@@ -21,12 +21,15 @@ import {
   type RuleRow,
 } from '@/lib/rules/model'
 import type { RuleMatch } from '@/lib/rules/service'
-import { ModeChip } from './RulesList'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
+import { ModeChip, OneClickControl, saveAlwaysReview } from './RulesList'
 import { accountLabel, counterpartyTitle, ruleTitle, vatLabelKey } from './rule-text'
 
 interface Payload {
   rule: RuleRow
   matches: RuleMatch[]
+  direct_booking?: DirectBookingSettings
 }
 
 async function fetchRule(url: string): Promise<Payload> {
@@ -51,6 +54,7 @@ export default function RuleDetail({ id }: { id: string }) {
   const { toast } = useToast()
   const { data, isLoading, error, mutate } = useSWR<Payload>(`/api/rules/${id}`, fetchRule)
   const [busy, setBusy] = useState(false)
+  const { canWrite } = useCanWrite()
 
   async function setMode(mode: RuleMode) {
     setBusy(true)
@@ -66,6 +70,21 @@ export default function RuleDetail({ id }: { id: string }) {
         return
       }
       toast({ title: mode === 'paused' ? t('toast_paused') : t('toast_resumed') })
+      await mutate()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setAlwaysReview(alwaysReview: boolean) {
+    setBusy(true)
+    try {
+      const saved = await saveAlwaysReview(id, alwaysReview)
+      if (!saved.ok) {
+        toast({ title: t('toast_failed'), description: getErrorMessage(saved.body, { statusCode: saved.status }), variant: 'destructive' })
+        return
+      }
+      toast({ title: alwaysReview ? t('toast_always_review_on') : t('toast_always_review_off') })
       await mutate()
     } finally {
       setBusy(false)
@@ -226,6 +245,17 @@ export default function RuleDetail({ id }: { id: string }) {
           <Section title={t('sect_trust')}>
             <Kv k={t('mode_label')} v={<ModeChip mode={rule.mode} />} />
             <Kv k={t('hits_label')} v={t('hits_line', { hits: rule.occurrence_count, corrections: rule.corrections })} />
+            <Kv
+              k={t('th_one_click')}
+              v={
+                <OneClickControl
+                  rule={rule}
+                  directBooking={data.direct_booking ?? DIRECT_BOOKING_ON}
+                  disabled={!canWrite || busy}
+                  onChange={(alwaysReview) => void setAlwaysReview(alwaysReview)}
+                />
+              }
+            />
             <Kv
               k={t('next_label')}
               v={

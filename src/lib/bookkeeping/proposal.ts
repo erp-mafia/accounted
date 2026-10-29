@@ -107,6 +107,14 @@ export interface BookingProposal {
   rule_mode?: CategorizationTemplate['mode']
   rule_own?: boolean
   rule_requires_review?: boolean
+  /** A learned counterpart rule a person set to always ask (categorization_templates.always_review). */
+  rule_always_review?: boolean
+  /**
+   * A learned counterpart rule from an imported history (source 'sie_import')
+   * that no booking here has confirmed yet: it asks once
+   * (lib/transactions/direct-booking.ts ruleReviewFlags).
+   */
+  rule_import_unconfirmed?: boolean
   has_underlag?: boolean
   /**
    * A weak learned-counterpart match that the assistant's stored read had on

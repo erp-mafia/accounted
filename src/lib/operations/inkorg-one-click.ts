@@ -58,6 +58,11 @@
  *   from the reading (name, numbers, address, the country and type the VAT
  *   rule used). A direct booking names the matched supplier only.
  *
+ *   Review. The company's one-click switch and a counterpart rule set to
+ *   always ask (lib/transactions/direct-booking.ts askedForReview, the same
+ *   decision the bank rows read) open the editor, prefilled with the whole
+ *   plan, instead of booking it (accounted#130).
+ *
  * Pure: the loader (./inkorg-one-click-read.ts) reads, this decides, the book door
  * (./inkorg-book.ts) writes through the shared internals.
  */
@@ -90,6 +95,7 @@ import {
 import { addDaysIso } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
+import { askedForReview, DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 
 export type OneClickForm = 'direct' | 'register' | 'register_and_settle'
 
@@ -130,6 +136,8 @@ export type OneClickReason =
   | 'limited_deduction'
   | 'possible_asset'
   | 'possible_domestic_reverse_charge'
+  // The company switched one click off, or the counterpart's rule always asks.
+  | 'review_required'
   // No one-click answer for this item.
   | 'no_bank_row'
   | 'credit_note'
@@ -179,6 +187,10 @@ export interface OneClickInput {
   supplier: OneClickSupplier | null
   /** The account the company has booked this counterparty on (templatePurchaseAccount). */
   counterpartyAccount: string | null
+  /** The counterpart's rule asks for a review on every booking (categorization_templates.always_review). */
+  counterpartyAlwaysReview?: boolean
+  /** The company's one-click switch (company_settings.direct_booking_enabled); absent, on. */
+  directBooking?: DirectBookingSettings
   /** Where the seller is, as the person answered; read only when the document names no country. */
   sellerRegionAnswer: SellerRegion | null
   /** SEK per unit of the invoice's currency on its date (a register path in a foreign currency). */
@@ -749,6 +761,10 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
       )
       if (Math.abs(payable - gross) > 0.01) return ask('editor', 'amount_mismatch')
     }
+  }
+  // The company's and the rule's say, last: the editor opens on the whole plan.
+  if (askedForReview({ rule_always_review: input.counterpartyAlwaysReview }, input.directBooking ?? DIRECT_BOOKING_ON)) {
+    return ask('editor', 'review_required')
   }
   return plan
 }

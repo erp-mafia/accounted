@@ -2679,7 +2679,12 @@
     "fx_monthly_confirm_description": "Open foreign-currency items are valued at the Riksbank rate on {date} and the difference is booked to 3960 and 7960. The voucher is reversed on {next}.",
     "fx_monthly_done": "Booked as {voucher}, reversed on {date}",
     "fx_monthly_nothing": "No open foreign-currency items on {date}, nothing was booked",
-    "fx_monthly_failed": "The currency revaluation was not booked"
+    "fx_monthly_failed": "The currency revaluation was not booked",
+    "direct_booking_label": "One-click booking",
+    "direct_booking_help": "When a suggestion on a bank row or in the Inkorg counts as settled (a rule of your own, a counterparty booked the same way at least three times, the assistant's sure reading of a receipt), it books with one click and can be undone right after. Off: every suggestion opens its review first, so you see the entry before it is booked. A single rule can also be set to always review, under Rules.",
+    "direct_booking_on": "Settled suggestions book with one click",
+    "direct_booking_off": "Every suggestion is reviewed first",
+    "direct_booking_save_failed": "The setting could not be saved"
   },
   "settings_salary": {
     "payments_heading": "Payment",
@@ -7813,7 +7818,11 @@
     "policy_direct": "Could be booked without review",
     "policy_review": "Required review",
     "more_value": "{count} decisions on this voucher, showing the latest",
-    "more_rest": "and {count} more"
+    "more_rest": "and {count} more",
+    "summary_accepted_one_click": "{who} booked the suggestion in one click, without a review",
+    "row_review": "Review",
+    "review_skipped": "Without a review, booked in one click",
+    "review_shown": "Reviewed before it was booked"
   },
   "journal_detail": {
     "owned_by_field": "Belongs to",
@@ -10080,7 +10089,7 @@
   },
   "rules": {
       "title": "Rules",
-      "help": "A rule is a sentence: when a transaction looks like this, do this. Rules come from your approvals and corrections. A rule starts as a suggestion. Confirmed, it categorises every hit and puts it in To do. After five hits without a correction it can book on its own once autopilot is on. A correction counts in the Corrected column. A paused rule matches nothing.",
+      "help": "A rule is a sentence: when a transaction looks like this, do this. Rules come from your approvals and corrections, and from history you imported. A rule categorises every hit. Once the counterparty has been booked the same way three times, the next hit books with one click, without a review, and can be undone right after. A rule from imported history is reviewed once here before it can book with one click. Turn off One click on a rule and it is always reviewed, or turn off one-click booking for the whole company in Settings under Bookkeeping, General. A correction counts in the Corrected column and starts the count over. A paused rule matches nothing. Booking entirely on its own, without a click, comes with autopilot.",
       "search": "Search rules…",
       "count": "{count} rules",
       "ladder_label": "Mode",
@@ -10167,7 +10176,18 @@
       "open_transactions": "Open Transactions",
       "linked_counterparty": "Counterparty",
       "linked_agents": "Agents",
-      "agents_same_rule": "the same rule via MCP"
+      "agents_same_rule": "the same rule via MCP",
+      "th_one_click": "One click",
+      "one_click_switch_label": "One click for {rule}",
+      "one_click_yes": "Yes",
+      "one_click_company_off": "Off for the company",
+      "one_click_always_review": "Always reviewed",
+      "one_click_import": "After one review",
+      "one_click_hits": "{count, plural, one {After # more hit} other {After # more hits}}",
+      "one_click_paused": "No, paused",
+      "one_click_proposed": "No, not confirmed",
+      "toast_always_review_on": "The rule is always reviewed",
+      "toast_always_review_off": "The rule can book with one click"
   },
   "accounts_v2": {
     "add_bank_desc": "Transactions arrive every night through PSD2. Read only, never moves money.",

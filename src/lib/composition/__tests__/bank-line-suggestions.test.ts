@@ -71,8 +71,11 @@ describe('BANK_LINE_SUGGESTIONS', () => {
       confidence: 0.92,
     })
     for (const proposal of [offer, { ...offer, rule_own: true }, { ...offer, rule_own: true, rule_requires_review: true }]) {
-      expect(BANK_LINE_SUGGESTIONS.confidenceBand(proposal)).toBe(confidenceBand(proposal))
+      for (const directBooking of [{ enabled: true }, { enabled: false }]) {
+        expect(BANK_LINE_SUGGESTIONS.confidenceBand(proposal, directBooking)).toBe(confidenceBand(proposal, directBooking))
+      }
     }
-    expect(BANK_LINE_SUGGESTIONS.confidenceBand({ ...offer, rule_own: true })).toBe('direct')
+    expect(BANK_LINE_SUGGESTIONS.confidenceBand({ ...offer, rule_own: true }, { enabled: true })).toBe('direct')
+    expect(BANK_LINE_SUGGESTIONS.confidenceBand({ ...offer, rule_own: true }, { enabled: false })).toBe('review')
   })
 })

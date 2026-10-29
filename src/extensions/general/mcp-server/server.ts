@@ -614,7 +614,7 @@ import {
   type SalaryRunPayout,
 } from '@/lib/transactions/salary-run-payouts'
 import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
-import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+import { reviewRequired } from '@/lib/transactions/direct-booking'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import {
   agentDuplicateMessage,
@@ -12393,7 +12393,7 @@ export const tools: McpTool[] = [
       // same booking (lib/transactions/propose.ts, lib/bookkeeping/proposal.ts).
       const { data: companyRow } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
       const entityType = (companyRow?.entity_type as EntityType | undefined) ?? undefined
-      const { proposals: proposed } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
+      const { proposals: proposed, direct_booking } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
       // A catalog template that names the skattekonto (1630) books the
       // company's skattekonto account (2012 for an enskild firma that runs it
       // there, PH 175): read once, only when a proposal names it.
@@ -12419,7 +12419,9 @@ export const tools: McpTool[] = [
               label: p.name_sv,
               why: whyTextSv(p),
               confidence: p.confidence,
-              books_without_review: booksWithoutReview(p),
+              // The app's one decision: the company's switch, the rule's own
+              // always-review and import flags, then the evidence.
+              books_without_review: !reviewRequired(p, direct_booking),
               ...(p.contested ? { contested: true } : {}),
               ...(box
                 ? {

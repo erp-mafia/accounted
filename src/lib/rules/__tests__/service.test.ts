@@ -38,8 +38,23 @@ describe('listRules', () => {
     ])
   })
 
+  it('reads the rules without always_review, as not asking, while that column is not there yet', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '42703', message: 'column categorization_templates.always_review does not exist' } })
+    enqueue({ data: [rule(1)] })
+
+    const rules = await listRules(supabase as unknown as SupabaseClient, COMPANY_ID)
+
+    expect(rules).toEqual([expect.objectContaining({ id: 'rule-1', mode: 'propose', always_review: false })])
+    const selects = findCalls('categorization_templates', 'select').map((args) => String(args[0]))
+    expect(selects[0]).toContain('always_review')
+    expect(selects[1]).not.toContain('always_review')
+    expect(selects[1]).toContain('mode')
+  })
+
   it('reads the legacy columns, paged, on a database without the mode column', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '42703', message: 'column categorization_templates.always_review does not exist' } })
     enqueue({ data: null, error: { code: '42703', message: 'column categorization_templates.mode does not exist' } })
     enqueue({ data: manyRows(1000, (i) => ({ ...rule(i), mode: undefined })) })
     enqueue({ data: [{ ...rule(1000), mode: undefined, is_active: false }] })

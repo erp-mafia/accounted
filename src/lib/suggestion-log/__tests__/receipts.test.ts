@@ -279,6 +279,7 @@ describe('getDecisionReceipts', () => {
   })
 
   it('reads the receipts without agent_reason while that column is not there yet', async () => {
+    mock.enqueue({ error: { message: 'column suggestion_log.review_shown does not exist', code: '42703' } })
     mock.enqueue({ error: { message: 'column suggestion_log.agent_reason does not exist', code: '42703' } })
     mock.enqueue({ data: [bankRow({ pending_operation_id: OP })] })
     mock.enqueue({ data: [op] })
@@ -287,8 +288,28 @@ describe('getDecisionReceipts', () => {
     expect(receipts).toHaveLength(1)
     expect(receipts[0].agent_reason).toBeNull()
     const selects = mock.findCalls('suggestion_log', 'select').map((args) => String(args[0]))
-    expect(selects).toHaveLength(2)
-    expect(selects[1]).not.toContain('agent_reason')
+    expect(selects).toHaveLength(3)
+    expect(selects[2]).not.toContain('agent_reason')
+  })
+
+  it('reads whether the review was shown, and reads around it while that column is not there yet', async () => {
+    mock.enqueue({ data: [bankRow({ review_shown: false })] })
+    mock.enqueue({ data: [entry] })
+    const [oneClick] = await getDecisionReceipts(supabase, CO, { journalEntryId: JE })
+    expect(oneClick.review_shown).toBe(false)
+    expect(toCompactDecision([oneClick])?.review_shown).toBe(false)
+
+    mock.reset()
+    mock.enqueue({ error: { message: 'column suggestion_log.review_shown does not exist', code: '42703' } })
+    mock.enqueue({ data: [bankRow({})] })
+    mock.enqueue({ data: [entry] })
+    const [before] = await getDecisionReceipts(supabase, CO, { journalEntryId: JE })
+    expect(before.review_shown).toBeNull()
+    expect(toCompactDecision([before])).not.toHaveProperty('review_shown')
+    const selects = mock.findCalls('suggestion_log', 'select').map((args) => String(args[0]))
+    expect(selects[0]).toContain('review_shown')
+    expect(selects[1]).not.toContain('review_shown')
+    expect(selects[1]).toContain('agent_reason')
   })
 
   it('returns an empty list and reads nothing else when no decision was recorded', async () => {

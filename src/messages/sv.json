@@ -2679,7 +2679,12 @@
     "fx_monthly_confirm_description": "Öppna poster i utländsk valuta värderas till Riksbankens kurs {date} och skillnaden bokförs mot 3960 och 7960. Verifikationen återförs {next}.",
     "fx_monthly_done": "Bokförd som {voucher}, återförs {date}",
     "fx_monthly_nothing": "Inga öppna poster i utländsk valuta {date}, inget bokfördes",
-    "fx_monthly_failed": "Valutaomvärderingen bokfördes inte"
+    "fx_monthly_failed": "Valutaomvärderingen bokfördes inte",
+    "direct_booking_label": "Bokföring med ett klick",
+    "direct_booking_help": "När ett förslag på en bankrad eller i Inkorgen räknas som avgjort (en egen regel, en motpart bokförd likadant minst tre gånger, assistentens säkra läsning av ett kvitto) bokförs det med ett klick och kan ångras direkt efteråt. Av: varje förslag öppnar granskningen först, så att du ser konteringen innan den bokförs. En enskild regel kan också granskas alltid, under Regler.",
+    "direct_booking_on": "Avgjorda förslag bokförs med ett klick",
+    "direct_booking_off": "Varje förslag granskas först",
+    "direct_booking_save_failed": "Inställningen kunde inte sparas"
   },
   "settings_salary": {
     "payments_heading": "Utbetalning",
@@ -7813,7 +7818,11 @@
     "policy_direct": "Fick bokföras utan granskning",
     "policy_review": "Krävde granskning",
     "more_value": "{count} beslut på verifikatet, det senaste visas",
-    "more_rest": "och {count} till"
+    "more_rest": "och {count} till",
+    "summary_accepted_one_click": "{who} bokförde förslaget med ett klick, utan granskning",
+    "row_review": "Granskning",
+    "review_skipped": "Utan granskning, bokförd med ett klick",
+    "review_shown": "Granskad innan den bokfördes"
   },
   "journal_detail": {
     "owned_by_field": "Hör till",
@@ -10080,7 +10089,7 @@
   },
   "rules": {
       "title": "Regler",
-      "help": "En regel är en mening: när en transaktion ser ut så här, gör så här. Reglerna kommer från dina godkännanden och rättelser. En regel börjar som förslag. Bekräftad konterar den varje träff och lägger den i Att göra. Efter fem träffar utan rättelse kan den bokföra själv när autopiloten är på. En rättelse räknas i kolumnen Rättad. En pausad regel matchar inget.",
+      "help": "En regel är en mening: när en transaktion ser ut så här, gör så här. Reglerna kommer från dina godkännanden och rättelser, och från historik du har importerat. En regel konterar varje träff. När motparten har bokförts likadant tre gånger bokförs nästa träff med ett klick, utan granskning, och kan ångras direkt efteråt. En regel från importerad historik granskas en gång här innan den kan bokföras med ett klick. Stäng av Ett klick på en regel så granskas den alltid, eller stäng av Bokföring med ett klick för hela företaget i Inställningar under Bokföring, Allmänt. En rättelse räknas i kolumnen Rättad och börjar om räkningen. En pausad regel matchar inget. Att bokföra helt själv, utan klick, kommer med autopiloten.",
       "search": "Sök regler…",
       "count": "{count} regler",
       "ladder_label": "Läge",
@@ -10167,7 +10176,18 @@
       "open_transactions": "Öppna Transaktioner",
       "linked_counterparty": "Motpart",
       "linked_agents": "Agenter",
-      "agents_same_rule": "samma regel via MCP"
+      "agents_same_rule": "samma regel via MCP",
+      "th_one_click": "Ett klick",
+      "one_click_switch_label": "Ett klick för {rule}",
+      "one_click_yes": "Ja",
+      "one_click_company_off": "Av för företaget",
+      "one_click_always_review": "Granskas alltid",
+      "one_click_import": "Efter en granskning",
+      "one_click_hits": "{count, plural, one {Efter # träff till} other {Efter # träffar till}}",
+      "one_click_paused": "Nej, pausad",
+      "one_click_proposed": "Nej, inte bekräftad",
+      "toast_always_review_on": "Regeln granskas alltid",
+      "toast_always_review_off": "Regeln kan bokföras med ett klick"
   },
   "accounts_v2": {
     "add_bank_desc": "Transaktioner hämtas varje natt via PSD2. Läser bara, flyttar aldrig pengar.",

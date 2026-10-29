@@ -18,5 +18,5 @@ export const BANK_LINE_SUGGESTIONS: BankLineSuggestions = Object.freeze<BankLine
   rulesRevision: () => BANK_PROPOSAL_RULES_REVISION,
   policyVersion: () => DIRECT_BOOKING_POLICY_VERSION,
   propose: (...args) => proposeForTransactions(...args),
-  confidenceBand: (proposal) => confidenceBand(proposal),
+  confidenceBand: (proposal, directBooking) => confidenceBand(proposal, directBooking),
 })

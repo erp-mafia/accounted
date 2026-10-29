@@ -1,6 +1,6 @@
 import { agentBookingFor, businessAccount, type BookingProposal, type ProposalBooking, type ProposalSource } from '@/lib/bookkeeping/proposal'
 import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
-import type { ConfidenceBand } from './bank-line-suggestions'
+import type { ConfidenceBand, DirectBookingSwitch } from './bank-line-suggestions'
 import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
 
 /**
@@ -18,8 +18,9 @@ import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
  *
  * The confidence band is the acted-on suggestion's band under the
  * direct-booking policy (lib/transactions/direct-booking.ts), evaluated on
- * the proposal as it was offered: deterministic evidence, never the model's
- * own words. No suggestion acted on, no band.
+ * the proposal as it was offered and the company's one-click switch as it
+ * was read with it: deterministic evidence, never the model's own words. No
+ * suggestion acted on, or no switch read (a failed snapshot), no band.
  */
 
 export type DecisionOutcome = 'accepted' | 'changed' | 'manual' | 'dismissed'
@@ -62,6 +63,10 @@ export interface SuggestionEvidence {
   rule_mode?: string
   rule_own?: boolean
   rule_requires_review?: boolean
+  /** Set only when true: a person set the rule to always ask. */
+  rule_always_review?: true
+  /** Set only when true: a rule from an imported history that no booking here had confirmed. */
+  rule_import_unconfirmed?: true
   has_underlag?: boolean
   read_reverse_charge_kind?: string
 }
@@ -148,6 +153,8 @@ function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
     ...(p.rule_mode !== undefined ? { rule_mode: p.rule_mode } : {}),
     ...(p.rule_own !== undefined ? { rule_own: p.rule_own } : {}),
     ...(p.rule_requires_review !== undefined ? { rule_requires_review: p.rule_requires_review } : {}),
+    ...(p.rule_always_review ? { rule_always_review: true as const } : {}),
+    ...(p.rule_import_unconfirmed ? { rule_import_unconfirmed: true as const } : {}),
     ...(p.has_underlag !== undefined ? { has_underlag: p.has_underlag } : {}),
     ...(p.read_reverse_charge_kind ? { read_reverse_charge_kind: p.read_reverse_charge_kind } : {}),
   }
@@ -203,6 +210,8 @@ export function classifyBankLineDecision(input: {
   /** Null when the bank line was dismissed. */
   final: BankLineFinal | null
   entityType?: EntityType
+  /** The company's one-click switch as read with the proposals; without it no band is decided. */
+  directBooking?: DirectBookingSwitch
 }): ClassifiedDecision {
   const { final, entityType } = input
   const { offered, suggestions: onOffer } = offeredSuggestions(input.proposals, input.read)
@@ -218,6 +227,6 @@ export function classifyBankLineDecision(input: {
     suggestions,
     acted_on: index,
     outcome: suggestions[index].matches_final ? 'accepted' : 'changed',
-    confidence_band: BANK_LINE_SUGGESTIONS.confidenceBand(offered[index]),
+    confidence_band: input.directBooking ? BANK_LINE_SUGGESTIONS.confidenceBand(offered[index], input.directBooking) : null,
   }
 }

@@ -15,7 +15,8 @@ import { createLogger } from '@/lib/logger'
 import { booksSwedishInputVat, proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
-import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
+import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT, type DirectBookingSettings } from './direct-booking'
+import { readDirectBookingSettings } from './direct-booking-settings'
 import { proposeClearings } from './clearing-proposals'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
@@ -55,6 +56,11 @@ export interface Proposed {
   proposals: Record<string, BookingProposal[]>
   /** Fresh stored reads by transaction id, so a review opens with the assistant's line. */
   assistant_reads: Record<string, AssistantRead>
+  /**
+   * The company's one-click switch, read with the proposals: what every
+   * surface passes to reviewReason (./direct-booking.ts) beside a proposal.
+   */
+  direct_booking: DirectBookingSettings
 }
 
 export async function proposeForTransactions(
@@ -65,12 +71,12 @@ export async function proposeForTransactions(
 ): Promise<Proposed> {
   const proposals: Record<string, BookingProposal[]> = {}
   const assistant_reads: Record<string, AssistantRead> = {}
-  if (transactions.length === 0) return { proposals, assistant_reads }
+  if (transactions.length === 0) return { proposals, assistant_reads, direct_booking: await readDirectBookingSettings(supabase, companyId) }
 
   // The company's own rules plus the global (null-company) defaults. Two
   // static queries rather than one dynamic `.or('company_id.eq.<id>,...')`,
   // which the no-phantom-columns scanner cannot resolve.
-  const [companyRules, globalRules] = await Promise.all([
+  const [companyRules, globalRules, direct_booking] = await Promise.all([
     supabase
       .from('mapping_rules')
       .select('*')
@@ -83,6 +89,7 @@ export async function proposeForTransactions(
       .is('company_id', null)
       .eq('is_active', true)
       .order('priority', { ascending: false }),
+    readDirectBookingSettings(supabase, companyId),
   ])
   const mappingRules = [
     ...((companyRules.data ?? []) as MappingRule[]),
@@ -216,7 +223,7 @@ export async function proposeForTransactions(
     proposals[txId] = leadWithClearing(proposals[txId] ?? [], clearing)
   }
 
-  return { proposals, assistant_reads }
+  return { proposals, assistant_reads, direct_booking }
 }
 
 /**

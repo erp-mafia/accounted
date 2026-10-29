@@ -1093,6 +1093,20 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Resend without vat_treatment reverse_charge (omit it, or standard_25 for a Swedish invoice). Omvänd skattskyldighet only covers invoices without the seller\'s VAT.',
     },
   },
+  // The row's one click (review_shown false) on a proposal the direct-booking
+  // policy sends to a review: the company switched one click off, the rule
+  // always asks, it is an imported rule nobody has confirmed here, or its
+  // evidence is not settled (lib/transactions/direct-booking.ts). Nothing is
+  // written; the page opens the review instead.
+  TX_CATEGORIZE_REVIEW_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Förslaget behöver granskas innan det bokförs. Öppna granskningen och bokför därifrån.',
+    message_en: 'The suggestion needs a review before it is booked. Open the review and book it from there.',
+    remediation: {
+      description:
+        'details.reason says why: company_off, rule_always_review, rule_import_unconfirmed, evidence, or proposal_not_on_offer. Show the booking to the person and send it again with review_shown true.',
+    },
+  },
   TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT: {
     httpStatus: 400,
     message_sv:

@@ -129,10 +129,12 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     module: 'transactions',
     labelKey: 'transactions',
     icon: ArrowsRightLeftIcon,
-    // Regler stays off the nav until there is a rules engine worth a page
-    // (founder call 2026-09-07); the route exists for the ones who need it.
+    // Regler is back in the menu (founder call 2026-10-28, reversing the
+    // 2026-09-07 one): it is where a rule is set to always ask, and where
+    // Ett klick says which rules book without a review (accounted#130).
     sub: [
       { href: '/parties', module: 'parties', labelKey: 'v2_parties' },
+      { href: '/rules', module: 'transactions', labelKey: 'v2_rules' },
     ],
   },
   {

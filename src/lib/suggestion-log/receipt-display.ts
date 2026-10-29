@@ -40,6 +40,8 @@ export type ReceiptLike = Pick<
   checks?: ReadonlyArray<ReceiptCheckLike> | null
   /** Why the agent that staged it proposed it; recorded from 2026-10-28. */
   agent_reason?: string | null
+  /** Whether the person saw the review before booking (false: one click); recorded from migration 20261030131517. */
+  review_shown?: boolean | null
 }
 
 /** The journal entry columns the display reads: the commit actor snapshot plus who created it. */
@@ -103,7 +105,7 @@ export interface BookingWhyOptions {
 
 export type EvidenceLevel = 'exact' | 'strong' | 'likely' | 'your_choice'
 
-export type BookingWhyRowId = 'decision' | 'proposal' | 'reason' | 'grounds' | 'changes' | 'checks' | 'policy' | 'more'
+export type BookingWhyRowId = 'decision' | 'proposal' | 'reason' | 'grounds' | 'changes' | 'checks' | 'review' | 'policy' | 'more'
 
 export interface BookingWhyRow {
   id: BookingWhyRowId
@@ -249,7 +251,8 @@ function howOf(entry: BookingWhyEntry, r: ReceiptLike | null): How {
 function summaryText(how: How, who: Who, whoText: string, r: ReceiptLike | null, data: BookingWhyData, o: BookingWhyOptions): string {
   switch (how) {
     case 'accepted':
-      return o.t('summary_accepted', { who: whoText })
+      // The row's one click, as the door recorded it: booked without a review.
+      return o.t(r?.review_shown === false ? 'summary_accepted_one_click' : 'summary_accepted', { who: whoText })
     case 'changed':
       return o.t('summary_changed', { who: whoText })
     case 'manual':
@@ -426,6 +429,13 @@ function moreRow(d: BookingWhyDecisions, data: BookingWhyData, o: BookingWhyOpti
   return { id: 'more', label: o.t('row_more'), value: o.t('more_value', { count: d.total }), items }
 }
 
+/** Whether the review was shown, as recorded; nothing when the door did not say. */
+function reviewRow(r: ReceiptLike, o: BookingWhyOptions): string | null {
+  if (r.review_shown === false) return o.t('review_skipped')
+  if (r.review_shown === true) return o.t('review_shown')
+  return null
+}
+
 function policyRow(r: ReceiptLike, o: BookingWhyOptions): string | null {
   const band = r.confidence_band
   if (band !== 'direct' && band !== 'review') return null
@@ -459,6 +469,7 @@ export function bookingWhy(data: BookingWhyData, o: BookingWhyOptions): BookingW
     push('grounds', groundsRow(r, o))
     push('changes', changesRow(r, o))
     push('checks', checksRow(r, o))
+    push('review', reviewRow(r, o))
     push('policy', policyRow(r, o))
     const more = data.decisions ? moreRow(data.decisions, data, o) : null
     if (more) rows.push(more)

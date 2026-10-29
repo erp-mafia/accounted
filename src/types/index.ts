@@ -614,6 +614,12 @@ export interface CompanySettings {
   defer_invoice_booking?: boolean
   /** Revalue open foreign-currency items at each month end, reversed the next day (default off). */
   fx_revaluation_monthly?: boolean
+  /**
+   * One click on a bank row's suggestion books it without a review when the
+   * direct-booking policy allows it (default on). Off: every suggestion
+   * opens a review (lib/transactions/direct-booking.ts, accounted#130).
+   */
+  direct_booking_enabled?: boolean
 
   // Invoice settings
   invoice_prefix: string | null
@@ -2650,6 +2656,9 @@ export interface CategorizationTemplate {
   mode: 'proposed' | 'propose' | 'auto' | 'paused'
   corrections: number
   paused_at: string | null
+  // A person set the rule to ask for a review on every booking (migration
+  // 20261030131517): the row's one click and the Inkorg's open the review.
+  always_review?: boolean
   created_at: string
   updated_at: string
 }

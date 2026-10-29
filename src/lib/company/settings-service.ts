@@ -203,6 +203,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     reminder_interest_rate_override: c.reminder_interest_rate_override,
     ai_flow_enabled: c.ai_flow_enabled,
     dimensions_enabled: c.dimensions_enabled,
+    direct_booking_enabled: c.direct_booking_enabled,
     mileage_enabled: c.mileage_enabled,
     sales_orders_enabled: c.sales_orders_enabled,
     quotes_enabled: c.quotes_enabled,

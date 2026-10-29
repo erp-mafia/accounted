@@ -603,6 +603,30 @@ describe('planOneClick: construction work with no VAT on it', () => {
   })
 })
 
+describe('planOneClick: the company and the rule ask for a review (accounted#130)', () => {
+  const wispr = { kind: 'supplier_invoice' as const, reading: WISPR, paidByReceipt: true, receiptDate: '2026-10-13' }
+
+  it('books in one click while the switch is on and the rule does not ask', () => {
+    expect(planOneClick(input({ ...wispr, directBooking: { enabled: true }, counterpartyAlwaysReview: false })).ask).toBeNull()
+  })
+
+  it('opens the editor on the whole plan when the company switched one click off', () => {
+    const plan = planOneClick(input({ ...wispr, directBooking: { enabled: false } }))
+    expect(plan).toMatchObject({ form: 'direct', ask: 'editor', reason: 'review_required', transactionId: 'tx-1' })
+    // Prefilled with what one click would have booked: nothing is lost by asking.
+    expect(plan.vat).toEqual({ kind: 'reverse_charge', rcKind: 'non_eu_services', rate: 0.25 })
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it("opens the editor when the counterpart's rule always asks", () => {
+    expect(planOneClick(input({ ...wispr, counterpartyAlwaysReview: true }))).toMatchObject({ ask: 'editor', reason: 'review_required' })
+  })
+
+  it('keeps a more specific question: the category is asked before the review', () => {
+    expect(planOneClick(input({ ...wispr, category: null, directBooking: { enabled: false } }))).toMatchObject({ ask: 'category', reason: 'no_category' })
+  })
+})
+
 describe('oneClickOutcome', () => {
   it('says the Wispr plan books in one click, in codes only', async () => {
     const { oneClickOutcome } = await import('../inkorg-one-click')

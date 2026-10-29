@@ -52,6 +52,7 @@ import { finalFromCategorize, recordDecisions, snapshotSuggestions, type Suggest
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { duplicateCheck, passed, warned, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
+import { reviewReason } from './direct-booking'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -146,6 +147,14 @@ export interface CategorizeInput {
   inbox_item_id?: string
   /** The suggestion the booking started from, for suggestion_log. */
   proposal_id?: string
+  /**
+   * The dashboard's word on whether the person saw the booking's review:
+   * false for the row's one click, which is booked only when the
+   * direct-booking policy lets proposal_id through without a review
+   * (oneClickRefusal); true from Granska bokföring. Recorded as
+   * suggestion_log.review_shown. Omitted by every other door.
+   */
+  review_shown?: boolean
   confirm_no_match?: boolean
   force?: boolean
   expected_duplicate_transaction_id?: string
@@ -680,6 +689,25 @@ export async function buildCategorizeMapping(
  * dismissal record and a missing räkenskapsår (ensureFiscalPeriod), both on
  * a live call only.
  */
+/**
+ * Why a one click (review_shown false) may not book, or null when it may:
+ * the proposal it names must be on offer for the row now, under the
+ * company's switch as read with it, and reviewReason
+ * (lib/transactions/direct-booking.ts) must let it through. No proposal
+ * named, none on offer (the list moved, or the snapshot failed) or no
+ * switch read: the review opens, it is never skipped on a guess.
+ */
+export function oneClickRefusal(
+  snapshot: Pick<SuggestionSnapshot, 'byTransaction' | 'directBooking'>,
+  txId: string,
+  proposalId: string | undefined,
+): { proposal_id: string | null; reason: string } | null {
+  const proposal = proposalId ? snapshot.byTransaction.get(txId)?.proposals.find((p) => p.template_id === proposalId) : undefined
+  if (!proposal || !snapshot.directBooking) return { proposal_id: proposalId ?? null, reason: 'proposal_not_on_offer' }
+  const reason = reviewReason(proposal, snapshot.directBooking)
+  return reason ? { proposal_id: proposalId ?? null, reason } : null
+}
+
 export async function categorizeTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -733,6 +761,16 @@ export async function categorizeTransaction(
     wouldBook = false
   } else {
     checks.push(passed('already_booked'))
+  }
+
+  // A one click is booked only when the policy lets that proposal through
+  // without a review, judged here on what is on offer now, before any guard
+  // writes anything. The snapshot is the one the decision is recorded with.
+  let suggestionSnapshot = options.suggestionSnapshot
+  if (wouldBook && !dryRun && input.review_shown === false) {
+    suggestionSnapshot ??= await snapshotSuggestions(supabase, companyId, [txId])
+    const refusal = oneClickRefusal(suggestionSnapshot, txId, input.proposal_id)
+    if (refusal) return refuseFor('TX_CATEGORIZE_REVIEW_REQUIRED', refusal)
   }
 
   const target: BookingTarget = {
@@ -980,7 +1018,7 @@ export async function categorizeTransaction(
   }
 
   // What was on offer, taken before the booking and its learning.
-  const suggestionSnapshot = options.suggestionSnapshot ?? (await snapshotSuggestions(supabase, companyId, [txId]))
+  suggestionSnapshot ??= await snapshotSuggestions(supabase, companyId, [txId])
   let bookedEntry: JournalEntry | null
   try {
     bookedEntry = await createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes, {
@@ -1048,6 +1086,8 @@ export async function categorizeTransaction(
   await recordDecisions(supabase, suggestionSnapshot, [{
     transactionId: txId,
     actedOn: input.proposal_id ?? null,
+    // Only the dashboard says; every other door leaves review_shown null.
+    ...(input.review_shown !== undefined ? { reviewShown: input.review_shown } : {}),
     final: finalFromCategorize({
       journalEntry: bookedEntry,
       mappingResult,

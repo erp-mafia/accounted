@@ -4,14 +4,16 @@
  * Parses the body and renders the outcome of categorizeTransaction
  * (lib/transactions/categorize-core.ts), the one booking path the v1 routes,
  * the approval executor and the MCP tool share. A row a posted verifikat
- * already books gets its flags updated and keeps its verifikat.
+ * already books gets its flags updated and keeps its verifikat. A row's one
+ * click (review_shown false) on a proposal the direct-booking policy sends to
+ * a review is refused with TX_CATEGORIZE_REVIEW_REQUIRED, nothing written.
  */
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
-import { CategorizeTransactionSchema } from '@/lib/api/schemas'
+import { DashboardCategorizeSchema } from '@/lib/api/schemas'
 import { categorizeTransaction } from '@/lib/transactions/categorize-core'
 
 export const POST = withRouteContext(
@@ -20,7 +22,7 @@ export const POST = withRouteContext(
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
 
-    const validation = await validateBody(request, CategorizeTransactionSchema, {
+    const validation = await validateBody(request, DashboardCategorizeSchema, {
       log,
       operation: 'transaction.categorize',
     })

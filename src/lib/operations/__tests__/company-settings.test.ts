@@ -37,6 +37,7 @@ const NOT_ON_THE_API: Record<string, string> = {
   salary_deviation_period: 'payroll: PATCH /salary/settings',
   salary_regional_support: 'payroll: dashboard switch only so far (PH 208); the PATCH /salary/settings door is a follow-up',
   finance_lease_capitalisation: 'K3 kapitel 20 opt-in: dashboard first, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED',
+  direct_booking_enabled: "the company's say over one click (accounted#130): owner or admin in the dashboard, so a key cannot switch its own review off",
 }
 
 /** Dashboard fields that are not columns but a parameter of one door's save. */
