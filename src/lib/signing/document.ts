@@ -57,6 +57,17 @@ export async function opensWithoutPassword(bytes: Uint8Array): Promise<boolean> 
   }
 }
 
+/** Pages in a PDF, or null when pdf-lib cannot read it. */
+export async function pdfPageCount(bytes: Uint8Array): Promise<number | null> {
+  try {
+    const { PDFDocument } = await import('pdf-lib')
+    return (await PDFDocument.load(bytes, { updateMetadata: false })).getPageCount()
+  } catch {
+    // Unreadable: the mail's document card leaves the page count out, nothing else depends on it.
+    return null
+  }
+}
+
 export async function loadSignableDocument(
   service: SupabaseClient,
   companyId: string,

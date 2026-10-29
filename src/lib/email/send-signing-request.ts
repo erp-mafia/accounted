@@ -1,5 +1,5 @@
 import { getEmailService } from '@/lib/email/service'
-import { getSenderForCompany } from '@/lib/email/brand-sender'
+import { resolveSigningMailIdentity } from '@/lib/email/signing-mail-sender'
 import {
   SIGNING_REQUEST_TEMPLATE,
   generateSigningRequestEmailHtml,
@@ -10,9 +10,10 @@ import type { Logger } from '@/lib/logger'
 
 /**
  * Mail a signer their link to a signing request (lib/signing/requests.ts).
- * Brand mail (WL-13): the sender identity follows the brand of the company.
- * A send failure never throws: the link stays valid and the sender can copy
- * it instead, with emailSent false.
+ * The sender reads "<company> via <platform>", or the company's brand
+ * (WL-13) when its team has one (./signing-mail-sender.ts). A send failure
+ * never throws: the link stays valid and the sender can copy it instead,
+ * with emailSent false.
  */
 export async function sendSigningRequestMail(params: {
   companyId: string
@@ -24,15 +25,19 @@ export async function sendSigningRequestMail(params: {
   expiresAt: string
   message: string | null
   reminder?: boolean
+  /** Pages in the document, when the caller already holds its bytes. */
+  pageCount?: number | null
+  /** How many are asked to sign. */
+  signerCount?: number | null
   log: Logger
 }): Promise<{ emailSent: boolean }> {
   const { companyId, email, url, log } = params
-  const sender = await getSenderForCompany(companyId)
   const emailService = await getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('email service not configured: signing request mail skipped', { template: SIGNING_REQUEST_TEMPLATE })
     return { emailSent: false }
   }
+  const sender = await resolveSigningMailIdentity(companyId, params.companyName)
   const data = {
     companyName: params.companyName,
     requester: params.requester,
@@ -41,7 +46,10 @@ export async function sendSigningRequestMail(params: {
     expiresAt: params.expiresAt,
     message: params.message,
     reminder: params.reminder ?? false,
-    appName: sender.brand?.appName,
+    pageCount: params.pageCount ?? null,
+    signerCount: params.signerCount ?? null,
+    logo: sender.logo,
+    platformName: sender.platformName,
   }
   const result = await emailService.sendEmail({
     to: email,

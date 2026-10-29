@@ -1,0 +1,1 @@
+[2026-10-29] The page stamp on a signed copy has no white band behind it (the canvas had one): it must never cover a line of what was signed. Mail logos link only PNG, JPEG or GIF; WebP and SVG, which Outlook and Gmail drop, show the company's initials.

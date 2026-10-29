@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { Font } from '@react-pdf/renderer'
 import type { CompanySettings, InvoiceFontFamily } from '@/types'
 import type { InvoiceBranding } from '@/lib/invoices/pdf-template'
@@ -15,37 +13,15 @@ import {
   toInvoiceFontDataUrl,
 } from '@/lib/invoices/font-files'
 import { createLogger } from '@/lib/logger'
+import { registerBundledFont } from '@/lib/pdf/bundled-fonts'
 import { createServiceClient } from '@/lib/supabase/server'
 
 export const CUSTOM_INVOICE_FONT_RENDER_PREFIX = 'InvoiceCustom-'
 
 type BundledInvoiceFontFamily = (typeof BUNDLED_INVOICE_FONT_FAMILIES)[number]
 
-interface FontVariantFiles {
-  regular: string
-  bold: string
-  italic: string
-  boldItalic: string
-}
-
-const BUNDLED_FONT_FILES: Record<BundledInvoiceFontFamily, FontVariantFiles> = {
-  'Source Sans 3': {
-    regular: 'SourceSans3-Regular.ttf',
-    bold: 'SourceSans3-Bold.ttf',
-    italic: 'SourceSans3-Italic.ttf',
-    boldItalic: 'SourceSans3-BoldItalic.ttf',
-  },
-  'Source Serif 4': {
-    regular: 'SourceSerif4-Regular.ttf',
-    bold: 'SourceSerif4-Bold.ttf',
-    italic: 'SourceSerif4-Italic.ttf',
-    boldItalic: 'SourceSerif4-BoldItalic.ttf',
-  },
-}
-
 const log = createLogger('invoice.pdf-fonts')
 const registeredFamilies = new Set<string>()
-const bundledRegistration = new Map<string, Promise<void>>()
 const customRegistration = new Map<string, Promise<string | null>>()
 const invalidCustomFontPaths = new Set<string>()
 
@@ -63,54 +39,6 @@ function isBundledInvoiceFont(
   return BUNDLED_INVOICE_FONT_FAMILIES.includes(
     family as BundledInvoiceFontFamily,
   )
-}
-
-async function readBundledFont(fileName: string): Promise<string> {
-  const bytes = await readFile(join(process.cwd(), 'public', 'fonts', 'invoice', fileName))
-  const format = detectInvoiceFontFileFormat(bytes)
-  if (!format) throw new Error(`Invalid bundled invoice font: ${fileName}`)
-  return toInvoiceFontDataUrl(bytes, format)
-}
-
-async function registerBundledFont(family: BundledInvoiceFontFamily): Promise<void> {
-  if (registeredFamilies.has(family)) return
-
-  let registration = bundledRegistration.get(family)
-  if (!registration) {
-    registration = (async () => {
-      const files = BUNDLED_FONT_FILES[family]
-      const [regular, bold, italic, boldItalic] = await Promise.all([
-        readBundledFont(files.regular),
-        readBundledFont(files.bold),
-        readBundledFont(files.italic),
-        readBundledFont(files.boldItalic),
-      ])
-
-      Font.register({
-        family,
-        fonts: [
-          { src: regular, fontWeight: 400, fontStyle: 'normal' },
-          { src: bold, fontWeight: 700, fontStyle: 'normal' },
-          { src: italic, fontWeight: 400, fontStyle: 'italic' },
-          { src: boldItalic, fontWeight: 700, fontStyle: 'italic' },
-        ],
-      })
-      await Promise.all([
-        Font.load({ fontFamily: family, fontWeight: 400, fontStyle: 'normal' }),
-        Font.load({ fontFamily: family, fontWeight: 700, fontStyle: 'normal' }),
-        Font.load({ fontFamily: family, fontWeight: 400, fontStyle: 'italic' }),
-        Font.load({ fontFamily: family, fontWeight: 700, fontStyle: 'italic' }),
-      ])
-      registeredFamilies.add(family)
-    })()
-    bundledRegistration.set(family, registration)
-  }
-
-  try {
-    await registration
-  } finally {
-    bundledRegistration.delete(family)
-  }
 }
 
 async function downloadCustomFontDataUrl(
