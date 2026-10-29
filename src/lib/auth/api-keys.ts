@@ -202,11 +202,13 @@ export interface ApiKeyServiceAccount {
 }
 
 /**
- * A refused key whose refusal has a code of its own: a service account whose
- * sponsor is no longer an owner or admin of its company (or whose company is
- * archived). Every other refusal is the bare 401 or 429.
+ * A refused key whose refusal has a code of its own, answered 403 by every
+ * door: the key's agent identity is paused by its sponsor (AGENT_PAUSED,
+ * migration 20261029100000), or a service account whose sponsor is no longer
+ * an owner or admin of its company, or whose company is archived
+ * (SERVICE_ACCOUNT_SUSPENDED). Every other refusal is the bare 401 or 429.
  */
-export type ApiKeyRefusalCode = 'SERVICE_ACCOUNT_SUSPENDED'
+export type ApiKeyRefusalCode = 'AGENT_PAUSED' | 'SERVICE_ACCOUNT_SUSPENDED'
 
 /**
  * WHO a validated key acts as on the v1 surface: a service account's key as
@@ -271,6 +273,21 @@ export async function validateApiKey(
        * database answers allowedCompanyIds with that one company.
        */
       serviceAccount: ApiKeyServiceAccount | null
+      /**
+       * The agent identity the key belongs to (agent_identities, migration
+       * 20261029100000): one per OAuth connector and sponsor, one per manual
+       * key, one per service account. Always set by validateApiKey; null on
+       * a DB without the migration. Optional so a validated key built by
+       * hand (tests, fixtures) need not invent one.
+       */
+      agentIdentityId?: string | null
+      /**
+       * The OAuth client that minted the key (api_keys.client): a built-in
+       * provider such as 'claude', or 'registered:<id>'. null for manual and
+       * service-account keys, OAuth keys older than the column, and a DB
+       * without the migration. Optional for the same reason.
+       */
+      client?: string | null
     }
   | { error: string; status: number; code?: ApiKeyRefusalCode }
 > {
@@ -294,7 +311,7 @@ export async function validateApiKey(
 
   if (error || !data || data.length === 0) {
     if (!error) {
-      const refusal = await serviceAccountRefusal(supabase, hash)
+      const refusal = await codedRefusal(supabase, hash)
       if (refusal) return refusal
     }
     return { error: 'Invalid API key', status: 401 }
@@ -350,31 +367,39 @@ export async function validateApiKey(
     allowedCompanyIds,
     readOnlyCompanyIds,
     serviceAccount: parseServiceAccount(row.service_account_id, row.service_account_name),
+    agentIdentityId: nonEmptyString(row.agent_identity_id),
+    client: nonEmptyString(row.client),
   }
 }
 
+const CODED_REFUSALS: Record<ApiKeyRefusalCode, string> = {
+  AGENT_PAUSED: 'Agent paused: the person responsible for it can resume it under Settings in Accounted',
+  SERVICE_ACCOUNT_SUSPENDED: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
+}
+
 /**
- * Why the validation answered no row, when the reason is a suspended service
- * account: its key is otherwise live, so the caller gets a structured 403
- * instead of the 401 an unknown key gets (it can be fixed by the company, not
- * by the integrator). One extra read, on the refusal path only. Any failure
- * (a DB without the function answers PGRST202) falls back to the generic 401.
+ * Why the validation answered no row, when the reason has a code of its own:
+ * the key's agent is paused, or its service account is suspended. The key is
+ * otherwise live, so the caller gets a structured 403 instead of the 401 an
+ * unknown key gets (a person can fix it, the integrator cannot). One extra
+ * read, on the refusal path only. Any failure (a DB without api_key_refusal
+ * answers PGRST202) falls back to the generic 401.
  */
-async function serviceAccountRefusal(
+async function codedRefusal(
   supabase: SupabaseClient,
   hash: string,
 ): Promise<{ error: string; status: number; code: ApiKeyRefusalCode } | null> {
   try {
-    const { data, error } = await supabase.rpc('service_account_key_refusal', { p_key_hash: hash })
-    if (error || data !== 'SERVICE_ACCOUNT_SUSPENDED') return null
-    return {
-      error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
-      status: 403,
-      code: 'SERVICE_ACCOUNT_SUSPENDED',
-    }
+    const { data, error } = await supabase.rpc('api_key_refusal', { p_key_hash: hash })
+    if (error || (data !== 'AGENT_PAUSED' && data !== 'SERVICE_ACCOUNT_SUSPENDED')) return null
+    return { error: CODED_REFUSALS[data as ApiKeyRefusalCode], status: 403, code: data as ApiKeyRefusalCode }
   } catch {
     return null
   }
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
 }
 
 /** The key's service account, or null for a person's key (or a DB without the columns). */

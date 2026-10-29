@@ -263,6 +263,21 @@ describe('GET /api/v1/api-key: the grant', () => {
     expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_SUSPENDED')
   })
 
+  it("answers a paused agent's key 403 AGENT_PAUSED with a message the agent can relay", async () => {
+    mockValidate.mockResolvedValue({
+      error: 'Agent paused: the person responsible for it can resume it under Settings in Accounted',
+      status: 403,
+      code: 'AGENT_PAUSED',
+    })
+    const res = await GET(makeRequest(), staticRouteContext())
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('AGENT_PAUSED')
+    expect(body.error.message).toBe(
+      'Den här agenten är pausad i Accounted. Den som ansvarar för den kan återuppta den under Inställningar.',
+    )
+  })
+
   it('returns 500 INTERNAL_ERROR when the membership read fails', async () => {
     mockServiceClient.mockReturnValue(
       makeSupabase({ company_members: { data: null, error: { message: 'boom' } } }),

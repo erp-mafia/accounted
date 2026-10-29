@@ -210,6 +210,11 @@ const RETAINED = new Set([
   'service_accounts.created_by',
   'service_accounts.revoked_by',
   'service_accounts.sponsor_user_id',
+  // Who an agent acted for and who last paused it: attribution of every write
+  // its keys made names the sponsor. Erasure deletes the keys themselves, so
+  // an erased sponsor's agents can no longer act.
+  'agent_identities.paused_by',
+  'agent_identities.sponsor_user_id',
   'booking_template_hidden.hidden_by',
   'booking_template_library.created_by',
   'brand_signup_allowlist.created_by',

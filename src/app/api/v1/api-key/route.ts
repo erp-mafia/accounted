@@ -89,6 +89,7 @@ registerEndpoint({
     'A non-owner membership in a company whose multi-user plan has lapsed is refused on every call (403 with reason `multi_user_frozen`); this response does not show that state.',
     'Archived companies are not listed, the same as GET /api/v1/companies.',
     'A service account\'s key reaches only the account\'s company, and every write it makes is recorded under the account\'s name. When the sponsor stops being an owner or admin, the key is refused with 403 SERVICE_ACCOUNT_SUSPENDED, here too.',
+    'While the person responsible for the agent has paused it, every key of the agent is refused with 403 AGENT_PAUSED, here too. Tell the user; only that person can resume it, under Settings.',
   ],
   example: {
     response: {
@@ -122,7 +123,7 @@ registerEndpoint({
   dryRunSupported: false,
   response: {
     success: dataEnvelope(ApiKeyGrant),
-    errorCodes: ['UNAUTHORIZED', 'SERVICE_ACCOUNT_SUSPENDED', 'RATE_LIMITED', 'INTERNAL_ERROR'],
+    errorCodes: ['UNAUTHORIZED', 'SERVICE_ACCOUNT_SUSPENDED', 'AGENT_PAUSED', 'RATE_LIMITED', 'INTERNAL_ERROR'],
   },
 })
 

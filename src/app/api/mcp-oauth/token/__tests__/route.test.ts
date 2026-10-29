@@ -62,11 +62,16 @@ const codeExchange = {
   redirect_uri: 'https://claude.ai/api/cb',
 }
 
+/** The paused-connector lookup answering "not paused". */
+const NOT_PAUSED = { data: [], error: null }
+
 /**
  * Query results in the order handleAuthorizationCodeGrant issues them:
  * used-code insert, expired-code cleanup, (role lookup when a company is
- * known), create_api_key_with_allowlist RPC. The role step is skipped for
- * companyless grants.
+ * known), paused connector lookup, create_api_key_with_allowlist RPC. The
+ * role step is skipped for companyless grants. A registration lookup (for a
+ * redirect URI that is not built in) goes in at index 3, before the pause
+ * lookup.
  */
 function exchangeResults(role: { role: string } | null | 'skip' = { role: 'owner' }) {
   const results: { data?: unknown; error?: unknown }[] = [
@@ -74,6 +79,7 @@ function exchangeResults(role: { role: string } | null | 'skip' = { role: 'owner
     { data: null, error: null }, // delete expired codes (best-effort)
   ]
   if (role !== 'skip') results.push({ data: role, error: null }) // company_members role
+  results.push(NOT_PAUSED) // agent_identities: no paused connector
   results.push({ data: 'key-9', error: null }) // create_api_key_with_allowlist RPC (new key id)
   return results
 }
@@ -551,6 +557,7 @@ describe('POST /api/mcp-oauth/token', () => {
         { data: null, error: null }, // oauth_used_codes insert
         { data: null, error: null }, // expired-code cleanup
         { data: { role: 'owner' }, error: null }, // role lookup in the default company
+        NOT_PAUSED, // agent_identities pause lookup
         { data: 'key-9', error: null }, // create_api_key_with_allowlist RPC
       ])
 
@@ -582,6 +589,7 @@ describe('POST /api/mcp-oauth/token', () => {
         { data: null, error: null },
         { data: null, error: null },
         { data: { role: 'owner' }, error: null },
+        NOT_PAUSED,
         { data: 'key-9', error: null },
       ])
 
@@ -605,6 +613,7 @@ describe('POST /api/mcp-oauth/token', () => {
         { data: null, error: null },
         { data: null, error: null },
         { data: { role: 'owner' }, error: null },
+        NOT_PAUSED,
         { data: null, error: { code: '42501', message: 'user is not a live member of company' } }, // RPC
       ])
 
@@ -757,6 +766,76 @@ describe('POST /api/mcp-oauth/token', () => {
     })
   })
 
+  describe('paused agent', () => {
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    it('refuses the exchange before any key exists when the connector of this user and client is paused', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results[3] = { data: [{ id: 'identity-1' }], error: null } // a paused connector
+      enqueueMany(results)
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toMatch(/^AGENT_PAUSED: /)
+      expect(body.access_token).toBeUndefined()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+
+      // The lookup is the live connector of exactly this user and client.
+      expect(findCalls('agent_identities', 'eq')).toEqual([
+        ['sponsor_user_id', 'user-1'],
+        ['kind', 'connector'],
+        ['client', 'claude'],
+      ])
+      expect(findCall('agent_identities', 'is')).toEqual(['revoked_at', null])
+      expect(findCall('agent_identities', 'not')).toEqual(['paused_at', 'is', null])
+    })
+
+    it('looks up the connector without a client as client null', async () => {
+      const redirectUri = 'https://agent.testbrand.example/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results.splice(3, 0, { data: null, error: null }) // no live registration
+      results[4] = { data: [{ id: 'identity-1' }], error: null } // paused
+      enqueueMany(results)
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(400)
+      expect(findCalls('agent_identities', 'is')).toContainEqual(['client', null])
+    })
+
+    it('lets the exchange through when the lookup fails (the key is refused at every call anyway)', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results[3] = { data: null, error: { code: 'PGRST205', message: 'relation not found' } }
+      enqueueMany(results)
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('claude')
+    })
+  })
+
   describe('refresh_token grant', () => {
     function refreshRequest(refreshToken: string) {
       return formRequest({ grant_type: 'refresh_token', refresh_token: refreshToken })
@@ -902,6 +981,23 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error_description).toContain('revoked')
       // Already revoked earlier (disconnect, earlier reuse): not a new event.
       expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('refuses a refresh while the agent is paused, with AGENT_PAUSED and no new pair', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'paused', scopes: null, api_key_id: 'key-1' }], error: null })
+
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toMatch(/^AGENT_PAUSED: /)
+      // RFC 6749 5.2: error_description is printable ASCII.
+      expect(body.error_description).toMatch(/^[\x20-\x21\x23-\x5B\x5D-\x7E]+$/)
+      expect(body.access_token).toBeUndefined()
+      expect(body.refresh_token).toBeUndefined()
+      expect(mocks.logInfo).toHaveBeenCalledWith('refresh refused: agent paused', { apiKeyId: 'key-1', outcome: 'paused' })
     })
 
     it('returns 500 when the rotation RPC fails with a DB error', async () => {

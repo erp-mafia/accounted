@@ -27,6 +27,12 @@ const ACCESS_KEY_GRACE_SECONDS = 120
 
 const log = createLogger('mcp-oauth/token')
 
+// RFC 6749 5.2 limits error_description to printable ASCII, so this is the
+// English sentence; the structured AGENT_PAUSED message every door answers a
+// paused agent's key with carries the Swedish one.
+const AGENT_PAUSED_DESCRIPTION =
+  'AGENT_PAUSED: this agent is paused in Accounted. The person responsible for it can resume it under Settings.'
+
 /**
  * OAuth 2.0 Token Endpoint.
  *
@@ -239,6 +245,19 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     if (registration) storedClient = `registered:${registration.id}`
   }
 
+  // A reconnect lands on the same connector identity as the connection it
+  // replaces (one per user and client, migration 20261029100000), so a
+  // paused agent cannot sign in again around its pause. Refused before a key
+  // exists. The key would be refused at every call anyway, so a failed
+  // lookup (a database without the table) lets the exchange through.
+  if (await connectorIsPaused(supabase, payload.userId, storedClient)) {
+    log.info('authorization refused: agent paused', { userId: payload.userId, client: storedClient })
+    return NextResponse.json(
+      { error: 'invalid_grant', error_description: AGENT_PAUSED_DESCRIPTION },
+      { status: 400 }
+    )
+  }
+
   // The key row and its company allowlist rows (for a restricted consent)
   // are written by one SECURITY DEFINER RPC in one transaction. A key with
   // no allowlist rows reaches every company its user belongs to, so the two
@@ -305,6 +324,39 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     refresh_token: refresh.token,
     scope: grantedScopes.join(' '),
   })
+}
+
+/**
+ * Whether the live connector identity of (user, client) is paused. Mirrors
+ * the identity the api_keys trigger attaches a new OAuth key to: kind
+ * connector, not revoked, same sponsor and client (a missing client is one
+ * connector too). Any lookup error answers false: validation refuses a paused
+ * identity's keys regardless, so this check only saves minting a dead key.
+ */
+async function connectorIsPaused(
+  supabase: ReturnType<typeof createServiceClientNoCookies>,
+  userId: string,
+  client: string | null,
+): Promise<boolean> {
+  try {
+    let query = supabase
+      .from('agent_identities')
+      .select('id')
+      .eq('sponsor_user_id', userId)
+      .eq('kind', 'connector')
+      .is('revoked_at', null)
+      .not('paused_at', 'is', null)
+    query = client === null ? query.is('client', null) : query.eq('client', client)
+    const { data, error } = await query.limit(1)
+    if (error) {
+      log.warn('agent identity pause lookup failed', { code: error.code })
+      return false
+    }
+    return Array.isArray(data) && data.length > 0
+  } catch (err) {
+    log.warn('agent identity pause lookup threw', { message: err instanceof Error ? err.message : String(err) })
+    return false
+  }
 }
 
 /**
@@ -397,18 +449,24 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
     log.warn('refresh token reuse: grant revoked', { apiKeyId, outcome })
   } else if (outcome === 'replayed') {
     log.info('refresh token replayed: same successor returned', { apiKeyId, outcome })
+  } else if (outcome === 'paused') {
+    log.info('refresh refused: agent paused', { apiKeyId, outcome })
   }
 
   // 'rotated' and 'replayed' both succeed with the successor pair. Everything
   // else is invalid_grant; for 'reuse_revoked' the RPC already revoked it.
+  // 'paused' wrote nothing: the same refresh token rotates once the agent is
+  // resumed.
   if (outcome !== 'rotated' && outcome !== 'replayed') {
     return NextResponse.json(
       {
         error: 'invalid_grant',
         error_description:
-          outcome === 'revoked' || outcome === 'reuse_revoked'
-            ? 'Refresh token revoked'
-            : 'Invalid or expired refresh token',
+          outcome === 'paused'
+            ? AGENT_PAUSED_DESCRIPTION
+            : outcome === 'revoked' || outcome === 'reuse_revoked'
+              ? 'Refresh token revoked'
+              : 'Invalid or expired refresh token',
       },
       { status: 400 }
     )

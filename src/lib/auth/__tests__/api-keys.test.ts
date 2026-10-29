@@ -351,6 +351,8 @@ describe('validateApiKey', () => {
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
       serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
     })
   })
 
@@ -377,6 +379,8 @@ describe('validateApiKey', () => {
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
       serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
     })
   })
 
@@ -406,6 +410,53 @@ describe('validateApiKey', () => {
       allowedCompanyIds: null,
       readOnlyCompanyIds: null,
       serviceAccount: null,
+      agentIdentityId: null,
+      client: null,
+    })
+  })
+
+  describe('agent identities', () => {
+    it('returns the agent identity and the client the key belongs to', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-1',
+          company_id: 'company-1',
+          api_key_id: 'ak_oauth',
+          api_key_name: 'MCP-klient (OAuth)',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          agent_identity_id: 'identity-1',
+          client: 'claude',
+        }],
+        error: null,
+      })
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toMatchObject({
+        userId: 'user-1',
+        agentIdentityId: 'identity-1',
+        client: 'claude',
+      })
+    })
+
+    it('answers a paused agent 403 AGENT_PAUSED, not the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal' ? { data: 'AGENT_PAUSED', error: null } : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toEqual({ error: expect.stringMatching(/paused/i), status: 403, code: 'AGENT_PAUSED' })
+    })
+
+    it('ignores a refusal code it does not know: the bare 401', async () => {
+      const mockRpc = vi.fn(async (name: string) =>
+        name === 'api_key_refusal' ? { data: 'SOMETHING_NEW', error: null } : { data: [], error: null },
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc: mockRpc } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toEqual({ error: 'Invalid API key', status: 401 })
     })
   })
 
@@ -437,7 +488,7 @@ describe('validateApiKey', () => {
 
     it('answers a suspended service account with its own code, not the bare 401', async () => {
       const mockRpc = vi.fn(async (name: string) =>
-        name === 'service_account_key_refusal'
+        name === 'api_key_refusal'
           ? { data: 'SERVICE_ACCOUNT_SUSPENDED', error: null }
           : { data: [], error: null },
       )
@@ -446,12 +497,12 @@ describe('validateApiKey', () => {
 
       const result = await validateApiKey('gnubok_sk_test-key-value')
       expect(result).toMatchObject({ status: 403, code: 'SERVICE_ACCOUNT_SUSPENDED' })
-      expect(mockRpc).toHaveBeenCalledWith('service_account_key_refusal', { p_key_hash: expect.any(String) })
+      expect(mockRpc).toHaveBeenCalledWith('api_key_refusal', { p_key_hash: expect.any(String) })
     })
 
     it('falls back to the bare 401 when the refusal lookup fails (a DB without the function)', async () => {
       const mockRpc = vi.fn(async (name: string) =>
-        name === 'service_account_key_refusal'
+        name === 'api_key_refusal'
           ? { data: null, error: { code: 'PGRST202', message: 'not found' } }
           : { data: [], error: null },
       )
