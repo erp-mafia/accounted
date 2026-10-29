@@ -25,6 +25,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type { ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { entryUnattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
@@ -195,6 +196,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
       }
     }
+
+    // An API key's unattended ceiling, which the storno's commit asks: here
+    // before the dry-run return too. The storno is the original's amount.
+    const overCeiling = await entryUnattendedCeilingRefusal(ctx.supabase, entryId)
+    if (overCeiling) return v1ErrorResponse(overCeiling, ctx.log, { requestId: ctx.requestId })
 
     // The object the verifikat books, if any (advice, never a refusal): a
     // storno leaves it as it was, so dry run and answer name it and its action.

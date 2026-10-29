@@ -63,8 +63,10 @@ import {
   AccountsNotInChartError,
   isBookkeepingError,
   TransactionMissingSekValueError,
+  UnattendedCommitLimitExceededError,
 } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import {
   detectBookingDuplicate,
@@ -963,6 +965,12 @@ export async function categorizeTransaction(
       if (err instanceof TransactionMissingSekValueError) return missingSekRefusal(err, transaction)
       throw err
     }
+    // An API key's unattended ceiling, which the booking's commit asks: the
+    // preview answers what the booking would.
+    const overCeiling = wouldBook ? unattendedCeilingRefusal(debitTotal(lines)) : null
+    if (overCeiling) {
+      return refuseFor(overCeiling.code, { attempted: overCeiling.attempted, limit: overCeiling.limit }, { cause: overCeiling })
+    }
     return {
       ok: true,
       dryRun: true,
@@ -1010,6 +1018,11 @@ export async function categorizeTransaction(
       })
     }
     if (err instanceof TransactionMissingSekValueError) return missingSekRefusal(err, transaction)
+    // Above the API key's unattended ceiling: nothing was posted and the row
+    // stays in "Att bokföra" for a person, under the refusal's own code.
+    if (err instanceof UnattendedCommitLimitExceededError) {
+      return refuseFor(err.code, { attempted: err.attempted, limit: err.limit }, { cause: err })
+    }
     // Fail closed (issue #1947): the verifikat IS the booking, so nothing is
     // written and the row stays in "Att bokföra".
     // A named database refusal (PT409: the bank row changed, another bank

@@ -144,7 +144,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.supabase,
         {
           id: operationId,
-          error: { code: 'YEAR_END_FAILED', message: getErrorMessage(err, { locale: 'en' }) },
+          error: {
+            // A key with an unattended ceiling never closes a year: refused before anything posts.
+            code: (err as { code?: unknown })?.code === 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' ? 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' : 'YEAR_END_FAILED',
+            message: getErrorMessage(err, { locale: 'en' }),
+          },
         },
         ctx.log,
       )

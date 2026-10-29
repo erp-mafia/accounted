@@ -52,6 +52,7 @@ export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLE
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
 export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
 export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
+export const UNATTENDED_COMMIT_LIMIT_EXCEEDED = 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -641,6 +642,30 @@ export class TransactionMissingSekValueError extends Error {
   }
 }
 
+/**
+ * A verifikat above the acting API key's unattended ceiling
+ * (api_keys.unattended_commit_limit): refused before a voucher number is
+ * drawn, so nothing is posted and the series has no gap. A person posts it
+ * from the app, or the key stages it for approval. lib/bookkeeping/unattended-ceiling.ts
+ * raises it; `attempted` and `limit` are SEK. `attempted` is null for an act
+ * whose amounts are only known as it posts them (a year-end close), which a
+ * key with a ceiling never runs.
+ */
+export class UnattendedCommitLimitExceededError extends Error {
+  readonly code = UNATTENDED_COMMIT_LIMIT_EXCEEDED
+  constructor(
+    public readonly attempted: number | null,
+    public readonly limit: number,
+  ) {
+    super(
+      attempted === null
+        ? `Unattended commit limit: a key with a limit of ${limit} SEK may not run this unattended`
+        : `Unattended commit limit exceeded: ${attempted} SEK is above the key's limit of ${limit} SEK`,
+    )
+    this.name = 'UnattendedCommitLimitExceededError'
+  }
+}
+
 // ============================================================================
 // BookkeepingDatabaseError: single wrapper for all "Failed to <op>: <cause>"
 // engine throws. The `operation` tag is preserved for logs; the cause string
@@ -761,6 +786,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
+    err instanceof UnattendedCommitLimitExceededError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||
     err instanceof CorrectionChainTooDeepError ||

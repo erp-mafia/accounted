@@ -120,14 +120,30 @@ export function priceOperation(
 }
 
 /**
+ * The ceiling that binds this actor: its positive limit when it is a key
+ * credential (api_key; mcp_oauth: an OAuth access token is itself a minted
+ * key; service_account: a service account's key), else null.
+ *
+ * Null means "do not enforce", so the control can only ever narrow what an
+ * API key does unattended and can never touch a human, a cron or an in-app
+ * approval. Every check of the ceiling starts here: the operation price below
+ * and the engine's check of each verifikat (lib/bookkeeping/unattended-ceiling.ts).
+ */
+export function unattendedCeiling(
+  actorType: string | undefined,
+  limit: number | null | undefined,
+): number | null {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) return null
+  const isKeyCredential = actorType === 'api_key' || actorType === 'mcp_oauth' || actorType === 'service_account'
+  return isKeyCredential ? limit : null
+}
+
+/**
  * True when this commit needs a human first.
  *
  * Written NULL-first in every clause. Absence of a limit, absence of a price,
- * and any actor that is not a key credential (api_key; mcp_oauth: an OAuth
- * access token is itself a minted key; service_account: a service account's
- * key) all return false, so the control can
- * only ever narrow what an API key does unattended and can never touch a
- * human, a cron or an in-app approval.
+ * and any actor that is not a key credential (unattendedCeiling) all return
+ * false.
  */
 export function exceedsUnattendedLimit(params: {
   actorType: string | undefined
@@ -140,14 +156,13 @@ export function exceedsUnattendedLimit(params: {
       ? params.limit
       : null
 
-  const isKeyCredential =
-    params.actorType === 'api_key' || params.actorType === 'mcp_oauth' || params.actorType === 'service_account'
-  if (!isKeyCredential || limit === null) {
+  const ceiling = unattendedCeiling(params.actorType, limit)
+  if (ceiling === null) {
     return { exceeded: false, attempted: null, limit }
   }
 
   const attempted = priceOperation(params.operationType, params.previewData)
-  if (attempted === null) return { exceeded: false, attempted: null, limit }
+  if (attempted === null) return { exceeded: false, attempted: null, limit: ceiling }
 
-  return { exceeded: attempted > limit, attempted, limit }
+  return { exceeded: attempted > ceiling, attempted, limit: ceiling }
 }

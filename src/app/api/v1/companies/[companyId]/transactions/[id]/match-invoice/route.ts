@@ -56,6 +56,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { postingPort } from '@/lib/posting/port'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
+import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
@@ -564,6 +565,42 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           }
         : null
 
+    // The 1510 clearing entry of the accrual branch below.
+    const buildClearing = () =>
+      buildInvoiceMatchClearingLines(
+        {
+          amount: transaction.amount,
+          amount_sek: transaction.amount_sek ?? null,
+          currency: transaction.currency,
+          exchange_rate: transaction.exchange_rate ?? null,
+        },
+        {
+          currency: invoice.currency,
+          exchange_rate: invoice.exchange_rate ?? null,
+          remaining_amount: invoice.remaining_amount ?? null,
+          total: invoice.total,
+          paid_amount: invoice.paid_amount ?? null,
+          invoice_number: invoice.invoice_number,
+          customer: invoice.customer,
+          default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
+        },
+        fx.required ? fx.paidInInvoiceCurrency : undefined,
+        paymentAccount,
+      )
+
+    // An API key's unattended ceiling, on the payment verifikat, before the
+    // sale or the storno below posts anything: the engine refuses it at
+    // commit too, but by then those would stand without the payment (an FX
+    // loss can put the payment above a bank amount within the ceiling). The
+    // cash entry debits the bank amount.
+    if (actorUnattendedCeiling() !== null) {
+      const paymentLines = customLines ?? (useCashEntry ? null : buildClearing().lines)
+      const overCeiling = unattendedCeilingRefusal(
+        paymentLines ? debitTotal(paymentLines) : Math.abs(transaction.amount_sek ?? transaction.amount),
+      )
+      if (overCeiling) return v1ErrorResponse(overCeiling, txLog, { requestId: ctx.requestId })
+    }
+
     // The sale first: a correct booking of the sent invoice whatever happens
     // to the match after it.
     const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
@@ -666,26 +703,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         // The invoice's dimension bag rides every leg, FX result lines
         // included, so a project's kursvinst/kursförlust stays inside the
         // project's result (the builder stamps it).
-        const { description, lines: clearingLines } = buildInvoiceMatchClearingLines(
-          {
-            amount: transaction.amount,
-            amount_sek: transaction.amount_sek ?? null,
-            currency: transaction.currency,
-            exchange_rate: transaction.exchange_rate ?? null,
-          },
-          {
-            currency: invoice.currency,
-            exchange_rate: invoice.exchange_rate ?? null,
-            remaining_amount: invoice.remaining_amount ?? null,
-            total: invoice.total,
-            paid_amount: invoice.paid_amount ?? null,
-            invoice_number: invoice.invoice_number,
-            customer: invoice.customer,
-            default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
-          },
-          fx.required ? fx.paidInInvoiceCurrency : undefined,
-          paymentAccount,
-        )
+        const { description, lines: clearingLines } = buildClearing()
         const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
@@ -717,6 +735,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // reason as the supplier route: the class's module is vi.mock'ed away in
       // route tests, and the string literal can't degrade into a catch-all.
       if ((err as { code?: unknown })?.code === 'MATCH_INVOICE_BOOKING_RATE_MISSING') {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
+      // Above the API key's unattended ceiling: its own 403 and remediation,
+      // not a retryable 5xx.
+      if ((err as { code?: unknown })?.code === 'UNATTENDED_COMMIT_LIMIT_EXCEEDED') {
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
       txLog.error('match-invoice: payment JE creation failed: aborting before state mutation', err as Error)

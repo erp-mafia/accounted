@@ -23,6 +23,13 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+// Pass-through spy: which actor the executor runs under.
+vi.mock('@/lib/bookkeeping/actor-context-node', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/actor-context-node')>()
+  return { ...actual, runWithActor: vi.fn(actual.runWithActor) }
+})
+
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -175,6 +182,25 @@ describe('commitPendingOperation: unattended commit limit', () => {
       expect(result.code).toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
       expect(result.operation_status).toBe('pending')
     }
+  })
+
+  // The operation is the unit that was priced and approved. The engine's own
+  // check of each verifikat (lib/bookkeeping/unattended-ceiling.ts) must not
+  // refuse inside the claim, where a throw would consume the operation.
+  it('runs the executor without the ceiling once the operation is priced within it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null })
+
+    await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({}),
+      { actor: { ...apiKeyActor, unattendedCommitLimit: 100000 } },
+    )
+
+    expect(runWithActor).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(runWithActor).mock.calls[0][0]).toEqual(apiKeyActor)
   })
 
   it('also covers categorize_transaction and supplier invoices from the inbox', async () => {

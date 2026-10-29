@@ -532,6 +532,21 @@ describe('validateApiKey', () => {
       })
       expect(apiKeyCommitActor({ serviceAccount: null })).toEqual({ type: 'api_key', label: 'Unnamed API key' })
     })
+
+    it('carries the key\'s unattended ceiling, so every door the request reaches is bound by it (#125)', () => {
+      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: 5000 })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+        unattendedCommitLimit: 5000,
+      })
+      expect(
+        apiKeyCommitActor({ serviceAccount: { id: 'sa-1', name: 'Synk' }, unattendedCommitLimit: 5000 }),
+      ).toMatchObject({ type: 'service_account', unattendedCommitLimit: 5000 })
+      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: null })).toEqual({
+        type: 'api_key',
+        label: 'Nyckel 1',
+      })
+    })
   })
 
   describe('unattended commit limit', () => {

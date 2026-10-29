@@ -22,6 +22,7 @@ import {
   type DimensionAliasInput,
 } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
+import { assertLinesWithinUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
@@ -49,6 +50,7 @@ import {
   NoOpenPeriodForDateError,
   TargetPeriodClosedError,
   TargetPeriodLockedError,
+  UnattendedCommitLimitExceededError,
 } from '@/lib/bookkeeping/errors'
 
 /**
@@ -389,6 +391,13 @@ export async function correctEntry(
     }
   }
 
+  // An API key's unattended ceiling, for both verifikat before either is
+  // drafted: the storno (the original's amount) and the corrected one. The
+  // commit asks again, but by then a refused correction would cancel a storno
+  // that already drew its number.
+  assertLinesWithinUnattendedCeiling(originalLines)
+  assertLinesWithinUnattendedCeiling(correctedLines)
+
   // ===== Step 0: Resolve corrected-line accounts BEFORE any journal write =====
   // The old flow created and posted the storno first and only then discovered
   // that a corrected line referenced an account outside the chart. The storno
@@ -504,6 +513,7 @@ export async function correctEntry(
 
   if (postReversalError) {
     await cancelEntry(supabase, companyId, userId, reversalEntry.id)
+    if (postReversalError instanceof UnattendedCommitLimitExceededError) throw postReversalError
     throw new BookkeepingDatabaseError('post_reversal_entry', postReversalError.message)
   }
 
@@ -599,6 +609,7 @@ export async function correctEntry(
 
     if (postCorrectedError) {
       await cancelEntry(supabase, companyId, userId, correctedEntry.id)
+      if (postCorrectedError instanceof UnattendedCommitLimitExceededError) throw postCorrectedError
       throw new BookkeepingDatabaseError('post_corrected_entry', postCorrectedError.message)
     }
   } catch (err) {

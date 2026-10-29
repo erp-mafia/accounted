@@ -43,7 +43,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
-import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
+import { buildSupplierBankMatchLines, createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
+import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -251,6 +252,16 @@ export async function bookSupplierBankMatch(
         details: { totalDebit, totalCredit },
       }
     }
+  }
+
+  // An API key's unattended ceiling, on the payment verifikat, before the
+  // registration or the storno below posts anything: the engine refuses it
+  // at commit too, but by then those would stand without the payment (an FX
+  // difference can put the payment above a bank amount within the ceiling).
+  if (actorUnattendedCeiling() !== null) {
+    const paymentLines = customLines ?? buildSupplierBankMatchLines(invoice, plan.booking, paymentAccount).lines
+    const overCeiling = unattendedCeilingRefusal(debitTotal(paymentLines))
+    if (overCeiling) return { ok: false, code: overCeiling.code, error: overCeiling }
   }
 
   // Faktureringsmetoden with defer_invoice_booking: an invoice registered

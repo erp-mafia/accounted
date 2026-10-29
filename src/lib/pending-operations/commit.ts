@@ -7407,7 +7407,13 @@ export async function commitPendingOperation(
       () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts),
       pendingOp.agent_reason ?? null,
     )
-  return opts.actor ? runWithActor(opts.actor, run) : run()
+  if (!opts.actor) return run()
+  // The key's unattended ceiling is the operation's, priced on its preview
+  // before the claim below, where a refusal keeps it pending. The executor
+  // runs without it: the engine's own check (lib/bookkeeping/unattended-ceiling.ts)
+  // would refuse inside the claim, where a throw consumes the operation.
+  const { unattendedCommitLimit: _priced, ...dispatchActor } = opts.actor
+  return runWithActor(dispatchActor, run)
 }
 
 async function commitPendingOperationInner(

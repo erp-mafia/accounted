@@ -63,6 +63,7 @@ import {
   TargetPeriodClosedError,
   TargetPeriodLockedError,
   TransactionMissingSekValueError,
+  UnattendedCommitLimitExceededError,
   isBookkeepingError,
 } from '../bookkeeping/errors'
 
@@ -691,6 +692,11 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
       code: err.code,
       details: { transactionId: err.transactionId, currency: err.currency, date: err.date },
     }
+  }
+  // The two numbers the remediation refers to, as the staged-operation
+  // refusal carries them (pending-operations/commit.ts).
+  if (err instanceof UnattendedCommitLimitExceededError) {
+    return { code: err.code, details: { attempted: err.attempted, limit: err.limit } }
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
