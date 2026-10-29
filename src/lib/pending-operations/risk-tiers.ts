@@ -510,6 +510,11 @@ const RISK_TIERS = {
   // (getRiskLevel already defaults unknown → 'high'; explicit for intent.)
   submit_vat_declaration: 'high',
   submit_agi: 'high',
+
+  // ── Underskottsregistret (IL 40 kap.) ──────────────────────────────
+  // Saves a year of prior tax losses: no verifikat, re-saved to undo, but
+  // its 4.14 a feeds the year's tax provision and INK2, so a person reviews.
+  save_tax_loss_carryforward: 'medium',
 } as const satisfies Record<string, RiskLevel>
 
 /** A pending_operations.operation_type: a key of the tier table above. */

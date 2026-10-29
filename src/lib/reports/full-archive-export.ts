@@ -1385,6 +1385,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // the allmännyttig statement, the exempt/taxable/shared treatment per
   // account and the ruta overrides. The bridge from the books to the return.
   { name: 'ink3_underlag_inputs', file: 'ink3_underlag_inputs.json', orderBy: 'created_at' },
+  // The underskottsregister (IL 40 kap.): per räkenskapsår the deficit
+  // brought forward (INK2S 4.14 a), the spärrar and the deficit carried
+  // forward, with the ownership change behind a spärr. No personal data.
+  { name: 'tax_loss_carryforwards', file: 'tax_loss_carryforwards.json', orderBy: 'created_at' },
   { name: 'tax_assessment_notices', file: 'tax_assessment_notices.json', orderBy: 'created_at' },
   { name: 'arsredovisning_narratives', file: 'arsredovisning_narratives.json' },
   { name: 'annual_report_profiles', file: 'annual_report_profiles.json', orderBy: 'created_at' },

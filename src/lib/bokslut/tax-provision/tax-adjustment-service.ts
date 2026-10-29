@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import type {
   TaxAdjustmentItem,
@@ -7,7 +7,9 @@ import type {
   TaxAdjustmentType,
 } from '../types'
 import type { EntityType } from '@/types'
-import { resolveCompanyEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
+import { resolveCompanyEntityType, supportsMemberCapital, usesInk2 } from '@/lib/company/entity-type'
+import { lossCarryforwardEnabledFor } from '@/lib/env/loss-carryforward-switch'
+import { loadRegisterDeficit } from '../loss-carryforward/register'
 
 interface DetectedTaxAdjustmentAccount {
   accountNumber: string
@@ -122,7 +124,10 @@ export async function loadTaxAdjustmentSnapshot(
   entityType?: EntityType,
 ): Promise<TaxAdjustmentSnapshot> {
   const form = await resolveFormForAdjustments(supabase, companyId, entityType)
-  const [trialBalance, persistedResult] = await Promise.all([
+  // The underskottsregister (IL 40 kap.) is read only where its switch is on
+  // and the form files INK2; everywhere else 4.14 a is the manual entry alone.
+  const registerOpen = form !== null && lossCarryforwardEnabledFor(companyId) && usesInk2(form)
+  const [trialBalance, persistedResult, register] = await Promise.all([
     generateTrialBalance(supabase, companyId, fiscalPeriodId, {
       closingEntry: 'exclude-all-year-end',
     }),
@@ -131,6 +136,7 @@ export async function loadTaxAdjustmentSnapshot(
       .select('source_key, adjustment_type, source, description, account_number, amount, included')
       .eq('company_id', companyId)
       .eq('fiscal_period_id', fiscalPeriodId),
+    registerOpen ? loadRegisterDeficit(supabase, companyId, fiscalPeriodId) : Promise.resolve(null),
   ])
 
   if (persistedResult.error) {
@@ -166,9 +172,17 @@ export async function loadTaxAdjustmentSnapshot(
     }
   })
 
+  // With a register row for the year, 4.14 a is the register's (4.14 a less
+  // the spärrar on 4.14 b and c); a saved manual figure that differs from it
+  // is an override and wins, and the snapshot says so.
+  let deficitOverridden = false
   const manualItems: TaxAdjustmentItem[] = MANUAL_ADJUSTMENTS.map((config) => {
     const persisted = persistedByKey.get(config.sourceKey)
-    const amount = roundOre(Math.max(0, Number(persisted?.amount) || 0))
+    let amount = roundOre(Math.max(0, Number(persisted?.amount) || 0))
+    if (config.adjustmentType === 'deficit_carryforward' && register) {
+      deficitOverridden = amount > 0 && !equalOre(amount, register.deductible)
+      if (!deficitOverridden) amount = register.deductible
+    }
     return {
       sourceKey: config.sourceKey,
       source: 'manual',
@@ -180,7 +194,9 @@ export async function loadTaxAdjustmentSnapshot(
     }
   })
 
-  return summarizeTaxAdjustments([...detectedItems, ...manualItems])
+  const snapshot = summarizeTaxAdjustments([...detectedItems, ...manualItems])
+  if (!registerOpen) return snapshot
+  return { ...snapshot, lossRegister: { row: register, overridden: deficitOverridden } }
 }
 
 export async function saveTaxAdjustments(
@@ -193,6 +209,14 @@ export async function saveTaxAdjustments(
 ): Promise<void> {
   const form = await resolveFormForAdjustments(supabase, companyId, entityType)
   const current = await loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, form ?? undefined)
+  // The figure the register already gives is not stored as an override, so
+  // a later change in the register flows into this year; a different figure
+  // is stored and wins (loadTaxAdjustmentSnapshot).
+  const registerRow = current.lossRegister?.row ?? null
+  const deficitCarryforward =
+    registerRow && equalOre(roundOre(input.manualAdjustments.deficitCarryforward), registerRow.deductible)
+      ? 0
+      : input.manualAdjustments.deficitCarryforward
   const detectedAmounts = new Map(
     current.items
       .filter((item) => item.source === 'detected')
@@ -245,8 +269,8 @@ export async function saveTaxAdjustments(
       source_key: 'manual:deficit_carryforward',
       description: 'Outnyttjat underskott från föregående beskattningsår',
       account_number: null,
-      amount: roundOre(input.manualAdjustments.deficitCarryforward),
-      included: input.manualAdjustments.deficitCarryforward > 0,
+      amount: roundOre(deficitCarryforward),
+      included: deficitCarryforward > 0,
     },
   ]
 

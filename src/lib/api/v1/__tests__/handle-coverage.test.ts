@@ -185,6 +185,7 @@ describe('path parameter typing', () => {
       'settlements/:settlementId': null,
       'supplier-payment-batches/:id': 'supplier_payment_batch',
       'suppliers/:id': 'supplier',
+      'tax-loss-carryforwards/:id': null,
       'transactions/:id': 'transaction',
       'values/:valueId': 'dimension_value',
       'webhook-deliveries/:id': 'webhook_delivery',

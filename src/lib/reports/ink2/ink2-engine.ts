@@ -502,6 +502,17 @@ export async function generateINK2Declaration(
     )
   }
 
+  // The underskottsregister's spärrar are netted into the 4.14 a deducted
+  // above: the taxable result is right, but Skatteverket's form takes the
+  // whole deficit on 4.14 a with the reductions on 4.14 b and 4.14 c (4.14 c
+  // also on 1.2), which this form does not carry yet.
+  const lossRegisterRow = taxAdjustments.lossRegister?.overridden ? null : taxAdjustments.lossRegister?.row
+  if (lossRegisterRow && (lossRegisterRow.amountBlockReduction > 0 || lossRegisterRow.groupBlockReduction > 0)) {
+    warnings.push(
+      `Underskottsregistret har spärrade belopp, så punkt 4.14 a visar underskottet netto (${deficitCarryforward} kr). I deklarationen ska 4.14 a vara ${Math.trunc(lossRegisterRow.broughtForward)} kr, 4.14 b ${Math.trunc(lossRegisterRow.amountBlockReduction)} kr och 4.14 c ${Math.trunc(lossRegisterRow.groupBlockReduction)} kr (4.14 c även i punkt 1.2). Ange dem i Skatteverkets e-tjänst.`,
+    )
+  }
+
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')

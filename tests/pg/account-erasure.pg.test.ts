@@ -114,6 +114,7 @@ const RETAINED = new Set([
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
   'ink3_underlag_inputs.updated_by', // Who last saved a förening's INK3 inputs; the company keeps the record.
+  'tax_loss_carryforwards.updated_by', // Who last saved a year of the underskottsregister; the company keeps the record.
   'fiscal_periods.user_id',
   'journal_entries.user_id',
   'journal_entry_no_doc_required.user_id',

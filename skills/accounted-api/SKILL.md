@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 387 endpoints.
+  pagination, scopes), and all 390 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 387 operations. Paths are shown without
+API version `2026-05-12`, 390 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -282,7 +282,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (52)
+### Periods and registers (55)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -339,6 +339,9 @@ POST /companies/{companyId}/skattekonto/sync : Fetch the skattekonto from Skatte
 POST /companies/{companyId}/skatteverket/agi/validate-huvuduppgift : Pre-validate an AGI huvuduppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]
 POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-validate one AGI individuppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
+GET /companies/{companyId}/tax-loss-carryforwards : The underskottsregister: prior years' tax losses per fiscal year (IL 40 kap.), oldest first [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/tax-loss-carryforwards : Save one fiscal year of the underskottsregister: the deficit brought forward, an ownership change and the year's result [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/tax-loss-carryforwards/{id} : One fiscal year of the underskottsregister, checked against the year before it [scope:reports:read risk:low idempotent]
 ```
 
 ### Invoices (AR) (28)

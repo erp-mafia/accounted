@@ -11403,6 +11403,48 @@ const AUTOGIRO: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Underskottsregistret (IL 40 kap., lib/bokslut/loss-carryforward)
+// ─────────────────────────────────────────────────────────────────
+
+const LOSS_CARRYFORWARD: Record<string, StructuredErrorEntry> = {
+  LOSS_CARRYFORWARD_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv: 'Underskottsregistret är inte tillgängligt här.',
+    message_en: 'The loss carry-forward register is not available here.',
+  },
+  LOSS_CARRYFORWARD_FORM_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv: 'Underskottsregistret gäller företag som lämnar inkomstdeklaration 2.',
+    message_en: 'The loss carry-forward register is for companies that file income tax return 2 (INK2).',
+  },
+  LOSS_CARRYFORWARD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Året finns inte i underskottsregistret.',
+    message_en: 'The year is not in the loss carry-forward register.',
+  },
+  LOSS_CARRYFORWARD_LINK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dokumentet eller skattebeskedet hittades inte hos företaget.',
+    message_en: 'The document or tax assessment notice was not found for the company.',
+  },
+  LOSS_CARRYFORWARD_CHANGE_OUTSIDE_YEAR: {
+    httpStatus: 422,
+    message_sv: 'Ägarförändringen ska ligga inom räkenskapsåret.',
+    message_en: 'The ownership change must fall inside the fiscal year.',
+  },
+  LOSS_CARRYFORWARD_BLOCK_END_BEFORE_CHANGE: {
+    httpStatus: 422,
+    message_sv: 'Koncernbidragsspärrens sista år kan inte ligga före året för ägarförändringen.',
+    message_en: 'The last year of the group contribution block cannot be before the year of the ownership change.',
+  },
+  LOSS_CARRYFORWARD_REDUCTIONS_EXCEED: {
+    httpStatus: 422,
+    message_sv: 'Punkt 4.14 b och 4.14 c kan tillsammans inte vara större än underskottet från föregående år (4.14 a).',
+    message_en: 'Fields 4.14 b and 4.14 c together cannot exceed the deficit brought forward (4.14 a).',
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -11471,6 +11513,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SIGNING,
   ...PENDING_OPERATIONS,
   ...AUTOGIRO,
+  ...LOSS_CARRYFORWARD,
   ...STOCK_COUNT,
 }
 

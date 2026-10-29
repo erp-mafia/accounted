@@ -15,6 +15,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DepreciationPanel } from './DepreciationPanel'
 import { EfDeclarationSection } from './EfDeclarationSection'
+import { LossCarryforwardRegister, LossRegisterDeficitHint } from './LossCarryforwardRegister'
 import type {
   DispositionsProposal,
   ProposedDisposition,
@@ -339,6 +340,12 @@ export function DispositionsStep({
         />
       )}
 
+      {/* The underskottsregister (IL 40 kap.) next to the 4.14 a it
+          prefills: present only while BOLAGET_COMPANY_IDS opens it. */}
+      {proposal.taxAdjustments?.lossRegister && (
+        <LossCarryforwardRegister periodId={periodId} onSaved={() => void loadProposals()} />
+      )}
+
       {/* Attention is ochre sentences, not cards (conventions 6 and 12):
           every disposition warning in one block. */}
       {proposal.warnings && proposal.warnings.length > 0 && (
@@ -563,6 +570,7 @@ function TaxAdjustmentsCard({
               efter en flytt från ett annat system. Dras av från årets skattemässiga resultat
               (INK2S punkt 4.14 a).
             </p>
+            <LossRegisterDeficitHint register={snapshot.lossRegister} />
           </div>
         </div>
 

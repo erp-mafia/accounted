@@ -59,6 +59,30 @@ export interface TaxAdjustmentSnapshot {
   nonTaxableIncome: number
   /** Prior years' unused deficit deducted this year (INK2S 4.14 a, SRU 7763). */
   deficitCarryforward: number
+  /**
+   * The underskottsregister (IL 40 kap.) for this fiscal year. Present only
+   * while BOLAGET_COMPANY_IDS opens the register for a company that files
+   * INK2; absent, the deficit is the manual entry exactly as before.
+   */
+  lossRegister?: TaxAdjustmentLossRegister
+}
+
+export interface TaxAdjustmentLossRegister {
+  /** The register's row for the year, null when the year has none. */
+  row: null | {
+    taxLossCarryforwardId: string
+    /** INK2S 4.14 a. */
+    broughtForward: number
+    /** INK2S 4.14 b. */
+    amountBlockReduction: number
+    /** INK2S 4.14 c. */
+    groupBlockReduction: number
+    /** 4.14 a less 4.14 b and 4.14 c: what the register says the year deducts. */
+    deductible: number
+    source: 'manual' | 'ink2_history' | 'tax_assessment' | 'computed'
+  }
+  /** True when a saved manual deficit differs from the register and is used instead. */
+  overridden: boolean
 }
 
 export interface CompletedDisposition {

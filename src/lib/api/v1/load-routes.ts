@@ -381,6 +381,9 @@ import '@/app/api/v1/companies/[companyId]/signing-requests/route'
 import '@/app/api/v1/companies/[companyId]/signing-requests/[id]/route'
 import '@/app/api/v1/companies/[companyId]/signing-requests/[id]/cancel/route'
 import '@/app/api/v1/companies/[companyId]/signing-requests/[id]/signers/[signerId]/remind/route'
+// The underskottsregister: prior years' tax losses per fiscal year, IL 40 kap. (lib/operations/tax-loss-carryforwards.ts).
+import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/route'
+import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/[id]/route'
 // The attest policy for supplier invoices and one invoice's attest trail (lib/operations/supplier-invoice-attest.ts).
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/attest-policy/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/attestations/route'

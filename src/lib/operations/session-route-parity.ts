@@ -239,6 +239,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/accruals/post-due/cron': machine(CRON),
   'POST /api/bookkeeping/finance-leases': gap('P3', 'register a finansiellt leasingavtal (K3 kapitel 20, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED), dashboard first'),
   'POST /api/bookkeeping/finance-leases/book': gap('P3', 'book the year of the finansiella leasingavtal (start and year-end adjustment), dashboard first'),
+  'POST /api/bookkeeping/tax-loss-carryforwards': covered([`POST ${V}/tax-loss-carryforwards`, 'gnubok_save_tax_loss_carryforward']),
   // The year-end stock count (inventeringslista, LIV 1955:257), behind BOLAGET_COMPANY_IDS.
   'POST /api/bookkeeping/inventory-counts': covered(['gnubok_save_inventory_count'], 'served while BOLAGET_COMPANY_IDS is set'),
   'PUT /api/bookkeeping/inventory-counts/:id': covered(['gnubok_save_inventory_count'], 'served while BOLAGET_COMPANY_IDS is set'),

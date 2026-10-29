@@ -323,6 +323,43 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
     expect(sru).toContain('#UPPGIFT 7670 406000')
     expect(validateInk2BlanketterSru(sru).isValid).toBe(true)
   })
+
+  it('warns that 4.14 a is net when the underskottsregister holds spärrade amounts', async () => {
+    const register = (overridden: boolean, amountBlockReduction: number) => ({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 100_000 - amountBlockReduction,
+      lossRegister: {
+        row: {
+          taxLossCarryforwardId: 'tlc-1',
+          broughtForward: 100_000,
+          amountBlockReduction,
+          groupBlockReduction: 0,
+          deductible: 100_000 - amountBlockReduction,
+          source: 'tax_assessment',
+        },
+        overridden,
+      },
+    })
+    const blocked = (warnings: string[]) => warnings.filter((w) => w.startsWith('Underskottsregistret'))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(false, 20_000) as any)
+    const netted = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(netted.ink2s['7763']).toBe(80_000)
+    expect(netted.ink2s['7670']).toBe(426_000)
+    expect(blocked(netted.warnings)).toEqual([
+      'Underskottsregistret har spärrade belopp, så punkt 4.14 a visar underskottet netto (80000 kr). I deklarationen ska 4.14 a vara 100000 kr, 4.14 b 20000 kr och 4.14 c 0 kr (4.14 c även i punkt 1.2). Ange dem i Skatteverkets e-tjänst.',
+    ])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(false, 0) as any)
+    expect(blocked((await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)).warnings)).toEqual([])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(true, 20_000) as any)
+    expect(blocked((await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)).warnings)).toEqual([])
+  })
 })
 
 describe('generateINK2Declaration: sign-based reclassification', () => {
