@@ -512,6 +512,53 @@ const RISK_TIERS = {
   submit_vat_declaration: 'high',
   submit_agi: 'high',
 
+  // ── Bolaget registers (lib/operations/bolaget.ts) ──────────────────
+  // No booking impact. An aktiebok entry is permanent (corrected only by a
+  // rattelse entry) and moves who owns what, so medium; a class change moves
+  // the votes and with them the verkliga huvudmän, medium; an LRVH
+  // assessment is a legal record and may raise a filing, medium. Roles, a
+  // new class and the firmateckning are end-dated or superseded later: low.
+  register_share_event: 'medium',
+  create_share_class: 'low',
+  update_share_class: 'medium',
+  add_company_role: 'low',
+  end_company_role: 'low',
+  set_signatory_rule: 'low',
+  confirm_beneficial_owners: 'medium',
+
+  // ── Bolaget capital events (lib/operations/bolaget-capital.ts) ──────
+  // Recording a dividend or a capital change books nothing but enters a
+  // legal decision (a nyemission's allotment goes into the aktiebok), so
+  // medium. Everything that posts a verifikat (the dividend decision and
+  // payout, a tillskott, an emission's payment or registration) moves
+  // equity in the ledger and is corrected only by storno: high.
+  create_dividend: 'medium',
+  book_dividend: 'high',
+  pay_dividend: 'high',
+  create_shareholder_contribution: 'high',
+  create_capital_change: 'medium',
+  book_capital_change: 'high',
+
+  // ── Bolaget owner tax (lib/operations/bolaget-owner-tax.ts) ──────────
+  // Nothing here books. The owner's K10 figures and a year's interest are
+  // figures for a declaration the owner files or a kontrolluppgift: low.
+  // An owner loan enters a legal fact the låneförbud (ABL 21 kap.) and the
+  // 21:10 special list rest on: medium.
+  set_k10_owner_inputs: 'low',
+  create_owner_loan: 'medium',
+  update_owner_loan: 'medium',
+  set_owner_loan_interest: 'low',
+
+  // ── Bolaget meetings and minutes (lib/operations/corporate-meetings.ts) ──
+  // No booking impact. A draft meeting, its changes and its decisions stay
+  // open until the minutes are signed in the app: low. Holding a meeting
+  // gives board minutes their permanent number and writes the AGM date to
+  // the årsredovisning: medium.
+  create_corporate_meeting: 'low',
+  update_corporate_meeting: 'low',
+  record_corporate_decision: 'low',
+  hold_corporate_meeting: 'medium',
+
   // ── Underskottsregistret (IL 40 kap.) ──────────────────────────────
   // Saves a year of prior tax losses: no verifikat, re-saved to undo, but
   // its 4.14 a feeds the year's tax provision and INK2, so a person reviews.

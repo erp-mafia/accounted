@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 391 endpoints.
+  pagination, scopes), and all 423 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 391 operations. Paths are shown without
+API version `2026-05-12`, 423 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -477,6 +477,59 @@ POST /companies/{companyId}/signing-requests : Send an archived PDF for BankID s
 GET /companies/{companyId}/signing-requests/{id} : Read one BankID signing request: every signer's status and, once completed, the signed PDF and the evidence package [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/signing-requests/{id}/cancel : Cancel an open signing request: its links stop working; signatures already made stay [scope:documents:write risk:low idempotent dry-run]
 POST /companies/{companyId}/signing-requests/{id}/signers/{signerId}/remind : Mail a pending signer again, once a day at most; the mail carries a new link and the old one stops working [scope:documents:write risk:low idempotent dry-run]
+```
+
+### Company registers (Bolaget) (17)
+
+Full detail: [references/company-registers.md](references/company-registers.md)
+
+```text
+GET /companies/{companyId}/beneficial-owners : Read the verkliga huvudmän: the proposal from the aktiebok, the confirmed set and the record of assessments [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/beneficial-owners/assessments : Record an assessment of the verkliga huvudmän (LRVH 2:1): who they are and why, or that there is none [scope:companies:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/company-roles : List the company's roles over time (board, VD, firmatecknare, revisor, verkliga huvudmän) and the firmateckning [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/company-roles : Add a role from a date: board member, chair, suppleant, VD, vice VD, firmatecknare, revisor or contact person [scope:companies:write risk:low idempotent dry-run]
+POST /companies/{companyId}/company-roles/{id}/end : End a role on a date (the last day in it). The row is kept [scope:companies:write risk:low idempotent dry-run]
+GET /companies/{companyId}/corporate-meetings : List the company's bolagsstämmor, styrelsemöten and per capsulam decisions, newest first [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/corporate-meetings : Plan a meeting: an årsstämma (prefilled from the årsredovisning and the roles), an extra stämma, a styrelsemöte or a per capsulam decision [scope:companies:write risk:low idempotent dry-run]
+GET /companies/{companyId}/corporate-meetings/{id} : Read one meeting: its minutes paragraph by paragraph, röstlängd, attendance, signers, effects on the roles and warnings [scope:companies:read risk:low idempotent]
+PATCH /companies/{companyId}/corporate-meetings/{id} : Change a meeting whose minutes are not signed: date, place, chair, protokollförare, justerare, kallelse, attendance or röstlängd presence [scope:companies:write risk:low idempotent dry-run]
+POST /companies/{companyId}/corporate-meetings/{id}/decisions : Add or change a decision (paragraph) in a meeting's unsigned minutes, with its terms per kind [scope:companies:write risk:low idempotent dry-run]
+POST /companies/{companyId}/corporate-meetings/{id}/hold : Mark a meeting as held: a board meeting takes its minutes number, an årsstämma records its date on the årsredovisning [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/share-classes : Add a share class with its votes per share and the förbehåll of the bolagsordning [scope:companies:write risk:low idempotent dry-run]
+PATCH /companies/{companyId}/share-classes/{id} : Change a share class's name, votes per share or förbehåll; its code stays [scope:companies:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/share-register : Read the aktiebok as of a date: holders with shares, votes and percent, share numbers, classes and notes [scope:companies:read risk:low idempotent]
+GET /companies/{companyId}/share-register/events : List every aktiebok entry in entry order, each with a Swedish sentence and whether a rättelse voided it [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/share-register/events : Add a dated entry to the aktiebok: an issue, a transfer, a cancellation, a conversion, a split, an aktiebrev, a pledge or a note [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/signatory-rules : Set the firmateckning from a date; the rule in force ends the day before [scope:companies:write risk:low idempotent dry-run]
+```
+
+### Capital events (Bolaget) (8)
+
+Full detail: [references/capital-events.md](references/capital-events.md)
+
+```text
+POST /companies/{companyId}/capital-changes : Record a nyemission, fondemission or minskning av aktiekapitalet, with its allotment and its filing deadlines [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/capital-changes/{id}/book : Book a capital change: a nyemission's payment (D bank / K 2082, 2097), or the registration of any change [scope:bookkeeping:write risk:high idempotent dry-run]
+GET /companies/{companyId}/capital-events : Read the capital events: dividends with the split per holder, aktieägartillskott, and nyemission, fondemission and minskning [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/dividends : Record a dividend decided by the bolagsstämma and split it over the holders of the aktiebok [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/dividends/{id}/book : Book a decided dividend: D 2098 (or 2091) / K 2898 on the decision day, and freeze the split per holder [scope:bookkeeping:write risk:high idempotent dry-run]
+POST /companies/{companyId}/dividends/{id}/pay : Mark a booked dividend paid: book D 2898 / K bank, or link the payout verifikat already booked from the bank [scope:bookkeeping:write risk:high idempotent dry-run]
+GET /companies/{companyId}/ku31/{year} : Read the KU31 status of an inkomstår: who received a dividend, what is reported, what still blocks the file [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/shareholder-contributions : Register and book an aktieägartillskott (villkorat or ovillkorat), or the repayment of a villkorat one [scope:bookkeeping:write risk:high idempotent dry-run]
+```
+
+### Owner tax (Bolaget) (7)
+
+Full detail: [references/owner-tax.md](references/owner-tax.md)
+
+```text
+GET /companies/{companyId}/k10/{year} : Read the K10 underlag per delägare for an inkomstår: gränsbelopp, lönebaserat utrymme, dividend and sparat utdelningsutrymme [scope:payroll:read risk:low idempotent]
+PUT /companies/{companyId}/k10/{year}/owners/{partyId} : Save what a delägare enters for the K10 underlag of a year: sparat utdelningsutrymme, an omkostnadsbelopp, a löneunderlag or own pay that differs from the payroll [scope:companies:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/ku20/{year} : Read the KU20 status of an inkomstår: interest the company paid to natural persons on their loans, the tax withheld, and what blocks the file [scope:companies:read risk:low idempotent]
+GET /companies/{companyId}/owner-loans : Read the owner loan register: loans and security between the company and its owners, board, VD and related persons, with the låneförbud check and the ledger reconciliation [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/owner-loans : Register a loan between the company and an owner, board member, VD or related person, or security the company gave for one; checked against the låneförbud (ABL 21 kap.) [scope:companies:write risk:medium idempotent dry-run]
+PATCH /companies/{companyId}/owner-loans/{id} : Update an owner loan: outstanding after a repayment, terms, the exception claimed, or mark it repaid or cancelled [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/owner-loans/{id}/interest : Record the interest on an owner loan for an inkomstår and the tax withheld: the figures KU20 reports [scope:companies:write risk:low idempotent dry-run reversible]
 ```
 
 ### Banking (65)

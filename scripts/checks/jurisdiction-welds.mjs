@@ -67,6 +67,13 @@ export const SE_PACK_TERRITORY = [
   'lib/company/forms/se-ideell-forening.ts',
   // Swedish year-end: årsredovisning and iXBRL, periodiseringsfond, bolagsskatt, EF.
   'lib/bokslut/',
+  // Capital events under ABL 12, 13, 17-18 and 20 kap. and K2 15.5: the BAS equity
+  // accounts each one books (2081, 2082, 2097, 2093, 2898) and the KU31 file to
+  // Skatteverket's schema.
+  'lib/bolaget/capital/',
+  // Owner tax: K10 under IL 57 kap., owner loans on the BAS accounts for
+  // loans with delägare and närstående (1360, 1685, 2393, 2893), and KU20.
+  'lib/bolaget/owner-tax/',
   // Income tax returns and their SRU files.
   'lib/reports/ink2/',
   'lib/reports/ink3/',

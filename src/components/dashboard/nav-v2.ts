@@ -12,6 +12,7 @@ import {
   InboxIcon,
   PercentBadgeIcon,
   SparklesIcon,
+  UsersIcon,
   WalletIcon,
   type Icon,
 } from '@/components/icons'
@@ -58,6 +59,8 @@ export interface NavGateFlags {
   hiddenWithInkorgV2?: boolean
   /** The Autogiro page (/invoices/autogiro): shown only for companies in the AUTOGIRO_COMPANY_IDS rollout (lib/invoices/autogiro/flag.ts). */
   requiresAutogiro?: boolean
+  /** The Bolaget registers (aktiebok, styrelse): shown only for companies in the BOLAGET_COMPANY_IDS rollout (lib/env/bolaget-switch.ts). */
+  requiresBolaget?: boolean
   requiredCapability?: CapabilityKey
   /** Show only for these legal forms (one or several). */
   entityOnly?: EntityType | readonly EntityType[]
@@ -252,6 +255,23 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/reports/ink2-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
       { href: '/reports/ne-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
       { href: '/reports/ink3-declaration', module: 'ledger', labelKey: 'income_declaration', entityOnly: ['ideell_forening'] },
+    ],
+  },
+  {
+    // Bolaget, the legal entity: the aktiebok and the board over time
+    // (ABL 5, 6 and 8 kap.). An aktiebolag's, per company while it rolls out.
+    href: '/bolaget/aktiebok',
+    module: 'corporate',
+    labelKey: 'bolaget_registers',
+    icon: UsersIcon,
+    entityOnly: ['aktiebolag'],
+    requiresBolaget: true,
+    sub: [
+      { href: '/bolaget/aktiebok', module: 'corporate', labelKey: 'bolaget_aktiebok', entityOnly: ['aktiebolag'], requiresBolaget: true },
+      { href: '/bolaget/styrelse', module: 'corporate', labelKey: 'bolaget_styrelse', entityOnly: ['aktiebolag'], requiresBolaget: true },
+      { href: '/bolaget/moten', module: 'corporate', labelKey: 'bolaget_meetings', entityOnly: ['aktiebolag'], requiresBolaget: true },
+      { href: '/bolaget/kapital', module: 'corporate', labelKey: 'bolaget_capital', entityOnly: ['aktiebolag'], requiresBolaget: true },
+      { href: '/bolaget/agarskatt', module: 'corporate', labelKey: 'bolaget_owner_tax', entityOnly: ['aktiebolag'], requiresBolaget: true },
     ],
   },
 ]

@@ -42,6 +42,7 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'equity.settlement': JSON.stringify(profile.equity.settlement),
     'equity.memberCapital': profile.equity.memberCapital,
     'equity.maintenanceFund': profile.equity.maintenanceFund,
+    'equity.shareRegister': profile.equity.shareRegister,
     'filings.incomeReturn': profile.filings.incomeReturn,
     'filings.booksCurrentTax': profile.filings.booksCurrentTax,
     'filings.corporateTaxDispositions': profile.filings.corporateTaxDispositions,

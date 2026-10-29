@@ -1328,6 +1328,38 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // underlag for those verifikat (BFL 7 kap. 1 §).
   { name: 'finance_leases', file: 'finance_leases.json', orderBy: 'created_at' },
   { name: 'finance_lease_postings', file: 'finance_lease_postings.json', orderBy: 'created_at' },
+  // Bolaget: the meetings with their minutes (ABL 7:49, 8:26 "förvaras på ett
+  // betryggande sätt") and each decision with its terms. Names only.
+  { name: 'corporate_meetings', file: 'corporate_meetings.json', orderBy: 'created_at' },
+  { name: 'corporate_decisions', file: 'corporate_decisions.json', orderBy: 'created_at' },
+  // Bolaget: the aktiebok (kept ten years after dissolution, ABL 5:3), its
+  // classes and settings, the roles over time, the firmateckning and the
+  // LRVH 2:1 assessments. Names and masked identities only; the
+  // personnummer stay in party_person_private (excluded below).
+  { name: 'share_register_settings', file: 'share_register_settings.json', orderBy: 'created_at' },
+  { name: 'share_classes', file: 'share_classes.json', orderBy: 'created_at' },
+  { name: 'share_register_events', file: 'share_register_events.json', orderBy: 'created_at' },
+  { name: 'company_roles', file: 'company_roles.json', orderBy: 'created_at' },
+  { name: 'company_signatory_rules', file: 'company_signatory_rules.json', orderBy: 'created_at' },
+  { name: 'beneficial_owner_assessments', file: 'beneficial_owner_assessments.json', orderBy: 'created_at' },
+  // Bolaget capital events: the dividend decisions with each holder's part
+  // (the KU31 rests on them), the KU31 answers and field 570 numbers, the
+  // aktieägartillskott and the changes of aktiekapital. Each points at the
+  // verifikat it posted. No personnummer is held in any of them.
+  { name: 'dividends', file: 'dividends.json', orderBy: 'created_at' },
+  { name: 'dividend_distributions', file: 'dividend_distributions.json', orderBy: 'created_at' },
+  { name: 'ku31_filings', file: 'ku31_filings.json', orderBy: 'created_at' },
+  { name: 'ku31_specification_numbers', file: 'ku31_specification_numbers.json', orderBy: 'created_at' },
+  { name: 'shareholder_contributions', file: 'shareholder_contributions.json', orderBy: 'created_at' },
+  { name: 'capital_changes', file: 'capital_changes.json', orderBy: 'created_at' },
+  // Bolaget owner tax: what each delägare entered for their K10 underlag,
+  // the owner loan register (the ABL 21:10 special list is kept ten years),
+  // the interest per year and the KU20 field 570 numbers. No personnummer
+  // is held in any of them.
+  { name: 'k10_owner_inputs', file: 'k10_owner_inputs.json', orderBy: 'created_at' },
+  { name: 'owner_loans', file: 'owner_loans.json', orderBy: 'created_at' },
+  { name: 'owner_loan_interest', file: 'owner_loan_interest.json', orderBy: 'created_at' },
+  { name: 'ku20_specification_numbers', file: 'ku20_specification_numbers.json', orderBy: 'created_at' },
   // Year-end stock counts (LIV 1955:257): the inventeringslista, its rows and
   // its signature; underlag for the lagerförändring verifikat (BFL 7 kap. 1 §).
   { name: 'inventory_counts', file: 'inventory_counts.json', orderBy: 'created_at' },
@@ -1485,6 +1517,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'non-human principals and their sponsors (API access control), not räkenskapsinformation; their creation and revocation are in audit_log and every write names the account by label',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',
   supplier_invoice_attest_links: 'attest mail link tokens (secrets, hashed) for one attester and one invoice; expire in 7 days, not räkenskapsinformation (every decision made through them is exported in supplier_invoice_attestations)',
+  party_person_private: 'the personnummer (ciphertext and keyed HMAC) and postal address of the people in the aktiebok and the roles; personal data, never exported as a table (an owner or admin prints them in the aktiebok PDF)',
   signing_signer_private: 'per signer the personnummer lock (hash and ciphertext) and the BankID signature with the full personnummer; operational personal data, never exported as a table (the signatures are in each completed request\'s evidence package, an archive document)',
   payment_signing_links: 'signing link tokens (secrets, hashed) for a basket of bank payments; expire in 72 hours, not räkenskapsinformation (the payment orders and their events, who approved and who signed, are exported)',
   bank_connections: 'PSD2 connection state and tokens, not portable',

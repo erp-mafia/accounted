@@ -11391,6 +11391,400 @@ const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Bolaget capital events: dividends, KU31, tillskott, emissions (lib/bolaget/capital)
+// ─────────────────────────────────────────────────────────────────
+
+const BOLAGET_CAPITAL: Record<string, StructuredErrorEntry> = {
+  DIVIDEND_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utdelningen finns inte.',
+    message_en: 'The dividend does not exist.',
+  },
+  DIVIDEND_STATUS_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Utdelningen har fel status för det här steget: ett beslut bokförs en gång och betalas ut efter att det bokförts.',
+    message_en: 'The dividend has the wrong status for this step: a decision is booked once and paid after it is booked.',
+  },
+  DIVIDEND_NO_HOLDERS: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken har inga ägare den dag som avgör vem som får utdelningen. För in aktierna under Ägare och aktiebok först.',
+    message_en: 'The share register has no holders on the day that decides who receives the dividend. Enter the shares first.',
+  },
+  DIVIDEND_EXCEEDS_FREE_EQUITY: {
+    httpStatus: 409,
+    message_sv: 'Utdelningen överstiger det fria egna kapitalet i den senaste balansräkningen med avdrag för senare värdeöverföringar och kan inte bokföras (17 kap. 3 § ABL).',
+    message_en: 'The dividend exceeds the free equity on the last balance sheet less later value transfers and cannot be booked (ABL 17:3).',
+  },
+  DIVIDEND_PAYOUT_ENTRY_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är inte bokfört eller debiterar inte 2898 Outtagen vinstutdelning.',
+    message_en: 'The voucher is not posted or does not debit 2898.',
+  },
+  DIVIDEND_RECIPIENTS_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Mottagarnas belopp stämmer inte med utbetalningen på 2898.',
+    message_en: 'The recipients\' amounts do not add up to the payout on 2898.',
+    thrown_message_sv: true,
+  },
+  DIVIDEND_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Verifikatet bokfördes men utdelningen kunde inte markeras. Kontakta supporten med verifikatets nummer.',
+    message_en: 'The voucher was posted but the dividend could not be marked. Contact support with the voucher number.',
+  },
+  DIVIDEND_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'En utdelning tas aldrig bort; ett beslut som inte bokförts kan avbrytas.',
+    message_en: 'A dividend is never deleted; a decision not yet booked can be cancelled.',
+  },
+  DIVIDEND_FROZEN: {
+    httpStatus: 409,
+    message_sv: 'En bokförd utdelning och dess fördelning ändras inte. Rätta verifikatet med en rättelse.',
+    message_en: 'A booked dividend and its split do not change. Correct the voucher instead.',
+  },
+  KU31_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'Kontrolluppgiften KU31 kan inte skapas ännu.',
+    message_en: 'The KU31 file cannot be made yet.',
+    thrown_message_sv: true,
+  },
+  CAPITAL_NO_OPEN_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget öppet räkenskapsår för datumet. Lägg upp räkenskapsåret eller välj ett annat datum.',
+    message_en: 'No open fiscal year covers the date. Add the fiscal year or choose another date.',
+    thrown_message_sv: true,
+  },
+  CONTRIBUTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Aktieägartillskottet finns inte eller är inte bokfört.',
+    message_en: 'The shareholder contribution does not exist or is not booked.',
+  },
+  CONTRIBUTION_NOT_CONDITIONAL: {
+    httpStatus: 409,
+    message_sv: 'Bara ett villkorat aktieägartillskott kan återbetalas.',
+    message_en: 'Only a conditional shareholder contribution can be repaid.',
+  },
+  CONTRIBUTION_REPAYMENT_EXCEEDS: {
+    httpStatus: 409,
+    message_sv: 'Återbetalningen är större än det som återstår av tillskottet.',
+    message_en: 'The repayment is larger than what is left of the contribution.',
+    thrown_message_sv: true,
+  },
+  CONTRIBUTION_RECORD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Verifikatet bokfördes men tillskottet kunde inte registreras. Kontakta supporten med verifikatets nummer.',
+    message_en: 'The voucher was posted but the contribution could not be recorded. Contact support with the voucher number.',
+  },
+  CONTRIBUTION_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'Ett aktieägartillskott tas aldrig bort.',
+    message_en: 'A shareholder contribution is never deleted.',
+  },
+  CONTRIBUTION_FROZEN: {
+    httpStatus: 409,
+    message_sv: 'Ett bokfört aktieägartillskott ändras inte. Rätta verifikatet med en rättelse.',
+    message_en: 'A booked shareholder contribution does not change. Correct the voucher instead.',
+  },
+  CAPITAL_CHANGE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kapitaländringen finns inte.',
+    message_en: 'The capital change does not exist.',
+  },
+  CAPITAL_CHANGE_STATUS_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Kapitaländringen har fel status för det här steget.',
+    message_en: 'The capital change has the wrong status for this step.',
+    thrown_message_sv: true,
+  },
+  CAPITAL_CHANGE_NOT_PAID: {
+    httpStatus: 409,
+    message_sv: 'Bokför inbetalningen av nyemissionen innan registreringen: aktierna ska vara fullt betalda (13 kap. 28 § ABL).',
+    message_en: 'Book the payment of the new issue before its registration: the shares must be fully paid (ABL 13:28).',
+  },
+  CAPITAL_CHANGE_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Verifikatet bokfördes men kapitaländringen kunde inte markeras. Kontakta supporten med verifikatets nummer.',
+    message_en: 'The voucher was posted but the capital change could not be marked. Contact support with the voucher number.',
+  },
+  CAPITAL_CHANGE_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'En kapitaländring tas aldrig bort.',
+    message_en: 'A capital change is never deleted.',
+  },
+  CAPITAL_CHANGE_FROZEN: {
+    httpStatus: 409,
+    message_sv: 'En bokförd eller registrerad kapitaländring ändras inte.',
+    message_en: 'A booked or registered capital change does not change.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Bolaget owner tax: K10 underlag, owner loans, KU20 (lib/bolaget/owner-tax)
+// ─────────────────────────────────────────────────────────────────
+
+const BOLAGET_OWNER_TAX: Record<string, StructuredErrorEntry> = {
+  K10_YEAR_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: 'K10-underlaget finns inte för det inkomståret.',
+    message_en: 'There is no K10 underlag for that income year.',
+    thrown_message_sv: true,
+  },
+  K10_OWNER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Personen ägde inga aktier vid årets ingång och fick ingen utdelning under året.',
+    message_en: 'The person held no shares at the start of the year and received no dividend in it.',
+  },
+  OWNER_LOAN_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Lånet finns inte i registret över ägarlån.',
+    message_en: 'The loan is not in the owner loan register.',
+  },
+  OWNER_LOAN_STATUS_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Ett makulerat lån ändras inte.',
+    message_en: 'A cancelled loan does not change.',
+  },
+  OWNER_LOAN_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj ett konto som passar lånet: 1360-1368 eller 1680-1689 när bolaget lånar ut, 2390-2399 eller 2890-2899 när bolaget lånar.',
+    message_en: 'Pick an account that fits the loan: 1360-1368 or 1680-1689 when the company lends, 2390-2399 or 2890-2899 when it borrows.',
+  },
+  OWNER_LOAN_RELATED_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange vilken aktieägare, styrelseledamot eller VD den närstående eller det kontrollerade bolaget hör till (en annan person än motparten).',
+    message_en: 'Name the shareholder, board member or VD the related person or controlled company belongs to (another person than the counterparty).',
+  },
+  OWNER_LOAN_OUTSTANDING_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Det utestående beloppet kan inte vara negativt eller större än lånebeloppet.',
+    message_en: 'The outstanding amount cannot be negative or larger than the principal.',
+  },
+  OWNER_LOAN_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'Ett lån tas aldrig bort: markera det som återbetalt eller makulerat.',
+    message_en: 'A loan is never deleted: mark it repaid or cancelled.',
+  },
+  KU20_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'Kontrolluppgiften KU20 kan inte skapas ännu.',
+    message_en: 'The KU20 file cannot be made yet.',
+    thrown_message_sv: true,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Bolaget meetings: stämmor, styrelsemöten, minutes (lib/bolaget/meetings)
+// ─────────────────────────────────────────────────────────────────
+
+const BOLAGET_MEETINGS: Record<string, StructuredErrorEntry> = {
+  CORPORATE_MEETING_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Mötet finns inte.',
+    message_en: 'The meeting was not found.',
+  },
+  CORPORATE_DECISION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Beslutet finns inte på mötet.',
+    message_en: 'The decision was not found on the meeting.',
+  },
+  CORPORATE_MEETING_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Protokollet är signerat och kan inte ändras eller tas bort.',
+    message_en: 'The minutes are signed and cannot be changed or deleted.',
+  },
+  CORPORATE_MEETING_NOT_HELD: {
+    httpStatus: 409,
+    message_sv: 'Markera mötet som hållet innan protokollet signeras.',
+    message_en: 'Mark the meeting as held before the minutes are signed.',
+  },
+  CORPORATE_MEETING_NOT_DRAFT: {
+    httpStatus: 409,
+    message_sv: 'Bara ett utkast kan tas bort. Ett hållet möte och dess protokoll sparas.',
+    message_en: 'Only a draft can be deleted. A held meeting and its minutes are kept.',
+  },
+  CORPORATE_MEETING_ALREADY_HELD: {
+    httpStatus: 409,
+    message_sv: 'Mötet är redan markerat som hållet.',
+    message_en: 'The meeting is already marked as held.',
+  },
+  CORPORATE_MEETING_IN_FUTURE: {
+    httpStatus: 409,
+    message_sv: 'Ett möte kan inte markeras som hållet före mötesdagen.',
+    message_en: 'A meeting cannot be marked as held before its date.',
+  },
+  CORPORATE_MEETING_FISCAL_PERIOD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange räkenskapsåret som årsstämman gäller.',
+    message_en: 'Give the fiscal year the annual general meeting is for.',
+  },
+  CORPORATE_MEETING_FISCAL_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret finns inte i bolaget.',
+    message_en: 'The fiscal year was not found in the company.',
+  },
+  CORPORATE_DECISION_PAYLOAD_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Beslutets uppgifter är inte giltiga.',
+    message_en: 'The terms of the decision are not valid.',
+    thrown_message_sv: true,
+  },
+  CORPORATE_MEETING_SIGNING_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Protokollet är ute för signering. Avbryt signeringen för att ändra det.',
+    message_en: 'The minutes are out for signing. Cancel the signing to change them.',
+  },
+  CORPORATE_MEETING_SIGNERS_MISSING: {
+    httpStatus: 409,
+    message_sv: 'Protokollet har ingen som ska skriva under. Ange ordförande, protokollförare och justerare.',
+    message_en: 'The minutes have no signers. Name the chair, the secretary and the adjusters.',
+  },
+  CORPORATE_MEETING_FILE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Filen kan inte arkiveras. Ladda upp en PDF eller en bild.',
+    message_en: 'The file cannot be archived. Upload a PDF or an image.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Bolaget registers: aktiebok, roles, verkliga huvudmän (lib/bolaget)
+// ─────────────────────────────────────────────────────────────────
+
+const BOLAGET: Record<string, StructuredErrorEntry> = {
+  BOLAGET_DISABLED: {
+    httpStatus: 404,
+    message_sv: 'Bolagets register finns inte här ännu.',
+    message_en: 'The company registers are not available here yet.',
+  },
+  BOLAGET_NOT_FOR_LEGAL_FORM: {
+    httpStatus: 409,
+    message_sv: 'Aktiebok, styrelse och verkliga huvudmän förs här för aktiebolag.',
+    message_en: 'The share register, the board and the beneficial owners are kept here for an aktiebolag only.',
+  },
+  BOLAGET_PARTY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Personen eller företaget finns inte i bolagets register.',
+    message_en: 'The person or company is not in the company\'s registers.',
+  },
+  BOLAGET_PARTY_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ange en befintlig person eller ett namn.',
+    message_en: 'Name an existing party or give a name.',
+    thrown_message_sv: true,
+  },
+  BOLAGET_PERSONNUMMER_IN_APP_ONLY: {
+    httpStatus: 400,
+    message_sv: 'Ett personnummer registreras bara i Accounted, under Ägare och aktiebok, aldrig i ett anrop.',
+    message_en: 'A personnummer is entered in Accounted only (Ägare och aktiebok), never through the API or an agent.',
+  },
+  BOLAGET_PERSONNUMMER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Personnumret är inte giltigt. Ange tolv siffror (ÅÅÅÅMMDDNNNN).',
+    message_en: 'The personnummer is not valid. Give twelve digits (YYYYMMDDNNNN).',
+  },
+  BOLAGET_PERSONNUMMER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Personnumret finns redan på en annan person i bolagets register.',
+    message_en: 'The personnummer is already on another person in the company\'s registers.',
+  },
+  BOLAGET_DATES_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Kontrollera datumen: slutdatum kan inte vara före startdatum och en anteckning kan inte dateras framåt i tiden.',
+    message_en: 'Check the dates: an end cannot precede the start, and an entry cannot be dated in the future.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_RANGE_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Aktienumren finns redan i aktieboken. Nya aktier får nästa lediga nummer.',
+    message_en: 'The share numbers are already held. New shares take the next free numbers.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_NOT_HELD: {
+    httpStatus: 409,
+    message_sv: 'Aktierna ägs inte av den angivna ägaren det datumet.',
+    message_en: 'The shares are not held by the named holder on that date.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_RANGE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange aktienummer (från och till) eller ett antal aktier som ägaren har i en följd.',
+    message_en: 'Give the share numbers (from and to) or a number of shares the holder has in one block.',
+  },
+  SHARE_REGISTER_RATIO_MISALIGNED: {
+    httpStatus: 409,
+    message_sv: 'Sammanläggningen går inte jämnt ut för alla innehav. Varje innehav måste vara delbart med kvoten.',
+    message_en: 'The consolidation does not divide every holding evenly.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_NOTE_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Anteckningen stämmer inte med aktieboken.',
+    message_en: 'The note does not match the share register.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_CORRECTION_INVALID: {
+    httpStatus: 409,
+    message_sv: 'En rättelse gäller en tidigare anteckning som inte redan är rättad och inte själv är en rättelse.',
+    message_en: 'A correction voids one earlier entry that is not already corrected and is not itself a correction.',
+    thrown_message_sv: true,
+  },
+  SHARE_REGISTER_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken kan inte ändras i efterhand. Rätta med en ny anteckning.',
+    message_en: 'The share register cannot be changed afterwards. Correct it with a new entry.',
+  },
+  SHARE_REGISTER_AVSTAMNINGSBOLAG: {
+    httpStatus: 409,
+    message_sv: 'Bolaget är ett avstämningsbolag: aktieboken förs av den centrala värdepappersförvararen.',
+    message_en: 'The company is an avstämningsbolag: the central securities depository keeps the share register.',
+  },
+  SHARE_CLASS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Aktieslaget finns inte.',
+    message_en: 'The share class does not exist.',
+  },
+  SHARE_CLASS_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange vilket aktieslag det gäller: bolaget har flera.',
+    message_en: 'Name the share class: the company has several.',
+  },
+  SHARE_CLASS_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan ett aktieslag med den beteckningen.',
+    message_en: 'A share class with that code already exists.',
+  },
+  COMPANY_ROLE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Rollen finns inte.',
+    message_en: 'The role does not exist.',
+  },
+  COMPANY_ROLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Personen har redan den rollen.',
+    message_en: 'The person already holds that role.',
+  },
+  COMPANY_ROLE_ALREADY_ENDED: {
+    httpStatus: 409,
+    message_sv: 'Rollen är redan avslutad.',
+    message_en: 'The role has already ended.',
+  },
+  COMPANY_ROLE_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'En roll avslutas, den ändras eller tas inte bort.',
+    message_en: 'A role is ended, never changed or deleted.',
+  },
+  BENEFICIAL_OWNER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ange minst en verklig huvudman, eller ingen när slutsatsen är att det saknas verklig huvudman.',
+    message_en: 'Name at least one beneficial owner, or none when the conclusion is that there is none.',
+    thrown_message_sv: true,
+  },
+  BENEFICIAL_OWNER_APPEND_ONLY: {
+    httpStatus: 409,
+    message_sv: 'En utredning av verkliga huvudmän sparas som den gjordes. Gör en ny utredning.',
+    message_en: 'A beneficial owner assessment is kept as made. Record a new one.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // BankID document signing (lib/signing)
 // ─────────────────────────────────────────────────────────────────
 
@@ -11851,6 +12245,10 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SIGNING,
   ...PENDING_OPERATIONS,
   ...AUTOGIRO,
+  ...BOLAGET_MEETINGS,
+  ...BOLAGET,
+  ...BOLAGET_CAPITAL,
+  ...BOLAGET_OWNER_TAX,
   ...LOSS_CARRYFORWARD,
   ...STOCK_COUNT,
 }

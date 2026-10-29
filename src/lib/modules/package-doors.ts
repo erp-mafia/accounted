@@ -96,6 +96,8 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   agents: null,
   auth: null,
   billing: null,
+  // The Bolaget registers (aktiebok, roles): Bokföring's package, never switched off.
+  bolaget: null,
   bookkeeping: null,
   byra: null,
   calendar: null,

@@ -1,0 +1,1 @@
+[2026-10-29] K10 underlag per owner computed in code under the 3:12 rules from 2026 only (8 IBB per owner, IBB of the prior year); owner loans are a register reconciled to the ledger, the ABL 21 kap. check warns, never blocks; KU20 XML via the KU31 writer; owner tax joins the capital module.

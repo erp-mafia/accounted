@@ -106,6 +106,8 @@ interface PartyRecord {
   suggested_reason: SuggestionReason | null
   created_at: string
   archived_at?: string | null
+  /** 'bolaget': created for a role or a shareholding (lib/bolaget/people.ts). */
+  origin?: string | null
 }
 
 export function statsFrom(o: ObservedParty): LedgerStats {
@@ -250,7 +252,7 @@ export async function getRegister(
   const partiesRead = fetchAllRows<PartyRecord>(({ from, to }) =>
     supabase
       .from('parties')
-      .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at')
+      .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at, origin')
       .eq('company_id', companyId)
       .is('merged_into', null)
       .order('display_name', { ascending: true })
@@ -329,6 +331,10 @@ export async function getRegister(
     if (p.archived_at) continue
     const customerId = customerByParty.get(p.id) ?? null
     const supplierId = supplierByParty.get(p.id) ?? null
+    // A board member or shareholder from the Bolaget registers is no
+    // counterparty: Motparter shows them only once they are a customer or a
+    // supplier too, or the books name them.
+    if (p.origin === 'bolaget' && !customerId && !supplierId && parts.length === 0) continue
     const stats = mergeStats(parts)
     rows.push({
       id: p.id,
