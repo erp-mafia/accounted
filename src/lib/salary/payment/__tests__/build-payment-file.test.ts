@@ -21,6 +21,7 @@ import {
   salaryPaymentFileRefusal,
   salaryPaymentMessageId,
 } from '../build-payment-file'
+import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 
 const COMPANY_ID = 'company-1'
 const RUN_ID = 'run-1'
@@ -512,6 +513,59 @@ describe('buildSalaryPaymentFile', () => {
     if (!result.ok) return
     expect(result.stamped).toBe(false)
     expect(result.content).toContain('<Document')
+  })
+})
+
+// Nordea refuses a pain.001 whose InitgPty is not its Signer ID (crm#1530):
+// the builder asks for it before anything is generated and passes it on.
+describe('buildSalaryPaymentFile for a Nordea debtor', () => {
+  const nordeaSettings = { ...settings, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' }
+
+  it('refuses NORDEA_SIGNER_ID_MISSING with a Swedish message, before loading employees', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: { ...nordeaSettings, nordea_signer_id: null } }, ...ONLY_1930])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'NORDEA_SIGNER_ID_MISSING',
+      format: 'pain001',
+      details: { fields: ['nordea_signer_id'], message: NORDEA_SIGNER_ID_MISSING_SV },
+    })
+    expect(calls.map((c) => c.table)).not.toContain('salary_run_employees')
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
+  })
+
+  it('maps the refusal to the missing-bank-details code for v1, MCP and the bank list', () => {
+    const refusal = salaryPaymentFileRefusal({
+      ok: false,
+      code: 'NORDEA_SIGNER_ID_MISSING',
+      format: 'pain001',
+      details: { fields: ['nordea_signer_id'], message: NORDEA_SIGNER_ID_MISSING_SV },
+    })
+    expect(refusal).toMatchObject({
+      code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+      reason: 'NORDEA_SIGNER_ID_MISSING',
+      details: { format: 'pain001', problem: 'nordea_signer_id_missing', fields: ['nordea_signer_id'] },
+    })
+  })
+
+  it('names the sender by the Signer ID with SchmeNm CUST', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: nordeaSettings },
+      ...ONLY_1930,
+      { data: [anna] },
+      { data: null },
+      { data: null },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.content).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
   })
 })
 

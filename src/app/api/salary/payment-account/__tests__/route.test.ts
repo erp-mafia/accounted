@@ -98,7 +98,21 @@ describe('GET /api/salary/payment-account', () => {
       // The account's bank (SEB), not the stored pick: the file is uploaded there.
       instruction_bank: 'seb',
       swedbank: false,
+      nordea: false,
     })
+  })
+
+  it("flags a Nordea account, whose files need Nordea's Signer ID (crm#1530)", async () => {
+    signedIn({
+      company_settings: { data: { iban: null, bic: null, salary_default_bank: null } },
+      cash_accounts: payingCashAccountsTable([
+        makePayingCashAccount({ iban: IBAN_1930, bank_connection_id: 'bc-1', bank_connection: { bank_name: 'Nordea', bic: 'NDEASESS' } }),
+      ]),
+    })
+    const response = await GET(createMockRequest(URL), { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toMatchObject({ missing: null, swedbank: false, nordea: true })
   })
 
   it("answers a booked run's verifikat account, and says when it lacks an IBAN", async () => {
@@ -137,6 +151,7 @@ describe('GET /api/salary/payment-account', () => {
       // No IBAN names a bank: the stored pick is the fallback.
       instruction_bank: 'nordea',
       swedbank: false,
+      nordea: false,
     })
   })
 })

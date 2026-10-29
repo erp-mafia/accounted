@@ -13,7 +13,7 @@ const PaymentAccountQuery = z.object({ run_id: z.string().uuid().optional() })
  * The bank account the payment files pay from, as the dashboard shows it
  * (crm#1483): the account summary (name, ledger account, last four of the
  * IBAN), whether a pain.001 can be made from it, the bank whose upload
- * instructions open first, and whether Swedbank's ids are needed. With
+ * instructions open first, and whether Swedbank's or Nordea's ids are needed. With
  * run_id, a booked run answers the account its salary verifikat credits;
  * without, the primary bank account. Reads only.
  */

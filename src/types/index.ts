@@ -594,6 +594,9 @@ export interface CompanySettings {
   // company's bank resolves to Swedbank (lib/payments/swedbank.ts).
   swedbank_signer_id?: string | null
   swedbank_corporate_pay_id?: string | null
+  // Nordea's Signer ID for pain.001 files: InitgPty with SchmeNm CUST. Read
+  // only when the company's bank resolves to Nordea (lib/payments/nordea.ts).
+  nordea_signer_id?: string | null
   // Foreign non-IBAN routing, only ever populated on the render-time copy
   // produced by companyWithInvoicePaymentAccount (never a DB column).
   bank_code?: string | null
@@ -1280,6 +1283,8 @@ export interface SupplierPaymentBatchDebtor {
    */
   swedbank_signer_id?: string | null
   swedbank_corporate_pay_id?: string | null
+  /** Nordea's Signer ID, present only on a Nordea debtor's batch made since crm#1530. */
+  nordea_signer_id?: string | null
 }
 
 export interface SupplierPaymentBatch {

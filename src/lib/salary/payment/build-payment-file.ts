@@ -82,7 +82,8 @@ import {
   type OverpaidEmployee,
 } from './payable'
 import { isSalaryInBankPaymentError } from './in-bank-payment'
-import { resolveSwedbankFileIds } from '@/lib/payments/swedbank'
+import { resolveBankFileIds } from '@/lib/payments/initiating-party'
+import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 import {
   checkEmployeeAccountChecksum,
   describePayeeAccountProblems,
@@ -144,6 +145,7 @@ export type SalaryPaymentFileErrorCode =
   | 'IBAN_MISSING'
   | 'BIC_MISSING'
   | 'SWEDBANK_IDS_MISSING'
+  | 'NORDEA_SIGNER_ID_MISSING'
   | 'BANKGIRO_MISSING'
   | 'BANKGIRO_INVALID'
   | 'NO_EMPLOYEES'
@@ -279,6 +281,7 @@ interface SettingsRow {
   city: string | null
   swedbank_signer_id: string | null
   swedbank_corporate_pay_id: string | null
+  nordea_signer_id: string | null
 }
 
 interface RunEmployeeRow {
@@ -343,6 +346,7 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
     case 'IBAN_MISSING':
     case 'BIC_MISSING':
     case 'SWEDBANK_IDS_MISSING':
+    case 'NORDEA_SIGNER_ID_MISSING':
     case 'BANKGIRO_MISSING':
     case 'BANKGIRO_INVALID':
       return {
@@ -460,11 +464,11 @@ export async function buildSalaryPaymentFile(
     .maybeSingle()
   if (companyErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'company', cause: companyErr })
 
-  // 4. Settings: the sender's name, town, bankgiro and Swedbank ids live
-  // here, not on companies. The paying account is step 5.
+  // 4. Settings: the sender's name, town, bankgiro and bank-assigned file
+  // ids live here, not on companies. The paying account is step 5.
   const { data: settingsData, error: settingsErr } = await supabase
     .from('company_settings')
-    .select('company_name, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id')
+    .select('company_name, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
@@ -508,17 +512,14 @@ export async function buildSalaryPaymentFile(
     const debtor = paying.account
     if (debtor.bic_derived) warnings.push(derivedBicWarningSv(debtor))
 
-    // Swedbank (savings banks included) identifies the sender and the
-    // agreement by its own SignerID and Corporate Pay id, never the org
-    // number, and refuses a file without them (lib/payments/swedbank.ts).
-    const swedbank = resolveSwedbankFileIds(debtor.bic, settings)
-    if (!swedbank.ok) {
-      return fail('SWEDBANK_IDS_MISSING', format, {
-        fields: (['swedbank_signer_id', 'swedbank_corporate_pay_id'] as const).filter(
-          (field) => !settings[field]?.trim(),
-        ),
-        message: SWEDBANK_IDS_MISSING_SV,
-      })
+    // Swedbank (savings banks included) and Nordea identify the sender by ids
+    // they assign, never the org number, and refuse a file without them
+    // (lib/payments/initiating-party.ts).
+    const fileIds = resolveBankFileIds(debtor.bic, settings)
+    if (!fileIds.ok) {
+      return fileIds.missing === 'swedbank_ids'
+        ? fail('SWEDBANK_IDS_MISSING', format, { fields: fileIds.fields, message: SWEDBANK_IDS_MISSING_SV })
+        : fail('NORDEA_SIGNER_ID_MISSING', format, { fields: fileIds.fields, message: NORDEA_SIGNER_ID_MISSING_SV })
     }
 
     pain001Company = {
@@ -529,7 +530,8 @@ export async function buildSalaryPaymentFile(
       iban: debtor.iban,
       bic: debtor.bic,
       city: settings.city,
-      swedbank: swedbank.ids,
+      swedbank: fileIds.ids.swedbank,
+      nordeaSignerId: fileIds.ids.nordeaSignerId,
     }
     payingCashAccount = payingAccountSummary(debtor)
   } else {

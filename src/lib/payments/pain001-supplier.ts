@@ -92,6 +92,12 @@
  * A Swedbank debtor without the ids (a batch created before 2026-10-11)
  * renders in the MIG 1.0 form, byte for byte, so a stored file never changes.
  *
+ * Nordea (debtor.nordeaSignerId set): InitgPty/Id/OrgId/Othr/Id is the Signer
+ * ID with SchmeNm/Cd CUST, which Nordea's upload checks against the file
+ * agreement (lib/payments/nordea.ts, crm#1530); the rest of the file keeps
+ * the form above. Which id InitgPty carries is decided for every bank in
+ * lib/payments/initiating-party.ts.
+ *
  * Per BFL: the generated file is rakenskapsinformation (underlag) for the
  * payments it initiates. Subject to 7-year retention.
  */
@@ -100,6 +106,7 @@ import { escapeXml } from '@/lib/xml/escape'
 import { formatPainAmount, max35, painControlSum, suffixId } from './pain001-format'
 import { creditorAccountForm, domesticCreditorAccount, type CreditorAccountForm } from './creditor-account'
 import { sanitizeMigText } from './mig-text'
+import { initiatingPartyId } from './initiating-party'
 import { SWEDBANK_BIC, type SwedbankFileIds } from './swedbank'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
 
@@ -124,6 +131,12 @@ export interface SupplierPain001Debtor {
    * which render in their original form.
    */
   swedbank?: SwedbankFileIds | null
+  /**
+   * Nordea's Signer ID: present only for a Nordea debtor, written as the
+   * InitgPty id. Absent on batches created before crm#1530, which render in
+   * their original form.
+   */
+  nordeaSignerId?: string | null
 }
 
 export interface SupplierPain001Payment {
@@ -245,12 +258,14 @@ export function generateSupplierPain001(
   lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
   lines.push('        <Id>')
   lines.push('          <OrgId>')
-  if (swedbank) {
-    // MIG 2.0 InitgPty/Id/OrgId/Othr: "SignerID as assigned by Swedbank",
-    // SchmeNm/Cd BANK. The org number here is what Swedbank refused.
-    pushBankAssignedId(lines, swedbank.signerId)
+  // The sender as the debtor's bank knows it (initiating-party.ts): the
+  // SignerID at Swedbank (BANK), the Signer ID at Nordea (CUST), the org
+  // number elsewhere. An org number there is what both banks refused.
+  const initiator = initiatingPartyId(debtor) ?? { id: orgDigits, scheme: null }
+  if (initiator.scheme) {
+    pushSchemedId(lines, initiator.id, initiator.scheme)
   } else {
-    lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
+    lines.push(`            <Othr><Id>${escapeXml(initiator.id)}</Id></Othr>`)
   }
   lines.push('          </OrgId>')
   lines.push('        </Id>')
@@ -298,7 +313,7 @@ export function generateSupplierPain001(
     if (swedbank) {
       // MIG 2.0 Dbtr/Id/OrgId/Othr: "Corporate Pay Agreement Identifier as
       // assigned by Swedbank", SchmeNm/Cd BANK.
-      pushBankAssignedId(lines, swedbank.corporatePayId)
+      pushSchemedId(lines, swedbank.corporatePayId, 'BANK')
     } else {
       lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
     }
@@ -357,11 +372,11 @@ export function generateSupplierPain001(
   return lines.join('\n')
 }
 
-/** A Swedbank-assigned party id: Othr/Id with SchmeNm/Cd BANK (MIG 2.0). */
-function pushBankAssignedId(lines: string[], id: string): void {
+/** A bank-assigned party id: Othr/Id with SchmeNm/Cd, BANK at Swedbank (MIG 2.0), CUST at Nordea. */
+function pushSchemedId(lines: string[], id: string, scheme: 'BANK' | 'CUST'): void {
   lines.push('            <Othr>')
   lines.push(`              <Id>${escapeXml(id)}</Id>`)
-  lines.push('              <SchmeNm><Cd>BANK</Cd></SchmeNm>')
+  lines.push(`              <SchmeNm><Cd>${scheme}</Cd></SchmeNm>`)
   lines.push('            </Othr>')
 }
 

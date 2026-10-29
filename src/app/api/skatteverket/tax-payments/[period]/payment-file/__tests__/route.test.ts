@@ -36,12 +36,15 @@ vi.mock('@/lib/payments/pain001-supplier', () => ({
 }))
 
 const mockResolveBatchDebtor = vi.fn()
-vi.mock('@/lib/payments/batch-service', async (importOriginal) => ({
-  // The real ISO 2.0 rule; only the settings read is mocked.
-  paysThroughSwedbankIso2: (await importOriginal<typeof import('@/lib/payments/batch-service')>())
-    .paysThroughSwedbankIso2,
-  resolveBatchDebtor: (...args: unknown[]) => mockResolveBatchDebtor(...args),
-}))
+vi.mock('@/lib/payments/batch-service', async (importOriginal) => {
+  // The real ISO 2.0 rule and debtor mapping; only the settings read is mocked.
+  const actual = await importOriginal<typeof import('@/lib/payments/batch-service')>()
+  return {
+    paysThroughSwedbankIso2: actual.paysThroughSwedbankIso2,
+    supplierPain001Debtor: actual.supplierPain001Debtor,
+    resolveBatchDebtor: (...args: unknown[]) => mockResolveBatchDebtor(...args),
+  }
+})
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted' }),
@@ -296,6 +299,53 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, och Skatteverket tar bara emot betalningar på bankgiro. Betala skatten i internetbanken.',
     )
     expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 asking for the Signer ID when a Nordea company has not entered it (crm#1530)', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'nordea_signer_id' })
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error).toContain('Nordea kräver företagets Signer ID')
+    expect(body.error).toContain('Inställningar → Fakturor')
+    expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
+  it("names a Nordea company's Signer ID as the sender of the tax payment file", async () => {
+    mockResolveBatchDebtor.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB',
+        org_number: '5566778899',
+        iban: 'SE4530000000031234567890',
+        bic: 'NDEASESS',
+        bankgiro: '1234567',
+        city: 'Stockholm',
+        nordea_signer_id: 'NB10000123456',
+      },
+    })
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({ bic: 'NDEASESS', nordeaSignerId: 'NB10000123456' })
   })
 
   it('keeps the period in every id, so two months never share an EndToEndId', async () => {

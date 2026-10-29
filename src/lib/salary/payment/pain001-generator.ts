@@ -50,6 +50,12 @@
  *    (swedbankCreditorAccount); 4-digit clearings keep the separate form.
  *  - Names use the MIG 2.0 character set, which has no apostrophe.
  *
+ * Nordea (`company.nordeaSignerId`, lib/payments/nordea.ts): InitgPty carries
+ * the Signer ID with SchmeNm CUST, which Nordea's upload checks against the
+ * file agreement (crm#1530); the rest keeps the common form. Which id
+ * InitgPty carries is decided for every bank in
+ * lib/payments/initiating-party.ts.
+ *
  * Per BFL: the generated file is räkenskapsinformation (underlag) linked to
  * the salary journal entry. Subject to 7-year retention.
  */
@@ -58,6 +64,7 @@ import { escapeXml } from '@/lib/xml/escape'
 import { formatPainAmount, max35, painControlSum, suffixId } from '@/lib/payments/pain001-format'
 import { previousBankDayIso } from '@/lib/payments/bank-days'
 import { sanitizeMigText } from '@/lib/payments/mig-text'
+import { initiatingPartyId } from '@/lib/payments/initiating-party'
 import { SWEDBANK_BIC, type SwedbankFileIds } from '@/lib/payments/swedbank'
 import { creditorAccountForm, domesticCreditorAccount } from '@/lib/payments/creditor-account'
 
@@ -73,6 +80,8 @@ export interface Pain001CompanyData {
    * Swedbank debtor, and then the file takes Swedbank's MIG 2.0 form.
    */
   swedbank?: SwedbankFileIds | null
+  /** Nordea's Signer ID: set only for a Nordea debtor, written as the InitgPty id. */
+  nordeaSignerId?: string | null
 }
 
 export interface Pain001Employee {
@@ -128,13 +137,16 @@ export function generatePain001(
   lines.push(`      <CtrlSum>${formattedTotal}</CtrlSum>`)
   lines.push('      <InitgPty>')
   lines.push(`        <Nm>${text(company.name)}</Nm>`)
-  if (swedbank) {
-    // MIG 2.0: "SignerID as assigned by Swedbank", SchmeNm BANK.
-    pushBankAssignedId(lines, '        ', swedbank.signerId)
-  } else if (orgDigits) {
+  // The sender as the debtor's bank knows it (initiating-party.ts): the
+  // SignerID at Swedbank (BANK), the Signer ID at Nordea (CUST), the org
+  // number elsewhere.
+  const initiator = initiatingPartyId(company)
+  if (initiator?.scheme) {
+    pushSchemedId(lines, '        ', initiator.id, initiator.scheme)
+  } else if (initiator) {
     lines.push('        <Id>')
     lines.push('          <OrgId>')
-    lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
+    lines.push(`            <Othr><Id>${escapeXml(initiator.id)}</Id></Othr>`)
     lines.push('          </OrgId>')
     lines.push('        </Id>')
   }
@@ -163,7 +175,7 @@ export function generatePain001(
   if (swedbank) {
     // XSD order: PstlAdr before Id. MIG 2.0: Corporate Pay agreement id, SchmeNm BANK.
     pushPostalAddress(lines, '        ', company.city, text)
-    pushBankAssignedId(lines, '        ', swedbank.corporatePayId)
+    pushSchemedId(lines, '        ', swedbank.corporatePayId, 'BANK')
   } else if (orgDigits) {
     lines.push('        <Id>')
     lines.push('          <OrgId>')
@@ -260,11 +272,11 @@ export function pain001TransactionId(messageId: string, index: number): string {
 // Helpers
 // ============================================================
 
-/** Party Id/OrgId/Othr carrying an id the bank assigned (SchmeNm BANK). */
-function pushBankAssignedId(lines: string[], indent: string, id: string): void {
+/** A bank-assigned party id: Othr/Id with SchmeNm/Cd, BANK at Swedbank (MIG 2.0), CUST at Nordea. */
+function pushSchemedId(lines: string[], indent: string, id: string, scheme: 'BANK' | 'CUST'): void {
   lines.push(`${indent}<Id>`)
   lines.push(`${indent}  <OrgId>`)
-  lines.push(`${indent}    <Othr><Id>${escapeXml(id)}</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>`)
+  lines.push(`${indent}    <Othr><Id>${escapeXml(id)}</Id><SchmeNm><Cd>${scheme}</Cd></SchmeNm></Othr>`)
   lines.push(`${indent}  </OrgId>`)
   lines.push(`${indent}</Id>`)
 }

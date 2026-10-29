@@ -3,7 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
-import { paysThroughSwedbankIso2, resolveBatchDebtor } from '@/lib/payments/batch-service'
+import { paysThroughSwedbankIso2, resolveBatchDebtor, supplierPain001Debtor } from '@/lib/payments/batch-service'
+import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 import { payingAccountMissingSv } from '@/lib/payments/paying-account'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -156,6 +157,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
               bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturor för att skapa betalfilen.',
               org_number: 'Organisationsnummer saknas för företaget.',
               swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturor.',
+              nordea_signer_id: NORDEA_SIGNER_ID_MISSING_SV,
             }[missing]
       return NextResponse.json({ error: message }, { status: 400 })
     }
@@ -174,18 +176,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     let xml: string
     try {
       xml = generateSupplierPain001(
-        {
-          name: debtor.name,
-          orgNumber: debtor.org_number,
-          iban: debtor.iban,
-          bic: debtor.bic,
-          bankgiro: debtor.bankgiro,
-          city: debtor.city,
-          swedbank:
-            debtor.swedbank_signer_id && debtor.swedbank_corporate_pay_id
-              ? { signerId: debtor.swedbank_signer_id, corporatePayId: debtor.swedbank_corporate_pay_id }
-              : null,
-        },
+        supplierPain001Debtor(debtor),
         [
           {
             payee: { type: 'bankgiro', bankgiro: SKATTEKONTO_BANKGIRO.replace(/\D/g, '') },
