@@ -38,6 +38,9 @@ const RISK_TIERS = {
   // update sit at the lowest tier next to create_customer.
   create_article: 'low',
   update_article: 'low',
+  // A draft inventeringslista (year-end stock count): no booking until a
+  // person signs it and the booking is approved on its own.
+  save_inventory_count: 'low',
   // Dimension values (kostnadsställe/projekt object codes, SIE #OBJEKT) are
   // reporting master data: no journal impact, no external side-effect, no
   // payment-routing surface. Staged (agents never silently mint reporting
@@ -81,6 +84,9 @@ const RISK_TIERS = {
   // The daily reminder batch emails the company's customers (lib/reminders).
   reminder_daily_batch: 'high',
   record_customer_loss: 'high',
+  // The lagerförändring of a signed inventeringslista: a bokslut verifikat
+  // that changes the year's result, undone only by a storno.
+  book_inventory_count: 'high',
   // Kvittning books a verifikat and lowers a customer and a supplier invoice;
   // undone only by a storno of that verifikat.
   book_counterparty_setoff: 'high',

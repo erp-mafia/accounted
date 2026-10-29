@@ -242,6 +242,12 @@ const READ_ONLY_RPCS = new Set([
   // the gnubok_delete_fiscal_period preview reads it; the delete itself runs
   // at approval.
   'delete_empty_fiscal_period_preview',
+  // The trial balance at balansdagen (its period aggregates and the derived
+  // IB of the year): STABLE, the gnubok_book_inventory_count preview compares
+  // the counted stock with the 14xx ledger balance; the verifikat is booked
+  // at approval.
+  'get_trial_balance_aggregates',
+  'compute_prior_opening_balances',
 ])
 
 /**
@@ -595,6 +601,14 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // Year-end stock count (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company): a draft counted on balansdagen needs no roll-forward
+  // note, and only a signed list is booked.
+  gnubok_save_inventory_count: {
+    args: { count_date: '2026-12-31' },
+    rows: { fiscal_periods: { period_end: '2026-12-31' }, inventory_counts: { status: 'draft', signing_request_id: null } },
+  },
+  gnubok_book_inventory_count: { rows: { inventory_counts: { status: 'signed', balance_date: '2026-12-31' } } },
   // Cancel a draft verifikat in an open, unlocked 2026 (agent feedback seq
   // 978933): the preview reads the entry and the lock, never the engine.
   gnubok_cancel_draft_entry: {

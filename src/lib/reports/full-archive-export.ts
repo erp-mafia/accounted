@@ -1328,6 +1328,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // underlag for those verifikat (BFL 7 kap. 1 §).
   { name: 'finance_leases', file: 'finance_leases.json', orderBy: 'created_at' },
   { name: 'finance_lease_postings', file: 'finance_lease_postings.json', orderBy: 'created_at' },
+  // Year-end stock counts (LIV 1955:257): the inventeringslista, its rows and
+  // its signature; underlag for the lagerförändring verifikat (BFL 7 kap. 1 §).
+  { name: 'inventory_counts', file: 'inventory_counts.json', orderBy: 'created_at' },
+  { name: 'inventory_count_rows', file: 'inventory_count_rows.json', orderBy: 'created_at' },
   { name: 'accrual_schedules', file: 'accrual_schedules.json', orderBy: 'created_at' },
   { name: 'accrual_schedule_installments', file: 'accrual_schedule_installments.json', orderBy: 'created_at' },
   // Dimensions

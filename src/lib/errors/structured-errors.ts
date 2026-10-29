@@ -9139,6 +9139,65 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Year-end stock count (inventeringslista, LIV 1955:257): lib/bokslut/stock-count
+const STOCK_COUNT: Record<string, StructuredErrorEntry> = {
+  STOCK_COUNT_DISABLED: {
+    httpStatus: 404,
+    message_sv: 'Inventering av varulager finns inte här ännu.',
+    message_en: 'The stock count is not available here yet.',
+  },
+  STOCK_COUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inventeringen hittades inte.',
+    message_en: 'The stock count was not found.',
+  },
+  STOCK_COUNT_NO_PERIOD: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret hittades inte.',
+    message_en: 'The financial year was not found.',
+  },
+  STOCK_COUNT_ROLL_FORWARD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Inventeringen gjordes en annan dag än balansdagen. Beskriv hur lagret räknats fram till balansdagen.',
+    message_en: 'The stock was counted on another day than the balance sheet date. Describe how the count was rolled forward to it.',
+  },
+  STOCK_COUNT_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Inventeringslistan är signerad och kan inte ändras.',
+    message_en: 'The stock count is signed and cannot be changed.',
+  },
+  STOCK_COUNT_SIGNING_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Inventeringslistan väntar på BankID-signering. Avbryt signeringen för att ändra den.',
+    message_en: 'The stock count is waiting for a BankID signature. Cancel the signing to change it.',
+  },
+  STOCK_COUNT_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Inventeringslistan har inga rader.',
+    message_en: 'The stock count has no rows.',
+  },
+  STOCK_COUNT_NOT_SIGNED: {
+    httpStatus: 409,
+    message_sv: 'Inventeringslistan ska signeras innan lagerförändringen bokförs.',
+    message_en: 'The stock count must be signed before the change in stock is booked.',
+  },
+  STOCK_COUNT_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Lagerförändringen är redan bokförd för det här räkenskapsåret.',
+    message_en: 'The change in stock is already booked for this financial year.',
+  },
+  STOCK_COUNT_ARTICLE_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'En artikel på inventeringslistan finns inte i artikelregistret.',
+    message_en: 'An article on the stock count is not in the article register.',
+  },
+  STOCK_COUNT_FILE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Den signerade kopian kunde inte sparas: kontrollera filtypen och storleken.',
+    message_en: 'The signed copy could not be saved: check the file type and size.',
+  },
+}
+
 // Dimensions registry (kostnadsställe/projekt)
 const DIMENSION: Record<string, StructuredErrorEntry> = {
   DIMENSION_NOT_FOUND: {
@@ -11412,6 +11471,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SIGNING,
   ...PENDING_OPERATIONS,
   ...AUTOGIRO,
+  ...STOCK_COUNT,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

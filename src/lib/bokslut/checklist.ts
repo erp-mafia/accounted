@@ -3,6 +3,7 @@ import { createLogger } from '@/lib/logger'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
+import { stockCountEnabledFor } from '@/lib/env/stock-count-switch'
 
 const log = createLogger('bokslut/checklist')
 
@@ -226,8 +227,19 @@ export async function buildBokslutChecklist(
   }
   const readiness = await readinessRead
 
-  return assembleChecklist(period, computeAutoStates(accounts, readiness, period.period_end), rows)
+  const checklist = assembleChecklist(period, computeAutoStates(accounts, readiness, period.period_end), rows)
+  // Where the stock count is on, the inventory step leads to it; signing a
+  // count marks the step done (lib/bokslut/stock-count/signing.ts).
+  if (stockCountEnabledFor(companyId)) {
+    checklist.items = checklist.items.map((item) =>
+      item.key === 'inventory_valued' ? { ...item, href: STOCK_COUNT_HREF } : item,
+    )
+  }
+  return checklist
 }
+
+/** The stock count page under bokslut. */
+export const STOCK_COUNT_HREF = '/bookkeeping/year-end/inventering'
 
 export type ChecklistErrorCode = 'UNKNOWN_ITEM' | 'INVALID_STATE' | 'NOTE_TOO_LONG'
 

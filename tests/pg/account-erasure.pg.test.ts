@@ -74,6 +74,7 @@ const RETAINED = new Set([
   'accrual_schedules.user_id',
   'assets.user_id',
   'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.
+  'inventory_counts.user_id', // Who made an inventeringslista (LIV 1955:257); räkenskapsinformation the company keeps.
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.

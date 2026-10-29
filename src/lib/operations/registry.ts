@@ -254,6 +254,8 @@ import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
 import { COUNTERPARTY_SETOFF_OPERATION_LIST } from './counterparty-setoff'
 import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
 import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { STOCK_COUNT_OPERATION_LIST } from './inventory-counts'
+import { stockCountConfigured } from '@/lib/env/stock-count-switch'
 import type { AnyOperation } from './types'
 
 const CORE_OPERATIONS: readonly AnyOperation[] = [
@@ -516,6 +518,7 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [
   ...COLLECTIONS_OPERATION_LIST,
   ...CUSTOMER_LOSS_OPERATION_LIST,
   ...COUNTERPARTY_SETOFF_OPERATION_LIST,
+  ...STOCK_COUNT_OPERATION_LIST,
 ]
 
 /**
@@ -531,6 +534,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   ...(customerLossEnabled() ? CUSTOMER_LOSS_OPERATION_LIST : []),
   // Kvittning likewise only while COUNTERPARTY_SETOFF_ENABLED is set.
   ...(counterpartySetoffEnabled() ? COUNTERPARTY_SETOFF_OPERATION_LIST : []),
+  // The year-end stock count likewise only while BOLAGET_COMPANY_IDS names a company.
+  ...(stockCountConfigured() ? STOCK_COUNT_OPERATION_LIST : []),
 ]
 
 const byPendingType = new Map<string, AnyOperation>()
