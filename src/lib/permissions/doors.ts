@@ -778,6 +778,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
 
     // ── Moms, declarations and Skatteverket ────────────────────────────
     '/api/reports': TAX,
+    // A person's liquidity forecast rows: planning data no verifikat reads,
+    // the same door as forecast:write on v1 and MCP.
+    '/api/reports/cash-forecast/rows': BOOK_HOUSE,
     '/api/tax-assessment-notices': TAX,
     '/api/skatteverket': TAX,
 

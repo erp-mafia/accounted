@@ -698,6 +698,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/pos-sales/days/:id/book': covered([`POST ${V}/pos-sales/days/:dayId/book`, 'gnubok_book_pos_sales_day']),
   'POST /api/pos-sales/fetch': covered([`POST ${V}/pos-sales/fetch`]),
 
+  // Liquidity forecast rows (lib/forecast/rows.ts): written directly, not bookkeeping
+  'POST /api/reports/cash-forecast/rows': covered(
+    [`POST ${V}/cash-forecast-rows`, 'gnubok_upsert_cash_forecast_rows'],
+    'the API names each row by external_source + external_id; a row a person types in has no outside key',
+  ),
+  'POST /api/reports/cash-forecast/rows/:id/cancel': covered([`POST ${V}/cash-forecast-rows/cancel`, 'gnubok_cancel_cash_forecast_row']),
+
   // ── VAT, tax, ROT/RUT ──────────────────────────────────────────────
   'POST /api/reports/vat-declaration/filings': covered([`POST ${V}/reports/vat-declaration/filings`]),
   'DELETE /api/reports/vat-declaration/filings': covered([`DELETE ${V}/reports/vat-declaration/filings`]),

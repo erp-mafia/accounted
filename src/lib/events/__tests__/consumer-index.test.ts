@@ -93,7 +93,7 @@ describe('event consumer index', () => {
       'webhooks',
       'suggestion-detectors',
     ])
-    expect(outboxConsumerIds('transaction.synced')).toEqual(['inbox-bank-match'])
+    expect(outboxConsumerIds('transaction.synced')).toEqual(['inbox-bank-match', 'forecast-realise'])
     expect(outboxConsumerIds('bank_connection.revoked')).toEqual([])
     expect(outboxConsumerIds('journal_entry.drafted')).toEqual([])
   })

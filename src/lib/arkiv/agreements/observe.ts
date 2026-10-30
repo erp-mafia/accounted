@@ -16,7 +16,7 @@ export interface ObserveSummary {
 }
 
 /** Days before and after a due date a payment may land. */
-const DATE_TOLERANCE_DAYS = 10
+export const DATE_TOLERANCE_DAYS = 10
 /** An expected payment this far past due with nothing arrived is missed. */
 const MISSED_AFTER_DAYS = 14
 /** How far back an obligation is still compared, so a late arrival can settle a missed one. */
