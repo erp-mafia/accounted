@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 443 endpoints.
+  pagination, scopes), and all 444 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 443 operations. Paths are shown without
+API version `2026-05-12`, 444 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -687,7 +687,7 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (52)
+### Reports (53)
 
 Full detail: [references/reports.md](references/reports.md)
 
@@ -699,6 +699,7 @@ GET /companies/{companyId}/budgets/{id} : Read one budget and its amounts per ac
 PATCH /companies/{companyId}/budgets/{id} : Rename a budget, make it the default, or archive or restore it [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/budgets/{id} : Delete a budget and its amounts [scope:bookkeeping:write risk:low idempotent dry-run]
 POST /companies/{companyId}/budgets/{id}/copy-actuals : Fill a budget with last year's booked result, optionally scaled [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/budgets/{id}/import : Import a budget file (SIE #PBUDGET, Excel or CSV) into a budget [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/budgets/{id}/lines : Save amounts in a budget (account, month, dimension cells) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/budgets/{id}/spread : Spread a yearly amount over the months of a budget [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/measures : The defined measures: id, name, precise definition, parameters and the report each equals [scope:reports:read risk:low idempotent]

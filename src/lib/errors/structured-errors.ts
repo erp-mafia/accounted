@@ -9661,6 +9661,46 @@ const BUDGET: Record<string, StructuredErrorEntry> = {
     message_en: 'The fiscal year has no default budget. Name a budget or make one the default.',
     remediation: { description: 'Send budget_id, or PATCH a budget of the year with is_default true.' },
   },
+  BUDGET_OTHER_FISCAL_YEAR: {
+    httpStatus: 400,
+    message_sv: 'Budgeten hör till ett annat räkenskapsår än rapporten. Välj en budget för det valda året.',
+    message_en: 'The budget belongs to another fiscal year than the report. Pick a budget of the chosen year.',
+    remediation: { description: 'List the budgets of the report\'s fiscal year (GET /budgets?fiscal_period_id=...) and send one of those.' },
+  },
+  BUDGET_IMPORT_UNSUPPORTED_FILE: {
+    httpStatus: 400,
+    message_sv: 'Filtypen stöds inte. Läs in en SIE-fil eller ett kalkylark (Excel, CSV eller ODS).',
+    message_en: 'Unsupported file type. Import a SIE file or a spreadsheet (Excel, CSV or ODS).',
+  },
+  BUDGET_IMPORT_FILE_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Filen är för stor för en budget (högst 10 MB).',
+    message_en: 'The file is too large for a budget (10 MB at most).',
+  },
+  BUDGET_IMPORT_UNREADABLE: {
+    httpStatus: 400,
+    message_sv: 'Filen kunde inte läsas. Kontrollera att den är en hel SIE-fil eller ett kalkylark.',
+    message_en: 'The file could not be read. Check that it is a complete SIE file or spreadsheet.',
+  },
+  BUDGET_IMPORT_NO_BUDGET_IN_FILE: {
+    httpStatus: 400,
+    message_sv: 'SIE-filen innehåller ingen budget (#PBUDGET). Exportera den med budget i källprogrammet, eller läs in budgeten som kalkylark.',
+    message_en: 'The SIE file holds no budget (#PBUDGET). Export it with the budget from the source program, or import the budget as a spreadsheet.',
+  },
+  BUDGET_IMPORT_LAYOUT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Kalkylarkets kolumner känns inte igen. Använd kolumnerna konto, månad och belopp (och gärna dim och kod), eller konto och en kolumn per månad.',
+    message_en: 'The spreadsheet columns are not recognised. Use the columns konto, månad and belopp (optionally dim and kod), or konto and one column per month.',
+    remediation: {
+      description: 'Long layout: a header row with konto, månad (YYYY-MM) and belopp, optionally dim and kod. Wide layout: konto and one column per month headed 2027-01 or jan.',
+    },
+  },
+  BUDGET_IMPORT_NOTHING_TO_IMPORT: {
+    httpStatus: 400,
+    message_sv: 'Filen gav inga budgetbelopp för budgetens räkenskapsår. Förhandsgranskningen visar vilka rader som hoppades över och varför.',
+    message_en: 'The file gave no budget amounts for the budget\'s fiscal year. The preview shows which rows were skipped and why.',
+    remediation: { description: 'details.skipped lists the accounts, objects and months that were left out; run with dry_run to see it.' },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

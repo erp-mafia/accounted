@@ -37,5 +37,13 @@ export function isResultatkonto(account: string): boolean {
   return ACCOUNT_NUMBER_RE.test(account) && account >= RESULTATKONTO_FIRST && account <= RESULTATKONTO_LAST
 }
 
+/**
+ * BAS class 3, rörelsens intäkter: a budget sheet's sign is read from these
+ * rows (revenue above zero means the sheet writes revenue positive).
+ */
+export function isRevenueAccount(account: string): boolean {
+  return /^3\d{3}$/.test(account)
+}
+
 /** The resultatkonton the budget API's examples show: sales of services and rent. */
 export const BUDGET_EXAMPLE_ACCOUNTS = { sales: '3010', rent: '5010' } as const

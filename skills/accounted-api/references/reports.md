@@ -2,7 +2,7 @@
 
 # Reports endpoints
 
-Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets (GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue negative) are compared with the books by GET /reports/budget-vs-actual. Only income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
+Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets (GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue negative, a file read in by POST /budgets/{id}/import from SIE #PBUDGET or Excel/CSV) are compared with the books by GET /reports/budget-vs-actual. Only income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -503,6 +503,127 @@ Example response `200`:
       "3010",
       "5010"
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/budgets/{id}/import`
+
+**Import a budget file (SIE #PBUDGET, Excel or CSV) into a budget.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Reads a budget file into one budget, all cells or none. A SIE file contributes its #PBUDGET rows (the month's budget per account and object, SIE sign); the rows for months of the budget's fiscal year are read and the file's other years are counted as skipped. A spreadsheet (xlsx, xls, csv, ods) is read in one of two layouts found from its header row: long (konto, månad as YYYY-MM, belopp, optionally dim and kod, or a projekt or kostnadsställe column) or wide (konto and one column per month, headed 2027-01 or jan). Accounts go through the same account mapping as the SIE ledger import, against the company's chart of accounts; an account the chart lacks, a balance account or an object the dimension registry lacks is skipped and named in details.skipped, never guessed. Dry-runnable: the dry run is the preview (what would be read, what is skipped and why, the budget per class and the result).
+
+**Use when:** Moving a budget from Fortnox (its SIE export carries #PBUDGET) or from a spreadsheet, before following it up with GET /reports/budget-vs-actual.
+**Do not use for:** A few cells (POST /budgets/{id}/lines), or the bookkeeping itself (POST /imports/sie).
+
+**Pitfalls:**
+- Send the file bytes base64-encoded in content_base64, up to about 3 MB of file; the filename's extension decides SIE or spreadsheet.
+- A spreadsheet's sign is read from its class 3 rows unless sign is sent: revenue positive means revenue_positive. sign_suspect true in the answer means revenue reads as a cost or costs as revenue: check the sign before saving.
+- replace true removes the budget's cells the file leaves out; without it the file is written over the budget and other cells stay.
+- Nothing for the budget's year answers 400 BUDGET_IMPORT_NOTHING_TO_IMPORT with the skipped lists in details.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  sign?: "debit_positive" | "revenue_positive",
+  replace?: boolean,
+  filename: string,
+  content_base64: string
+}
+```
+
+Example request:
+```json
+{
+  "filename": "budget-2027.xlsx",
+  "content_base64": "UEsDBBQ…",
+  "replace": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    budget_id: string,
+    inserted: number,
+    updated: number,
+    deleted: number,
+    unchanged: number,
+    format: "sie" | "long" | "wide",
+    sign: "debit_positive" | "revenue_positive",
+    detected_sign: "debit_positive" | "revenue_positive" | null,
+    replace: boolean,
+    rows_read: number,
+    cells: number,
+    accounts: number,
+    mapped_accounts: { source: string, target: string }[],
+    skipped: { accounts_not_in_chart: string[], balance_accounts: string[], unknown_objects: { dim_no: string, code: string }[], rows: number, months_outside_year: number, unreadable: { line: number, reason: "record" | "amount" | "month" | "dimension" }[], unreadable_count: number },
+    file_years: { year_index: number, start: string, end: string }[],
+    class_totals: { account_class: number, amount: number }[],
+    result: number,
+    sign_suspect: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget_id": "7c1d…",
+    "inserted": 240,
+    "updated": 0,
+    "deleted": 0,
+    "unchanged": 0,
+    "format": "wide",
+    "sign": "revenue_positive",
+    "detected_sign": "revenue_positive",
+    "replace": true,
+    "rows_read": 240,
+    "cells": 240,
+    "accounts": 20,
+    "mapped_accounts": [],
+    "skipped": {
+      "accounts_not_in_chart": [],
+      "balance_accounts": [],
+      "unknown_objects": [],
+      "rows": 0,
+      "months_outside_year": 0,
+      "unreadable": [],
+      "unreadable_count": 0
+    },
+    "file_years": [],
+    "class_totals": [
+      {
+        "account_class": 3,
+        "amount": 1200000
+      }
+    ],
+    "result": 150000,
+    "sign_suspect": false
   },
   "meta": {
     "request_id": "req_…",

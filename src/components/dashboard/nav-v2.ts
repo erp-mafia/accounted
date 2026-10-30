@@ -245,6 +245,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     sub: [
       { href: '/reports', module: 'ledger', labelKey: 'reports' },
       { href: '/kpi', module: 'ledger', labelKey: 'kpi' },
+      { href: '/budget', module: 'ledger', labelKey: 'budget' },
     ],
   },
   {

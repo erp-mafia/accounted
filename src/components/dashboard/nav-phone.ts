@@ -8,6 +8,7 @@ import {
   BriefcaseIcon,
   BuildingLibraryIcon,
   BuildingStorefrontIcon,
+  CalculatorIcon,
   CalendarDateRangeIcon,
   CalendarDaysIcon,
   ChartBarIcon,
@@ -52,6 +53,7 @@ export type NavLabelKey =
   | 'assistant'
   | 'agent_knowledge'
   | 'kpi'
+  | 'budget'
   | 'invoice_inbox'
   | 'inkorg'
   | 'arkiv'
@@ -210,6 +212,7 @@ export const navItems: NavItem[] = [
   // Analys: read the numbers.
   { href: '/kpi', module: 'ledger', labelKey: 'kpi', icon: ArrowTrendingUpIcon, group: 'analys' },
   { href: '/reports', module: 'ledger', labelKey: 'reports', icon: ChartBarIcon, group: 'analys' },
+  { href: '/budget', module: 'ledger', labelKey: 'budget', icon: CalculatorIcon, group: 'analys' },
   // Data: the registers (master data) + Importera/exportera as its own
   // row. Anställda is a register (you edit an employee rarely, you run
   // payroll monthly), so it lives here while Löner stays in Arbeta.

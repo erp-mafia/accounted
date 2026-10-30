@@ -1,0 +1,1 @@
+[2026-10-29] The budget grid shows and takes amounts in the resultatrapport's sign (revenue positive, costs negative) while the API keeps the SIE sign: a typed figure reads the same in the report's Budget column, and class subtotals and the result stay plain sums (accounted#134).
