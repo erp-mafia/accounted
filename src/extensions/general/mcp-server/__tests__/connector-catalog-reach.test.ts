@@ -204,7 +204,16 @@ describe('connector-minted key: invoice draft round trip', () => {
  * from tools/list. Prefer making it stage. If it truly must commit directly,
  * list it; an entry here also has to pass the "nothing names it" test below.
  */
-const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {}
+const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
+  // The liquidity forecast's rows (accounted#136, decision 2026-10-28): not
+  // bookkeeping, so they commit directly (DIRECT_WRITE_SCOPES) instead of
+  // staging, and search-only because tools/list is at its ceiling. Reachable
+  // over v1 REST and a raw tools/call; for a client that only calls listed
+  // tools, the founder picks between listing the upsert and a bridge for
+  // direct writes.
+  gnubok_upsert_cash_forecast_rows: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows carries it.',
+  gnubok_cancel_cash_forecast_row: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows/cancel carries it.',
+}
 
 describe('no search-only WRITE is out of reach (issue #2800)', () => {
   const searchOnlyWrites = tools.filter(

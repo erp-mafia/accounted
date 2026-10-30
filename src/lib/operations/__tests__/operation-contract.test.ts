@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
-import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
+import { DIRECT_WRITE_SCOPES, STAGING_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import { OPERATION_LABEL_KEYS, SINGLE_ACTION_WARNING_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
@@ -67,12 +67,30 @@ describe('operation registry contract', () => {
   })
 
   it('stages every MCP write, described as staging, within the description budget', () => {
-    for (const op of OPERATIONS.filter((o) => o.mcp && o.kind === 'write')) {
-      expect(op.mcp!.stage, `${op.id}: MCP writes always stage`).toBeDefined()
+    for (const op of OPERATIONS.filter((o) => o.mcp && o.kind === 'write' && !o.mcp.direct)) {
+      expect(op.mcp!.stage, `${op.id}: MCP writes stage unless they are direct`).toBeDefined()
       const description = op.mcp!.description ?? op.docs.summary
       expect(description, op.id).toMatch(/\bstage\b/i)
       expect(description.length, op.id).toBeLessThanOrEqual(280)
     }
+  })
+
+  it('writes directly over MCP only what never reaches the books (DIRECT_WRITE_SCOPES), never described as staging', () => {
+    const direct = OPERATIONS.filter((o) => o.mcp?.direct)
+    for (const op of direct) {
+      expect(op.kind, op.id).toBe('write')
+      expect(op.mcp!.stage, `${op.id}: direct and stage are exclusive`).toBeUndefined()
+      expect(DIRECT_WRITE_SCOPES, `${op.id}: scope ${op.scope}`).toContain(op.scope)
+      expect(STAGING_SCOPES, `${op.id}: a direct scope never stages`).not.toContain(op.scope)
+      const description = op.mcp!.description ?? op.docs.summary
+      expect(description, op.id).not.toMatch(/\bstage/i)
+      expect(description.length, op.id).toBeLessThanOrEqual(280)
+    }
+    // Every operation under a direct scope is a read or a direct write: none of them stages.
+    for (const op of OPERATIONS.filter((o) => DIRECT_WRITE_SCOPES.includes(o.scope))) {
+      expect(op.mcp?.stage, op.id).toBeUndefined()
+    }
+    expect(direct.map((o) => o.id).sort()).toEqual(['cash-forecast-rows.cancel', 'cash-forecast-rows.upsert-batch'])
   })
 
   it('labels every pending operation type in both languages, so none shows its raw name', () => {

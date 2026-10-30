@@ -12338,6 +12338,53 @@ const LOSS_CARRYFORWARD: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Liquidity forecast and its rows (lib/forecast, accounted#136)
+// ─────────────────────────────────────────────────────────────────
+
+const CASH_FORECAST: Record<string, StructuredErrorEntry> = {
+  CASH_FORECAST_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Likviditetsprognosen kunde inte tas fram. Försök igen.',
+    message_en: 'The liquidity forecast could not be built. Try again.',
+    retryable: true,
+  },
+  CASH_FORECAST_ROWS_READ_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Prognosraderna kunde inte läsas. Försök igen.',
+    message_en: 'The forecast rows could not be read. Try again.',
+    retryable: true,
+  },
+  CASH_FORECAST_ROWS_WRITE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Prognosraderna kunde inte sparas. Försök igen.',
+    message_en: 'The forecast rows could not be saved. Try again.',
+    retryable: true,
+  },
+  CASH_FORECAST_ROWS_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'En annan skrivning lade till samma prognosrad samtidigt. Skicka samma rader igen.',
+    message_en: 'Another write added the same forecast row at the same time. Send the same rows again.',
+    retryable: true,
+  },
+  CASH_FORECAST_ROW_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Prognosraden hittades inte.',
+    message_en: 'The forecast row was not found.',
+    remediation: { description: 'List the rows with GET /cash-forecast-rows (gnubok_list_cash_forecast_rows).', tool: 'gnubok_list_cash_forecast_rows' },
+  },
+  CASH_FORECAST_ROW_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Prognosraden är inte öppen längre: den är redan realiserad eller ersatt.',
+    message_en: 'The forecast row is no longer open: it is already realised or superseded.',
+  },
+  CASH_FORECAST_ROW_REFERENCE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En faktura, leverantörsfaktura eller dimension som raden pekar på finns inte i företaget.',
+    message_en: 'An invoice, supplier invoice or dimension value the row points at does not exist in the company.',
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -12415,6 +12462,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGET_OWNER_TAX,
   ...LOSS_CARRYFORWARD,
   ...STOCK_COUNT,
+  ...CASH_FORECAST,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

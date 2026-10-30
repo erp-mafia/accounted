@@ -1057,7 +1057,7 @@ Request body:
 ```ts
 {
   name?: string,
-  scopes: ("transactions:read" | "transactions:write" | "customers:read" | "customers:write" | "articles:read" | "articles:write" | "invoices:read" | "invoices:write" | "suppliers:read" | "suppliers:write" | "reports:read" | "bookkeeping:write" | "payroll:read" | "payroll:write" | "companies:read" | "companies:write" | "events:read" | "webhooks:manage" | "operations:read" | "documents:read" | "documents:write" | "compliance:read" | "skatteverket:write" | "agent:read" | "agent:write" | "pending_operations:read" | "pending_operations:approve" | "reconciliation:read" | "reconciliation:write" | "reconciliation:signoff")[],
+  scopes: ("transactions:read" | "transactions:write" | "customers:read" | "customers:write" | "articles:read" | "articles:write" | "invoices:read" | "invoices:write" | "suppliers:read" | "suppliers:write" | "reports:read" | "bookkeeping:write" | "payroll:read" | "payroll:write" | "companies:read" | "companies:write" | "events:read" | "webhooks:manage" | "operations:read" | "documents:read" | "documents:write" | "compliance:read" | "skatteverket:write" | "agent:read" | "agent:write" | "pending_operations:read" | "pending_operations:approve" | "reconciliation:read" | "reconciliation:write" | "reconciliation:signoff" | "forecast:write")[],
   mode?: "live" | "test",
   read_only?: boolean,
   acknowledge_sod?: boolean

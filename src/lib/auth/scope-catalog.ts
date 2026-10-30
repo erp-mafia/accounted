@@ -51,6 +51,11 @@ export const API_KEY_SCOPES = {
   'reconciliation:read':  { label: 'Avstämning: läs',   description: 'Konton att stämma av, bryggan per konto och raderna bakom den (bank + skattekonto)' },
   'reconciliation:write': { label: 'Avstämning: skriv', description: 'Koppla och koppla bort händelser mot verifikat, ignorera rader (MCP stagar; REST skriver direkt)' },
   'reconciliation:signoff': { label: 'Avstämning: signera', description: 'Markera ett konto som avstämt t.o.m. ett datum och öppna en signering igen (MCP stagar; REST skriver direkt)' },
+  // Rows of the liquidity forecast (lib/forecast): expected money in or out
+  // that the books do not hold yet. Not bookkeeping, so REST and MCP both
+  // write directly (decision 2026-10-28) and it is not a STAGING_SCOPE. The
+  // forecast and the rows are read with reports:read.
+  'forecast:write':     { label: 'Likviditetsprognos: skriv', description: 'Lägg till, uppdatera och stryk rader i likviditetsprognosen (skrivs direkt, når aldrig bokföringen)' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -140,6 +145,16 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
 ]
 
 /**
+ * Scopes whose MCP writes commit on the call instead of staging for a
+ * person's approval (OperationMcpBinding.direct). Only data that never
+ * reaches the books belongs here: forecast:write writes the liquidity
+ * forecast's rows, planning data that no verifikat reads (decision
+ * 2026-10-28). Every scope that creates or changes räkenskapsinformation
+ * stages (STAGING_SCOPES).
+ */
+export const DIRECT_WRITE_SCOPES: readonly ApiKeyScope[] = ['forecast:write']
+
+/**
  * Detect a segregation-of-duties conflict between staging and approval scopes
  * on the same key. Returns the offending staging scope, or null when the
  * combination is clean. Callers may choose to block, warn, or record an
@@ -180,6 +195,7 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'invoices',           label: 'Fakturor',            scopes: ['invoices:read', 'invoices:write'] },
   { domain: 'suppliers',          label: 'Leverantörer',        scopes: ['suppliers:read', 'suppliers:write'] },
   { domain: 'reports',            label: 'Rapporter',           scopes: ['reports:read'] },
+  { domain: 'forecast',           label: 'Likviditetsprognos',  scopes: ['forecast:write'] },
   { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
   { domain: 'payroll',            label: 'Löner',               scopes: ['payroll:read', 'payroll:write'] },
   { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:write'] },
@@ -327,6 +343,12 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_query_journal:                   'reports:read',
   gnubok_get_ar_ledger:                   'reports:read',
   gnubok_get_supplier_ledger:             'reports:read',
+  // Liquidity forecast (lib/operations/cash-forecast.ts): read with the
+  // reports, its rows written directly under forecast:write (not bookkeeping).
+  gnubok_get_cash_forecast:               'reports:read',
+  gnubok_list_cash_forecast_rows:         'reports:read',
+  gnubok_upsert_cash_forecast_rows:       'forecast:write',
+  gnubok_cancel_cash_forecast_row:        'forecast:write',
   gnubok_list_fiscal_periods:             'reports:read',
   gnubok_get_reconciliation_status:       'reports:read',
   gnubok_list_accrual_schedules:          'reports:read',

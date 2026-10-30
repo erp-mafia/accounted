@@ -1,0 +1,1 @@
+[2026-10-28] The forecast row writes stay search-only as asked (tools/list at its ceiling), so an MCP client that calls only listed tools cannot reach them: no bridge carries a direct write. Listed as unreachable; v1 carries them. Listing the upsert or a direct-write bridge is the founder's call.

@@ -200,6 +200,9 @@ export const SCOPE_DOORS: Readonly<Record<ApiKeyScope, DoorSpec | null>> = Objec
   'reconciliation:read': READ,
   'reconciliation:write': BOOK_RECORD,
   'reconciliation:signoff': BOOK_RECORD,
+  // The liquidity forecast's rows: planning data no verifikat reads, written
+  // directly over v1 and MCP, never staged (decision 2026-10-28).
+  'forecast:write': BOOK_HOUSE,
 })
 
 export function isApiKeyScope(value: string | null | undefined): value is ApiKeyScope {
