@@ -50,6 +50,7 @@ import {
   fieldsAtPaths,
   holdsKey,
   inboxKindOfDocType,
+  prepaidDeduction,
   projectExtraction,
   sameValue,
   xmlValues,
@@ -305,6 +306,7 @@ export function resolveDocumentReading(inputs: ReadingInputs): DocumentReading {
     arkiv,
     supplier,
     roundingAmount: roundingOf(origins.current) ?? roundingOf(origins.model),
+    prepaidAmount: prepaidDeduction((origins.current ?? origins.model)?.totals),
   }
   // A total promoted from the document's one prominent amount is fallback-grade (InvoiceExtractionResult.totalSource).
   const promotedTotal = origins.model?.totalSource === 'prominent'

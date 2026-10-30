@@ -1,0 +1,1 @@
+[2026-10-30] The supplier-invoice dry run builds its verifikat with the commit's own builders and judges the accounts like the engine, so it also refuses SI_CREATE_NO_FISCAL_PERIOD where the commit does: a passing dry run is a posting commit (crm#1536).

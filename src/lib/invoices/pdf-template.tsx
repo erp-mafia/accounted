@@ -20,6 +20,7 @@ import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnumm
 import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { unitLabel } from '@/lib/invoices/unit-labels'
+import { deliveryAddressLines } from '@/lib/invoices/delivery-address'
 import {
   PAYMENT_AREA_GAP_PT,
   PAYMENT_AREA_HEIGHT_PT,
@@ -399,6 +400,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     : null
   const postalLine = (postal: string | null | undefined, city: string | null | undefined) =>
     postal || city ? `${postal ?? ''} ${city ?? ''}`.trim() : null
+  // Leveransadress (crm#1547): where the goods go, when not to the invoice address.
+  const deliveryLines = deliveryAddressLines(invoice.delivery_address, company.country || 'SE', (code) => getCountryName(code, lang))
 
   // The one notice slot: the statutory VAT notice, then the proforma or quote
   // notice. "Not VAT-registered" trumps the others ONLY when the invoice
@@ -706,6 +709,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   <Text style={styles.metaMuted}>{L.invoiceMarking}</Text> {invoice.invoice_marking.trim()}
                 </Text>
               )}
+              {deliveryLines.length > 0 && (
+                <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
+                  <Text style={styles.metaMuted}>{L.deliveryAddress}</Text>
+                </Text>
+              )}
+              {deliveryLines.map((line, index) => (
+                <Text key={`delivery-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
             </View>
           </View>
 

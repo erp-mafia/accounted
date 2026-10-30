@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CreateInvoiceItemSchema, CurrencySchema, InvoiceQrModeSchema } from '@/lib/api/schemas'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { isoDateSchema } from '@/lib/invariants/zod'
@@ -47,6 +48,8 @@ export const CreateInvoiceParamsSchema = z
     our_reference: z.string().nullable().optional(),
     your_reference: z.string().nullable().optional(),
     invoice_marking: z.string().max(200).nullable().optional(),
+    // Leveransadress (crm#1547), validated at staging; null or absent = none.
+    delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
     notes: z.string().nullable().optional(),
     payment_link_url: z.string().nullable().optional(),
     payment_cash_account_id: z.string().nullable().optional(),
@@ -119,6 +122,8 @@ export async function buildStagedInvoice(args: {
     your_reference: staged.your_reference ?? undefined,
     our_reference: staged.our_reference ?? undefined,
     invoice_marking: staged.invoice_marking ?? undefined,
+    // Only when staged, so an invoice without one never names the column.
+    ...(staged.delivery_address ? { delivery_address: staged.delivery_address } : {}),
     notes: staged.notes ?? undefined,
     payment_link_url: httpsLinkOrUndefined(staged.payment_link_url),
     // A new invoice has no stored choice to leave alone: absent inherits.

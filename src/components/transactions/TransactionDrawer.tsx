@@ -16,6 +16,7 @@ import type { TransactionWithInvoice } from '@/components/transactions/transacti
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { bankRowTitle } from '@/lib/transactions/row-title'
 import { useGiroText } from './use-giro-text'
 
 async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
@@ -121,6 +122,9 @@ export function TransactionDrawer({
 
   if (typeof document === 'undefined') return null
 
+  // The bank's text, with the name it sent put first when the text is only digits (crm#1399).
+  const title = bankRowTitle(transaction)
+
   // What the bank's enrichment added (Open Payments): the counterparty's
   // organisationsnummer, the amount a foreign purchase was made in with the
   // rate (the bank's own on a SEK account, else the amounts' ratio: there
@@ -158,13 +162,13 @@ export function TransactionDrawer({
   return createPortal(
     <aside
       role="dialog"
-      aria-label={transaction.description}
+      aria-label={title}
       className="fixed bottom-[calc(var(--bottom-nav-h)+0.625rem)] right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[var(--shadow-lg)] animate-fade-in"
     >
       <div className="flex items-start gap-3 border-b border-border px-6 pb-3 pt-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-medium" data-ph-mask title={transaction.description}>
-            {transaction.description}
+          <p className="truncate text-[13px] font-medium" data-ph-mask title={title}>
+            {title}
           </p>
           <p className={cn('mt-0.5 text-xl tabular-nums tracking-tight', isIncome && 'text-success')} data-ph-mask>
             {isIncome ? '+' : ''}

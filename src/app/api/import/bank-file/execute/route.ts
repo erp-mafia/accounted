@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { eventBus } from '@/lib/events'
 import { ingestTransactions } from '@/lib/transactions/ingest'
+import { announceSyncedTransactions } from '@/lib/transactions/announce-synced'
 import { toRawTransaction } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
@@ -15,7 +15,6 @@ import { recordBankFileArrival } from '@/lib/import/bank-file/arrival'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId, BankFileAccountIdentity } from '@/lib/import/bank-file/types'
-import type { Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   runUnattendedReconciliationSweep,
@@ -340,21 +339,13 @@ export const POST = withRouteContext(
 
       if (ingestResult.imported > 0 && ingestResult.transaction_ids.length > 0) {
         try {
-          const { data: importedTransactions } = await supabase
-            .from('transactions')
-            .select('*')
-            .in('id', ingestResult.transaction_ids)
-
-          if (importedTransactions && importedTransactions.length > 0) {
-            await eventBus.emit({
-              type: 'transaction.synced',
-              payload: {
-                transactions: importedTransactions as Transaction[],
-                userId: user.id,
-                companyId,
-              },
-            })
-          }
+          await announceSyncedTransactions(supabase, {
+            companyId,
+            userId: user.id,
+            transactionIds: ingestResult.transaction_ids,
+            log: opLog,
+            context: { importId: importRecord.id },
+          })
         } catch (err) {
           opLog.warn('transaction.synced event emission failed', err as Error)
         }

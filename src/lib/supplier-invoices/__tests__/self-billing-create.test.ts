@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createTableMockSupabase, makeSupplier } from '@/tests/helpers'
+import { createTableMockSupabase, makeSupplier, type TableMockResolver } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
 
 const mockRegistrationEntry = vi.fn()
@@ -32,6 +32,10 @@ vi.mock('@/lib/supplier-invoices/self-billing/archive', async () => {
 import { createSupplierInvoice, type CreateSupplierInvoiceInput } from '../create'
 
 const SUPPLIER_ID = '550e8400-e29b-41d4-a716-446655440000'
+// An open fiscal year: the registration builder lists periods (findFiscalPeriod,
+// .limit), the period-lock check reads one row (.maybeSingle).
+const openPeriod = (id: string): TableMockResolver => (chain) =>
+  chain.some((c) => c.method === 'limit') ? { data: [{ id }] } : { data: { id, is_closed: false, locked_at: null } }
 const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => log } as unknown as Logger
 
 const SETTINGS = {
@@ -75,6 +79,7 @@ function setUp(card: Record<string, unknown> = {}, settings: Record<string, unkn
       }),
     },
     company_settings: { data: settings },
+    fiscal_periods: openPeriod('fp-1'),
     'rpc:get_next_arrival_number': { data: 12 },
     supplier_invoices: { data: CREATED },
     supplier_invoice_items: { data: [{ id: 'line-1', sort_order: 0 }] },

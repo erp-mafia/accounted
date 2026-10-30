@@ -1101,3 +1101,85 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
     expect(rows(report)['inv-rut']).toMatchObject({ outstanding: 10000, paid_amount: 0 })
   })
 })
+
+describe('generateARLedger: a credited invoice and its credit note read as a pair (crm#1537)', () => {
+  const base = { customer_id: 'cust-a', customer: { id: 'cust-a', name: 'Test AB' }, paid_amount: 0, currency: 'SEK' }
+  const open = { ...base, id: 'inv-open', invoice_number: 'F010', invoice_date: '2026-09-01', due_date: '2026-10-01', total: 500, status: 'sent' }
+  const original = (total: number, extra: Record<string, unknown> = {}) => ({
+    ...base, id: 'inv-orig', invoice_number: 'F001', invoice_date: '2026-06-01', due_date: '2026-07-01', total, status: 'credited', ...extra,
+  })
+  const creditNote = (total: number, extra: Record<string, unknown> = {}) => ({
+    ...base, id: 'inv-kr', invoice_number: 'KR001', invoice_date: '2026-10-20', due_date: '2026-10-20', total, status: 'sent', credited_invoice_id: 'inv-orig', ...extra,
+  })
+
+  it('lists neither row of a full credit as open or overdue beside another open invoice, and keeps the totals', async () => {
+    tables = { invoices: [original(1000), creditNote(-1000), open] }
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toHaveLength(1)
+    const entry = report.entries[0]
+    expect(entry.invoices.map((inv) => inv.invoice_id)).toEqual(['inv-open'])
+    // Only the open invoice ages: no 1 000 in an overdue bucket against -1 000 in current.
+    expect(entry.days_1_30 + entry.days_31_60 + entry.days_61_90 + entry.days_90_plus).toBe(entry.total_outstanding - entry.current)
+    expect(entry.total_outstanding).toBe(500)
+    expect(report.total_outstanding).toBe(500)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('keeps the rest of a partial credit on the original, aged by its own due date, and drops the used-up credit note', async () => {
+    tables = { invoices: [original(1000), creditNote(-400)] }
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-10-25')
+
+    const entry = report.entries[0]
+    expect(entry.invoices).toHaveLength(1)
+    expect(entry.invoices[0]).toMatchObject({ invoice_id: 'inv-orig', outstanding: 600, outstanding_sek: 600, paid_amount: 400 })
+    expect(entry.invoices[0].days_overdue).toBeGreaterThan(90)
+    expect(entry.days_90_plus).toBe(600)
+    expect(entry.current).toBe(0)
+    expect(report.total_outstanding).toBe(600)
+  })
+
+  it('leaves a credit above what the original still owes on the credit note, owed back', async () => {
+    // Paid in full, then credited: nothing left on the original, the credit is owed back.
+    tables = { invoices: [original(1000, { paid_amount: 1000 }), creditNote(-1000)] }
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    const entry = report.entries[0]
+    expect(entry.invoices.map((inv) => [inv.invoice_id, inv.outstanding])).toEqual([['inv-kr', -1000]])
+    expect(report.total_outstanding).toBe(-1000)
+  })
+
+  it('applies a credit only to the invoice it credits, in the same conversion', async () => {
+    // A credit note for another invoice, and a foreign pair at different rates, stay unpaired.
+    tables = {
+      invoices: [
+        original(1000),
+        creditNote(-1000, { credited_invoice_id: 'inv-elsewhere' }),
+        { ...original(100, { currency: 'EUR', exchange_rate: 11 }), id: 'inv-eur' },
+        { ...creditNote(-100, { currency: 'EUR', exchange_rate: 11.5 }), id: 'kr-eur', credited_invoice_id: 'inv-eur' },
+      ],
+    }
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id).sort()).toEqual(['inv-eur', 'inv-kr', 'inv-orig', 'kr-eur'])
+    expect(report.total_outstanding).toBe(roundSek(1000 - 1000 + 1100 - 1150))
+  })
+
+  it('lists the pair unpaired, with the same totals, when the link cannot be read', async () => {
+    tables = { invoices: [original(1000), creditNote(-1000), open] }
+    failures = { invoices: { message: 'read failed' } }
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries[0].invoices.map((inv) => inv.invoice_id).sort()).toEqual(['inv-kr', 'inv-open', 'inv-orig'])
+    expect(report.total_outstanding).toBe(500)
+  })
+})
+
+function roundSek(n: number): number {
+  return Math.round(n * 100) / 100
+}

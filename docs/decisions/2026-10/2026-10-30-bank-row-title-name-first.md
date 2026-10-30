@@ -1,0 +1,1 @@
+[2026-10-30] Bank row title (crm#1399): the list and drawer show 'Name (text)' whenever the bank's text has no letters and merchant_name has one, not only for a bare Swish number: no stored row has that shape (the 'name' was the number), while OCR-only and Swish-id rows hide real names.

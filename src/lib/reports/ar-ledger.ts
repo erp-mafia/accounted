@@ -14,6 +14,7 @@ import {
 } from '@/lib/bookkeeping/skatteverket-share'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
+import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -165,6 +166,27 @@ export async function generateARLedger(
   // longer sits on 1513 (skatteverket-share.ts).
   const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
 
+  // Each row's open amount in its own currency, then each credit note set
+  // against the invoice it credits (credited-pairs.ts): a fully credited
+  // invoice and its credit note net to zero and neither is open or overdue;
+  // a partial credit leaves the rest on the original. Totals do not move.
+  const ownOutstanding = new Map<string, number>()
+  for (const inv of invoices) {
+    const total = Number(inv.total) || 0
+    const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
+    ownOutstanding.set(inv.id, outstandingWithCreditUsed(
+      payments
+        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
+        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
+      creditUsed.get(inv.id)
+    ))
+  }
+  const creditNoteIds = invoices.filter((inv) => (Number(inv.total) || 0) < 0).map((inv) => inv.id)
+  const creditedInvoiceOf = creditNoteIds.length > 0
+    ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
+    : new Map<string, string>()
+  const paired = netCreditedPairs(invoices, ownOutstanding, creditedInvoiceOf)
+
   // Group by customer and calculate aging. An invoice without a customer
   // groups under a null customer_id.
   const byCustomer = new Map<string | null, ARLedgerEntry>()
@@ -195,20 +217,19 @@ export async function generateARLedger(
     const dueDate = new Date(inv.due_date)
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
     const total = Number(inv.total) || 0
-    const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
-    const outstanding = outstandingWithCreditUsed(
-      payments
-        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
-        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
-      creditUsed.get(inv.id)
-    )
+    const outstanding = paired.outstanding.get(inv.id) ?? 0
     const paidAmount = roundOre(total - outstanding)
 
     // 'paid' invoices are only fetched to catch ones still open: at the as-of
     // date, or (live) on a deduction Skatteverket has yet to pay out. One
     // settled by then adds nothing to the reskontra, so skip its zero row
-    // instead of listing it.
-    if (inv.status === 'paid' && outstanding === 0) continue
+    // instead of listing it. The same for a credited invoice with nothing
+    // left on it and a credit note its original used up: settled by credit,
+    // not open, so never listed as overdue.
+    if (
+      outstanding === 0 &&
+      (inv.status === 'paid' || inv.status === 'credited' || paired.settledByCredit.has(inv.id))
+    ) continue
 
     // Aging buckets and totals must be in SEK so they reconcile with account 1510.
     // Foreign-currency invoices without an exchange_rate cannot be converted:

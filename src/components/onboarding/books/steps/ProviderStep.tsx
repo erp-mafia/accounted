@@ -161,7 +161,10 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     (cId) => { finishAttempt('success'); void loadPreview(cId) },
     (reason, cancelled) => {
       finishAttempt(cancelled ? 'cancelled' : 'provider_error')
-      setError(getErrorMessage(reason, { locale }))
+      // A cancel at the provider ends like a closed login window: try again,
+      // or take the SIE upload below. The callback's own sentence only said
+      // "try again", and most who saw it never connected (PostHog, 10-24..10-29).
+      setError(cancelled ? t('provider_cancelled', { provider: provName }) : getErrorMessage(reason, { locale }))
       setPhase('connect')
     },
   )

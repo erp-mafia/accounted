@@ -149,6 +149,23 @@ const SI_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const JE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const USER_ID = 'user-1'
 
+// An open fiscal year: the dry run's registration builder lists periods
+// (findFiscalPeriod, .limit), the period-lock check reads one row.
+const OPEN_PERIOD: TableMockResolver = (chain) =>
+  chain.some((c) => c.method === 'limit')
+    ? { data: [{ id: 'fp-1' }] }
+    : { data: { id: 'fp-1', is_closed: false, locked_at: null } }
+
+/** The active chart holds `active`; `inactive` rows exist but are deactivated. */
+function chart(active: string[], inactive: string[] = []): TableMockResolver {
+  return (chain) => {
+    const asked = (chain.find((c) => c.method === 'in')?.args[1] as string[] | undefined) ?? []
+    const activeOnly = chain.some((c) => c.method === 'eq' && c.args[0] === 'is_active' && c.args[1] === true)
+    const rows = activeOnly ? active : [...active, ...inactive]
+    return { data: asked.filter((n) => rows.includes(n)).map((account_number) => ({ account_number })) }
+  }
+}
+
 function makeRequest(url: string, init?: RequestInit): Request {
   return new Request(url, {
     ...init,
@@ -611,7 +628,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
-        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: OPEN_PERIOD,
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -625,6 +642,134 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(mockedReg).not.toHaveBeenCalled()
+  })
+
+  describe('dry run: the would-be verifikat and its accounts (crm#1536)', () => {
+    function dryRunClient(overrides: Record<string, TableResp | TableResp[] | TableMockResolver> = {}) {
+      const mock = supabaseFor({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: OPEN_PERIOD,
+        chart_of_accounts: chart(['5410', '2641', '2440']),
+        idempotency_keys: { data: null, error: null },
+        ...overrides,
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+      return mock
+    }
+
+    function dryRun(body: Record<string, unknown> = validBody) {
+      return createSI(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?dry_run=true`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+        companyParams(COMPANY_ID),
+      )
+    }
+
+    const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
+    const wrote = (mock: ReturnType<typeof supabaseFor>) =>
+      mock.calls.some((c) => WRITES.has(c.method) && c.table !== 'idempotency_keys')
+
+    it('answers the registration verifikat the commit would post, its accounts read from the active chart', async () => {
+      const mock = dryRunClient()
+      const res = await dryRun()
+      expect(res.status).toBe(200)
+      const preview = (await res.json()).data.preview
+      expect(preview.verifikat).toEqual({
+        entry_date: '2026-05-10',
+        lines: [
+          { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2440', debit_amount: 0, credit_amount: 1250 },
+        ],
+        total_debit: 1250,
+        total_credit: 1250,
+      })
+      const chartRead = mock.calls.find((c) => c.table === 'chart_of_accounts' && c.method === 'in')
+      expect(chartRead?.args).toEqual(['account_number', ['5410', '2641', '2440']])
+      expect(mock.calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['company_id', COMPANY_ID] })
+      expect(mockedReg).not.toHaveBeenCalled()
+      expect(wrote(mock)).toBe(false)
+    })
+
+    it("refuses a deactivated cost account with the commit's 400 ACCOUNTS_NOT_IN_CHART, writing nothing", async () => {
+      const mock = dryRunClient({ chart_of_accounts: chart(['2641', '2440'], ['5410']) })
+      const res = await dryRun()
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(body.error.details.account_numbers).toEqual(['5410'])
+      expect(mockedReg).not.toHaveBeenCalled()
+      expect(wrote(mock)).toBe(false)
+      expect(mock.supabase.rpc).not.toHaveBeenCalledWith('get_next_arrival_number', expect.anything())
+    })
+
+    it('refuses an account outside BAS 2026 the same way', async () => {
+      dryRunClient()
+      const res = await dryRun({ ...validBody, items: [{ ...validBody.items[0], account_number: '5419' }] })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(body.error.details.account_numbers).toEqual(['5419'])
+    })
+
+    it('lets a BAS account missing from the chart pass: the commit adds it', async () => {
+      dryRunClient({ chart_of_accounts: chart(['2641', '2440']) })
+      const res = await dryRun()
+      expect(res.status).toBe(200)
+      const preview = (await res.json()).data.preview
+      expect(preview.verifikat.lines[0]).toMatchObject({ account_number: '5410', debit_amount: 1000 })
+    })
+
+    it('answers verifikat null and checks no account when the registration posts nothing (kontantmetoden)', async () => {
+      const mock = dryRunClient({
+        company_settings: { data: { accounting_method: 'cash', bookkeeping_locked_through: null }, error: null },
+        chart_of_accounts: chart([], ['5410']),
+      })
+      const res = await dryRun()
+      expect(res.status).toBe(200)
+      const preview = (await res.json()).data.preview
+      expect(preview.would_create_registration_journal_entry).toBe(false)
+      expect(preview.verifikat).toBeNull()
+      expect(mock.calls.some((c) => c.table === 'chart_of_accounts')).toBe(false)
+    })
+
+    it("a privately paid invoice previews the utlägg verifikat on the owner's 2893 and checks its accounts", async () => {
+      const mock = dryRunClient({
+        companies: { data: { entity_type: 'aktiebolag' }, error: null },
+        chart_of_accounts: chart(['5410', '2641'], ['2893']),
+      })
+      const res = await dryRun({ ...validBody, paid_with_private_funds: true })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(body.error.details.account_numbers).toEqual(['2893'])
+      expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+      expect(wrote(mock)).toBe(false)
+
+      dryRunClient({
+        companies: { data: { entity_type: 'aktiebolag' }, error: null },
+        chart_of_accounts: chart(['5410', '2641', '2893']),
+      })
+      const ok = await dryRun({ ...validBody, paid_with_private_funds: true })
+      expect(ok.status).toBe(200)
+      const preview = (await ok.json()).data.preview
+      expect(preview.verifikat.lines).toEqual([
+        { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 1250 },
+      ])
+    })
+
+    it('refuses with SI_CREATE_NO_FISCAL_PERIOD when no open fiscal year covers the date, as the commit does', async () => {
+      dryRunClient({ fiscal_periods: { data: null, error: null } })
+      const res = await dryRun()
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('SI_CREATE_NO_FISCAL_PERIOD')
+    })
   })
 
   it('rejects a non-Swedish VAT rate with 400 VALIDATION_ERROR', async () => {
@@ -1104,7 +1249,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
-        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: OPEN_PERIOD,
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -1132,6 +1277,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     const body = await res.json()
     expect(body.data.preview.default_dimensions).toEqual({ '6': 'P001' })
     expect(body.data.preview.items[0].dimensions).toEqual({ '1': 'KS01' })
+    // The verifikat lines carry the tags the commit books.
+    expect(body.data.preview.verifikat.lines[0]).toMatchObject({ account_number: '5410', dimensions: { '6': 'P001', '1': 'KS01' } })
   })
 })
 

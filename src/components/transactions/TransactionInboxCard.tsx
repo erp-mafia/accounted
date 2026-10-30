@@ -63,6 +63,7 @@ import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import type { CashAccount } from '@/types'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
 import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { bankRowTitle } from '@/lib/transactions/row-title'
 import { useGiroText } from './use-giro-text'
 
 interface TransactionInboxCardProps {
@@ -421,7 +422,7 @@ export default function TransactionInboxCard({
             painting over the Belopp column. */}
         <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
           <span className="row-collapsible flex min-w-0 items-center gap-2">
-            <span className="truncate">{transaction.description}</span>
+            <span className="truncate">{bankRowTitle(transaction)}</span>
             {/* Derived, beside the bank's text: whose giro the row shows. */}
             {giroCounterparty && (
               <span

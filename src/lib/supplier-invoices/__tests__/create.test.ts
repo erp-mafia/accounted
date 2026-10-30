@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createTableMockSupabase, makeSupplier } from '@/tests/helpers'
+import { createTableMockSupabase, makeSupplier, type TableMockResolver } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
 
 const mockRegistrationEntry = vi.fn()
@@ -20,15 +20,24 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
 })
 
 const mockRegisterExpenseClaim = vi.fn()
-vi.mock('@/lib/expenses/expense-claims-service', () => ({
-  registerExpenseClaim: (...args: unknown[]) => mockRegisterExpenseClaim(...args),
-}))
+// planExpenseClaim stays real: a dry run plans the utlägg verifikat with reads only.
+vi.mock('@/lib/expenses/expense-claims-service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/expenses/expense-claims-service')>(
+    '@/lib/expenses/expense-claims-service',
+  )
+  return { ...actual, registerExpenseClaim: (...args: unknown[]) => mockRegisterExpenseClaim(...args) }
+})
 
 import { createSupplierInvoice, type CreateSupplierInvoiceInput } from '../create'
 
 const { supabase, setTable, reset, calls } = createTableMockSupabase()
 
 const SUPPLIER_ID = '550e8400-e29b-41d4-a716-446655440000'
+
+// An open fiscal year: the registration builder lists periods (findFiscalPeriod,
+// .limit), the period-lock check reads one row (.maybeSingle).
+const openPeriod = (id: string): TableMockResolver => (chain) =>
+  chain.some((c) => c.method === 'limit') ? { data: [{ id }] } : { data: { id, is_closed: false, locked_at: null } }
 
 const log: Logger = {
   info: vi.fn(),
@@ -66,6 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID }) })
+  setTable('fiscal_periods', openPeriod('fp-1'))
   // The arrival number would be 7 if anyone drew it: a dry run must not.
   setTable('rpc:get_next_arrival_number', { data: 7 })
 })
@@ -349,7 +359,7 @@ describe('createSupplierInvoice with an upplupen kostnad', () => {
     })
 
   beforeEach(() => {
-    setTable('fiscal_periods', { data: { id: 'fp-2026', is_closed: false, locked_at: null } })
+    setTable('fiscal_periods', openPeriod('fp-2026'))
   })
 
   for (const dryRun of [true, false]) {

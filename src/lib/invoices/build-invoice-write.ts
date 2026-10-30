@@ -11,6 +11,7 @@ import {
 import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import { normalizeDeliveryAddress, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -134,6 +135,12 @@ export interface InvoiceWriteInput {
   our_reference?: string
   /** Fakturamärkning: buyer-required marking, separate from your_reference. */
   invoice_marking?: string
+  /**
+   * Leveransadress (crm#1547). Omitted leaves the column alone (absent on
+   * create, unchanged on a draft edit, and no write before the migration
+   * applies); null clears it.
+   */
+  delivery_address?: InvoiceDeliveryAddress | null
   notes?: string
   /** Optional https payment link (schema-validated). Omitted/empty → null. */
   payment_link_url?: string
@@ -195,6 +202,8 @@ export type InvoiceWriteFields = {
   your_reference: string | null | undefined
   our_reference: string | null | undefined
   invoice_marking: string | null
+  /** Present only when the input carried delivery_address (see InvoiceWriteInput.delivery_address). */
+  delivery_address?: InvoiceDeliveryAddress | null
   notes: string | null | undefined
   payment_link_url: string | null
   payment_link_auto: boolean
@@ -742,6 +751,9 @@ export async function buildInvoiceWriteData(params: {
     // Always a concrete value so a draft edit that cleared the field NULLs
     // the column (supabase-js drops undefined keys).
     invoice_marking: input.invoice_marking?.trim() || null,
+    // Only when sent, like qr_mode: a rebuild that does not mention it keeps
+    // the stored address, and the column is never named before it exists.
+    ...(input.delivery_address !== undefined ? { delivery_address: normalizeDeliveryAddress(input.delivery_address) } : {}),
     notes: input.notes,
     // Always a concrete value (never undefined) so a draft edit that cleared
     // the field actually NULLs the column: supabase-js drops undefined keys.

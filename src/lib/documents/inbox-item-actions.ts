@@ -588,7 +588,8 @@ export type UpdateInboxItemFieldsInput = z.infer<typeof UpdateInboxItemFieldsSch
  * Merge a correction into the item's reading. The spread of the current
  * reading comes first on purpose: naming surviving keys one by one once
  * wiped documentKind, merchantCategory, legibility and more on the first
- * manual edit. A hand-set TOTALT stops being a promoted prominent amount.
+ * manual edit. A hand-set TOTALT stops being a promoted prominent amount
+ * and is the amount due (no prepaid deduction).
  * The paths the correction names are recorded beside the reading
  * (personFields, lib/documents/person-corrections.ts), so a new reading
  * never overwrites them.
@@ -608,6 +609,8 @@ export function mergeInboxItemFields(
   }
   if (body.totals && 'total' in body.totals) {
     merged.totalSource = null
+    // The amount a person types is the amount due ("Att betala"): it drops a read prepaid deduction (crm#1518).
+    if (merged.totals.prepaidAmount != null) merged.totals = { ...merged.totals, prepaidAmount: null }
   }
   if (body.documentKind !== undefined) {
     merged.documentKind = body.documentKind

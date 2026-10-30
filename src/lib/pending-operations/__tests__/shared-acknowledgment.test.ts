@@ -52,7 +52,80 @@ describe('sharedAcknowledgmentGroup', () => {
   })
 })
 
+function webshopOrder(preview: Record<string, unknown> = {}): Op {
+  return {
+    operation_type: 'book_webshop_order',
+    risk_level: 'high',
+    params: { webshop_order_id: 'o1', lines: [] },
+    preview_data: {
+      row_type: 'order',
+      total_sek: 125,
+      warnings: [],
+      journal_entry: {
+        entry_date: '2026-10-14',
+        balanced: true,
+        lines: [
+          { account_number: '1686', debit_amount: 125, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 100 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 25 },
+        ],
+      },
+      ...preview,
+    },
+  }
+}
+
+describe('sharedAcknowledgmentGroup: webshop orders (I12)', () => {
+  it('groups a webshop order booking whose suggestion carried no warning', () => {
+    expect(sharedAcknowledgmentGroup(webshopOrder())).toBe('webshop_order_book')
+  })
+
+  it('keeps an order with a warning individual: foreign VAT, a country outside Sweden', () => {
+    expect(sharedAcknowledgmentGroup(webshopOrder({ warnings: ['foreign_vat'] }))).toBeNull()
+    expect(sharedAcknowledgmentGroup(webshopOrder({ warnings: ['country_outside_sweden'] }))).toBeNull()
+    expect(sharedAcknowledgmentGroup(webshopOrder({ compliance_warning: 'Underlag saknas' }))).toBeNull()
+  })
+
+  it('keeps an order individual when its preview cannot show what it posts', () => {
+    expect(sharedAcknowledgmentGroup(webshopOrder({ warnings: undefined }))).toBeNull()
+    expect(sharedAcknowledgmentGroup(webshopOrder({ journal_entry: undefined }))).toBeNull()
+    expect(sharedAcknowledgmentGroup(webshopOrder({ journal_entry: { entry_date: '2026-10-14', lines: [] } }))).toBeNull()
+  })
+
+  it('groups neither the day booking nor a non-high webshop order', () => {
+    expect(sharedAcknowledgmentGroup({ ...webshopOrder(), operation_type: 'book_webshop_day' })).toBeNull()
+    expect(sharedAcknowledgmentGroup({ ...webshopOrder(), risk_level: 'medium' })).toBeNull()
+  })
+})
+
 describe('summarizeSharedAcknowledgment', () => {
+  it('sums webshop orders and refunds from the previewed verifikat (I12)', () => {
+    const refund = webshopOrder({
+      row_type: 'refund',
+      total_sek: -50.1,
+      journal_entry: {
+        entry_date: '2026-10-16',
+        lines: [
+          { account_number: '3001', debit_amount: 40.08, credit_amount: 0 },
+          { account_number: '2611', debit_amount: 10.02, credit_amount: 0 },
+          { account_number: '1686', debit_amount: 0, credit_amount: 50.1 },
+        ],
+      },
+    })
+    const summary = summarizeSharedAcknowledgment([webshopOrder(), webshopOrder({ total_sek: 0.2 }), refund])
+
+    expect(summary.count).toBe(3)
+    expect(summary.date_from).toBe('2026-10-14')
+    expect(summary.date_to).toBe('2026-10-16')
+    expect(summary.incoming).toBe(125.2)
+    expect(summary.outgoing).toBe(50.1)
+    expect(summary.accounts).toEqual([
+      { account_number: '1686', account_name: null, debit: 250, credit: 50.1 },
+      { account_number: '2611', account_name: null, debit: 10.02, credit: 50 },
+      { account_number: '3001', account_name: null, debit: 40.08, credit: 200 },
+    ])
+  })
+
   it('sums count, directions, date range and every account to öre', () => {
     const summary = summarizeSharedAcknowledgment([
       {

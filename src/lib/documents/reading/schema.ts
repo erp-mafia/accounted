@@ -55,7 +55,7 @@ export const DocumentReadingSchema = z
         invoice_issue_date: field(z.string(), 'BT-2, YYYY-MM-DD.'),
         payment_due_date: field(z.string(), 'BT-9, YYYY-MM-DD.'),
         invoice_currency_code: field(z.string(), 'BT-5, ISO 4217.'),
-        amount_due_for_payment: field(z.number(), 'BT-115: the total to pay (a receipt: paid). Below zero on a credit note.'),
+        amount_due_for_payment: field(z.number(), 'BT-115: total less prepaid (a receipt: paid). Below zero on a credit note.'),
         vat_breakdown: field(z.array(VatBreakdownEntry), 'BG-23, one row per rate.'),
         remittance_information: field(z.string(), 'BT-83: the OCR or payment reference.'),
         payment_account_bankgiro: field(z.string(), 'BT-84 under BT-86 SE:BANKGIRO.'),

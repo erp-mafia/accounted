@@ -752,6 +752,7 @@ import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-o
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
+import { InvoiceDeliveryAddressSchema, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '@/types'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
@@ -2018,6 +2019,25 @@ function parseQrModeArg(value: unknown): InvoiceQrMode | null {
     return value as InvoiceQrMode
   }
   throw codedError('VALIDATION_ERROR', `qr_mode must be one of ${INVOICE_QR_MODES.join(', ')}, or null.`)
+}
+
+/**
+ * A tool's delivery_address argument (crm#1547), validated and normalized by
+ * InvoiceDeliveryAddressSchema, the web API's own: null or an empty address
+ * is none (and clears on update).
+ */
+function parseDeliveryAddressArg(value: unknown): InvoiceDeliveryAddress | null {
+  const parsed = InvoiceDeliveryAddressSchema.nullable().safeParse(value)
+  if (!parsed.success) {
+    throw fieldValidationError(
+      'Invalid delivery_address',
+      zodFieldIssues(parsed.error, value).map((issue) => ({
+        ...issue,
+        field: issue.field === 'arguments' ? 'delivery_address' : `delivery_address.${issue.field}`,
+      })),
+    )
+  }
+  return parsed.data
 }
 
 /**
@@ -9916,7 +9936,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_invoice',
     keywords: ['faktura', 'kundfaktura', 'fakturera', 'ny faktura'],
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice or quote (offert) with a VAT preview. Approval creates a draft (F-number assigned on send) or an open quote numbered OF-nnn at once; quotes never book.',
+    description: 'Stage a new invoice or quote (offert) with a VAT preview. Approval creates a draft (F-number on send) or an open quote OF-nnn at once; quotes never book.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -9937,18 +9957,19 @@ export const tools: McpTool[] = [
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every item not setting the key. Unknown values rejected: never auto-created.',
+          description: 'Dims bag {sie_dim_no: code or name}, e.g. {"6":"P001"}. Applies to items not setting the key; unknown values rejected, never created.',
         },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         due_date: { type: 'string', description: 'YYYY-MM-DD (default from payment terms)' },
         currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
-        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol OrderReference.' },
+        invoice_marking: { type: 'string', description: 'Märkning (buyer marking/PO), not your_reference; Peppol OrderReference.' },
+        delivery_address: { type: 'object', description: 'Leveransadress {name, address_line1, address_line2, postal_code, city, country}.' },
         notes: { type: 'string' },
         payment_link_url: {
           type: 'string',
-          description: 'Optional https pay link for THIS invoice (e.g. Stripe); rendered in the invoice email and PDF.',
+          description: 'https pay link for THIS invoice (e.g. Stripe), in the email and PDF.',
         },
         qr_mode: { type: 'string', enum: [...INVOICE_QR_MODES], description: 'PDF payment QR' },
       },
@@ -10009,6 +10030,7 @@ export const tools: McpTool[] = [
       // Same closed set as the web API (InvoiceQrModeSchema); null and an
       // omitted value both inherit the company's invoice_qr_mode.
       const qrMode = parseQrModeArg(args.qr_mode)
+      const deliveryAddress = args.delivery_address === undefined ? null : parseDeliveryAddressArg(args.delivery_address)
 
       // Fetch customer (full row for VAT rules) BEFORE the article prefill:
       // an article's stored rate may only be adopted against this customer's
@@ -10118,6 +10140,7 @@ export const tools: McpTool[] = [
         // Fakturareferens (crm#1200) and Märkning (crm#1477).
         your_reference: yourReferenceForNewInvoice(args.your_reference as string | undefined, customer),
         invoice_marking: invoiceMarkingForNewInvoice(args.invoice_marking as string | undefined, customer),
+        ...(deliveryAddress ? { delivery_address: deliveryAddress } : {}),
         notes: (args.notes as string) || null,
         payment_link_url: paymentLinkUrl,
         ...(qrMode ? { qr_mode: qrMode } : {}),
@@ -24035,7 +24058,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_invoice',
     keywords: ['ändra faktura', 'kundfaktura', 'faktura'],
     title: 'Update Draft Invoice',
-    description: 'Stage an edit to a DRAFT invoice: header fields and/or items (FULL REPLACE: read current lines with gnubok_get_invoice through gnubok_call_tool first; lines accept article_id). Drafts only, no verifikat, not self-billed, not a credit note; otherwise use gnubok_credit_invoice.',
+    description: 'Stage an edit to a DRAFT invoice: header and/or items (FULL REPLACE: read current lines with gnubok_get_invoice via gnubok_call_tool first). Drafts only: no verifikat, not self-billed, not a credit note; else gnubok_credit_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -24048,7 +24071,8 @@ export const tools: McpTool[] = [
         delivery_date: { type: ['string', 'null'], description: 'YYYY-MM-DD; null clears.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
-        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking), separate from your_reference.' },
+        invoice_marking: { type: 'string', description: 'Märkning (buyer marking), not your_reference.' },
+        delivery_address: { type: ['object', 'null'], description: 'As on gnubok_create_invoice; null clears.' },
         qr_mode: { type: ['string', 'null'], enum: [...INVOICE_QR_MODES, null], description: 'null = company default' },
         items: {
           type: 'array',
@@ -24063,7 +24087,7 @@ export const tools: McpTool[] = [
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
-                description: 'Article UUID (gnubok_list_articles). Prefills description, unit, unit_price, revenue account and, when compatible with the customer VAT rules, vat_rate; line values win. Pass back to keep the linkage.',
+                description: 'Article UUID (gnubok_list_articles). Prefills description, unit, price, revenue account and (VAT rules permitting) vat_rate; line values win. Pass back to keep.',
               },
               line_type: {
                 type: 'string',
@@ -24091,7 +24115,7 @@ export const tools: McpTool[] = [
             },
             required: ['quantity'],
           },
-          description: 'FULL REPLACE: this array becomes the whole line set; omit to keep the current lines. gnubok_get_invoice is not in tools/list: read the lines with gnubok_call_tool({tool: "gnubok_get_invoice"}) first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back).',
+          description: 'FULL REPLACE: becomes the whole line set; omit to keep the current lines. Read them with gnubok_call_tool({tool: "gnubok_get_invoice"}) first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back).',
         },
         default_dimensions: {
           type: 'object',
@@ -24138,6 +24162,7 @@ export const tools: McpTool[] = [
       for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference', 'invoice_marking']) {
         if (args[key] !== undefined) headerChanges[key] = args[key]
       }
+      if (args.delivery_address !== undefined) headerChanges.delivery_address = parseDeliveryAddressArg(args.delivery_address)
       // null is a real change here (back to the company default), so only an
       // omitted qr_mode leaves it alone.
       if (args.qr_mode !== undefined) headerChanges.qr_mode = parseQrModeArg(args.qr_mode)
@@ -27337,7 +27362,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_inbox_extracted_data',
     keywords: ['inkorg', 'underlag', 'tolka kvitto'],
     title: 'Set Inbox Extracted Data',
-    description: 'Replace extracted_data on an inbox item with agent-supplied fields. Use when your pipeline parses the document better than Accounted\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
+    description: 'Replace an inbox item\'s extracted_data with your own reading of the document. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -27345,7 +27370,7 @@ export const tools: McpTool[] = [
         inbox_item_id: { type: 'string', description: 'UUID of the invoice_inbox_items row' },
         extracted_data: {
           type: 'object',
-          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). lineItems.accountSuggestion accepts a BAS expense account (4xxx-7xxx); AI extractor always emits null here.',
+          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). totals.prepaidAmount: a balance or credit applied before the amount due (due = total - it). lineItems.accountSuggestion: a BAS expense account (4xxx-7xxx).',
         },
       },
       required: ['inbox_item_id', 'extracted_data'],

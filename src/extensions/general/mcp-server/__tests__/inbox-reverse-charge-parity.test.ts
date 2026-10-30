@@ -464,6 +464,11 @@ async function dashboardAndV1Convert(stated: Stated) {
 }
 
 async function v1Create(stated: Stated) {
+  // An open fiscal year: the dry run builds the registration verifikat
+  // (findFiscalPeriod lists, the period-lock check reads one row).
+  db.setTable('fiscal_periods', (chain) =>
+    chain.some((c) => c.method === 'limit') ? { data: [{ id: 'fp-1' }] } : { data: { id: 'fp-1', is_closed: false, locked_at: null } },
+  )
   const result = await createSupplierInvoice(
     ctx(),
     {

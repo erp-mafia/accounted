@@ -211,6 +211,15 @@ describe('gnubok_search_tools', () => {
       expect(names).toContain('gnubok_book_salary_run')
     })
 
+    // A one-off kostförmån is a payslip line, not a standing förmån on the
+    // employee (crm#1349): the search returned only the standing tool.
+    it('"lägg till kostförmån" finds the payslip line door next to the standing benefit', async () => {
+      const result = await call({ query: 'lägg till kostförmån', limit: 10 })
+      const names = result.tools.map((t) => t.name)
+      expect(names).toContain('gnubok_add_payslip_line')
+      expect(names).toContain('gnubok_add_employee_benefit')
+    })
+
     it('"verifikat" finds voucher and journal tools', async () => {
       const result = await call({ query: 'verifikat', limit: 50 })
       const names = result.tools.map((t) => t.name)

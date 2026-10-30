@@ -1,0 +1,1 @@
+[2026-10-30] Leveransadress is one jsonb column per invoice (invoices.delivery_address), written only when sent and printed/sent to Peppol BG-13, not a customer default and not tied to delivery_country (VAT): smallest slice that matches the migrated per-invoice data (crm#1547).

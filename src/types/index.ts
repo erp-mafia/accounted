@@ -1759,6 +1759,11 @@ export interface Invoice {
   // the PDF and mapped to Peppol BT-13 OrderReference. Optional in
   // TS for pre-migration fixtures.
   invoice_marking?: string | null
+  // Leveransadress (crm#1547, migration 20261031109700): where the goods go
+  // when not to the invoice address. Printed on the PDF, Peppol BG-13;
+  // informational (VAT follows delivery_country). Optional in TS for
+  // pre-migration rows.
+  delivery_address?: import('@/lib/invoices/delivery-address').InvoiceDeliveryAddress | null
 
   // Optional online payment link (pasted by the user, e.g. a Stripe Payment
   // Link). Rendered as a "Betala online" button in the invoice email and as a
@@ -4713,6 +4718,11 @@ export interface InvoiceExtractionResult {
     total: number | null
     // Öresavrundning line on Swedish receipts; negative when rounded down.
     roundingAmount?: number | null
+    // BT-113: what the document deducts from the total as settled before
+    // this payment (an applied account balance, a credit, a deposit, a gift
+    // card), so the amount due is total minus it. Never a card or bank
+    // payment of the document itself. Optional: older readings lack it.
+    prepaidAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
   // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)

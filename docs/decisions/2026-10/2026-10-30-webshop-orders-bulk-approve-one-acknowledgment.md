@@ -1,0 +1,1 @@
+[2026-10-30] Warning-free book_webshop_order operations join bulk approval under one shared acknowledgment (group webshop_order_book), like bank samlingsverifikat; the tier stays high and any suggestion warning keeps the order individual (I12).

@@ -37,6 +37,7 @@ import { canDetachDocument } from './detach-underlag'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import type { TransactionWithInvoice, HistoryFilter, SourceFilter } from './transaction-types'
 import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { bankRowTitle } from '@/lib/transactions/row-title'
 import { useGiroText } from './use-giro-text'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -332,7 +333,7 @@ function BankHistoryRow({
           truncate and would paint over Belopp. */}
       <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="row-collapsible flex min-w-0 items-center gap-2">
-          <span className="truncate">{transaction.description}</span>
+          <span className="truncate">{bankRowTitle(transaction)}</span>
           {giroCounterparty && (
             <span
               className="hidden max-w-[16rem] shrink-0 truncate text-xs text-muted-foreground md:inline-block"

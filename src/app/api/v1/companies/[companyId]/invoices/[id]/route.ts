@@ -33,6 +33,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
@@ -57,6 +58,8 @@ const V1PatchDraftInvoiceSchema = z.object({
   your_reference: z.union([z.string(), z.null()]).optional(),
   our_reference: z.union([z.string(), z.null()]).optional(),
   notes: z.union([z.string(), z.null()]).optional(),
+  // Leveransadress (crm#1547); null or {} clears it.
+  delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
   // Project/cost-centre tagging ({"6":"P001"}): replaces the whole bag.
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
@@ -325,6 +328,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'your_reference',
       'our_reference',
       'notes',
+      'delivery_address',
       'default_dimensions',
       'qr_mode',
     ] as const) {

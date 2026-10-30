@@ -1,0 +1,1 @@
+[2026-10-30] The inbox reading's amount due is total less totals.prepaidAmount (BT-113: an applied balance, credit or deposit, never a card or bank payment of the document), total stays what is booked; a person's hand-set total is the amount due and drops it (crm#1518).

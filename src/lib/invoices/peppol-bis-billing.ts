@@ -13,6 +13,7 @@ import { computeLineAmounts, computeLineVat, hasLineDiscount } from '@/lib/bookk
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { isPeppolInvoiceLine } from '@/lib/invoices/peppol-lines'
 import { toSingleLine } from '@/lib/utils'
+import { normalizeDeliveryAddress } from '@/lib/invoices/delivery-address'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
 import {
   MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES,
@@ -789,9 +790,8 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     ...renderAttachments(input.attachments ?? []),
     renderParty('AccountingSupplierParty', prepared.supplier, company.f_skatt),
     renderParty('AccountingCustomerParty', prepared.buyer, false),
-    invoice.delivery_date
-      ? `  <cac:Delivery><cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate></cac:Delivery>`
-      : null,
+    // The buyer is a Swedish party (prepareParty refuses any other country).
+    renderDelivery(invoice, input.customer.country),
     '  <cac:PaymentMeans>',
     '    <cbc:PaymentMeansCode>30</cbc:PaymentMeansCode>',
     `    <cbc:PaymentID>${prepared.payment.paymentId}</cbc:PaymentID>`,
@@ -823,6 +823,44 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '</Invoice>',
     '',
   ].filter(Boolean).join('\n')
+}
+
+/**
+ * BG-13 Delivery information: BT-72 the actual delivery date, and the
+ * invoice's leveransadress (crm#1547) as BG-15 (BT-75 to BT-80 under
+ * DeliveryLocation) and BT-70 (DeliveryParty). BG-15 requires the country
+ * (BR-57): the address's own, else the goods' delivery_country, else the
+ * buyer's; without any the address is left out and the name still goes.
+ * Null when there is nothing to deliver to or date.
+ */
+export function renderDelivery(invoice: Pick<Invoice, 'delivery_date' | 'delivery_address' | 'delivery_country'>, buyerCountry: string | null | undefined): string | null {
+  const address = normalizeDeliveryAddress(invoice.delivery_address)
+  const country = address ? (address.country ?? invoice.delivery_country ?? buyerCountry ?? null)?.toUpperCase() ?? null : null
+  const hasStreet = !!address && !!(address.address_line1 || address.address_line2 || address.city || address.postal_code)
+  const element = (tag: string, value: string | null) => (value ? [`        <cbc:${tag}>${escapeXml(value)}</cbc:${tag}>`] : [])
+  const parts = [
+    ...(invoice.delivery_date ? [`    <cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate>`] : []),
+    ...(address && hasStreet && country
+      ? [
+          '    <cac:DeliveryLocation>',
+          '      <cac:Address>',
+          ...element('StreetName', address.address_line1),
+          ...element('AdditionalStreetName', address.address_line2),
+          ...element('CityName', address.city),
+          ...element('PostalZone', address.postal_code),
+          `        <cac:Country><cbc:IdentificationCode>${escapeXml(country)}</cbc:IdentificationCode></cac:Country>`,
+          '      </cac:Address>',
+          '    </cac:DeliveryLocation>',
+        ]
+      : []),
+    ...(address?.name ? [`    <cac:DeliveryParty><cac:PartyName><cbc:Name>${escapeXml(address.name)}</cbc:Name></cac:PartyName></cac:DeliveryParty>`] : []),
+  ]
+  if (parts.length === 0) return null
+  // The date alone keeps the one-line form it always had.
+  if (parts.length === 1 && invoice.delivery_date) {
+    return `  <cac:Delivery><cbc:ActualDeliveryDate>${invoice.delivery_date}</cbc:ActualDeliveryDate></cac:Delivery>`
+  }
+  return ['  <cac:Delivery>', ...parts, '  </cac:Delivery>'].join('\n')
 }
 
 export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): PeppolInvoiceResult {

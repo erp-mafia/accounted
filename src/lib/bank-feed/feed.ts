@@ -38,7 +38,7 @@ import {
 import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { eventBus } from '@/lib/events/bus'
-import type { Transaction } from '@/types'
+import { announceSyncedTransactions } from '@/lib/transactions/announce-synced'
 import { BankFeedError, BankFeedRefusedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { consentFailureText, isPermanentConsentFailure } from './failure-text'
 import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
@@ -480,11 +480,8 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         .eq('company_id', companyId)
       if (enrichedError) log.warn('open payments sync: last_enriched_at not stored', { connectionId, message: enrichedError.message })
     }
-    if (transactionIds.length > 0 && !rawInsertOnly) {
-      const { data: synced } = await supabase.from('transactions').select('*').eq('company_id', companyId).in('id', transactionIds)
-      if (synced && synced.length > 0) {
-        await eventBus.emit({ type: 'transaction.synced', payload: { transactions: synced as Transaction[], userId, companyId } })
-      }
+    if (!rawInsertOnly) {
+      await announceSyncedTransactions(supabase, { companyId, userId, transactionIds, log, context: { connectionId } })
     }
     log.info('open payments sync completed', {
       connectionId, trigger, imported, duplicates, enrichedUpdated, windowEnriched, lastEnrichedAt,

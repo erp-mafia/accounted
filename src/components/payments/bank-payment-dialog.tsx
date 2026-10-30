@@ -9,6 +9,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { defaultPaymentAccount, PaymentAccountPicker } from './PaymentAccountPicker'
+import { primaryPaymentAccount } from './payment-account-choice'
 import { PaymentsVerificationLine } from './PaymentsVerificationLine'
 import type { SigningFlowStage } from './BankIdSigningFlow'
 import {
@@ -34,9 +35,14 @@ import {
  * pay: a salary run passes the account its verifikat credits, so the
  * salaries leave from the account the books say they leave from (PH 220).
  * It may arrive after the accounts; until the person picks one in the
- * picker, the default follows it.
+ * picker, the default follows it. preferPrimary prefers the company's primary
+ * bank account (primaryAccount) instead: the skattekonto payment, whose
+ * inbetalning is booked against it.
  */
-export function useBankPaymentDialog(open: boolean, { preferredAccountId = null }: { preferredAccountId?: string | null } = {}) {
+export function useBankPaymentDialog(
+  open: boolean,
+  { preferredAccountId = null, preferPrimary = false }: { preferredAccountId?: string | null; preferPrimary?: boolean } = {},
+) {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
@@ -82,9 +88,12 @@ export function useBankPaymentDialog(open: boolean, { preferredAccountId = null 
   }, [open])
 
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
+  /** The company's primary bank account, payable or not; null when none is marked. */
+  const primaryAccount = useMemo(() => primaryPaymentAccount(availability?.accounts ?? []), [availability])
+  const preferred = preferredAccountId ?? (preferPrimary ? (primaryAccount?.id ?? null) : null)
   const defaultAccountId = useMemo(
-    () => defaultPaymentAccount(payableAccounts, preferredAccountId)?.id ?? '',
-    [payableAccounts, preferredAccountId],
+    () => defaultPaymentAccount(payableAccounts, preferred)?.id ?? '',
+    [payableAccounts, preferred],
   )
   const accountId = picked && payableAccounts.some((a) => a.id === picked) ? picked : defaultAccountId
   const setAccountId = useCallback((id: string) => setPicked(id), [])
@@ -104,7 +113,7 @@ export function useBankPaymentDialog(open: boolean, { preferredAccountId = null 
   // the over-the-cap gate follow without a second read.
   const raiseIncluded = useCallback((included: number) => setUsage((current) => withIncludedPayments(current, included)), [])
 
-  return { availability, usage, raiseIncluded, accountId, setAccountId, payableAccounts, account, unsupportedBank, readiness, verificationLine, fail }
+  return { availability, usage, raiseIncluded, accountId, setAccountId, payableAccounts, account, primaryAccount, unsupportedBank, readiness, verificationLine, fail }
 }
 
 /**
