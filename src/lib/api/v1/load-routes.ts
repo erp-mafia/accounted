@@ -344,6 +344,10 @@ import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/book/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/clearing-balance/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/fetch/route'
+// Liquidity forecast and its rows: lib/operations/cash-forecast.ts
+import '@/app/api/v1/companies/[companyId]/cash-forecast/route'
+import '@/app/api/v1/companies/[companyId]/cash-forecast-rows/route'
+import '@/app/api/v1/companies/[companyId]/cash-forecast-rows/cancel/route'
 // Webshop orders (Shopify, WooCommerce, Zettle): lib/operations/webshop-orders.ts
 import '@/app/api/v1/companies/[companyId]/webshop-orders/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/route'

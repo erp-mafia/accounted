@@ -1126,6 +1126,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'autogiro_debits', file: 'autogiro_debits.json', orderBy: 'debit_date' },
   { name: 'autogiro_files', file: 'autogiro_files.json', orderBy: 'created_at' },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
+  // The liquidity forecast's own rows (src/lib/forecast): planning data, never
+  // posted, cancelled rows included so what a forecast showed stays readable.
+  { name: 'cash_forecast_rows', file: 'cash_forecast_rows.json', orderBy: 'created_at' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
   {

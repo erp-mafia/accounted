@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `444`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `448`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -55,6 +55,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/capabilities",
   "GET /api/v1/companies/:companyId/capital-events",
   "GET /api/v1/companies/:companyId/cash-accounts",
+  "GET /api/v1/companies/:companyId/cash-forecast",
+  "GET /api/v1/companies/:companyId/cash-forecast-rows",
   "GET /api/v1/companies/:companyId/collections/candidates",
   "GET /api/v1/companies/:companyId/collections/settlements",
   "GET /api/v1/companies/:companyId/company-roles",
@@ -267,6 +269,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/capital-changes/:id/book",
   "POST /api/v1/companies/:companyId/cash-accounts",
   "POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary",
+  "POST /api/v1/companies/:companyId/cash-forecast-rows",
+  "POST /api/v1/companies/:companyId/cash-forecast-rows/cancel",
   "POST /api/v1/companies/:companyId/collections/payments/:paymentId/book",
   "POST /api/v1/companies/:companyId/collections/settlements/:settlementId/book",
   "POST /api/v1/companies/:companyId/company-roles",
@@ -463,7 +467,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "import": 7,
   "inbox": 11,
   "invoicing": 33,
-  "ledger": 129,
+  "ledger": 133,
   "payments": 20,
   "payroll": 58,
   "platform": 29,
@@ -488,6 +492,7 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "customers:write",
   "documents:read",
   "documents:write",
+  "forecast:write",
   "invoices:read",
   "invoices:write",
   "operations:read",

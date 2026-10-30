@@ -52,6 +52,12 @@ export interface OperationContext {
    * of that pending operation, not a direct call through a door.
    */
   pendingOperationId?: string
+  /**
+   * Set to 'mcp' by the MCP door of a direct write (OperationMcpBinding.direct),
+   * for an operation that records who wrote a row (a forecast row's source);
+   * undefined on every other door.
+   */
+  door?: 'mcp'
 }
 
 /** A non-blocking note about a write that went through, in both languages. */
@@ -145,6 +151,15 @@ export interface OperationMcpBinding {
    * input is safe. Both default to false.
    */
   hints?: { destructive?: boolean; idempotent?: boolean }
+  /**
+   * A write that is not bookkeeping and so commits on the call, like its v1
+   * endpoint, instead of staging: the tool replays `idempotency_key`
+   * (withRetryKey) and answers the operation's output. Only for a scope in
+   * DIRECT_WRITE_SCOPES (lib/auth/scope-catalog.ts), today forecast:write
+   * (the liquidity forecast's rows, decision 2026-10-28); exclusive with
+   * `stage`. operation-contract.test.ts holds both.
+   */
+  direct?: true
   /**
    * Present on writes: the tool stages a pending operation of this type and
    * the approval path runs `run()` with the staged input. The type must be in

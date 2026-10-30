@@ -5,7 +5,9 @@
  * the same request (once a stringified top-level scalar is read back as the
  * number or null it stands for: coerceStringifiedScalars).
  *
- * Reads run directly. Writes stage: the tool validates the input, asks the
+ * Reads run directly, and so does a write marked `direct` (data that never
+ * reaches the books, DIRECT_WRITE_SCOPES): it commits on the call and replays
+ * idempotency_key. Every other write stages: the tool validates the input, asks the
  * operation for a dry-run preview (which runs every check the commit will
  * run), and stages a pending operation of `mcp.stage.pendingType` with the
  * input as params. Approval (gnubok_approve_pending_operation) reaches
@@ -27,7 +29,7 @@
  */
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { badArgument, fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
+import { badArgument, codedRefusal, fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
 import { throwOutcomeFailure } from '@/lib/operations/errors'
 import {
   isPreviewToken,
@@ -38,9 +40,11 @@ import {
 import { planStagedOperation } from '@/lib/operations/stage'
 import type { AnyOperation } from '@/lib/operations/types'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import { DIRECT_WRITE_SCOPES } from '@/lib/auth/scope-catalog'
 import { createLogger } from '@/lib/logger'
 import type { ActorContext, McpTool, McpToolAnnotations } from './server'
 import type { NextActionHint } from './tool-result'
+import { withRetryKey } from './retry-key'
 
 const log = createLogger('mcp-operation-tools')
 
@@ -218,9 +222,14 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       continue
     }
 
+    if (binding.direct) {
+      tools.push(directWriteTool(op, inputSchema, description))
+      continue
+    }
+
     const stage = binding.stage
     if (!stage) {
-      throw new Error(`operation ${op.id} is a write without mcp.stage: MCP writes always stage`)
+      throw new Error(`operation ${op.id} is a write without mcp.stage: MCP writes stage unless they are direct`)
     }
     // An input only a refusal asks for is accepted without being listed
     // (binding.undeclaredInputs); validation still reads the full input.
@@ -304,6 +313,51 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
     })
   }
   return tools
+}
+
+/** A direct write: it reaches no ledger, and a repeat with the same key and input replays the first answer. */
+const DIRECT_WRITE_ANNOTATIONS: McpToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+}
+
+/**
+ * The tool of a write that commits on the call (OperationMcpBinding.direct):
+ * only for a scope in DIRECT_WRITE_SCOPES, data that never reaches the books.
+ * It runs the operation as its v1 endpoint does, answers the operation's
+ * output, and replays idempotency_key (withRetryKey). No dry_run: the v1
+ * endpoint previews, and an answer of two shapes would break outputSchema.
+ */
+function directWriteTool(op: AnyOperation, inputSchema: JsonSchema, description: string): McpTool {
+  const binding = op.mcp!
+  if (op.kind !== 'write' || binding.stage || !DIRECT_WRITE_SCOPES.includes(op.scope)) {
+    throw codedRefusal('INTERNAL_ERROR', `operation ${op.id}: mcp.direct is only for a write under ${DIRECT_WRITE_SCOPES.join(', ')} that does not stage`)
+  }
+  return withRetryKey({
+    name: binding.name,
+    title: binding.title,
+    description,
+    inputSchema,
+    outputSchema: toolOutputSchema(op.output as unknown as z.ZodTypeAny),
+    annotations: DIRECT_WRITE_ANNOTATIONS,
+    catalogVisibility: binding.visibility ?? 'search',
+    keywords: binding.keywords,
+    async execute(args, companyId, userId, supabase) {
+      // Private dispatcher fields (__keyScopes, ...) are not the caller's input.
+      const rest = Object.fromEntries(Object.entries(args).filter(([name]) => !name.startsWith('__')))
+      const input = parseOrThrow(op, inputSchema, rest)
+      const outcome = await op.run(
+        { supabase, companyId, userId, log: log.child({ operation: op.id }), door: 'mcp' },
+        input,
+        { dryRun: false },
+      )
+      if (!outcome.ok) throwOutcomeFailure(outcome)
+      if (outcome.dryRun) return outcome.preview
+      return outcome.data
+    },
+  })
 }
 
 /**

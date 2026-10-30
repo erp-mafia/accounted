@@ -113,6 +113,7 @@ const RETAINED = new Set([
   'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
   'supplier_payee_confirmations.decided_by', // Who confirmed or rejected a supplier account; the company keeps the payment control record.
   'vat_check_reviews.actor', // Who accepted or withdrew a VAT warning for a period; the company keeps the review record.
+  'cash_forecast_rows.created_by', // Who added a row to the liquidity forecast; company planning data, the company keeps it.
   'company_portals.created_by', // Who added a supplier portal link; company configuration, the company keeps it.
   'bank_payment_allowance_requests.requested_by', // Who asked for more included bank payments a month; the company keeps the request.
   'company_bank_payment_allowances.granted_by', // The founder who set a company's monthly bank payment allowance; the company keeps the record.

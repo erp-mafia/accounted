@@ -98,11 +98,13 @@ describe('direct MCP writes are safe to retry', () => {
     const replaying = tools.filter((t) => t.retryKey).map((t) => t.name).sort()
     expect(replaying).toEqual([
       'gnubok_auto_match_period',
+      'gnubok_cancel_cash_forecast_row',
       'gnubok_create_company',
       'gnubok_create_skill',
       'gnubok_create_transactions',
       'gnubok_generate_rot_rut_file',
       'gnubok_upload_document',
+      'gnubok_upsert_cash_forecast_rows',
     ])
   })
 })

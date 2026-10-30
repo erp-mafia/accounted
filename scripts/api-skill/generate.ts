@@ -195,7 +195,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports', 'audit-trail', 'vat', 'measures', 'unexplained', 'budgets'],
+    members: ['reports', 'audit-trail', 'vat', 'measures', 'unexplained', 'budgets', 'cash-forecast', 'cash-forecast-rows'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
       'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets ' +
@@ -210,7 +210,10 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'caveats and an explain call down to every journal line; they refuse unknown parameters. The ' +
       'unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra ' +
       'against the ledger, bank and skattekonto against the outside balance, declared moms not settled, ' +
-      'overdue unbooked bank rows) and explains each down to the records behind it.',
+      'overdue unbooked bank rows) and explains each down to the records behind it. The liquidity ' +
+      'forecast (GET /cash-forecast) projects the bank balance 13 ISO weeks ahead from open invoices, ' +
+      'payment orders, salary, taxes and forecast rows; the rows (/cash-forecast-rows) are not ' +
+      'bookkeeping and are written directly under forecast:write.',
   },
   {
     file: 'assets.md',

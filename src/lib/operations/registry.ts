@@ -224,6 +224,7 @@ import {
 } from './arsredovisning'
 import { reportsForenklatArsbokslut } from './forenklat-arsbokslut'
 import { MEASURE_OPERATIONS } from './measures'
+import { CASH_FORECAST_OPERATIONS } from './cash-forecast'
 import { UNEXPLAINED_OPERATIONS } from './unexplained'
 import {
   skattekontoSync,
@@ -482,6 +483,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   reportsForenklatArsbokslut,
   // measures: defined figures equal to their report, explained down to every line (lib/measures)
   ...MEASURE_OPERATIONS,
+  // cash-forecast: the 13-week liquidity forecast and its rows (lib/forecast); the rows are not bookkeeping and write directly
+  ...CASH_FORECAST_OPERATIONS,
   // unexplained: expected-zero checks with explain handles (lib/unexplained)
   ...UNEXPLAINED_OPERATIONS,
   // skatteverket-helpers

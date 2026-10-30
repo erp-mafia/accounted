@@ -243,6 +243,11 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // Periodiseringar (lib/bookkeeping/accruals): re-planning a schedule.
       'accrual-schedules',
       'budgets',
+      // The liquidity forecast and its rows (lib/forecast, a composition
+      // layer): a report read from the ledger and the blocks, in the always-on
+      // Bokföring package like the other reports.
+      'cash-forecast',
+      'cash-forecast-rows',
     ],
     v1Segments: [
       'journal-entries',
@@ -261,6 +266,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'unexplained',
       'accrual-schedules',
       'budgets',
+      'cash-forecast',
+      'cash-forecast-rows',
     ],
     jurisdictions: SE,
   },
@@ -719,6 +726,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'tic-budget',
   'ui-state',
   'vendor-marks',
+  // The liquidity forecast: reads across the ledger and the blocks (AR, AP,
+  // payment orders, salary, skattekonto, VAT, recurring invoices), like the
+  // worklist; its operations belong to the ledger.
+  'forecast',
   // The unexplained queue: expected-zero checks that read across the ledger
   // and the blocks (reconciliation, VAT filings, bank rows), like the worklist.
   'unexplained',

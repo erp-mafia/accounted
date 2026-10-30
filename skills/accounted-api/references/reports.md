@@ -2,7 +2,7 @@
 
 # Reports endpoints
 
-Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets (GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue negative, a file read in by POST /budgets/{id}/import from SIE #PBUDGET or Excel/CSV) are compared with the books by GET /reports/budget-vs-actual. Only income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
+Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets (GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue negative, a file read in by POST /budgets/{id}/import from SIE #PBUDGET or Excel/CSV) are compared with the books by GET /reports/budget-vs-actual. Only income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it. The liquidity forecast (GET /cash-forecast) projects the bank balance 13 ISO weeks ahead from open invoices, payment orders, salary, taxes and forecast rows; the rows (/cash-forecast-rows) are not bookkeeping and are written directly under forecast:write.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -806,6 +806,413 @@ Example response `200`:
         "amount": -80000
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/cash-forecast`
+
+**The 13-week liquidity forecast: where the bank balance is heading, by day and by ISO week.**
+`scope:reports:read · risk:low · idempotent`
+
+Projects the bank balance from today: the opening balance (the banks' last reported balance, or the booked bank balance when no bank reports one, labelled), then every expected flow: open customer and supplier invoices on their due dates, the bank payment queue on its dates, salary runs as net pay, taxes through the skattekonto (Skatteverket's own debits, F-skatt, VAT and AGI), recurring invoices not created yet, and forecast rows. Answers 30 days by day and 13 ISO weeks (weeks, at most 26) as opening + in - out = closing, the lowest point flagged, and overdue invoices listed apart. Each flow is tagged known, derived or forecast; estimates say so. Read-only.
+
+**Use when:** To answer "will we have money for X", find the week the balance is lowest, or plan payments.
+**Do not use for:** The historical cash flow (GET /reports/kassaflodesanalys) or what is booked on the bank accounts (GET /measures/bank_balance).
+
+**Pitfalls:**
+- Each krona counts once: an invoice inside a payment order counts at the order's date; a salary run as net pay, its tax and avgifter through the skattekonto on the AGI's due date; a forecast row linked to an invoice yields to it.
+- Overdue invoices are listed under overdue, not projected: nothing says when they will be paid.
+- complete=false means a source could not be read; its caveat (SOURCE_UNAVAILABLE) names it.
+- Estimates are flagged: VAT for a period not yet declared is the books so far; salary for a month without a run repeats the latest run.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `weeks` | query | `number` | no | ISO weeks to project, the current week first. Default 13. |
+
+Response `200`:
+```ts
+{
+  data: {
+    currency: "SEK",
+    today: string,
+    horizon: { start: string, end: string, weeks: number },
+    opening: { amount: number, source: "bank" | "booked" | "unknown", as_of: string | null, age_days: number | null, accounts: { cash_account_id: string | null, ledger_account: string, name: string | null, balance: number, balance_updated_at: string | null }[] },
+    days: { date: string, opening: number, inflow: number, outflow: number, closing: number, lowest: boolean }[],
+    weeks: { iso_week: string, start: string, end: string, opening: number, inflow: number, outflow: number, closing: number, min_closing: number, lowest: boolean }[],
+    lowest: { date: string, closing: number, iso_week: string },
+    closing: number,
+    flows: { date: string, direction: "in" | "out", amount: number, kind: "known" | "derived" | "forecast", source: "customer_invoice" | "supplier_invoice" | "payment_order" | "salary_run" | "salary_estimate" | "skattekonto" | "vat" | "agi" | "f_skatt" | "recurring_invoice" | "forecast_row", estimate: boolean, counterparty: string | null, reference: string | null, ref: { type: "invoice" | "supplier_invoice" | "payment_order" | "salary_run" | "recurring_invoice_schedule" | "cash_forecast_row" | "skattekonto" | "vat_period" | "agi_period", id: string } | null, confidence: "firm" | "likely" | "possible" | null }[],
+    overdue: { receivables: { total: number, invoices: { invoice_id: string, invoice_number: string, customer_name: string, due_date: string, days_overdue: number, amount: number }[] }, payables: { total: number, invoices: { supplier_invoice_id: string, supplier_invoice_number: string | null, supplier_name: string, due_date: string, days_overdue: number, amount: number }[] } },
+    complete: boolean,
+    caveats: { code: string, message_sv: string, message_en: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "currency": "SEK",
+    "today": "2026-10-28",
+    "horizon": {
+      "start": "2026-10-28",
+      "end": "2027-01-24",
+      "weeks": 13
+    },
+    "opening": {
+      "amount": 412500,
+      "source": "bank",
+      "as_of": "2026-10-28T05:02:11Z",
+      "age_days": 0,
+      "accounts": []
+    },
+    "days": [
+      {
+        "date": "2026-10-28",
+        "opening": 412500,
+        "inflow": 0,
+        "outflow": 18750,
+        "closing": 393750,
+        "lowest": false
+      }
+    ],
+    "weeks": [
+      {
+        "iso_week": "2026-W44",
+        "start": "2026-10-26",
+        "end": "2026-11-01",
+        "opening": 412500,
+        "inflow": 62000,
+        "outflow": 18750,
+        "closing": 455750,
+        "min_closing": 393750,
+        "lowest": false
+      }
+    ],
+    "lowest": {
+      "date": "2026-11-25",
+      "closing": 121300,
+      "iso_week": "2026-W48"
+    },
+    "closing": 286400,
+    "flows": [
+      {
+        "date": "2026-10-28",
+        "direction": "out",
+        "amount": 18750,
+        "kind": "known",
+        "source": "payment_order",
+        "estimate": false,
+        "counterparty": "Städbolaget AB",
+        "reference": "F-2026-118",
+        "ref": {
+          "type": "payment_order",
+          "id": "5c2a…"
+        },
+        "confidence": null
+      }
+    ],
+    "overdue": {
+      "receivables": {
+        "total": 0,
+        "invoices": []
+      },
+      "payables": {
+        "total": 0,
+        "invoices": []
+      }
+    },
+    "complete": true,
+    "caveats": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/cash-forecast-rows`
+
+**The forecast rows: money expected in or out that the books do not hold yet.**
+`scope:reports:read · risk:low · idempotent`
+
+Lists the company's forecast rows by expected date: amount, direction, category, confidence, the outside key (external_source, external_id) and status (open, realised, superseded, cancelled). Filter by status, date range and outside system. Paginated with limit and offset; total is the full count. Read-only.
+
+**Use when:** To see what has been added to the liquidity forecast, or to find a row to change or cancel.
+**Do not use for:** The projection itself (GET /cash-forecast).
+
+**Pitfalls:**
+- Amounts are SEK and always positive; direction (in or out) says which way. Other currencies are not accepted yet.
+- A row dated before today leaves the projection: cancel it, or move its date if the money is still expected.
+- Link a row to its invoice (invoice_id or supplier_invoice_id) once the invoice exists: the invoice then counts and the row does not, so the money is never counted twice.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"open" \| "realised" \| "superseded" \| "cancelled"` | no | Only rows with this status. Default: every status. |
+| `from` | query | `string` | no | First expected date, inclusive. |
+| `to` | query | `string` | no | Last expected date, inclusive. |
+| `external_source` | query | `string` | no | Only rows from this outside system, e.g. "boom". |
+| `limit` | query | `number` | no | Rows per page, default 100. |
+| `offset` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    rows: { cash_forecast_row_id: string, expected_date: string, amount: number, direction: "in" | "out", currency: string, category: "revenue" | "payroll" | "tax" | "rent" | "loan" | "other", source: "manual" | "api" | "mcp" | "pms", external_source: string | null, external_id: string | null, confidence: "firm" | "likely" | "possible", dimension_value_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, status: "open" | "realised" | "superseded" | "cancelled", matched_transaction_id: string | null, note: string | null, created_at: string, updated_at: string }[],
+    total: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "rows": [
+      {
+        "cash_forecast_row_id": "7b0e…",
+        "expected_date": "2026-11-20",
+        "amount": 48000,
+        "direction": "in",
+        "currency": "SEK",
+        "category": "revenue",
+        "source": "pms",
+        "external_source": "boom",
+        "external_id": "booking-48213",
+        "confidence": "likely",
+        "dimension_value_id": null,
+        "invoice_id": null,
+        "supplier_invoice_id": null,
+        "status": "open",
+        "matched_transaction_id": null,
+        "note": "Bokning vecka 47",
+        "created_at": "2026-10-28T09:12:00Z",
+        "updated_at": "2026-10-28T09:12:00Z"
+      }
+    ],
+    "total": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/cash-forecast-rows`
+
+**Add or update forecast rows by your own key, up to 500 at a time.**
+`scope:forecast:write · risk:low · idempotent · dry-run · reversible`
+
+Writes rows to the liquidity forecast, each named by your system and its id (external_source, external_id): a key not seen before creates a row, a key seen before updates that row while it is open. A row that is realised, superseded or cancelled is left as it is and listed under skipped. Not bookkeeping: rows never reach the books, so they are written directly (no approval) under forecast:write. Up to 500 rows per call. Dry-runnable.
+
+**Use when:** A system that knows future money (bookings in a property management system, a loan plan, planned purchases) feeds the forecast, or an agent adds an expected payment.
+**Do not use for:** Booking anything: a forecast row is never a verifikat. Customer and supplier invoices already count on their own.
+
+**Pitfalls:**
+- Amounts are SEK and always positive; direction (in or out) says which way. Other currencies are not accepted yet.
+- A row dated before today leaves the projection: cancel it, or move its date if the money is still expected.
+- Link a row to its invoice (invoice_id or supplier_invoice_id) once the invoice exists: the invoice then counts and the row does not, so the money is never counted twice.
+- Sending the same batch again changes nothing: the key names the row. A cancelled row is not reopened by a later upsert.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  rows: { external_source: string, external_id: string, expected_date: string, amount: number, direction: "in" | "out", category: "revenue" | "payroll" | "tax" | "rent" | "loan" | "other", confidence?: "firm" | "likely" | "possible", note?: string | null, dimension_value_id?: string | null, invoice_id?: string | null, supplier_invoice_id?: string | null }[],
+  source?: "api" | "mcp" | "pms"
+}
+```
+
+Example request:
+```json
+{
+  "rows": [
+    {
+      "external_source": "boom",
+      "external_id": "booking-48213",
+      "expected_date": "2026-11-20",
+      "amount": 48000,
+      "direction": "in",
+      "category": "revenue",
+      "note": "Bokning vecka 47"
+    }
+  ],
+  "source": "pms"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    rows: { cash_forecast_row_id: string, expected_date: string, amount: number, direction: "in" | "out", currency: string, category: "revenue" | "payroll" | "tax" | "rent" | "loan" | "other", source: "manual" | "api" | "mcp" | "pms", external_source: string | null, external_id: string | null, confidence: "firm" | "likely" | "possible", dimension_value_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, status: "open" | "realised" | "superseded" | "cancelled", matched_transaction_id: string | null, note: string | null, created_at: string, updated_at: string }[],
+    created: number,
+    updated: number,
+    skipped: { cash_forecast_row_id: string, external_source: string, external_id: string, status: "open" | "realised" | "superseded" | "cancelled" }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "rows": [
+      {
+        "cash_forecast_row_id": "7b0e…",
+        "expected_date": "2026-11-20",
+        "amount": 48000,
+        "direction": "in",
+        "currency": "SEK",
+        "category": "revenue",
+        "source": "pms",
+        "external_source": "boom",
+        "external_id": "booking-48213",
+        "confidence": "likely",
+        "dimension_value_id": null,
+        "invoice_id": null,
+        "supplier_invoice_id": null,
+        "status": "open",
+        "matched_transaction_id": null,
+        "note": "Bokning vecka 47",
+        "created_at": "2026-10-28T09:12:00Z",
+        "updated_at": "2026-10-28T09:12:00Z"
+      }
+    ],
+    "created": 1,
+    "updated": 0,
+    "skipped": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/cash-forecast-rows/cancel`
+
+**Cancel a forecast row: it leaves the forecast and stays on record.**
+`scope:forecast:write · risk:low · idempotent · dry-run`
+
+Sets an open row's status to cancelled; rows are never deleted. Name the row by cash_forecast_row_id, or by your own external_source and external_id. Cancelling a cancelled row changes nothing; a realised or superseded row cannot be cancelled. Not bookkeeping: written directly under forecast:write. Dry-runnable.
+
+**Use when:** Money that was expected will not come or go: a booking cancelled, a purchase dropped.
+**Do not use for:** Changing a row's amount or date (upsert it with the same key).
+
+**Pitfalls:**
+- A cancelled row is not reopened by a later upsert of the same key: write a new key if the money is expected again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ cash_forecast_row_id?: string, external_source?: string, external_id?: string }
+```
+
+Example request:
+```json
+{
+  "external_source": "boom",
+  "external_id": "booking-48213"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    row: { cash_forecast_row_id: string, expected_date: string, amount: number, direction: "in" | "out", currency: string, category: "revenue" | "payroll" | "tax" | "rent" | "loan" | "other", source: "manual" | "api" | "mcp" | "pms", external_source: string | null, external_id: string | null, confidence: "firm" | "likely" | "possible", dimension_value_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, status: "open" | "realised" | "superseded" | "cancelled", matched_transaction_id: string | null, note: string | null, created_at: string, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "row": {
+      "cash_forecast_row_id": "7b0e…",
+      "expected_date": "2026-11-20",
+      "amount": 48000,
+      "direction": "in",
+      "currency": "SEK",
+      "category": "revenue",
+      "source": "pms",
+      "external_source": "boom",
+      "external_id": "booking-48213",
+      "confidence": "likely",
+      "dimension_value_id": null,
+      "invoice_id": null,
+      "supplier_invoice_id": null,
+      "status": "cancelled",
+      "matched_transaction_id": null,
+      "note": "Bokning vecka 47",
+      "created_at": "2026-10-28T09:12:00Z",
+      "updated_at": "2026-10-28T09:12:00Z"
+    }
   },
   "meta": {
     "request_id": "req_…",
