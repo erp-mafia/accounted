@@ -247,6 +247,18 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
     })
 
+    it('refuses a proposal a booking review rule matches, whatever its evidence (accounted#130 step 2)', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([{ ...settled, review_blocked: true }])
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(settled.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_REVIEW_REQUIRED')
+      expect(body.error.details).toEqual({ proposal_id: settled.template_id, reason: 'booking_blocked' })
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
     it('refuses a proposal that is not on offer now: the review opens, nothing is skipped on a guess', async () => {
       enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
       offer([settled])

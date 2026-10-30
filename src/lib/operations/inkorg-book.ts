@@ -44,6 +44,8 @@ import { bookInboxItemDirectly } from './inbox-book-direct'
 import { convertInboxItemToSupplierInvoice } from './inbox-convert'
 import { refuseWhenPairBooked } from './inbox-pair-guard'
 import { registerAndSettleInboxItem } from './inbox-register-and-settle'
+import { getActor } from '@/lib/bookkeeping/actor-context'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { oneClickOutcome, planOneClick, type OneClickForm, type OneClickInput, type OneClickPlan, type OneClickSupplierCreate } from './inkorg-one-click'
 import { readOneClickInput, type OneClickItem } from './inkorg-one-click-read'
 import { computePreviewToken } from './preview-token'
@@ -181,8 +183,24 @@ async function createPlannedSupplier(ctx: OperationContext & { requestId: string
   return { ok: false, response: errorResponseFromCode('SUPPLIER_CREATE_FAILED', ctx.log, { requestId: ctx.requestId }) }
 }
 
-/** POST .../book: recompute, check the pin, book the plan's form through the shared internals. */
+/**
+ * POST .../book: recompute, check the pin, book the plan's form through the
+ * shared internals. A one click: the person did not see the booking's
+ * review, so a booking a booking review rule matches is never stamped as
+ * reviewed (the plan asks for the editor first; commit_journal_entry
+ * refuses whatever gets past, accounted#130).
+ */
 export async function bookInkorgItem(
+  ctx: OperationContext & { requestId: string },
+  itemId: string,
+  request: InkorgBookRequest,
+): Promise<InkorgBookOutcome> {
+  const actor = getActor()
+  const run = () => bookInkorgItemOneClick(ctx, itemId, request)
+  return actor ? runWithActor({ ...actor, withoutReview: true }, run) : run()
+}
+
+async function bookInkorgItemOneClick(
   ctx: OperationContext & { requestId: string },
   itemId: string,
   request: InkorgBookRequest,

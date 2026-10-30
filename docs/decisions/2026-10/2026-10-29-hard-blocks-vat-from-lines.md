@@ -1,0 +1,1 @@
+[2026-10-29] A block's VAT criterion is read off the verifikat's VAT accounts, the same in SQL and TypeScript (264x rate from its share of the gross, every rate when the share fits none): a journal entry stores no VAT treatment, and the last line must judge what it can see.

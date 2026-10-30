@@ -16,6 +16,12 @@ import { eventBus } from '@/lib/events/bus'
 import type { PendingOperation } from '@/types'
 
 const mockDetectBookingDuplicate = vi.fn()
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectBookingDuplicate(...args),
 }))

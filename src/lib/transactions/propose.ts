@@ -18,6 +18,8 @@ import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT, type DirectBookingSettings } from './direct-booking'
 import { readDirectBookingSettings } from './direct-booking-settings'
 import { proposeClearings } from './clearing-proposals'
+import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
+import { markBlockedProposals } from '@/lib/booking-review/proposals'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -40,6 +42,10 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * card and Swish on 1686) leads above everything, since any other booking
  * of it counts the revenue twice (leadWithClearing); it never books from
  * the row.
+ *
+ * Last, a booking review rule (lib/booking-review, accounted#130 step 2)
+ * marks every proposal it matches review_blocked: it keeps its place, and
+ * never books without a person's review (reviewReason 'booking_blocked').
  */
 /**
  * The rules behind a bank line's suggestions, recorded with every decision
@@ -48,7 +54,7 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.4'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.5'
 
 const log = createLogger('transactions/propose')
 
@@ -221,6 +227,13 @@ export async function proposeForTransactions(
   )
   for (const [txId, clearing] of clearings) {
     proposals[txId] = leadWithClearing(proposals[txId] ?? [], clearing)
+  }
+
+  const blockRules = await loadActiveBookingReviewRules(supabase, companyId)
+  if (blockRules.length > 0) {
+    for (const tx of transactions) {
+      proposals[tx.id] = markBlockedProposals(proposals[tx.id] ?? [], tx, blockRules)
+    }
   }
 
   return { proposals, assistant_reads, direct_booking }

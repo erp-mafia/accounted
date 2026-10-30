@@ -53,6 +53,8 @@ export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED'
 export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
 export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
 export const UNATTENDED_COMMIT_LIMIT_EXCEEDED = 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' as const
+export const BOOKING_REVIEW_REQUIRED = 'BOOKING_REVIEW_REQUIRED' as const
+export const BOOKING_REVIEW_LIMIT = 'BOOKING_REVIEW_LIMIT' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -666,6 +668,41 @@ export class UnattendedCommitLimitExceededError extends Error {
   }
 }
 
+/**
+ * A booking a booking review rule matches (booking_review_rules, accounted#130
+ * step 2) that was about to be posted without a person's review: by a key,
+ * an agent, a grant, cron, a bulk path or a one click. commit_journal_entry
+ * refused it before a voucher number was drawn, so nothing is posted. A
+ * person books it from its review in the app; an agent stages it.
+ */
+export class BookingReviewRequiredError extends Error {
+  readonly code = BOOKING_REVIEW_REQUIRED
+  constructor(public readonly journalEntryId: string | null = null) {
+    super('A booking review rule matches this booking, so a person books it from its review')
+    this.name = 'BookingReviewRequiredError'
+  }
+}
+
+/**
+ * A person reviewed a booking a rule matches, but the company has set
+ * booking_review limits (company_attest_limits) and theirs does not cover
+ * the bank rows' amount, or they have none. Nothing is posted.
+ */
+export class BookingReviewLimitError extends Error {
+  readonly code = BOOKING_REVIEW_LIMIT
+  constructor(
+    public readonly amountSek: number | null,
+    public readonly limitSek: number | null,
+  ) {
+    super(
+      limitSek === null
+        ? 'Booking review limit: the reviewer has no booking_review limit, and the company has set them'
+        : `Booking review limit: ${amountSek} SEK is above the reviewer's limit of ${limitSek} SEK`,
+    )
+    this.name = 'BookingReviewLimitError'
+  }
+}
+
 // ============================================================================
 // BookkeepingDatabaseError: single wrapper for all "Failed to <op>: <cause>"
 // engine throws. The `operation` tag is preserved for logs; the cause string
@@ -787,6 +824,8 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
     err instanceof UnattendedCommitLimitExceededError ||
+    err instanceof BookingReviewRequiredError ||
+    err instanceof BookingReviewLimitError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||
     err instanceof CorrectionChainTooDeepError ||

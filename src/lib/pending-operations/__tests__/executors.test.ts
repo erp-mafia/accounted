@@ -1,5 +1,11 @@
 // The error classes and the refusal mapping stay real: the executor answers
 // a database refusal by its class and code (crm#1272).
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/import/sie-jobs',async (importOriginal)=>({
   ...(await importOriginal<typeof import('@/lib/import/sie-jobs')>()),submitSIEJob:vi.fn(),requestSIEJobAction:vi.fn(),
 }))

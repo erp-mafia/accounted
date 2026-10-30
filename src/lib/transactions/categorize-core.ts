@@ -66,7 +66,12 @@ import {
   isBookkeepingError,
   TransactionMissingSekValueError,
   UnattendedCommitLimitExceededError,
+  BookingReviewLimitError,
+  BookingReviewRequiredError,
 } from '@/lib/bookkeeping/errors'
+import { getActor } from '@/lib/bookkeeping/actor-context'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
@@ -203,6 +208,13 @@ export interface CategorizeOptions {
    * refusal. The dashboard leaves it off: its review shows the box it books.
    */
   reverseChargeBoxParam?: ReverseChargeBoxParam
+  /**
+   * The person books without seeing this booking's review (a bulk door).
+   * A booking a booking review rule matches is then refused, as for a one
+   * click (review_shown false), and the commit is never stamped as reviewed
+   * (accounted#130 step 2).
+   */
+  withoutReview?: boolean
   log?: Logger
 }
 
@@ -924,6 +936,30 @@ export async function categorizeTransaction(
   }
   checks.push(passed('chart'))
 
+  // Hard blocks (accounted#130 step 2): a booking a booking review rule
+  // matches is booked only by a person from its review. A key, an agent,
+  // cron, and a person's one click or bulk booking are refused here, before
+  // anything more is written; commit_journal_entry holds the same line for
+  // whatever gets past. A dry run previews it: staging is how an agent
+  // hands such a booking to a person.
+  // Without an actor scope (a server action, a test) the database decides alone.
+  const reviewSkipped = input.review_shown === false || options.withoutReview === true
+  const bookingActor = getActor()
+  if (wouldBook && !dryRun && (reviewSkipped || (bookingActor && !isPersonReview(bookingActor)))) {
+    let lines: CreateJournalEntryLineInput[] | null = null
+    try {
+      lines = buildTransactionEntryLines(transaction, mappingResult)
+    } catch {
+      // The engine refuses the same booking below, with its own code.
+    }
+    const matched = lines ? await matchBookingOfRows(supabase, companyId, [transaction], lines) : []
+    if (matched.length > 0) {
+      return bookingActor?.type === 'user'
+        ? refuseFor('TX_CATEGORIZE_REVIEW_REQUIRED', { proposal_id: input.proposal_id ?? null, reason: 'booking_blocked', matched_rules: matched })
+        : refuseFor('BOOKING_REVIEW_REQUIRED', { transaction_id: txId, matched_rules: matched })
+    }
+  }
+
   // The booking guard's skattekonto half (issue #50): a tax account booked
   // straight from the bank when the skattekonto booked the same tax this
   // month. It judges the kontering, so it runs here; a force already bound
@@ -1029,8 +1065,11 @@ export async function categorizeTransaction(
   // What was on offer, taken before the booking and its learning.
   suggestionSnapshot ??= await snapshotSuggestions(supabase, companyId, [txId])
   let bookedEntry: JournalEntry | null
+  // A booking the person did not review is never stamped as reviewed.
+  const asBooked = <T>(fn: () => Promise<T>): Promise<T> =>
+    reviewSkipped && bookingActor ? runWithActor({ ...bookingActor, withoutReview: true }, fn) : fn()
   try {
-    bookedEntry = await createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes, {
+    bookedEntry = await asBooked(() => createTransactionJournalEntry(supabase, companyId, userId, transaction, mappingResult, input.notes, {
       // The voucher carries the rules its decision was made under.
       rubricVersion: suggestionSnapshot.ruleVersion,
       // The business event (posting port pilot; read only while
@@ -1047,7 +1086,7 @@ export async function categorizeTransaction(
         templateId: context.template?.id ?? null,
         counterpartyTemplateId: isBusiness ? (input.counterparty_template_id ?? null) : null,
       },
-    })
+    }))
   } catch (err) {
     // An account deactivated between the check above and the engine call.
     if (err instanceof AccountsNotInChartError) {
@@ -1061,6 +1100,16 @@ export async function categorizeTransaction(
     // stays in "Att bokföra" for a person, under the refusal's own code.
     if (err instanceof UnattendedCommitLimitExceededError) {
       return refuseFor(err.code, { attempted: err.attempted, limit: err.limit }, { cause: err })
+    }
+    // A booking review rule matched in the database (accounted#130): nothing
+    // was posted. A person's one click opens the review; anyone else stages.
+    if (err instanceof BookingReviewRequiredError) {
+      return bookingActor?.type === 'user'
+        ? refuseFor('TX_CATEGORIZE_REVIEW_REQUIRED', { proposal_id: input.proposal_id ?? null, reason: 'booking_blocked' }, { cause: err })
+        : refuseFor(err.code, { transaction_id: txId }, { cause: err })
+    }
+    if (err instanceof BookingReviewLimitError) {
+      return refuseFor(err.code, { amount_sek: err.amountSek, limit_sek: err.limitSek }, { cause: err })
     }
     // Fail closed (issue #1947): the verifikat IS the booking, so nothing is
     // written and the row stays in "Att bokföra".
@@ -1395,6 +1444,8 @@ export interface CategorizeMatchedTransactionOpts {
   loadChart?: ChartVatTreatmentsLoader
   /** The suggestion the booking started from (MCP categorize_transaction's proposal_id). */
   proposalId?: string
+  /** A bulk door: the person books without seeing this booking's review (CategorizeOptions.withoutReview). */
+  withoutReview?: boolean
 }
 
 /** The staged categorize_transaction as the service's input. */
@@ -1475,6 +1526,7 @@ export async function categorizeMatchedTransaction(
     exclude,
     loadChart: opts.loadChart,
     invoiceMatchIntercept: false,
+    ...(opts.withoutReview ? { withoutReview: true } : {}),
   })
   if (outcome.ok) {
     const booked = outcome.dryRun ? null : outcome.booked
@@ -1673,7 +1725,7 @@ export async function bulkBookMatchedInboxItems(
         userId,
         companyId,
         item.matched_transaction_id as string,
-        { category, vatTreatment: vat_treatment, reverseChargeKind, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart },
+        { category, vatTreatment: vat_treatment, reverseChargeKind, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart, withoutReview: true },
         // Snapshot copies so the guard sees only the prior bookings of this batch.
         { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
       )
@@ -1698,6 +1750,8 @@ export async function bulkBookMatchedInboxItems(
           // A foreign row with no SEK value is not a mapping problem: the
           // repair is fetching its exchange rate.
           : result.errorCode === 'TX_MISSING_SEK_VALUE' ? 'missing_sek_value'
+          // A booking review rule matches (accounted#130): a person books it from its review.
+          : result.errorCode === 'TX_CATEGORIZE_REVIEW_REQUIRED' || result.errorCode === 'BOOKING_REVIEW_REQUIRED' ? 'booking_review_required'
           : result.status === 404 ? 'transaction_not_found'
           : result.status === 409 ? 'already_booked_or_duplicate'
           : result.status === 400 ? 'no_account_mapping'

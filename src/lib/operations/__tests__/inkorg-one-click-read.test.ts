@@ -4,6 +4,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 
 const readBankMatchMock = vi.fn()
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/documents/inbox-bank-match', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/documents/inbox-bank-match')>()),
   readInboxBankMatch: (...args: unknown[]) => readBankMatchMock(...args),

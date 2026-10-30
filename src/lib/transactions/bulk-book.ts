@@ -25,6 +25,10 @@
  * (lib/operations/transactions.ts), which serves v1, the MCP tool
  * gnubok_bulk_book_transactions and its approval.
  *
+ * A row a booking review rule matches (accounted#130 step 2) is refused
+ * for a new samlingsverifikat (BOOKING_REVIEW_BULK_REFUSED): a person books
+ * it on its own from its review.
+ *
  * Rows of several dates may only be linked to an existing verifikat (path
  * 1): one document, such as Stripe's monthly fee invoice, is settled by bank
  * rows of many days. A new samlingsverifikat (paths 2 and 3) needs one date.
@@ -78,6 +82,9 @@ import {
   fetchActiveDimensionRules,
 } from '@/lib/bookkeeping/dimension-rules'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
+import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import {
   detectBookingDuplicate,
@@ -135,6 +142,7 @@ type SelectedTx = Pick<
   | 'currency'
   | 'description'
   | 'merchant_name'
+  | 'original_description'
   | 'date'
   | 'amount_sek'
   | 'exchange_rate'
@@ -168,7 +176,7 @@ export async function bulkBookTransactions(
   // the amounts, every branch the currencies.
   const { data: txs, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, currency, description, merchant_name, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+    .select('id, amount, currency, description, merchant_name, original_description, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
     .in('id', body.tx_ids)
     .eq('company_id', companyId)
 
@@ -379,6 +387,41 @@ export async function bulkBookTransactions(
     const importVat = await refuseImportVatWithoutBase(supabase, companyId, newEntryPayload.lines)
     if (importVat) {
       return { ok: false, code: importVat.code, details: importVat.details, messageSv: importVat.messageSv }
+    }
+
+    // Hard blocks (accounted#130 step 2): a row a booking review rule matches
+    // is booked on its own, from its review, never in a samlingsverifikat.
+    // Refused in the dry run too, so it is never staged; the RPC's
+    // commit_journal_entry refuses it as well.
+    const blockRules = await loadActiveBookingReviewRules(supabase, companyId)
+    if (blockRules.length > 0) {
+      const blocked: string[] = []
+      for (const tx of txTyped) {
+        const matched = await matchBookingOfRows(supabase, companyId, [tx], newEntryPayload.lines, blockRules)
+        if (matched.length > 0) blocked.push(tx.id)
+      }
+      if (blocked.length > 0) return { ok: false, code: 'BOOKING_REVIEW_BULK_REFUSED', details: { transaction_ids: blocked } }
+    }
+  }
+
+  // Hard blocks (accounted#130 step 2): linking rows to a posted verifikat
+  // books them on its lines. A key, an agent or cron may not book a row a
+  // booking review rule matches that way; a person linking in the app has
+  // the verifikat in front of them.
+  const linkActor = getActor()
+  if (body.existing_journal_entry_id && !newEntryPayload && linkActor && !isPersonReview(linkActor)) {
+    const blockRules = await loadActiveBookingReviewRules(supabase, companyId)
+    if (blockRules.length > 0) {
+      const { data: entryLines } = await supabase
+        .from('journal_entry_lines')
+        .select('account_number, debit_amount, credit_amount')
+        .eq('journal_entry_id', body.existing_journal_entry_id)
+      const lines = Array.isArray(entryLines) ? (entryLines as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) : []
+      const blocked: string[] = []
+      for (const tx of txTyped) {
+        if ((await matchBookingOfRows(supabase, companyId, [tx], lines, blockRules)).length > 0) blocked.push(tx.id)
+      }
+      if (blocked.length > 0) return { ok: false, code: 'BOOKING_REVIEW_BULK_REFUSED', details: { transaction_ids: blocked } }
     }
   }
 

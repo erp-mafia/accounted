@@ -11,6 +11,12 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { tools } from '../server'
 
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
   return { ...actual, detectBookingDuplicate: vi.fn() }

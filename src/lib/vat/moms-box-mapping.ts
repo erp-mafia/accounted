@@ -274,3 +274,28 @@ export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
 export function isDeclarationVatAccount(accountNumber: string): boolean {
   return /^26[1-4]\d$/.test(accountNumber)
 }
+
+/**
+ * What a line on this account says about a booking's VAT, as booking review
+ * rules read it (lib/booking-review/match.ts vatClassesFromLines, accounted#130;
+ * mirrored in SQL by public.booking_review_vat_classes, migration
+ * 20261031150000): omvänd betalningsskyldighet or import of goods (the
+ * utgående accounts per rate and the two reverse-charge ingående accounts),
+ * utgående moms per rate, other ingående moms (its rate read off the
+ * amounts), another 26xx account, or no VAT account at all.
+ */
+export type BookingVatRole = 'reverse_charge' | 'standard_25' | 'reduced_12' | 'reduced_6' | 'input' | 'other_vat' | 'not_vat'
+
+const BOOKING_REVERSE_CHARGE_ACCOUNTS: ReadonlySet<string> = new Set([
+  '2614', '2615', '2624', '2625', '2634', '2635', '2645', '2647',
+])
+
+export function bookingVatRole(accountNumber: string): BookingVatRole {
+  if (BOOKING_REVERSE_CHARGE_ACCOUNTS.has(accountNumber)) return 'reverse_charge'
+  if (/^261\d$/.test(accountNumber)) return 'standard_25'
+  if (/^262\d$/.test(accountNumber)) return 'reduced_12'
+  if (/^263\d$/.test(accountNumber)) return 'reduced_6'
+  if (/^264\d$/.test(accountNumber)) return 'input'
+  if (accountNumber.startsWith('26')) return 'other_vat'
+  return 'not_vat'
+}

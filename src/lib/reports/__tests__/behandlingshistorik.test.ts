@@ -1822,6 +1822,65 @@ describe('auditRowToEvent: attest levels (#135)', () => {
   })
 })
 
+describe('auditRowToEvent: hard blocks (accounted#130)', () => {
+  const block = {
+    id: 'block-1',
+    company_id: 'company-1',
+    rule_id: 'block-1',
+    version: 1,
+    accounts: ['6250', '5410'],
+    counterparty_key: 'google cloud',
+    counterparty_label: 'Google Cloud',
+    amount_from_sek: '5000.00',
+    vat_treatment: 'reverse_charge',
+    note: 'Kontrollanten granskar',
+    valid_from: '2026-10-29T10:00:00Z',
+    revoked_at: null,
+    revoked_reason: null,
+  }
+
+  it('is an audited table', () => {
+    expect(AUDITED_TABLES).toContain('booking_review_rules')
+  })
+
+  it('states what a block matches when it is added, dated', () => {
+    const event = auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'INSERT', new_state: block }))
+    expect(event).toMatchObject({
+      category: 'installningar',
+      code: 'booking_review_rule.created',
+      event: 'Spärr för bokföring tillagd',
+      details: [
+        'Version: 1',
+        'Gäller: bokningar av bankrader som spärren träffar bokförs bara av en person, från granskningen',
+        'Anteckning: Kontrollanten granskar',
+        'Gäller från: 2026-10-29',
+      ],
+    })
+    expect(event?.object).toMatch(/^Spärr: konton 6250, 5410, Google Cloud, från 5.000 kr, omvänd betalningsskyldighet$/)
+  })
+
+  it('states an archive and a new version, and nothing else', () => {
+    const archived = { ...block, revoked_at: '2026-10-30T09:00:00Z', revoked_reason: 'archived' }
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'UPDATE', old_state: block, new_state: archived })),
+    ).toMatchObject({ code: 'booking_review_rule.archived', event: 'Spärr för bokföring arkiverad', details: ['Version: 1'] })
+    const superseded = { ...block, revoked_at: '2026-10-30T09:00:00Z', revoked_reason: 'superseded' }
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'UPDATE', old_state: block, new_state: superseded })),
+    ).toMatchObject({ code: 'booking_review_rule.superseded' })
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'UPDATE', old_state: block, new_state: { ...block } })),
+    ).toBeNull()
+  })
+
+  it('names a block on one account and no VAT in the singular', () => {
+    const single = { ...block, accounts: ['6071'], counterparty_key: null, counterparty_label: null, amount_from_sek: null, vat_treatment: 'none' }
+    expect(auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'INSERT', new_state: single }))?.object).toBe(
+      'Spärr: konto 6071, utan moms',
+    )
+  })
+})
+
 describe('decisionEvents', () => {
   const rule = {
     source: 'rule',

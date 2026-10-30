@@ -275,7 +275,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'foundation',
     // vat: a reverse charge booked in bulk reads its box off the seller (vat/reverse-charge-box).
     uses: ['deadlines', 'inbox', 'vat'],
-    libFolders: ['transactions', 'rules', 'reconciliation'],
+    libFolders: ['transactions', 'rules', 'booking-review', 'reconciliation'],
     operationPrefixes: ['transactions'],
     v1Segments: ['transactions', 'reconciliation'],
     jurisdictions: SE,

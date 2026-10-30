@@ -28,8 +28,10 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
 
-    const outcome = await categorizeTransaction(supabase, user.id, companyId, id, validation.data, {
+    const { in_bulk: inBulk, ...booking } = validation.data
+    const outcome = await categorizeTransaction(supabase, user.id, companyId, id, booking, {
       onBooked: 'update_flags',
+      ...(inBulk ? { withoutReview: true } : {}),
       log,
     })
 

@@ -228,6 +228,55 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Do not retry, and do not split the entry into smaller ones: one affärshändelse is one verifikat (BFL 5 kap. 6 §). Nothing was posted. Ask a human to approve the staged operation in Accounted (on the v1 API, resend a write with ?stage=true where the endpoint stages, or let a person do it in the app), or have the key owner raise the limit in API key settings. details.attempted and details.limit carry the numbers.',
     },
   },
+  // Hard blocks (accounted#130 step 2): a booking a booking review rule
+  // matches is booked only by a person, from its review, in the app.
+  BOOKING_REVIEW_REQUIRED: {
+    httpStatus: 409,
+    message_sv:
+      'Företaget har en spärr som säger att den här bokföringen alltid ska granskas av en person. Den bokförs från granskningen i Accounted, inte med ett klick, i massbokning, av en regel för automatisk bokföring eller av en agent.',
+    message_en:
+      'The company has a block saying a person always reviews this booking. It is booked from its review in Accounted, never with one click, in bulk, by a rule for automatic booking or by an agent.',
+    retryable: false,
+    remediation: {
+      description:
+        'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool stages already) and tell the user it waits for their review in Accounted, under Att godkänna. The blocks are listed under Regler, Spärrar.',
+    },
+  },
+  BOOKING_REVIEW_WEB_ONLY: {
+    httpStatus: 403,
+    message_sv:
+      'Företaget har en spärr som matchar den här bokföringen, så den godkänns av en person i Accounted, inte via API, MCP, en regel för automatisk bokföring eller i massgodkännande.',
+    message_en:
+      'A company block matches this booking, so a person approves it in Accounted, never through the API, MCP, a rule for automatic booking or a bulk approval.',
+    retryable: false,
+    remediation: {
+      description:
+        'The operation stays pending. Do not retry the approval with a key. Tell the user it waits for their review in Accounted, under Att godkänna.',
+    },
+  },
+  BOOKING_REVIEW_LIMIT: {
+    httpStatus: 403,
+    message_sv:
+      'Bokföringen matchar en spärr, och din attestgräns för granskning täcker inte beloppet. En person med högre gräns bokför den.',
+    message_en:
+      'The booking matches a block, and your attest limit for booking reviews does not cover the amount. Someone with a higher limit books it.',
+    retryable: false,
+    remediation: {
+      description:
+        'Nothing was posted. details.amount_sek is the bank amount and details.limit_sek the reviewer limit (null: the reviewer has none while the company has set limits). Ask an owner or admin, or a person whose booking_review limit covers it, to book it.',
+    },
+  },
+  BOOKING_REVIEW_BULK_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'En eller flera av raderna matchar en spärr och kan inte massbokföras. Bokför dem en och en från granskningen.',
+    message_en: 'One or more of the rows match a block and cannot be booked in bulk. Book them one at a time from their review.',
+    retryable: false,
+    remediation: {
+      description:
+        'details.transaction_ids names the rows a booking review rule matches. Leave them out of the bulk booking; a person books each from its review in the app.',
+    },
+  },
   ACCOUNTS_NOT_IN_CHART: {
     httpStatus: 400,
     message_sv: 'Konton saknas i kontoplanen.',
@@ -1104,7 +1153,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The suggestion needs a review before it is booked. Open the review and book it from there.',
     remediation: {
       description:
-        'details.reason says why: company_off, rule_always_review, rule_import_unconfirmed, evidence, or proposal_not_on_offer. Show the booking to the person and send it again with review_shown true.',
+        'details.reason says why: booking_blocked (a booking review rule matches; details.matched_rules names it), company_off, rule_always_review, rule_import_unconfirmed, evidence, or proposal_not_on_offer. Show the booking to the person and send it again with review_shown true.',
     },
   },
   TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT: {

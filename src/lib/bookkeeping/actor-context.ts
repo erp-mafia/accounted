@@ -41,6 +41,13 @@ export interface CommitActor {
    * and the cookie-session routes cannot reach the check that reads it.
    */
   unattendedCommitLimit?: number | null
+  /**
+   * The person booked without seeing the booking's review: a row's one
+   * click, the Inkorg's one click, a bulk booking. Such a commit is never
+   * stamped as reviewed, so a booking a booking review rule matches is
+   * refused (lib/bookkeeping/booking-review-commit.ts, accounted#130).
+   */
+  withoutReview?: true
 }
 
 export interface ActorStore {

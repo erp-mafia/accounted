@@ -8,6 +8,8 @@
  * The door's own staging is untouched: this runs after it, on the staged
  * row, and never fails the staging.
  *
+ *   0. A booking a booking review rule matches (accounted#130 step 2) is
+ *      never let through: refused before the claim, it waits for a person.
  *   1. claim_company_grant (migration 20261017100400) is the one gate. Under
  *      a lock on the operation and the grant it checks, in SQL against what
  *      the database holds now, everything a grant requires: the kill switch,
@@ -51,6 +53,7 @@ import type { PendingOperation } from '@/types'
 import { grantsEnabled } from './flag'
 import { SILENT_GRANT_REFUSALS } from './types'
 import { toError } from '@/lib/errors/to-error'
+import { operationBookingReview } from '@/lib/booking-review/operation-gate'
 
 /** The credential that staged the operation, as the staging door validated it. */
 export interface GrantCredential {
@@ -132,6 +135,20 @@ export async function applyCompanyGrant(
   // The master switch: off, no grant applies and the gate is never asked.
   if (!grantsEnabled()) return { applied: false, reason: 'switched_off' }
   if (!credential.apiKeyId) return { applied: false, reason: 'not_a_key_credential' }
+
+  // Hard blocks (accounted#130 step 2): a booking a booking review rule
+  // matches is never let through by a grant. Asked before the claim, so no
+  // use is claimed; the approval gate and commit_journal_entry refuse it too.
+  const { data: staged } = await supabase
+    .from('pending_operations')
+    .select('operation_type, params, preview_data')
+    .eq('id', operationId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (staged && (await operationBookingReview(supabase, companyId, staged as Pick<PendingOperation, 'operation_type' | 'params' | 'preview_data'>))) {
+    log.info('grant did not apply: a booking review rule matches', { operationId })
+    return { applied: false, reason: 'booking_review_rule' }
+  }
 
   let claim: ClaimResult
   try {

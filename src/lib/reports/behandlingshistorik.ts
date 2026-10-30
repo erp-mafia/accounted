@@ -315,6 +315,10 @@ export const AUDITED_TABLES = [
   // Attest limits per person (migration 20261030140000): how much one
   // attester's approval covers, which decides who may release a payment.
   'company_attest_limits',
+  // Hard blocks (migration 20261031150000): what is never booked without a
+  // person's review, added, replaced and archived by an owner or admin
+  // through save_booking_review_rule and archive_booking_review_rule.
+  'booking_review_rules',
 ] as const
 
 /**
@@ -1396,6 +1400,63 @@ function grantAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null
   return null
 }
 
+const BOOKING_REVIEW_VAT_LABELS: Record<string, string> = {
+  standard_25: 'moms 25 %',
+  reduced_12: 'moms 12 %',
+  reduced_6: 'moms 6 %',
+  reverse_charge: 'omvänd betalningsskyldighet',
+  none: 'utan moms',
+}
+
+/** "konto 6250, Google Cloud, från 5 000 kr, omvänd betalningsskyldighet": what a block matches. */
+function bookingReviewCriteria(state: Record<string, unknown>): string {
+  const parts: string[] = []
+  const accounts = Array.isArray(state.accounts) ? (state.accounts as unknown[]).map(String) : []
+  if (accounts.length > 0) parts.push(`${accounts.length === 1 ? 'konto' : 'konton'} ${accounts.join(', ')}`)
+  const counterparty = str(state.counterparty_label) ?? str(state.counterparty_key)
+  if (counterparty) parts.push(counterparty)
+  const fromRaw = state.amount_from_sek
+  const from = fromRaw === null || fromRaw === undefined ? null : Number(fromRaw)
+  if (from !== null && Number.isFinite(from)) parts.push(`från ${fmtKronor(from)} kr`)
+  const vat = str(state.vat_treatment)
+  if (vat) parts.push(BOOKING_REVIEW_VAT_LABELS[vat] ?? vat)
+  return parts.join(', ')
+}
+
+/**
+ * A hard block (booking_review_rules, migration 20261031150000): a
+ * processing rule in BFNAR 2013:2 p. 9.16's sense, dated when an owner or
+ * admin adds it, replaces it with a new version or archives it. While it is
+ * active, a booking of a bank row it matches is booked only by a person,
+ * from its review. One line says what it matches.
+ */
+function bookingReviewRuleAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = (row.new_state ?? row.old_state ?? {}) as Record<string, unknown>
+  const criteria = bookingReviewCriteria(state)
+  const object = `Spärr: ${criteria || 'okänd'}`
+  const version = typeof state.version === 'number' ? state.version : Number(state.version)
+  const versionLine = Number.isFinite(version) ? [`Version: ${version}`] : []
+  if (row.action === 'INSERT') {
+    const details = [...versionLine, 'Gäller: bokningar av bankrader som spärren träffar bokförs bara av en person, från granskningen']
+    const note = str(state.note)
+    if (note) details.push(`Anteckning: ${note}`)
+    const validFrom = str(state.valid_from)
+    if (validFrom) details.push(`Gäller från: ${validFrom.slice(0, 10)}`)
+    return auditEvent(row, { category: 'installningar', code: 'booking_review_rule.created', event: 'Spärr för bokföring tillagd', object, details })
+  }
+  if (row.action === 'UPDATE' && !row.old_state?.revoked_at && row.new_state?.revoked_at) {
+    const superseded = str(row.new_state?.revoked_reason) === 'superseded'
+    return auditEvent(row, {
+      category: 'installningar',
+      code: superseded ? 'booking_review_rule.superseded' : 'booking_review_rule.archived',
+      event: superseded ? 'Spärr för bokföring ersatt av ny version' : 'Spärr för bokföring arkiverad',
+      object,
+      details: versionLine,
+    })
+  }
+  return null
+}
+
 /** The company's switch that pauses every rule for automatic booking at once. */
 function grantSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
   if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
@@ -1840,6 +1901,8 @@ export function auditRowToEvent(
       return attestPolicyAuditEvent(row)
     case 'company_attest_limits':
       return attestLimitAuditEvent(row)
+    case 'booking_review_rules':
+      return bookingReviewRuleAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',

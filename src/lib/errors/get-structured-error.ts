@@ -64,6 +64,8 @@ import {
   TargetPeriodLockedError,
   TransactionMissingSekValueError,
   UnattendedCommitLimitExceededError,
+  BookingReviewRequiredError,
+  BookingReviewLimitError,
   isBookkeepingError,
 } from '../bookkeeping/errors'
 
@@ -697,6 +699,12 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   // refusal carries them (pending-operations/commit.ts).
   if (err instanceof UnattendedCommitLimitExceededError) {
     return { code: err.code, details: { attempted: err.attempted, limit: err.limit } }
+  }
+  if (err instanceof BookingReviewRequiredError) {
+    return { code: err.code, ...(err.journalEntryId ? { details: { journal_entry_id: err.journalEntryId } } : {}) }
+  }
+  if (err instanceof BookingReviewLimitError) {
+    return { code: err.code, details: { amount_sek: err.amountSek, limit_sek: err.limitSek } }
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }

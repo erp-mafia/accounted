@@ -20,6 +20,12 @@ import { commitPendingOperation } from '../commit'
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
 // The duplicate guard and the underlag propagation have their own tests.
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
   detectBookingDuplicate: vi.fn(async () => null),

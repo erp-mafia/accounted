@@ -58,10 +58,11 @@
  *   from the reading (name, numbers, address, the country and type the VAT
  *   rule used). A direct booking names the matched supplier only.
  *
- *   Review. The company's one-click switch and a counterpart rule set to
- *   always ask (lib/transactions/direct-booking.ts askedForReview, the same
- *   decision the bank rows read) open the editor, prefilled with the whole
- *   plan, instead of booking it (accounted#130).
+ *   Review. The company's one-click switch, a counterpart rule set to
+ *   always ask and a booking review rule that matches the plan
+ *   (lib/transactions/direct-booking.ts askedForReview, the same decision
+ *   the bank rows read) open the editor, prefilled with the whole plan,
+ *   instead of booking it (accounted#130).
  *
  * Pure: the loader (./inkorg-one-click-read.ts) reads, this decides, the book door
  * (./inkorg-book.ts) writes through the shared internals.
@@ -96,6 +97,16 @@ import { addDaysIso } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { askedForReview, DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
+import { factsFromLines, matchBookingReviewRules, type BookingReviewRule } from '@/lib/booking-review/match'
+
+/** Whether a booking review rule matches the plan's lines and its bank row (or supplier). */
+function planBlocked(lines: readonly OneClickLine[], review: OneClickInput['bookingReview']): boolean {
+  if (!review || review.rules.length === 0) return false
+  const facts = factsFromLines(lines, [
+    { counterpartyKey: review.counterpartyKey, amountSek: review.amountSek === null ? Number.POSITIVE_INFINITY : Math.abs(review.amountSek) },
+  ])
+  return matchBookingReviewRules(review.rules, facts).length > 0
+}
 
 export type OneClickForm = 'direct' | 'register' | 'register_and_settle'
 
@@ -191,6 +202,14 @@ export interface OneClickInput {
   counterpartyAlwaysReview?: boolean
   /** The company's one-click switch (company_settings.direct_booking_enabled); absent, on. */
   directBooking?: DirectBookingSettings
+  /**
+   * The company's booking review rules (accounted#130 step 2) and what they
+   * judge besides the plan's lines: the counterparty of the bank row (else
+   * of the supplier the document names) and the bank row's kronor amount
+   * (null when unknown, which meets any amount criterion). A match opens
+   * the editor.
+   */
+  bookingReview?: { rules: BookingReviewRule[]; counterpartyKey: string; amountSek: number | null }
   /** Where the seller is, as the person answered; read only when the document names no country. */
   sellerRegionAnswer: SellerRegion | null
   /** SEK per unit of the invoice's currency on its date (a register path in a foreign currency). */
@@ -763,7 +782,7 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
     }
   }
   // The company's and the rule's say, last: the editor opens on the whole plan.
-  if (askedForReview({ rule_always_review: input.counterpartyAlwaysReview }, input.directBooking ?? DIRECT_BOOKING_ON)) {
+  if (askedForReview({ rule_always_review: input.counterpartyAlwaysReview, review_blocked: planBlocked(plan.lines, input.bookingReview) }, input.directBooking ?? DIRECT_BOOKING_ON)) {
     return ask('editor', 'review_required')
   }
   return plan

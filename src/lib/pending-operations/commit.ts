@@ -181,6 +181,7 @@ import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/struct
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
+import { bookingReviewLimitCovers, operationBookingReview } from '@/lib/booking-review/operation-gate'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { SIEJobDatabaseError, SIEJobValidationError, submitSIEJob } from '@/lib/import/sie-jobs'
@@ -7424,7 +7425,12 @@ export async function commitPendingOperation(
   // runs without it: the engine's own check (lib/bookkeeping/unattended-ceiling.ts)
   // would refuse inside the claim, where a throw consumes the operation.
   const { unattendedCommitLimit: _priced, ...dispatchActor } = opts.actor
-  return runWithActor(dispatchActor, run)
+  // Only a person's single approval in the app is a review of the booking:
+  // a bulk approval, a key or an agent never stamps one (accounted#130).
+  return runWithActor(
+    opts.commitMethod && opts.commitMethod !== 'user_accept' ? { ...dispatchActor, withoutReview: true } : dispatchActor,
+    run,
+  )
 }
 
 async function commitPendingOperationInner(
@@ -7451,6 +7457,34 @@ async function commitPendingOperationInner(
       http_status: 403,
       code: webOnlyCode,
       operation_status: 'pending',
+    }
+  }
+
+  // ── Hard blocks (accounted#130 step 2): a staged booking a booking review
+  //    rule matches is approved by a person in the app, one at a time, never
+  //    through a key, MCP, a grant or a bulk approval; with booking_review
+  //    limits set, by a person whose limit covers the amount. Refused before
+  //    the claim, so the op stays 'pending' for that person.
+  const bookingReview = await operationBookingReview(supabase, companyId, pendingOp)
+  if (bookingReview) {
+    if (!(opts.commitMethod === 'user_accept' && opts.actor?.type === 'user')) {
+      return {
+        status: 'failed',
+        error: getErrorEntry('BOOKING_REVIEW_WEB_ONLY')?.message_sv ?? 'Det här måste godkännas av en person i Accounted.',
+        http_status: 403,
+        code: 'BOOKING_REVIEW_WEB_ONLY',
+        operation_status: 'pending',
+      }
+    }
+    const limit = await bookingReviewLimitCovers(supabase, companyId, userId, bookingReview.amountSek)
+    if (!limit.covered) {
+      return {
+        status: 'failed',
+        error: getErrorEntry('BOOKING_REVIEW_LIMIT')?.message_sv ?? 'Din attestgräns täcker inte beloppet.',
+        http_status: 403,
+        code: 'BOOKING_REVIEW_LIMIT',
+        operation_status: 'pending',
+      }
     }
   }
 

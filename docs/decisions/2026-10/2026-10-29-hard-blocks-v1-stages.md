@@ -1,0 +1,1 @@
+[2026-10-29] v1 categorize stages a blocked booking and answers 202 instead of refusing it (issue: staged, never direct); a booking named by template id, which a staged categorize_transaction cannot carry, is refused with BOOKING_REVIEW_REQUIRED.

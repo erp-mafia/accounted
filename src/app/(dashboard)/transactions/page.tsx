@@ -2067,6 +2067,8 @@ export default function TransactionsPage() {
     proposalId?: string
     /** false: the row's one click; true: booked from Granska bokföring. Sent as review_shown. */
     reviewShown?: boolean
+    /** Bokför valda: no booking's review seen, so a booking a block matches is refused (in_bulk). */
+    inBulk?: boolean
     /** The server sent a one click to its review (TX_CATEGORIZE_REVIEW_REQUIRED): open it instead of a failure toast. */
     onReviewRequired?: () => void
     inboxItemId?: string
@@ -2096,7 +2098,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2112,6 +2114,7 @@ export default function TransactionsPage() {
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
           ...(proposalId ? { proposal_id: proposalId } : {}),
           ...(reviewShown !== undefined ? { review_shown: reviewShown } : {}),
+          ...(inBulk ? { in_bulk: true } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
@@ -4067,6 +4070,7 @@ export default function TransactionsPage() {
         reverseChargeKind,
         confirmNoMatch: false,
         silent: true,
+        inBulk: true,
       })
       completed++
       setBatchProgress({ done: completed, total: ids.length })
