@@ -63,6 +63,7 @@ import {
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
 import { useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
@@ -662,15 +663,16 @@ export default function JournalEntryList({
       // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
-        // A missing-underlag-filtered total of 0 says nothing about whether
-        // the ledger has entries, so that mode never short-circuits the probe.
-        const unscopedQuery =
-          !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search && !showMissingOnly
+        // The all-years probe runs only when its answer can change what
+        // renders (lib/bookkeeping/ledger-probe.ts, crm#1390).
+        const probePlan = planLedgerProbe({ periodId, search, seriesFilter, dateFrom, dateTo, showMissingOnly })
         await Promise.all([
           fetchDraftCount(),
-          unscopedQuery
+          probePlan === 'from_total'
             ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
-            : fetchLedgerHasAnyEntry(isCurrent),
+            : probePlan === 'probe'
+              ? fetchLedgerHasAnyEntry(isCurrent)
+              : Promise.resolve(),
         ])
       } else {
         if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)

@@ -3,6 +3,7 @@ import { nextStepKind, type NextStepKind } from '@/lib/receipt-hunt/agent-workli
 import type { CompanyPortal } from '@/lib/receipt-hunt/company-portals'
 import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import { createLogger } from '@/lib/logger'
+import { toError } from '@/lib/errors/to-error'
 
 const log = createLogger('worklist/missing-underlag')
 
@@ -76,7 +77,7 @@ export async function listMissingUnderlagSample(
   } catch (err) {
     log.error('missing underlag sample failed', {
       companyId,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: toError(err).message,
     })
     return EMPTY
   }

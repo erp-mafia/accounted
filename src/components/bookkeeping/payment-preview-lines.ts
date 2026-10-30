@@ -126,3 +126,34 @@ export function toLinePayload(lines: readonly EditablePaymentLine[]): PaymentLin
     }
   })
 }
+
+/**
+ * The Bokföring card's edit state. `rows` null: nothing edited, the route
+ * books its own default. `rows` set: the user's rows, which book. `open`:
+ * the edit grid is showing (Redigera) or not (Klart).
+ */
+export interface PaymentEditorState {
+  rows: EditablePaymentLine[] | null
+  open: boolean
+}
+
+export const UNEDITED_EDITOR_STATE: PaymentEditorState = { rows: null, open: false }
+
+/**
+ * Redigera / Klart. Opening resumes the user's rows, or starts from the
+ * preview's. Closing keeps the rows: they are what the user chose to book
+ * (crm#1550: Klart used to drop them and book the preview instead). Rows
+ * still equal to the preview's are dropped, so a preview that refetches
+ * later keeps following the dialog's inputs.
+ */
+export function toggleEditorState(
+  state: PaymentEditorState,
+  previewLines: readonly PaymentPreviewLine[],
+): PaymentEditorState {
+  const fromPreview = previewLines.map(previewToEditable)
+  if (!state.open) return { rows: state.rows ?? fromPreview, open: true }
+  const unchanged =
+    state.rows !== null &&
+    JSON.stringify(toLinePayload(state.rows)) === JSON.stringify(toLinePayload(fromPreview))
+  return { rows: unchanged ? null : state.rows, open: false }
+}

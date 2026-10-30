@@ -1260,6 +1260,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       <SalaryBankPaymentDialog
         salaryRunId={id}
+        fileAccount={runFileAccount}
         open={payDialogOpen}
         onClose={() => setPayDialogOpen(false)}
         onDone={() => {

@@ -13,23 +13,29 @@ import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { LineDimensions } from './payment-line-dimensions'
 import {
+  UNEDITED_EDITOR_STATE,
   UNEDITED_VALIDATION,
   blankEditableLine,
   previewToEditable,
   toLinePayload,
+  toggleEditorState,
   validateEditableLines,
   type EditablePaymentLine,
+  type PaymentEditorState,
   type PaymentLinePayload,
   type PaymentLinesValidation,
   type PaymentPreviewLine,
 } from './payment-preview-lines'
 
 export interface PaymentPreviewEditor {
+  /** The edit grid is showing. */
   isEditing: boolean
-  /** The working rows while editing; empty otherwise. */
+  /** The user's rows book, in the grid or kept after Klart. */
+  isEdited: boolean
+  /** The user's rows; empty when nothing is edited. */
   lines: EditablePaymentLine[]
   validation: PaymentLinesValidation
-  /** The rows to send: the edited grid while editing and valid, else undefined (the route's default booking). */
+  /** The rows to send: the user's rows when valid, else undefined (the route's default booking). */
   payload: PaymentLinePayload[] | undefined
   toggleEditing: () => void
   stopEditing: () => void
@@ -42,17 +48,18 @@ export interface PaymentPreviewEditor {
 /**
  * The edit state behind PaymentPreviewLinesCard. Read-only by default: the
  * rows shown are the preview's, and what books is the route's own default.
- * "Redigera" copies the preview into a working grid; from then on the grid
- * is what books, as long as it balances. "Klart" leaves edit mode and goes
- * back to the preview's rows. A preview that refetches while the user edits
- * does not overwrite the grid.
+ * "Redigera" copies the preview into a working grid; from then on the user's
+ * rows are what books, as long as they balance. "Klart" closes the grid and
+ * shows the user's rows read-only; they still book (toggleEditorState).
+ * "Återställ" puts the preview's rows back in the grid. A preview that
+ * refetches does not overwrite the user's rows; stopEditing drops them.
  */
 export function usePaymentPreviewEditor(
   previewLines: readonly PaymentPreviewLine[] | null | undefined,
   documentDimensions?: LineDimensions | null,
 ): PaymentPreviewEditor {
-  const [edited, setEdited] = useState<EditablePaymentLine[] | null>(null)
-  const isEditing = edited !== null
+  const [state, setState] = useState<PaymentEditorState>(UNEDITED_EDITOR_STATE)
+  const edited = state.rows
 
   const fromPreview = useCallback(
     () => (previewLines ?? []).map(previewToEditable),
@@ -67,26 +74,37 @@ export function usePaymentPreviewEditor(
     [edited, validation.isValid],
   )
 
-  // Stable identities: hosts call stopEditing from their own effects.
-  const toggleEditing = useCallback(() => setEdited((prev) => (prev ? null : fromPreview())), [fromPreview])
-  const stopEditing = useCallback(() => setEdited(null), [])
-  const reset = useCallback(() => setEdited((prev) => (prev ? fromPreview() : prev)), [fromPreview])
-  const addLine = useCallback(
-    () => setEdited((prev) => (prev ? [...prev, blankEditableLine(documentDimensions)] : prev)),
-    [documentDimensions],
-  )
-  const removeLine = useCallback(
-    (index: number) => setEdited((prev) => (prev ? prev.filter((_, i) => i !== index) : prev)),
-    [],
-  )
-  const updateLine = useCallback(
-    (index: number, patch: Partial<EditablePaymentLine>) =>
-      setEdited((prev) => (prev ? prev.map((l, i) => (i === index ? { ...l, ...patch } : l)) : prev)),
+  // Rows change only while the grid is open.
+  const editRows = useCallback(
+    (change: (rows: EditablePaymentLine[]) => EditablePaymentLine[]) =>
+      setState((s) => (s.open && s.rows ? { ...s, rows: change(s.rows) } : s)),
     [],
   )
 
+  const toggleEditing = useCallback(
+    () => setState((s) => toggleEditorState(s, previewLines ?? [])),
+    [previewLines],
+  )
+  // Stable identity: hosts call stopEditing from their own effects.
+  const stopEditing = useCallback(() => setState(UNEDITED_EDITOR_STATE), [])
+  const reset = useCallback(() => editRows(() => fromPreview()), [editRows, fromPreview])
+  const addLine = useCallback(
+    () => editRows((rows) => [...rows, blankEditableLine(documentDimensions)]),
+    [editRows, documentDimensions],
+  )
+  const removeLine = useCallback(
+    (index: number) => editRows((rows) => rows.filter((_, i) => i !== index)),
+    [editRows],
+  )
+  const updateLine = useCallback(
+    (index: number, patch: Partial<EditablePaymentLine>) =>
+      editRows((rows) => rows.map((l, i) => (i === index ? { ...l, ...patch } : l))),
+    [editRows],
+  )
+
   return {
-    isEditing,
+    isEditing: state.open,
+    isEdited: edited !== null,
     lines: edited ?? [],
     validation,
     payload,
@@ -143,7 +161,14 @@ export function PaymentPreviewLinesCard({
                 {t('booking_reset')}
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={editor.toggleEditing} disabled={disabled}>
+            {/* Klart keeps the rows, so it waits until they book: the grid
+                below says what is wrong. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={editor.toggleEditing}
+              disabled={disabled || (editor.isEditing && !validation.isValid)}
+            >
               {editor.isEditing ? (
                 t('booking_done_editing')
               ) : (
@@ -159,10 +184,11 @@ export function PaymentPreviewLinesCard({
 
       {children}
 
-      {lines && !editor.isEditing && (
+      {/* Read-only: the user's rows once edited (they are what books), else the preview's. */}
+      {!editor.isEditing && (editor.isEdited || lines) && (
         <VoucherLinesTable
           withCurrency
-          lines={voucherLineViews(lines)}
+          lines={voucherLineViews(editor.isEdited ? toLinePayload(editor.lines) : (lines ?? []))}
         />
       )}
 

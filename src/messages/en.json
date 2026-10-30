@@ -18000,6 +18000,7 @@
     "nothing_to_pay": "The correction leaves no difference to pay out compared with the earlier run."
   },
   "salary_bank_payment": {
+    "account_not_booked": "The salary is booked on {account}. Paid from another account, the books will not match the bank.",
     "section_title": "Pay through the bank",
     "section_prompt": "Pay the net salaries straight from the company account: one payment per employee, all signed with one BankID.",
     "section_prompt_again": "The bank did not pay every salary. Pay again to the employees without a payment.",

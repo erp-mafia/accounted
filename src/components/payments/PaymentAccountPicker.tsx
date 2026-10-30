@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { BankMark } from '@/components/banks/BankMark'
+import { pickPaymentAccount } from './payment-account-choice'
 import type { PayableAccount } from './payments-client'
 
 /**
@@ -30,10 +31,14 @@ export function rememberPaymentAccount(id: string) {
   }
 }
 
-/** The account a dialog opens on: the one paid from last time while it can still pay, else the first payable one. */
-export function defaultPaymentAccount(payable: PayableAccount[]): PayableAccount | undefined {
-  const remembered = rememberedPaymentAccount()
-  return payable.find((a) => a.id === remembered) ?? payable[0]
+/**
+ * The account a dialog opens on: the dialog's preferred account while it can
+ * pay (a salary run: the one its verifikat credits), else the one paid from
+ * last time while it can still pay, else the first payable one
+ * (pickPaymentAccount).
+ */
+export function defaultPaymentAccount(payable: PayableAccount[], preferred: string | null = null): PayableAccount | undefined {
+  return pickPaymentAccount(payable, { preferred, remembered: rememberedPaymentAccount() })
 }
 
 export function PaymentAccountPicker({

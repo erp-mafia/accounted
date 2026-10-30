@@ -86,6 +86,53 @@ describe('renderReminderPreview', () => {
     await expect(renderReminderPreview(db({ data: [] }), 'company-1', { now: NOW })).rejects.toBeInstanceOf(NoInvoiceToPreviewError)
   })
 
+  it('never samples a sent credit note or a proforma past its date: the one overdue rule (crm#1435)', async () => {
+    // The invoices table as rows; the resolver applies the chain's filters, so the test reads the predicate, not the call shape.
+    type Row = Record<string, unknown>
+    const table = (rows: Row[]) =>
+      createTableMockSupabase({
+        invoices: (chain) => {
+          let out = rows
+          for (const { method, args } of chain) {
+            const [column, value] = args as [string, unknown]
+            if (method === 'eq' || method === 'is') out = out.filter((r) => r[column] === value)
+            if (method === 'in') out = out.filter((r) => (value as unknown[]).includes(r[column]))
+            if (method === 'gt') out = out.filter((r) => Number(r[column]) > Number(value))
+            if (method === 'lt') out = out.filter((r) => String(r[column]) < String(value))
+            if (method === 'order') {
+              const sign = (args[1] as { ascending?: boolean } | undefined)?.ascending === false ? -1 : 1
+              out = [...out].sort((a, b) => (String(a[column]) < String(b[column]) ? -sign : sign))
+            }
+            if (method === 'limit') out = out.slice(0, Number(args[0]))
+          }
+          return { data: out.map((r) => ({ id: r.id })) }
+        },
+      }).supabase as unknown as SupabaseClient
+    const row = (id: string, overrides: Row = {}): Row => ({
+      id,
+      company_id: 'company-1',
+      status: 'sent',
+      document_type: 'invoice',
+      credited_invoice_id: null,
+      remaining_amount: 1250,
+      invoice_date: '2026-11-02',
+      due_date: '2026-12-02',
+      ...overrides,
+    })
+    // A sent credit note (nothing remaining) and a proforma, both due later than the real overdue invoice.
+    const creditNote = row('kr-7', { credited_invoice_id: 'inv-7', remaining_amount: 0, invoice_date: '2026-11-20', due_date: '2026-12-10' })
+    const proforma = row('pf-1', { document_type: 'proforma', invoice_date: '2026-11-21', due_date: '2026-12-11' })
+
+    await renderReminderPreview(table([creditNote, proforma, row('inv-1')]), 'company-1', { now: NOW })
+    expect(loadReminderContext).toHaveBeenLastCalledWith(expect.anything(), 'company-1', 'inv-1')
+
+    // Nothing overdue: the latest issued real invoice, still never the credit note or the proforma.
+    await renderReminderPreview(table([creditNote, proforma, row('paid-1', { status: 'paid', remaining_amount: 0 })]), 'company-1', { now: NOW })
+    expect(loadReminderContext).toHaveBeenLastCalledWith(expect.anything(), 'company-1', 'paid-1')
+
+    await expect(renderReminderPreview(table([creditNote, proforma]), 'company-1', { now: NOW })).rejects.toBeInstanceOf(NoInvoiceToPreviewError)
+  })
+
   it('refuses an invoice without a customer', async () => {
     vi.mocked(loadReminderContext).mockResolvedValue(context({ customer: null }))
     await expect(renderReminderPreview(db({ data: [] }), 'company-1', { invoiceId: 'inv-1', now: NOW })).rejects.toBeInstanceOf(NoInvoiceToPreviewError)

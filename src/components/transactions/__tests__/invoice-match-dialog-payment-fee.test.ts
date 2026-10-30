@@ -26,7 +26,7 @@ const readMessages = (locale: 'sv' | 'en') =>
 describe('InvoiceMatchDialog: a payment provider fee', () => {
   it('starts with no fee named and forgets it for another transaction or invoice', () => {
     expect(SRC).toContain('const [feeAccount, setFeeAccount] = useState<string | null>(null)')
-    expect(SRC).toMatch(/setOverpaymentAccount\(null\)\n\s+setFeeAccount\(null\)\n\s+\}, \[transactionId, invoiceId\]\)/)
+    expect(SRC).toMatch(/setOverpaymentAccount\(null\)\n\s+setFeeAccount\(null\)\n\s+stopEditing\(\)\n\s+\}, \[transactionId, invoiceId, stopEditing\]\)/)
   })
 
   it('asks the preview for the named fee account', () => {

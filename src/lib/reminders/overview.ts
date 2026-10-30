@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { REMINDERS_SENDING_ENABLED, remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { roundOre } from '@/lib/money'
 import { loadAutomaticReminderState, type AutomaticReminderState } from './automatic'
@@ -22,9 +23,6 @@ import { decideReminder, reminderSchedule, type ReminderSchedule } from './polic
 
 /** Overdue invoices read for the pick list, newest due date first. */
 export const PICKABLE_SCAN_LIMIT = 100
-
-/** The statuses of an issued invoice that may still be owed (policy.ts). */
-const OWED_STATUSES = ['sent', 'overdue', 'partially_paid']
 
 /** Invoices decided at once while building the pick list. */
 const SCAN_CONCURRENCY = 6
@@ -84,17 +82,15 @@ export interface ReminderOverview extends ReminderSummary {
  * send of ours, is not offered its imported backlog.
  */
 async function countOfferableInvoices(db: SupabaseClient, companyId: string, today: string): Promise<number> {
-  const { count, error } = await db
-    .from('invoices')
-    .select('id, customer:customers!inner(email, reminders_excluded), invoice_deliveries!inner(status)', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
+  const { count, error } = await filterOverdueInvoices(
+    db
+      .from('invoices')
+      .select('id, customer:customers!inner(email, reminders_excluded), invoice_deliveries!inner(status)', { count: 'exact', head: true })
+      .eq('company_id', companyId),
+    today,
+  )
     .eq('is_self_billed', false)
     .is('autogiro_payer_number', null)
-    .in('status', OWED_STATUSES)
-    .gt('remaining_amount', 0)
-    .lt('due_date', today)
     .not('customer.email', 'is', null)
     .neq('customer.email', '')
     .eq('customer.reminders_excluded', false)
@@ -159,13 +155,9 @@ export async function loadReminderOverview(
 
   const [{ row, collectionsConnected }, overdue, automatic] = await Promise.all([
     loadSwitches(db, companyId),
-    db
-      .from('invoices')
-      .select('id', { count: 'exact' })
-      .eq('company_id', companyId)
-      .in('status', OWED_STATUSES)
-      .gt('remaining_amount', 0)
-      .lt('due_date', today)
+    // The one overdue rule (lib/invoices/overdue.ts), so a sent credit note
+    // or a proforma is never counted or offered here (crm#1435).
+    filterOverdueInvoices(db.from('invoices').select('id', { count: 'exact' }).eq('company_id', companyId), today)
       .order('due_date', { ascending: false })
       .order('id', { ascending: true })
       .limit(PICKABLE_SCAN_LIMIT),

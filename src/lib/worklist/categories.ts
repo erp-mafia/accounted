@@ -17,6 +17,7 @@ import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-cand
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { toError } from '@/lib/errors/to-error'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
@@ -83,14 +84,34 @@ const INBOX_SCAN_CAP = 1000
  */
 const IN_CLAUSE_CHUNK = 150
 
-function logAndZero(
-  category: string,
-  companyId: string,
-  error: { message?: string } | null,
-): number {
+/**
+ * A count that could not be read answers zero: no count ever errors the page.
+ * `error` is whatever failed, a PostgREST error object as often as an Error:
+ * toError keeps its message and code, where String() of the object logged
+ * "[object Object]" (every attest-due failure on 2026-10-29).
+ *
+ * A column or table the code reads before its migration has run (42703 /
+ * PGRST204, 42P01 / PGRST205) is the minutes between deploy and migrate: it
+ * clears itself, so it is a warning, not an error. Reading
+ * company_attest_policies.two_step_from_sek before 20261030140000 logged one
+ * error per Hem load for 46 minutes.
+ */
+// Missing column (42703 read, PGRST204 write) or table (42P01, PGRST205).
+// Kept local: this module is in the Transaktioner client bundle (through
+// lib/transactions/underlag-status), and the shared helpers live in modules
+// that import node:async_hooks.
+const SCHEMA_GAP_CODES = new Set(['42703', 'PGRST204', '42P01', 'PGRST205'])
+
+function logAndZero(category: string, companyId: string, error: unknown): number {
+  const { message, code } = toError(error)
   // companyId is a structured field so repeated failures can be correlated
   // to a tenant in monitoring.
-  log.error(`worklist count failed: ${category}`, { companyId, reason: error?.message })
+  const fields = { companyId, reason: message, code }
+  if (code && SCHEMA_GAP_CODES.has(code)) {
+    log.warn(`worklist count skipped, schema not migrated yet: ${category}`, fields)
+  } else {
+    log.error(`worklist count failed: ${category}`, fields)
+  }
   return 0
 }
 
@@ -178,7 +199,7 @@ export async function countInboxDocuments(
   } catch (pairingError) {
     log.warn('inbox_document pairing read failed; counting every item', {
       companyId,
-      error: pairingError instanceof Error ? pairingError.message : String(pairingError),
+      error: toError(pairingError).message,
     })
   }
 
@@ -386,7 +407,7 @@ export async function listSupplierInvoiceAttestsDue(
         due_date: c.due_date,
       }))
   } catch (error) {
-    logAndZero('supplier_invoice_attest_due', companyId, { message: error instanceof Error ? error.message : String(error) })
+    logAndZero('supplier_invoice_attest_due', companyId, error)
     return []
   }
 }
@@ -424,11 +445,7 @@ export async function countVerifikatMissingDocument(
     }
     return result.total_count ?? 0
   } catch (err) {
-    return logAndZero(
-      'verifikat_missing_document',
-      companyId,
-      err instanceof Error ? { message: err.message } : null,
-    )
+    return logAndZero('verifikat_missing_document', companyId, err)
   }
 }
 
@@ -1236,7 +1253,7 @@ export async function listInvoiceCombinationSuggestions(
   } catch (err) {
     log.error('worklist listInvoiceCombinationSuggestions failed', {
       companyId,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: toError(err).message,
     })
     return []
   }
