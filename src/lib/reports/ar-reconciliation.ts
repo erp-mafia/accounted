@@ -61,11 +61,12 @@ export async function generateARReconciliation(
 
   // total/paid_amount are stored in invoice currency; account 1510 is in SEK
   // (booked at invoice-date rate), so convert each row before summing.
-  // The open invoices are the live kundreskontra's population (one read,
-  // ar-ledger-invoices.ts) without its 'credited' originals: a partially paid
-  // invoice still carries total - paid_amount on 1510, and a paid one with a
-  // ROT/RUT deduction can still carry Skatteverket's share on 1513. The 1510
-  // balance and the coverage context are read beside it.
+  // The open invoices are the live kundreskontra's whole population (one
+  // read, ar-ledger-invoices.ts): a partially paid invoice still carries
+  // total - paid_amount on 1510, a paid one with a ROT/RUT deduction can
+  // still carry Skatteverket's share on 1513, and a 'credited' original
+  // still carries its debit, which its credit note's own row (Cr 1510)
+  // nets. The 1510 balance and the coverage context are read beside it.
   const [population, account1510Balance, preRegisterArInPeriod] = await Promise.all([
     fetchArLedgerInvoices(supabase, companyId),
     // The booked AR balance: 1510 (Kundfordringar) AND 1513 (Kundfordringar:
@@ -93,9 +94,11 @@ export async function generateARReconciliation(
     hasPreRegisterArInPeriod(supabase, companyId, periodId).catch(() => false),
   ])
   // In id order, the order the sum below has always run in: each step rounds.
-  const invoices = population
-    .filter((inv) => inv.status !== 'credited')
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  // The same rows the kundreskontra sums (generateARLedger). Leaving the
+  // credited originals out while their credit notes stayed in counted each
+  // credit against nothing, and the register fell short of 1510 by exactly
+  // the credited amount (crm#1537).
+  const invoices = [...population].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   // A credit note whose verifikat paid another invoice has used that much of
   // its credit: the kundreskontra's rule (credit-note-settlement.ts).
   const creditUsed = creditNoteCreditUsed(invoices)

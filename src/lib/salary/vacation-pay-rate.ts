@@ -68,6 +68,33 @@ export function vacationPayRateToPercent(rate: number | null | undefined): numbe
 }
 
 /**
+ * Sammalöneregeln semestertillägg (Semesterlagen 16 a §): at least 0,43 % of
+ * the månadslön per paid vacation day; many kollektivavtal set 0,8 %. The
+ * default of employees.semestertillagg_rate.
+ */
+export const STATUTORY_SEMESTERTILLAGG_RATE = 0.0043
+
+/**
+ * Form helpers for "Semestertillägg": the UI shows a percentage ("0,8"), the
+ * row stores a fraction (0.008). Empty input means the statutory 0,43 %; an
+ * unparseable one is undefined (the key is left out of the request). Three
+ * decimals of a percentage are kept (0,605 %). Range checks stay with the API
+ * schema (0..0.05), so an out-of-range entry gets the server's 400.
+ */
+export function semestertillaggRateFromPercentInput(raw: unknown): number | undefined {
+  const text = typeof raw === 'string' ? raw.trim().replace(',', '.') : ''
+  if (text === '') return STATUTORY_SEMESTERTILLAGG_RATE
+  const percent = Number(text)
+  if (!Number.isFinite(percent)) return undefined
+  return Math.round(percent * 1000) / 100000
+}
+
+export function semestertillaggRateToPercent(rate: number | null | undefined): number | '' {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return ''
+  return Math.round(rate * 100000) / 1000
+}
+
+/**
  * Form helper for "Semesterdagar per år": 0 is a real value (vacation_rule
  * none, e.g. a company owner outside semesterlagen), so only an empty or
  * unparseable field reads as null (callers pick their default).

@@ -711,6 +711,105 @@ describe('api-client', () => {
   })
 
   // -------------------------------------------------------------------------
+  // getAllTransactionsWithRaw: 422 WRONG_TRANSACTIONS_PERIOD
+  // -------------------------------------------------------------------------
+  // On 2026-10-28 Nordea answered a normal 7-day window ending on the UTC
+  // date with this 422 for two hours, then served the same windows again. As
+  // a plain Error it parked every connection in 'error', a state the cron
+  // never selects again.
+  describe('getAllTransactionsWithRaw: 422 WRONG_TRANSACTIONS_PERIOD', () => {
+    const WRONG_PERIOD_BODY =
+      '{"code":422,"message":"Wrong transactions period requested","detail":{"message":"Invalid date range requested"},"error":"WRONG_TRANSACTIONS_PERIOD"}'
+    const wrongPeriod = () => Promise.resolve(new Response(WRONG_PERIOD_BODY, { status: 422 }))
+    const ok = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+
+    it('a refused window the account has answered before is the bank being unavailable: one call, warn, no error log', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockImplementation(wrongPeriod)
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      }).catch((e) => e)
+
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure).toMatchObject({ status: 422, reason: 'window-already-accepted', dateFrom: '2026-10-21' })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('treating the bank as unavailable'),
+        expect.objectContaining({ status: 422, dateFrom: '2026-10-21', dateTo: '2026-10-28' })
+      )
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('a refused window wider than the accepted width is narrowed to it', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementationOnce(wrongPeriod).mockImplementationOnce(ok)
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-09-28', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      })
+
+      expect(result).toMatchObject({ requestedDateFrom: '2026-09-28', effectiveDateFrom: '2026-10-21', narrowed: true })
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[1]).toContain('date_from=2026-10-21')
+      expect(urls[1]).toContain('date_to=2026-10-28')
+      warnSpy.mockRestore()
+    })
+
+    it('without an accepted width, a window no ladder rung narrows stops after one call', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementation(wrongPeriod)
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28').catch((e) => e)
+
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure).toMatchObject({ status: 422, reason: 'ladder-exhausted' })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+    })
+
+    it('drops an unsupported strategy before judging the window', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementationOnce(wrongPeriod).mockImplementationOnce(ok)
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', 'longest', {
+        acceptedHistoryDays: 7,
+      })
+
+      expect(result.narrowed).toBe(false)
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('strategy=longest')
+      expect(urls[1]).not.toContain('strategy=')
+      warnSpy.mockRestore()
+    })
+
+    it('any other 422 still fails as before', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(new Response('{"code":422,"error":"SOMETHING_ELSE"}', { status: 422 }))
+      )
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      }).catch((e) => e)
+
+      expect(failure).not.toBeInstanceOf(AspspUnavailableError)
+      expect(failure.message).toContain('Failed to get transactions (422)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      errorSpy.mockRestore()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // getAllTransactionsWithRaw: typed 429 and no mid-pagination rewrite
   // -------------------------------------------------------------------------
   describe('getAllTransactionsWithRaw fallbacks', () => {

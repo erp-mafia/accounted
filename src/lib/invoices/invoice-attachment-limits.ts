@@ -29,6 +29,23 @@ export const MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024
 export const MAX_INVOICE_ATTACHMENT_FILE_BYTES = 10 * 1024 * 1024
 
 /**
+ * Peppol carries the files inside the e-faktura itself, each base64-encoded
+ * in a cac:AdditionalDocumentReference (BIS Billing 3.0). PDF only: the
+ * format every receiving system can show, the one consultants attach (a
+ * tidrapport, a dagbok), and inside the BIS mimeCode list.
+ */
+export const PEPPOL_ATTACHMENT_MIME_TYPE = 'application/pdf'
+
+/**
+ * At most this much file data inside one e-faktura. Inline attachments should
+ * stay under 10 MB even though AS4 allows 100 MB: many access points refuse
+ * larger messages (swedish-e-invoicing skill, peppol-bis-billing.md). Base64
+ * turns 5 MB into 6.7 MB, which leaves room under 10 MB for the invoice XML
+ * and the staged delivery row that stores the whole message.
+ */
+export const MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES = 5 * 1024 * 1024
+
+/**
  * What happens to a picked file before it is uploaded:
  *  - 'ok':        it fits as it is.
  *  - 'shrink':    a photo over the limit; the browser re-encodes it
@@ -47,12 +64,13 @@ export function invoiceAttachmentSizeVerdict(
 
 /**
  * Whether a send step offers Bilagor (#79). One rule for every send step, the
- * invoice page's send dialog and the editor's confirm alike, so one step
- * cannot offer the files while another hides them. Only an email carries
- * them (Peppol, mark-sent, a Kivra or Billo mailbox and the PDF download do
- * not), and only while the set can still change: a draft, or a document the
- * editor has not saved yet (`status` null). The sandbox sends no email, and a
- * plan without email cannot send one.
+ * invoice page's send dialogs and the editor's confirm alike, so one step
+ * cannot offer the files while another hides them. An email carries them
+ * after the PDF, and an e-faktura over Peppol inside the message (PDF only,
+ * crm#1545); mark-sent, a Kivra or Billo mailbox and the PDF download do not.
+ * Only while the set can still change: a draft, or a document the editor has
+ * not saved yet (`status` null). The sandbox sends neither, and a plan
+ * without email cannot email.
  */
 export function offersInvoiceAttachments(input: {
   channel: EditorChannel | null
@@ -60,10 +78,11 @@ export function offersInvoiceAttachments(input: {
   isSandbox: boolean
   canEmail: boolean
 }): boolean {
-  return (
-    input.channel === 'email' &&
-    (input.status === null || input.status === 'draft') &&
-    !input.isSandbox &&
-    input.canEmail
-  )
+  const carries = input.channel === 'peppol' || (input.channel === 'email' && input.canEmail)
+  return carries && (input.status === null || input.status === 'draft') && !input.isSandbox
+}
+
+/** A file an e-faktura can carry: a PDF, by its stored or picked type or its name. */
+export function isPeppolAttachmentFile(file: { type: string | null; name: string }): boolean {
+  return file.type === PEPPOL_ATTACHMENT_MIME_TYPE || (!file.type && /\.pdf$/i.test(file.name))
 }

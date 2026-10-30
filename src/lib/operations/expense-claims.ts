@@ -156,6 +156,7 @@ export const expenseClaimsCreate = defineOperation({
       'employee_id wins over claimant_name: the employee\'s own name is stored.',
       'A date in a locked period or behind the company lock date returns 400 PERIOD_LOCKED; no open fiscal year returns EXPENSE_CLAIM_NO_FISCAL_PERIOD.',
       'expense_account is a STRING in class 4-8 ("5410"), never a number.',
+      'A dry run answers the would-be verifikat in preview.verifikat.lines (account_number, debit_amount, credit_amount) and refuses what the commit refuses: a line account that is deactivated or not in BAS 2026 returns 400 ACCOUNTS_NOT_IN_CHART. A BAS account merely missing from the chart passes; the commit adds it.',
     ],
     example: {
       request: {
@@ -182,6 +183,7 @@ export const expenseClaimsCreate = defineOperation({
     'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND',
     'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
     'INBOX_ITEM_ALREADY_BOOKED',
+    'ACCOUNTS_NOT_IN_CHART',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/expense-claims' },
   mcp: {

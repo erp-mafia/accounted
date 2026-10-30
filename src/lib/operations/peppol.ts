@@ -226,6 +226,7 @@ export const invoicesSendPeppol = defineOperation({
       '409 PEPPOL_DUPLICATE_INVOICE_NUMBER: the access point already holds an invoice with this number for this recipient (ends the delivery). 409 PEPPOL_BUSINESS_REJECTED: the buyer refused the invoice via Peppol; it is not sent again, credit it and create a new invoice. 409 CONNECTOR_PEPPOL_RESEND_NOT_FAILED: a resend was refused because the access point has not reported the earlier delivery as failed (nothing is sent).',
       'A draft whose verifikat the engine refuses (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) is not transmitted: the engine\'s error comes back and the invoice stays in draft. If the network then fails to take a draft that was booked on issue, the invoice stays issued (details.invoice_status sent) and can be resent.',
       'An invoice date outside every fiscal year answers 422 PEPPOL_FISCAL_PERIOD_MISSING (the delivery needs its retention basis).',
+      'Files attached to the invoice in Accounted travel inside the e-faktura as embedded PDFs (AdditionalDocumentReference; the dry run lists them under preview.attachments). A file that is not a PDF, or more than 5 MB together, answers 400 VALIDATION_ERROR naming it (details.issues: PEPPOL_ATTACHMENT_NOT_PDF, PEPPOL_ATTACHMENTS_TOO_LARGE) before anything is issued or sent.',
       SCOPE_PITFALL,
     ],
     example: {

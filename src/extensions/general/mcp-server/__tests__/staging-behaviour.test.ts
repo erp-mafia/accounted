@@ -1305,7 +1305,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Peppol (wave 4): the previews validate with reads and never reach the
   // (throwing) transport registered at the top. No registration yet, so
   // registering is new.
-  gnubok_send_invoice_peppol: { rows: PEPPOL_ROWS },
+  // No files on the invoice: the send reads invoice_attachments before it stages.
+  gnubok_send_invoice_peppol: { rows: PEPPOL_ROWS, empty: ['invoice_attachments'] },
   gnubok_register_peppol_participant: { rows: PEPPOL_ROWS, empty: ['peppol_registrations'] },
   gnubok_request_peppol_access: { rows: { ...PEPPOL_ROWS, peppol_access: { status: 'none' } } },
   // Payroll over MCP, run structure: a draft run the employee is not yet on,

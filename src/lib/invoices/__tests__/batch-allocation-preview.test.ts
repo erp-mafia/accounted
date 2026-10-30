@@ -298,3 +298,42 @@ describe('buildBatchAllocationPreview', () => {
     })
   })
 })
+
+describe('buildBatchAllocationPreview: kontantmetoden cash lines (crm#1539, migration 20261031100700)', () => {
+  it('books each unbooked invoice\'s revenue, moms and öresavrundning in place of 1510, and the one bank leg', () => {
+    const preview = buildBatchAllocationPreview({
+      transaction: { amount: 1063, currency: 'SEK', date: '2026-10-28' },
+      bankAccount: '1930',
+      allocations: [
+        { kind: 'customer_invoice', invoice_id: INV_B, amount: 563 },
+        { kind: 'customer_invoice', invoice_id: INV_A, amount: 500 },
+      ],
+      invoices: {
+        [INV_A]: { currency: 'SEK', remaining_amount: 500, total: 1000 },
+        [INV_B]: { currency: 'SEK', remaining_amount: 562.5, total: 1125 },
+      },
+      cashLines: {
+        [INV_A]: [
+          { account_number: '3001', debit_amount: 0, credit_amount: 400 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 100 },
+        ],
+        [INV_B]: [
+          { account_number: '3001', debit_amount: 0, credit_amount: 450 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 112.5 },
+          { account_number: '3740', debit_amount: 0, credit_amount: 0.5 },
+        ],
+      },
+    })
+    // Sorted by invoice id as the RPC sorts; no 1510 line at all.
+    expect(preview.lines).toEqual([
+      { account_number: '3001', description: 'Kundfaktura 1 av 2', debit: 0, credit: 400 },
+      { account_number: '2611', description: 'Kundfaktura 1 av 2', debit: 0, credit: 100 },
+      { account_number: '3001', description: 'Kundfaktura 2 av 2', debit: 0, credit: 450 },
+      { account_number: '2611', description: 'Kundfaktura 2 av 2', debit: 0, credit: 112.5 },
+      { account_number: '3740', description: 'Kundfaktura 2 av 2', debit: 0, credit: 0.5 },
+      { account_number: '1930', description: 'Inbetalning 2026-10-28', debit: 1063, credit: 0 },
+    ])
+    expect(preview.balanced).toBe(true)
+    expect(preview.description).toBe('Samlingsinbetalning 2026-10-28')
+  })
+})

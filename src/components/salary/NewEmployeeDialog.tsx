@@ -15,7 +15,13 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ArrowDownOnSquareIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
-import { vacationDaysFromInput, vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
+import {
+  semestertillaggRateFromPercentInput,
+  semestertillaggRateToPercent,
+  STATUTORY_SEMESTERTILLAGG_RATE,
+  vacationDaysFromInput,
+  vacationPayRateFromPercentInput,
+} from '@/lib/salary/vacation-pay-rate'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -272,6 +278,11 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       vacation_days_per_year: vacationDaysFromInput(form.get('vacation_days_per_year')) ?? 25,
       // Empty (or hidden under sammalöneregeln/none) = statutory rate.
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
+      // Sammalöneregeln only (the one rule that reads it); otherwise left out
+      // and the API default (0,43 %) applies. crm#1529
+      semestertillagg_rate: vacationRule === 'sammaloneregeln'
+        ? semestertillaggRateFromPercentInput(form.get('semestertillagg_rate'))
+        : undefined,
       // Always sent: {} means no default dimensions.
       default_dimensions: dimensions,
     }
@@ -488,6 +499,21 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
                 <p className="text-xs text-muted-foreground">
                   Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.
                 </p>
+              </Field>
+            )}
+            {vacationRule === 'sammaloneregeln' && (
+              <Field label={tEmployee('form_semestertillagg_rate')} htmlFor="semestertillagg_rate">
+                <Input
+                  id="semestertillagg_rate"
+                  name="semestertillagg_rate"
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="5"
+                  placeholder="0.43"
+                  defaultValue={semestertillaggRateToPercent(STATUTORY_SEMESTERTILLAGG_RATE)}
+                />
+                <p className="text-xs text-muted-foreground">{tEmployee('form_semestertillagg_rate_hint')}</p>
               </Field>
             )}
           </div>

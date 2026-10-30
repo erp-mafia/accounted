@@ -748,6 +748,31 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol', () => {
     }
   })
 
+  it('names an attachment the e-faktura cannot carry: not a PDF, too large together (crm#1545)', async () => {
+    const attachment = (file_name: string, mime_type: string, file_size_bytes: number) => ({
+      document_id: file_name,
+      created_at: '2026-08-20T10:00:00.000Z',
+      document: { file_name, mime_type, file_size_bytes, storage_path: `c/${file_name}` },
+    })
+    mockServiceClient.mockReturnValue(makeClient({
+      company_members: MEMBER,
+      company_settings: COMPANY_SETTINGS,
+      peppol_access: ACCESS,
+      peppol_deliveries: SENT_COUNTS,
+      invoices: { data: invoiceRow(), error: null },
+      invoice_attachments: {
+        data: [attachment('tidrapport.pdf', 'application/pdf', 4 * 1024 * 1024), attachment('bild.png', 'image/png', 2 * 1024 * 1024)],
+        error: null,
+      },
+    }))
+    const body = await (await readiness()).json()
+    expect(body.data.ready).toBe(false)
+    expect(body.data.blockers).toEqual([
+      expect.objectContaining({ code: 'PEPPOL_ATTACHMENT_NOT_PDF', field: 'attachments[1]', message_sv: expect.stringContaining('bild.png är ingen PDF') }),
+      expect.objectContaining({ code: 'PEPPOL_ATTACHMENTS_TOO_LARGE', field: 'attachments' }),
+    ])
+  })
+
   it('flags a credit note as not sendable', async () => {
     mockServiceClient.mockReturnValue(makeClient({
       company_members: MEMBER,

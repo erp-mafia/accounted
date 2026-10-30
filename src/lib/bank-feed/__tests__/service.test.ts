@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   door: vi.fn(),
@@ -46,6 +46,8 @@ vi.mock('@/lib/auth/resource-psu', () => ({
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { BankFeedRefusedError, ConsentOverError, ProviderUnavailableError, type BankFeedConnect } from '../connect'
 import {
+  INITIAL_SYNC_ANSWER_MS,
+  INITIAL_SYNC_WAIT_MS,
   consentStep,
   disconnectBankFeedConnection,
   getBankFeedBankDetails,
@@ -892,6 +894,80 @@ describe('selectBankFeedAccounts', () => {
     expect(rpc).toHaveBeenCalledWith('supersede_enable_banking_connection', { p_company_id: 'co-1', p_user_id: 'user-1', p_new: CONNECTION, p_old: EB_ROW })
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.superseded', payload: expect.objectContaining({ connectionId: EB_ROW }) }))
     expect(mocks.runSync).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: CONNECTION, trigger: 'initial', signer }))
+  })
+
+  // 2026-10-27: a two-year first import (3 447 rows, matching passes, the
+  // SIE-overlap sweep) held the account picker's spinner for 243 s and the
+  // platform cut the function at 300 s.
+  describe('the first import that outlasts the wait', () => {
+    function pendingSelection() {
+      mocks.connect.mockReturnValue(fakeConnect())
+      mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, status: 'pending_selection', session_id: 'consent-1', bank_name: 'Swedbank', accounts_data: stored, aggregator: 'open_payments' } })
+      mocks.saveSelection.mockResolvedValue({ status: 'active', accounts: stored })
+      const pending = row({ status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { extended_history_days: 760, listing_only: false } } })
+      return stub({
+        bank_connections: [
+          { data: pending, error: null },
+          { data: [], error: null },
+          { data: { ...pending, status: 'active' }, error: null },
+          { data: { ...pending, status: 'active' }, error: null },
+        ],
+        cash_accounts: [{ data: [], error: null }],
+      }).supabase
+    }
+    const accounts = [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }, { uid: 'ACC001', enabled: false, ledgerAccount: null }]
+    let finishImport: (value: unknown) => void = () => {}
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mocks.runSync.mockReturnValue(new Promise((resolve) => { finishImport = resolve }))
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('a door that keeps the work alive answers after the short wait and hands it the running import', async () => {
+      const supabase = pendingSelection()
+      const keepAlive = vi.fn()
+      let settled = false
+      const answer = selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts, signer, now: NOW, keepAlive })
+        .finally(() => { settled = true })
+
+      await vi.advanceTimersByTimeAsync(INITIAL_SYNC_ANSWER_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(await answer).toMatchObject({ ok: true, data: { sync: null, sync_pending: true, connection: { status: 'active' } } })
+      expect(keepAlive).toHaveBeenCalledTimes(1)
+      expect(keepAlive.mock.calls[0][0]).toBe(mocks.runSync.mock.results[0].value)
+      // The import still runs as the person: the extended window needs them present.
+      expect(mocks.runSync).toHaveBeenCalledWith(supabase, expect.objectContaining({ trigger: 'initial', signer }))
+      expect(INITIAL_SYNC_ANSWER_MS).toBeLessThanOrEqual(30_000)
+    })
+
+    it('an import inside the short wait still answers with its count', async () => {
+      const supabase = pendingSelection()
+      const keepAlive = vi.fn()
+      const answer = selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts, signer, now: NOW, keepAlive })
+      await vi.advanceTimersByTimeAsync(1_000)
+      finishImport({ ok: true, connection_id: CONNECTION, bank: 'Swedbank', imported: 42, duplicates: 0, from_date: '2024-09-12', to_date: '2026-10-12', last_synced_at: 'x' })
+
+      expect(await answer).toMatchObject({ ok: true, data: { sync: { imported: 42 }, sync_pending: false } })
+      expect(keepAlive).not.toHaveBeenCalled()
+    })
+
+    it('a door without keepAlive is the only thing running the import, so it waits the long way', async () => {
+      const supabase = pendingSelection()
+      let settled = false
+      const answer = selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts, signer, now: NOW })
+        .finally(() => { settled = true })
+
+      await vi.advanceTimersByTimeAsync(INITIAL_SYNC_ANSWER_MS)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(INITIAL_SYNC_WAIT_MS - INITIAL_SYNC_ANSWER_MS)
+
+      expect(await answer).toMatchObject({ ok: true, data: { sync: null, sync_pending: true } })
+    })
   })
 
   it('takes over the Enable Banking row reading the same account when the connection came through a door that named no switch, and keeps one still reading another account', async () => {

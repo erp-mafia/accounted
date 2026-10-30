@@ -54,7 +54,7 @@ For the cross-company view (unbooked items, inbox, next deadline and last booked
 
 These four invariants hold across the entire surface: once you've internalised them you can predict the shape of any endpoint without reading the reference.
 
-**Dry-run on every write.** Append \`?dry_run=true\` (or send \`X-Dry-Run: true\`) to any POST/PATCH/DELETE to preview the effect: the response shows the journal lines, voucher number, account deltas, and any validation errors that would surface, but commits nothing. Use this in agent test-loops to validate inputs before paying the side-effect cost.
+**Dry-run on every write.** Append \`?dry_run=true\` (or send \`X-Dry-Run: true\`) to any POST/PATCH/DELETE to preview the effect: the response shows the would-be record, the verifikat lines it would post, and any validation errors that would surface, but commits nothing. Use this in agent test-loops to validate inputs before paying the side-effect cost.
 
 **Idempotency-Key on every write.** Pass a UUID in the \`Idempotency-Key\` header. Replays of the same key+body return the original response with \`Idempotent-Replayed: true\` (24h cache). Replays with a different body return \`409 IDEMPOTENCY_KEY_REUSE\`.
 

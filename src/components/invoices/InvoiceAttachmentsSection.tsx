@@ -15,7 +15,9 @@ import {
   MAX_INVOICE_ATTACHMENTS,
   MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES,
   MAX_INVOICE_ATTACHMENT_FILE_BYTES,
+  MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES,
   invoiceAttachmentSizeVerdict,
+  isPeppolAttachmentFile,
 } from '@/lib/invoices/invoice-attachment-limits'
 
 export interface InvoiceAttachmentFile {
@@ -66,17 +68,21 @@ let pendingCounter = 0
  * invoice's own and survives closing the dialog; before the document exists
  * the caller holds the list (see InvoiceAttachmentsTarget). Removing a file
  * before the send takes it off the invoice; the upload stays in the archive.
- * After the send the attachments are fixed.
+ * After the send the attachments are fixed. On a Peppol send (crm#1545) the
+ * files go inside the e-faktura: PDF only, within the Peppol size ceiling.
  */
 export function InvoiceAttachmentsSection({
   target,
   disabled = false,
   onBusyChange,
+  channel = 'email',
 }: {
   target: InvoiceAttachmentsTarget
   disabled?: boolean
   /** True while a file is uploading or being removed: the send waits for it. */
   onBusyChange?: (busy: boolean) => void
+  /** The send that carries the files: an email, or an e-faktura over Peppol. */
+  channel?: 'email' | 'peppol'
 }) {
   const t = useTranslations('invoice_attachments')
   const locale = useLocale() as 'sv' | 'en'
@@ -126,6 +132,8 @@ export function InvoiceAttachmentsSection({
   // the photo shrink depends on the deployment.
   const hosted = isHostedDeployment()
   const fileLimitBytes = MAX_INVOICE_ATTACHMENT_FILE_BYTES
+  const peppol = channel === 'peppol'
+  const totalLimitBytes = peppol ? MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES : MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES
   const tooLarge = useCallback(
     (file: File) =>
       t('file_too_large', {
@@ -189,6 +197,10 @@ export function InvoiceAttachmentsSection({
           setError(t('unsupported_type', { name: file.name }))
           continue
         }
+        if (peppol && !isPeppolAttachmentFile(file)) {
+          setError(t('peppol_pdf_only', { name: file.name }))
+          continue
+        }
         const verdict = invoiceAttachmentSizeVerdict(file, hosted)
         if (verdict === 'too_large') {
           setError(tooLarge(file))
@@ -200,8 +212,8 @@ export function InvoiceAttachmentsSection({
         }
         // A photo that is shrunk first uploads at most the per-file limit.
         const uploadBytes = verdict === 'shrink' ? Math.min(file.size, fileLimitBytes) : file.size
-        if (bytes + uploadBytes > MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES) {
-          setError(t('total_too_large'))
+        if (bytes + uploadBytes > totalLimitBytes) {
+          setError(peppol ? t('peppol_total_too_large', { size: formatSize(totalLimitBytes, locale) }) : t('total_too_large'))
           continue
         }
         count += 1
@@ -228,7 +240,7 @@ export function InvoiceAttachmentsSection({
         }
       }
     },
-    [attached.length, fileLimitBytes, hosted, pending, t, tooLarge, uploadAndAttach, usedBytes],
+    [attached.length, fileLimitBytes, hosted, locale, peppol, pending, t, tooLarge, totalLimitBytes, uploadAndAttach, usedBytes],
   )
 
   const remove = useCallback(
@@ -263,11 +275,13 @@ export function InvoiceAttachmentsSection({
           <p className="text-sm font-medium">{t('title')}</p>
           <HelpPopover>
             <p>
-              {t('help_what', {
-                count: MAX_INVOICE_ATTACHMENTS,
-                fileLimit: formatSize(fileLimitBytes, locale),
-                size: formatSize(MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES, locale),
-              })}
+              {peppol
+                ? t('help_what_peppol', { count: MAX_INVOICE_ATTACHMENTS, size: formatSize(totalLimitBytes, locale) })
+                : t('help_what', {
+                    count: MAX_INVOICE_ATTACHMENTS,
+                    fileLimit: formatSize(fileLimitBytes, locale),
+                    size: formatSize(totalLimitBytes, locale),
+                  })}
             </p>
             <p className="mt-2">{t('help_retention')}</p>
           </HelpPopover>
@@ -286,7 +300,7 @@ export function InvoiceAttachmentsSection({
           ref={inputRef}
           type="file"
           multiple
-          accept={DOCUMENT_UPLOAD_ACCEPT}
+          accept={peppol ? 'application/pdf,.pdf' : DOCUMENT_UPLOAD_ACCEPT}
           className="hidden"
           onChange={(event) => {
             const files = Array.from(event.target.files ?? [])
@@ -295,6 +309,12 @@ export function InvoiceAttachmentsSection({
           }}
         />
       </div>
+
+      {peppol && (
+        <p className="text-xs text-muted-foreground">
+          {t('peppol_hint', { size: formatSize(totalLimitBytes, locale) })}
+        </p>
+      )}
 
       {loading ? (
         <Skeleton className="h-4 w-1/2" />

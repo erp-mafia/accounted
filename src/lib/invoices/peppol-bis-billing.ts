@@ -14,6 +14,10 @@ import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { isPeppolInvoiceLine } from '@/lib/invoices/peppol-lines'
 import { toSingleLine } from '@/lib/utils'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
+import {
+  MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES,
+  PEPPOL_ATTACHMENT_MIME_TYPE,
+} from '@/lib/invoices/invoice-attachment-limits'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 export const PEPPOL_BIS_BILLING_CUSTOMIZATION_ID =
@@ -54,11 +58,20 @@ export interface PeppolValidationIssue {
   messageEn: string
 }
 
+/** A file the e-faktura carries (crm#1545): the invoice's attachments as read from the archive. */
+export interface PeppolAttachmentFile {
+  filename: string
+  contentType: string
+  content: Buffer
+}
+
 export interface PeppolInvoiceInput {
   invoice: Invoice
   customer: Customer
   items: InvoiceItem[]
   company: CompanySettings
+  /** Embedded as cac:AdditionalDocumentReference (BG-24), in this order. */
+  attachments?: PeppolAttachmentFile[]
 }
 
 export type PeppolInvoiceResult =
@@ -253,6 +266,40 @@ function prepareParty(
     email: source.email?.trim() || null,
     phone: source.phone?.trim() || null,
   }
+}
+
+function formatMegabytes(bytes: number): string {
+  return String(Math.round((bytes / (1024 * 1024)) * 10) / 10)
+}
+
+/**
+ * What an e-faktura cannot carry: a file that is not a PDF, or more file data
+ * than MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES. Sizes are the bytes actually read.
+ * Exported so the send can refuse before an invoice number is taken.
+ */
+export function peppolAttachmentIssues(
+  attachments: ReadonlyArray<{ filename: string; contentType: string | null; sizeBytes: number }>,
+): PeppolValidationIssue[] {
+  const issues: PeppolValidationIssue[] = []
+  attachments.forEach((file, index) => {
+    if (file.contentType !== PEPPOL_ATTACHMENT_MIME_TYPE) {
+      issues.push(validationIssue(
+        'PEPPOL_ATTACHMENT_NOT_PDF', `attachments[${index}]`,
+        `Via Peppol kan bara PDF-filer bifogas, och ${file.filename} är ingen PDF. Ta bort bilagan eller skicka fakturan med e-post.`,
+        `Only PDF files can be attached over Peppol, and ${file.filename} is not a PDF. Remove the attachment or send the invoice by email.`,
+      ))
+    }
+  })
+  const total = attachments.reduce((sum, file) => sum + file.sizeBytes, 0)
+  if (total > MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES) {
+    const limit = formatMegabytes(MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES)
+    issues.push(validationIssue(
+      'PEPPOL_ATTACHMENTS_TOO_LARGE', 'attachments',
+      `Bilagorna är ${formatMegabytes(total)} MB och får vara högst ${limit} MB tillsammans via Peppol. Ta bort en bilaga, komprimera PDF:en eller skicka fakturan med e-post.`,
+      `The attachments are ${formatMegabytes(total)} MB and may total at most ${limit} MB over Peppol. Remove an attachment, compress the PDF or send the invoice by email.`,
+    ))
+  }
+  return issues
 }
 
 function prepareInvoice(input: PeppolInvoiceInput):
@@ -532,6 +579,12 @@ function prepareInvoice(input: PeppolInvoiceInput):
     ))
   }
 
+  issues.push(...peppolAttachmentIssues((input.attachments ?? []).map((file) => ({
+    filename: file.filename,
+    contentType: file.contentType,
+    sizeBytes: file.content.byteLength,
+  }))))
+
   if (issues.length > 0 || !supplier || !buyer || !payment) return { prepared: null, issues }
   // BT-112 from the amounts the XML actually prints (BR-CO-15), BT-114 as the
   // öresavrundning delta plus the per-line/per-category VAT delta, BT-115 as
@@ -633,6 +686,23 @@ function sellersItemIdentification(company: CompanySettings, item: InvoiceItem):
   ]
 }
 
+/**
+ * One cac:AdditionalDocumentReference per file (BG-24): BT-122 the file name,
+ * BT-125 the content base64-embedded with its mimeCode and filename. No
+ * DocumentTypeCode: in BIS Billing 3 that code marks an invoiced object
+ * (BT-18), not an attachment.
+ */
+function renderAttachments(attachments: PeppolAttachmentFile[]): string[] {
+  return attachments.flatMap((file) => [
+    '  <cac:AdditionalDocumentReference>',
+    `    <cbc:ID>${escapeXml(toSingleLine(file.filename))}</cbc:ID>`,
+    '    <cac:Attachment>',
+    `      <cbc:EmbeddedDocumentBinaryObject mimeCode="${escapeXml(file.contentType)}" filename="${escapeXml(toSingleLine(file.filename))}">${file.content.toString('base64')}</cbc:EmbeddedDocumentBinaryObject>`,
+    '    </cac:Attachment>',
+    '  </cac:AdditionalDocumentReference>',
+  ])
+}
+
 function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice): string {
   const { invoice, company } = input
   const taxTotal = roundMoney(prepared.taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0))
@@ -714,6 +784,9 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
           '  </cac:OrderReference>',
         ]
       : []),
+    // BG-24 supporting documents: after the order reference and before the
+    // seller, the UBL 2.1 Invoice element order.
+    ...renderAttachments(input.attachments ?? []),
     renderParty('AccountingSupplierParty', prepared.supplier, company.f_skatt),
     renderParty('AccountingCustomerParty', prepared.buyer, false),
     invoice.delivery_date

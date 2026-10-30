@@ -18,7 +18,10 @@ import {
  * to delete their documents (migration 20261016224500), because what the
  * customer received with the invoice is räkenskapsinformation (BFL 7 kap).
  *
- * Peppol and the PDF download are unchanged: only the email carries them.
+ * An e-faktura over Peppol carries them too, embedded in the message (PDF
+ * only, within MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES; crm#1545, see
+ * lib/invoices/peppol-send-service.ts). A Kivra or Billo mailbox and the PDF
+ * download do not.
  */
 
 export { MAX_INVOICE_ATTACHMENTS, MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES }
@@ -265,7 +268,8 @@ export async function unlinkInvoiceAttachment(
 }
 
 /**
- * The invoice's attachments as email attachments, read from the archive.
+ * The invoice's attachments as files, read from the archive (the email's
+ * attachments, the e-faktura's embedded documents).
  * Called by every send path BEFORE the invoice number is allocated and the
  * invoice issued, so a missing or oversized file stops the send while nothing
  * irreversible has happened. The sizes are checked on the bytes actually

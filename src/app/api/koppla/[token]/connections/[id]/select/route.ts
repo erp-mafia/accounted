@@ -11,8 +11,9 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isUuid } from '@/lib/invariants/uuid'
 import { sessionFailureResponse } from '@/lib/operations/session'
 
-// The first import runs inside this request, as on the session route.
-export const maxDuration = 300
+// The first import starts inside this request and finishes in the
+// background, as on the session route.
+export const maxDuration = 800
 
 const SelectSchema = z.object({
   accounts: z

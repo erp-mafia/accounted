@@ -47,7 +47,7 @@ import { GET as bank } from '../banks/[bic]/route'
 import { GET as overview, POST as start } from '../connections/route'
 import { POST as poll } from '../connections/[id]/poll/route'
 import { POST as restart } from '../connections/[id]/restart/route'
-import { POST as select } from '../connections/[id]/select/route'
+import { POST as select, maxDuration as selectMaxDuration } from '../connections/[id]/select/route'
 import { POST as sync } from '../connections/[id]/sync/route'
 import { DELETE as disconnect, GET as connection } from '../connections/[id]/route'
 import { GET as cronRoute } from '../sync/cron/route'
@@ -219,6 +219,10 @@ describe('open payments routes map the service answers', () => {
     const { status, body } = await parseJsonResponse<ErrorBody>(await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true }] }), params(ID)))
     expect(status).toBe(400)
     expect(body.error.code).toBe('BANK_SELECTION_LEDGER_CONFLICT')
+  })
+
+  it('POST select lives on for the first import it answers before: the Pro-plan ceiling, not the 300 s that cut a two-year import', () => {
+    expect(selectMaxDuration).toBe(800)
   })
 
   it('POST sync answers the runner\'s result and its cooldown as 429', async () => {

@@ -6955,7 +6955,11 @@
     "unsupported_type": "{name} har en filtyp som inte kan bifogas. Tillåtna: PDF, bilder, Word, Excel, PowerPoint, OpenDocument, RTF och CSV.",
     "file_too_large": "{name} är {size}, och en bilaga får vara högst {limit}. Komprimera filen eller dela upp den och försök igen.",
     "too_many": "En faktura kan ha högst {count} bilagor.",
-    "total_too_large": "Bilagorna får vara högst 25 MB tillsammans. Ta bort en bilaga eller komprimera filen."
+    "total_too_large": "Bilagorna får vara högst 25 MB tillsammans. Ta bort en bilaga eller komprimera filen.",
+    "help_what_peppol": "Filerna följer med inuti e-fakturan, till exempel en tidrapport eller en dagbok. Bara PDF, högst {count} filer och {size} totalt.",
+    "peppol_hint": "Följer med inuti e-fakturan. Bara PDF, högst {size} totalt.",
+    "peppol_pdf_only": "{name} är ingen PDF. Via Peppol kan bara PDF-filer bifogas; skicka fakturan med e-post om filen måste följa med.",
+    "peppol_total_too_large": "Bilagorna får vara högst {size} tillsammans via Peppol. Ta bort en bilaga eller komprimera PDF:en."
   },
   "invoice_send_dialog": {
     "title_email": "Skicka faktura",
@@ -11317,6 +11321,8 @@
     "form_vacation_days_hint_none": "0 dagar går bara när semesterlagen inte gäller, t.ex. för en företagsledare. Annars minst 25.",
     "form_vacation_pay_rate": "Semesterlön, procentsats",
     "form_vacation_pay_rate_hint": "Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.",
+    "form_semestertillagg_rate": "Semestertillägg, procentsats",
+    "form_semestertillagg_rate_hint": "Procent av månadslönen per betald semesterdag. Lämna tomt för lagens 0,43 % (semesterlagen 16 a §); många kollektivavtal anger 0,8 %. Styr både semestertillägget på lönebeskedet och dagvärdet i semesterlöneskulden.",
     "form_bank_account": "Bankkonto",
     "form_clearing_number": "Clearingnummer",
     "form_account_number": "Kontonummer",

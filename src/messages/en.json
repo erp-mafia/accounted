@@ -6955,7 +6955,11 @@
     "unsupported_type": "{name} is a file type that cannot be attached. Allowed: PDF, images, Word, Excel, PowerPoint, OpenDocument, RTF and CSV.",
     "file_too_large": "{name} is {size}, and an attachment can be at most {limit}. Compress or split the file and try again.",
     "too_many": "An invoice can have at most {count} attachments.",
-    "total_too_large": "Attachments may total at most 25 MB. Remove an attachment or compress the file."
+    "total_too_large": "Attachments may total at most 25 MB. Remove an attachment or compress the file.",
+    "help_what_peppol": "The files travel inside the e-invoice, for example a time report or a work log. PDF only, at most {count} files and {size} in total.",
+    "peppol_hint": "Sent inside the e-invoice. PDF only, at most {size} in total.",
+    "peppol_pdf_only": "{name} is not a PDF. Only PDF files can be attached over Peppol; send the invoice by email if the file must go along.",
+    "peppol_total_too_large": "Attachments may total at most {size} over Peppol. Remove an attachment or compress the PDF."
   },
   "invoice_send_dialog": {
     "title_email": "Send invoice",
@@ -11317,6 +11321,8 @@
     "form_vacation_days_hint_none": "0 days only where the Annual Leave Act does not apply, e.g. a company owner. Otherwise at least 25.",
     "form_vacation_pay_rate": "Vacation pay percentage",
     "form_vacation_pay_rate_hint": "Leave empty for the statutory 12 % (14.4 % at 30 days). Enter the collective agreement rate, e.g. 13.5. The statutory rate always applies as a floor.",
+    "form_semestertillagg_rate": "Vacation supplement percentage",
+    "form_semestertillagg_rate_hint": "Percent of the monthly salary per paid vacation day. Leave empty for the statutory 0.43 % (semesterlagen 16 a §); many collective agreements set 0.8 %. Drives both the vacation supplement on the payslip and the day value in the vacation pay liability.",
     "form_bank_account": "Bank account",
     "form_clearing_number": "Clearing number",
     "form_account_number": "Account number",

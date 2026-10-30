@@ -2601,7 +2601,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         // A saved draft attaches its files at once (the confirm's section
         // targets it); only a new document's files wait for the save.
         attachmentDocumentIds:
-          channel === 'email' && !paidAtIssue && !isEditMode
+          (channel === 'email' || channel === 'peppol') && !paidAtIssue && !isEditMode
             ? stagedAttachments.map((file) => file.document_id)
             : undefined,
         email:
@@ -5280,6 +5280,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         rows={confirmRows}
         voucher={confirmVoucher}
         attachments={confirmAttachments}
+        attachmentsChannel={confirmChannel === 'peppol' ? 'peppol' : 'email'}
         extra={
           <>
             {isPaidConfirm && (

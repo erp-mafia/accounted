@@ -1083,6 +1083,20 @@ function isAspspError(body: string): boolean {
 }
 
 /**
+ * Enable Banking's 422 {"error":"WRONG_TRANSACTIONS_PERIOD","detail":{"message":
+ * "Invalid date range requested"}}: the bank refused the window. Every sample
+ * on record (Nordea, 2026-10-28 07:00-08:52 UTC, eight syncs) was a 7-day
+ * window ending on the UTC date, which the same accounts answered the day
+ * before and the day after, while Nordea also failed other calls (ASPSP_ERROR,
+ * a 502 through Open Payments). So it is read like ASPSP_ERROR: a window this
+ * account has answered before means the bank is refusing right now, a wider
+ * one is narrowed toward what it has answered.
+ */
+function isWrongTransactionsPeriod(body: string): boolean {
+  return body.includes('WRONG_TRANSACTIONS_PERIOD')
+}
+
+/**
  * Given the date_from we just tried, return the next strictly-narrower
  * date_from from ASPSP_HISTORY_FALLBACK_DAYS, anchored to date_to. Returns
  * undefined when no narrower window remains (or date_to is missing), which
@@ -1113,6 +1127,9 @@ function nextNarrowerDateFrom(
  * apply only to the very first request (page 0, no continuation_key): a
  * continuation_key is scoped to the window/strategy that produced it, so the
  * query is never rewritten mid-pagination.
+ *
+ * The window cases take a 400 ASPSP_ERROR and a 422 WRONG_TRANSACTIONS_PERIOD
+ * alike (isWrongTransactionsPeriod).
  *
  *  - 'drop-strategy'     : an unsupported strategy enum: retry the same window.
  *  - 'narrow'            : the ASPSP rejected the history window: retry with a
@@ -1152,10 +1169,12 @@ function planFirstPageRecovery(args: {
     dateTo,
     acceptedHistoryDays,
   } = args
-  if (status !== 400 || page !== 0 || hasContinuationKey) return { type: 'give-up' }
+  if (page !== 0 || hasContinuationKey) return { type: 'give-up' }
+  const periodRefused = status === 422 && isWrongTransactionsPeriod(body)
+  if (status !== 400 && !periodRefused) return { type: 'give-up' }
   // Drop an unsupported strategy first: preserves the full requested window.
   if (activeStrategy) return { type: 'drop-strategy' }
-  if (!isAspspError(body)) return { type: 'give-up' }
+  if (!periodRefused && !isAspspError(body)) return { type: 'give-up' }
 
   // A window this account has fetched before is the strongest signal on hand
   // that width is not the problem: stop after this one call. Wider than that:

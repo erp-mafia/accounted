@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   vacationDaysFromInput,
   resolveVacationPayRate,
+  semestertillaggRateFromPercentInput,
+  semestertillaggRateToPercent,
+  STATUTORY_SEMESTERTILLAGG_RATE,
   statutoryVacationPayRate,
   vacationPayRateFromPercentInput,
   vacationPayRateToPercent,
@@ -80,5 +83,39 @@ describe('vacationDaysFromInput (agent feedback seq 828138)', () => {
     expect(vacationDaysFromInput('')).toBeNull()
     expect(vacationDaysFromInput(null)).toBeNull()
     expect(vacationDaysFromInput('abc')).toBeNull()
+  })
+})
+
+describe('semestertillägg form conversion (crm#1529)', () => {
+  it('reads a kollektivavtal tillägg as a fraction: 0,8 % is 0.008 (inside the API bound 0..0.05)', () => {
+    expect(semestertillaggRateFromPercentInput('0,8')).toBe(0.008)
+    expect(semestertillaggRateFromPercentInput('0.8')).toBe(0.008)
+    expect(semestertillaggRateFromPercentInput(' 0,43 ')).toBe(0.0043)
+    expect(semestertillaggRateFromPercentInput('0,605')).toBe(0.00605)
+  })
+
+  it('reads an empty field as the statutory 0,43 % (Semesterlagen 16 a §)', () => {
+    expect(STATUTORY_SEMESTERTILLAGG_RATE).toBe(0.0043)
+    expect(semestertillaggRateFromPercentInput('')).toBe(0.0043)
+    expect(semestertillaggRateFromPercentInput(null)).toBe(0.0043)
+  })
+
+  it('leaves an unparseable entry out of the request', () => {
+    expect(semestertillaggRateFromPercentInput('abc')).toBeUndefined()
+  })
+
+  it('keeps 0 as a real value and passes out-of-range entries on for the API to refuse', () => {
+    expect(semestertillaggRateFromPercentInput('0')).toBe(0)
+    expect(semestertillaggRateFromPercentInput('6')).toBe(0.06)
+  })
+
+  it('shows the stored fraction as a percentage and round-trips', () => {
+    expect(semestertillaggRateToPercent(0.0043)).toBe(0.43)
+    expect(semestertillaggRateToPercent(0.008)).toBe(0.8)
+    expect(semestertillaggRateToPercent(null)).toBe('')
+    expect(semestertillaggRateToPercent(undefined)).toBe('')
+    for (const percent of ['0.43', '0.8', '0.605', '5']) {
+      expect(semestertillaggRateToPercent(semestertillaggRateFromPercentInput(percent))).toBe(Number(percent))
+    }
   })
 })

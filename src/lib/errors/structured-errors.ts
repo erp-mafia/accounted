@@ -8609,9 +8609,23 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
   BATCH_CASH_METHOD_UNBOOKED_INVOICE: {
     httpStatus: 400,
     message_sv:
-      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms ska bokföras vid betalningen. En samlingsmatchning kvittar bara mot kundfordringar eller leverantörsskulder och skulle hoppa över det. Matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
+      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms bokförs vid betalningen. En samlingsmatchning bokför det för kundfakturor i kronor som betalas i sin helhet, alla på en gång. Leverantörsfakturor, delbetalningar, fakturor i utländsk valuta och en blandning med redan bokförda fakturor går inte: matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
     message_en:
-      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT must be booked at payment. A batch match only clears receivables or payables and would skip that. Match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
+      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT are booked at payment. A batch match books that for SEK customer invoices paid in full, all of them at once. Supplier invoices, partial payments, foreign-currency invoices and a mix with booked invoices are not supported: match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
+  },
+  BATCH_CASH_LINES_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Intäkts- och momsraderna för en obokförd faktura under kontantmetoden kunde inte bokföras: kontrollera att kontona är aktiva i kontoplanen och att fakturan betalas i sin helhet.',
+    message_en:
+      'The revenue and VAT lines for an unbooked cash-method invoice could not be booked: check that the accounts are active in the chart of accounts and that the invoice is paid in full.',
+  },
+  BATCH_CASH_LINES_MIXED: {
+    httpStatus: 400,
+    message_sv:
+      'Under kontantmetoden kan en samlingsmatchning inte blanda obokförda och redan bokförda fakturor. Dela upp dem i två fördelningar.',
+    message_en:
+      'Under the cash method a batch match cannot mix unbooked and already booked invoices. Split them into two allocations.',
   },
   BATCH_DIRECTION_MISMATCH: {
     httpStatus: 400,

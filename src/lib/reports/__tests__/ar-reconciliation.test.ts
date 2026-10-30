@@ -25,6 +25,7 @@ vi.mock('../trial-balance', () => ({
 
 import { closingBalanceOf } from '../trial-balance'
 import { generateARReconciliation } from '../ar-reconciliation'
+import { generateARLedger } from '../ar-ledger'
 
 /** The booked 1510 + 1513 balance (debit minus credit, IB included). */
 function booked(amount: number) {
@@ -248,6 +249,80 @@ describe('generateARReconciliation: a credit note set off against a new invoice 
   })
 })
 
+describe('generateARReconciliation: a credited invoice and its credit note (crm#1537)', () => {
+  // Kreditera books the credit note's own verifikat (Cr 1510) and moves the
+  // original to 'credited'; the credit note stays 'sent'. 1510 nets the pair.
+  const original = {
+    id: 'inv-original', customer_id: 'cust-a', total: 50000, paid_amount: 0, status: 'credited',
+    currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-original',
+    invoice_date: '2026-08-01', due_date: '2026-08-31',
+  }
+  const creditNote = {
+    id: 'inv-credit-note', customer_id: 'cust-a', total: -50000, paid_amount: 0, status: 'sent',
+    currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-credit-note',
+    invoice_date: '2026-08-15', due_date: '2026-08-15',
+  }
+  const open = {
+    id: 'inv-open', customer_id: 'cust-b', total: 20000, paid_amount: 0, status: 'sent',
+    currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-open',
+    invoice_date: '2026-09-01', due_date: '2026-09-30',
+  }
+
+  it('counts the credited original beside its credit note, so the pair nets to nothing', async () => {
+    setBooks({ invoices: [original, creditNote, open] })
+    // 1510: the original 50 000, its credit note -50 000, the open invoice 20 000.
+    booked(20000)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(20000)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('sums exactly what the kundreskontra sums: one definition of the open amount', async () => {
+    setBooks({ invoices: [original, creditNote, open] })
+    booked(20000)
+
+    const [reconciliation, ledger] = await Promise.all([
+      generateARReconciliation(supabase, 'company-1', 'period-1'),
+      generateARLedger(supabase, 'company-1'),
+    ])
+
+    expect(reconciliation.ar_ledger_total).toBe(ledger.total_outstanding)
+  })
+
+  it('a paid invoice credited afterwards leaves the credit open as money owed back', async () => {
+    // 1510: the original 50 000, its payment -50 000, the credit note -50 000:
+    // 50 000 owed back to the customer until it is refunded or set off.
+    setBooks({ invoices: [{ ...original, paid_amount: 50000 }, creditNote] })
+    booked(-50000)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(-50000)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('a migrated settled credit note stays out, as in the kundreskontra', async () => {
+    // The provider netted the credit into the original's paid_amount and the
+    // migration imported the credit note as 'credited' with a negative total.
+    setBooks({
+      invoices: [
+        { ...original, status: 'paid', paid_amount: 50000 },
+        { ...creditNote, status: 'credited' },
+        open,
+      ],
+    })
+    booked(20000)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(20000)
+    expect(result.is_reconciled).toBe(true)
+  })
+})
+
 describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () => {
   // RUT invoice: 10 000 invoiced, deduction 3 000 on 1513, the buyer's 7 000
   // paid. The invoice is 'paid' while Skatteverket's 3 000 is still open.
@@ -271,13 +346,14 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
   // out (`rest1513`).
   const ledger = (rest1513: number) => booked(1250 + rest1513)
 
-  it('reads paid invoices with a deduction into the population, and no credited originals', async () => {
-    // A credited original is the kundreskontra's to net, never the 1510
-    // reconciliation's; a paid invoice without a deduction is settled.
+  it('reads paid invoices with a deduction into the population; a credited original nets against its credit note', async () => {
+    // A credited original and its credit note are both on 1510 and net to
+    // nothing; a paid invoice without a deduction is settled.
     setBooks({
       invoices: [
         rut,
         { ...plain, id: 'inv-credited', status: 'credited' },
+        { ...plain, id: 'inv-credit-note', total: -1250, journal_entry_id: 'je-credit-note' },
         { ...plain, id: 'inv-paid', status: 'paid', paid_amount: 1250 },
       ],
     })

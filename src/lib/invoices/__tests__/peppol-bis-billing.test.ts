@@ -8,6 +8,7 @@ import { roundOre, sumOre } from '@/lib/money'
 import type { EntityType, InvoiceItem } from '@/types'
 import {
   generatePeppolBisBillingInvoice,
+  peppolAttachmentIssues,
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
 } from '../peppol-bis-billing'
@@ -826,5 +827,95 @@ describe('generatePeppolBisBillingInvoice: article number', () => {
       if (!result.ok) return
       expect(result.xml).not.toContain('SellersItemIdentification')
     }
+  })
+})
+
+describe('embedded attachments (crm#1545)', () => {
+  const MB = 1024 * 1024
+  const pdf = (filename: string, bytes = 32) => ({
+    filename,
+    contentType: 'application/pdf',
+    content: Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(Math.max(bytes - 9, 0), 0x20)]),
+  })
+
+  it('embeds each PDF as an AdditionalDocumentReference between the order reference and the seller, in order', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'PO 4711' })
+    const first = pdf('Tidrapport <oktober>.pdf')
+    const second = pdf('Dagbok.pdf')
+
+    const result = generatePeppolBisBillingInvoice({ ...input, attachments: [first, second] })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain(
+      '  </cac:OrderReference>\n' +
+      '  <cac:AdditionalDocumentReference>\n' +
+      '    <cbc:ID>Tidrapport &lt;oktober&gt;.pdf</cbc:ID>\n' +
+      '    <cac:Attachment>\n' +
+      `      <cbc:EmbeddedDocumentBinaryObject mimeCode="application/pdf" filename="Tidrapport &lt;oktober&gt;.pdf">${first.content.toString('base64')}</cbc:EmbeddedDocumentBinaryObject>\n` +
+      '    </cac:Attachment>\n' +
+      '  </cac:AdditionalDocumentReference>\n' +
+      '  <cac:AdditionalDocumentReference>\n' +
+      '    <cbc:ID>Dagbok.pdf</cbc:ID>',
+    )
+    const xml = result.xml
+    expect(xml.indexOf('Dagbok.pdf')).toBeLessThan(xml.indexOf('<cac:AccountingSupplierParty>'))
+    // No DocumentTypeCode: in BIS Billing 3 it marks an invoiced object (BT-18), not an attachment.
+    expect(xml).not.toContain('DocumentTypeCode')
+    // The invoice number stays the document's first cbc:ID (the transport reads it from there).
+    expect(/<cbc:ID>([^<]+)<\/cbc:ID>/.exec(xml)?.[1]).toBe('F-2026-42')
+  })
+
+  it('emits no AdditionalDocumentReference without attachments', () => {
+    const result = generatePeppolBisBillingInvoice(makeValidInput())
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('AdditionalDocumentReference')
+  })
+
+  it('refuses a file that is not a PDF with a Swedish message naming it', () => {
+    const result = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('ok.pdf'), { filename: 'bild.png', contentType: 'image/png', content: Buffer.from('png') }],
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: 'PEPPOL_ATTACHMENT_NOT_PDF',
+        field: 'attachments[1]',
+        messageSv: expect.stringContaining('bild.png är ingen PDF'),
+      }),
+    ])
+  })
+
+  it('accepts exactly 5 MB of files and refuses one byte more, in Swedish', () => {
+    const atLimit = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('a.pdf', 3 * MB), pdf('b.pdf', 2 * MB)],
+    })
+    expect(atLimit.ok).toBe(true)
+
+    const over = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('a.pdf', 3 * MB), pdf('b.pdf', 2 * MB + 1)],
+    })
+    expect(over.ok).toBe(false)
+    if (over.ok) return
+    expect(over.issues).toEqual([
+      expect.objectContaining({
+        code: 'PEPPOL_ATTACHMENTS_TOO_LARGE',
+        messageSv: expect.stringContaining('högst 5 MB tillsammans via Peppol'),
+      }),
+    ])
+  })
+})
+
+describe('peppolAttachmentIssues (crm#1545)', () => {
+  it('judges stored metadata the same way: a missing type is not a PDF', () => {
+    expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 10 }])).toEqual([])
+    expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: null, sizeBytes: 10 }]).map((i) => i.code))
+      .toEqual(['PEPPOL_ATTACHMENT_NOT_PDF'])
   })
 })

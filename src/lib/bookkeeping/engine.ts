@@ -1728,6 +1728,24 @@ export interface MatchBatchAllocationInput {
    */
   feeLines?: PayoutFeeLine[]
   /**
+   * Kontantmetoden: customer invoice id to the revenue, moms and
+   * öresavrundning lines its unbooked sale books at payment
+   * (lib/invoices/batch-cash-method-guard.ts), sent as p_cash_lines (migration
+   * 20261031100700). Empty or omitted: the parameter is not sent. Sent to a
+   * database without it, the call answers PGRST202: a refusal, never a 1510
+   * clearing.
+   */
+  cashLines?: Record<
+    string,
+    Array<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+      line_description?: string
+      dimensions?: Record<string, string>
+    }>
+  >
+  /**
    * The posting port's events, one per allocation (sale.payment_received or
    * purchase.paid), linked to the samlingsverifikat before its number is
    * drawn. Omitted: the RPC is called as before.
@@ -1766,6 +1784,7 @@ export async function commitMatchBatchAllocation(
       // (migration 20260824120000).
       p_user_id: userId,
       ...(input.feeLines?.length ? { p_fee_lines: input.feeLines } : {}),
+      ...(input.cashLines && Object.keys(input.cashLines).length > 0 ? { p_cash_lines: input.cashLines } : {}),
       ...events,
     }),
   )

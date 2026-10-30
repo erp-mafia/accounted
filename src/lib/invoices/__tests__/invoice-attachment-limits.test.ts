@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   MAX_INVOICE_ATTACHMENT_FILE_BYTES,
   invoiceAttachmentSizeVerdict,
+  isPeppolAttachmentFile,
   offersInvoiceAttachments,
 } from '@/lib/invoices/invoice-attachment-limits'
 
@@ -37,9 +38,16 @@ describe('offersInvoiceAttachments (#79, crm#1315)', () => {
     expect(offersInvoiceAttachments({ ...base, channel: 'email', status: 'draft' })).toBe(true)
   })
 
-  it('does not offer them on a channel that does not email them', () => {
+  it('offers them on a Peppol send of a draft or an unsaved document, with or without email in the plan (crm#1545)', () => {
+    expect(offersInvoiceAttachments({ ...base, channel: 'peppol', status: 'draft' })).toBe(true)
+    expect(offersInvoiceAttachments({ ...base, channel: 'peppol', status: null })).toBe(true)
+    expect(offersInvoiceAttachments({ channel: 'peppol', status: 'draft', isSandbox: false, canEmail: false })).toBe(true)
+    expect(offersInvoiceAttachments({ ...base, channel: 'peppol', status: 'sent' })).toBe(false)
+    expect(offersInvoiceAttachments({ channel: 'peppol', status: 'draft', isSandbox: true, canEmail: true })).toBe(false)
+  })
+
+  it('does not offer them on a channel that does not carry them', () => {
     expect(offersInvoiceAttachments({ ...base, channel: 'manual', status: 'draft' })).toBe(false)
-    expect(offersInvoiceAttachments({ ...base, channel: 'peppol', status: 'draft' })).toBe(false)
     // A Kivra or Billo mailbox takes the invoice PDF alone.
     expect(offersInvoiceAttachments({ ...base, channel: 'kivra', status: 'draft' })).toBe(false)
     expect(offersInvoiceAttachments({ ...base, channel: 'billo', status: null })).toBe(false)
@@ -53,5 +61,14 @@ describe('offersInvoiceAttachments (#79, crm#1315)', () => {
   it('does not offer them in the sandbox or without email in the plan', () => {
     expect(offersInvoiceAttachments({ channel: 'email', status: null, isSandbox: true, canEmail: true })).toBe(false)
     expect(offersInvoiceAttachments({ channel: 'email', status: null, isSandbox: false, canEmail: false })).toBe(false)
+  })
+})
+
+describe('isPeppolAttachmentFile (crm#1545)', () => {
+  it('takes a PDF by type, or by name when the browser gives no type', () => {
+    expect(isPeppolAttachmentFile({ type: 'application/pdf', name: 'tidrapport' })).toBe(true)
+    expect(isPeppolAttachmentFile({ type: '', name: 'Dagbok.PDF' })).toBe(true)
+    expect(isPeppolAttachmentFile({ type: 'image/png', name: 'kvitto.pdf' })).toBe(false)
+    expect(isPeppolAttachmentFile({ type: '', name: 'tidrapport.docx' })).toBe(false)
   })
 })

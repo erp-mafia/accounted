@@ -91,6 +91,8 @@ import {
   type PeppolVerifiedEvent,
 } from '@/lib/invoices/peppol-transport'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { listInvoiceAttachments, loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
+import { peppolAttachmentIssues, type PeppolAttachmentFile } from '@/lib/invoices/peppol-bis-billing'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { CompanySettings, Invoice } from '@/types'
 
@@ -357,6 +359,26 @@ export async function sendInvoiceViaPeppol(
     }
   }
 
+  // The invoice's files ride inside the e-faktura (crm#1545), read from the
+  // archive and checked (PDF only, the Peppol size ceiling) before a number
+  // is taken, so a file the message cannot carry stops the send while
+  // nothing irreversible has happened.
+  const loaded = await loadInvoiceEmailAttachments(supabase, companyId, invoiceId)
+  if (!loaded.ok) return refuse(loaded.code)
+  const attachments: PeppolAttachmentFile[] = loaded.value
+  const attachmentIssues = peppolAttachmentIssues(
+    attachments.map((file) => ({ filename: file.filename, contentType: file.contentType, sizeBytes: file.content.byteLength })),
+  )
+  if (attachmentIssues.length > 0) {
+    logRefusal('VALIDATION_ERROR', { issues: attachmentIssues.map((i) => i.code) })
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      messageSv: attachmentIssues[0].messageSv,
+      details: { issues: peppolIssueDetails(attachmentIssues) },
+    }
+  }
+
   const numberPending = wasDraft && !invoice.invoice_number
   if (numberPending && !dryRun) {
     try {
@@ -374,6 +396,7 @@ export async function sendInvoiceViaPeppol(
   const generated = generatePeppolDocument(
     numberPending && dryRun ? { ...invoice, invoice_number: PLACEHOLDER_INVOICE_NUMBER } : invoice,
     company,
+    attachments,
   )
   if (!generated.ok) {
     if (generated.reason === 'customer_missing') {
@@ -413,6 +436,7 @@ export async function sendInvoiceViaPeppol(
         transport_provider: transport.provider,
         remaining_sends: permission.remaining,
         will_issue_invoice: wasDraft,
+        attachments: attachments.map((file) => ({ file_name: file.filename, file_size_bytes: file.content.byteLength })),
         network_submitted: false,
         // The SMP lookup and the submission are network calls: commit only.
         recipient_lookup: 'on_commit',
@@ -847,6 +871,17 @@ export async function getInvoicePeppolReadiness(
         blockers.push(blocker('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', { field: 'company.payment_accounts' }))
       }
     }
+  }
+
+  // The files the e-faktura would carry (crm#1545), checked on the stored
+  // metadata; the send checks the bytes it reads.
+  const attachmentRows = await listInvoiceAttachments(supabase, companyId, invoiceId)
+  for (const issue of peppolAttachmentIssues(attachmentRows.map((row) => ({
+    filename: row.file_name,
+    contentType: row.mime_type,
+    sizeBytes: row.file_size_bytes ?? 0,
+  })))) {
+    blockers.push({ code: issue.code, field: issue.field, message_sv: issue.messageSv, message_en: issue.messageEn })
   }
 
   let sender: PeppolParticipant | null = null

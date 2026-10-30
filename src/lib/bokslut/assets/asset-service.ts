@@ -6,7 +6,6 @@ import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
   computeAnnualDepreciation,
   openingDepreciationOf,
@@ -363,74 +362,6 @@ export async function hasPostedDepreciation(
   return (count ?? 0) > 0
 }
 
-/**
- * Catch depreciation that was posted by hand (a manual avskrivningsverifikat),
- * which leaves no depreciation_schedules row and so slips past
- * hasPostedDepreciation. We look at the ledger instead: any posted CREDIT to
- * the asset's ackumulerade-avskrivningar account (12x9) is depreciation.
- *
- * The wrinkle is shared accounts: siblings in the same category default to
- * the same 12x9, so a sibling's *engine* avskrivning would otherwise look like
- * depreciation of this asset. We exclude entries that depreciation_schedules
- * attributes to a *different* asset, so engine siblings don't cause a false
- * block. What remains is depreciation tied to this asset (engine or manual)
- * plus the rare case of a manual sibling entry on a shared account, there we
- * err toward blocking, which is the safe direction for a basis correction.
- */
-async function hasManualDepreciationPosted(
-  supabase: SupabaseClient,
-  companyId: string,
-  asset: Asset,
-): Promise<boolean> {
-  // Engine-posted depreciation entries that belong to OTHER assets: these are
-  // safely attributable and must not block a correction of this asset.
-  // Paged on id: past 1,000 sibling rows the rest read as manual
-  // depreciation of this asset and blocked a correction that was allowed.
-  let otherSched: { journal_entry_id: string | null }[]
-  try {
-    otherSched = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
-      supabase
-        .from('depreciation_schedules')
-        .select('journal_entry_id')
-        .eq('company_id', companyId)
-        .neq('asset_id', asset.id)
-        .not('journal_entry_id', 'is', null)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-  } catch (schedError) {
-    throw new Error(
-      `Failed to load sibling depreciation entries for asset ${asset.id}: ${schedError instanceof Error ? schedError.message : String(schedError)}`,
-    )
-  }
-  const siblingEngineEntries = new Set(
-    otherSched
-      .map((r) => r.journal_entry_id)
-      .filter((id): id is string => id !== null),
-  )
-
-  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts): posted
-  // entries for the company first, then their lines on the accumulated
-  // account with a credit.
-  let lines: { journal_entry_id: string }[]
-  try {
-    lines = await fetchEntryLines<{ journal_entry_id: string }>({
-      supabase,
-      lineColumns: 'journal_entry_id',
-      filterEntries: (q: EntryLinesQuery) =>
-        q.eq('company_id', companyId).eq('status', 'posted'),
-      filterLines: (q: EntryLinesQuery) =>
-        q.eq('account_number', asset.bas_accumulated_account).gt('credit_amount', 0),
-      attachEntriesAs: null,
-    })
-  } catch (err) {
-    throw new Error(
-      `Failed to scan ledger depreciation for asset ${asset.id}: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
-  return lines.some((line) => !siblingEngineEntries.has(line.journal_entry_id))
-}
-
 export async function updateAsset(
   supabase: SupabaseClient,
   companyId: string,
@@ -477,17 +408,16 @@ export async function updateAsset(
     if (existing.disposed_at) {
       throw new AssetCorrectionBlockedError('disposed')
     }
-    // Engine-driven (depreciation_schedules) OR hand-posted (ledger): either
-    // means the basis has driven postings and a correction must go via storno.
-    // The opening amount is the exception to the ledger scan: it describes
-    // depreciation that IS on the ledger's 12x9 account from the previous
-    // system (imported vouchers or opening balance), so a posted credit there
-    // is expected, not a reason to refuse. Only Accounted's own postings,
-    // which the engine planned from the old opening amount, lock it.
+    // One predicate, the one get_asset reports as has_posted_depreciation
+    // and the database enforces on the opening fields: a depreciation
+    // the engine planned from this basis and posted. Only those vouchers
+    // would contradict the corrected register; a planned row that was never
+    // posted does not. Credits on the 12x9 account that the engine did not
+    // post (imported history, an opening balance, a hand-booked avskrivning
+    // or rättelse) carry no link to this row: the register accounts for
+    // them through the opening amount, corrected in the same patch, and
+    // refusing on them locked every migrated asset's basis (crm#1511).
     if (await hasPostedDepreciation(supabase, companyId, assetId)) {
-      throw new AssetCorrectionBlockedError('depreciation_posted')
-    }
-    if (isCorrection && (await hasManualDepreciationPosted(supabase, companyId, existing))) {
       throw new AssetCorrectionBlockedError('depreciation_posted')
     }
   }
@@ -1201,11 +1131,11 @@ function disposalAccounts(category: AssetCategory): { gain: string; loss: string
 //
 // createAsset() posts no acquisition voucher (the purchase is already in the
 // ledger), and no document links point at assets, so those two signals do not
-// exist here. The manual-depreciation ledger heuristic used by the basis
-// correction guard (hasManualDepreciationPosted) is deliberately NOT a delete
-// blocker: a hand-posted avskrivningsverifikat carries no link to the register
-// row, the ledger is untouched by removing the row, and on a shared 12x9
-// account the heuristic would refuse every migrated company's typo rows.
+// exist here. A hand-posted avskrivningsverifikat is not a blocker either: it
+// carries no link to the register row, the ledger is untouched by removing
+// the row, and on a shared 12x9 account a ledger scan would refuse every
+// migrated company's typo rows. The basis correction guard in updateAsset()
+// reads the same predicate (hasPostedDepreciation).
 
 export type AssetDeleteBlockReason = 'disposed' | 'depreciation_posted'
 
