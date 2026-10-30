@@ -493,13 +493,15 @@ describe('getAccountStatus', () => {
 
   it('adds the balance check for the account, beside the movement bridge', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const row = cashAccount(ID_A, { is_primary: true, balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z' })
+    const reference = { date: '2026-08-19', type: 'closingBooked', fetched_at: '2026-08-20T05:12:00+00:00' }
+    const row = cashAccount(ID_A, { is_primary: true, balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z', balance_reference: reference })
     enqueue({ data: row })
     bankStatusMock.mockResolvedValue(bankStatus())
     enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
     const check = {
-      as_of: '2026-08-20',
+      as_of: '2026-08-19',
       fetched_at: '2026-08-20T05:12:00Z',
+      balance_type: 'closingBooked',
       bank_balance: 1000,
       booked_balance: 700,
       difference: 300,
@@ -512,7 +514,11 @@ describe('getAccountStatus', () => {
 
     const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
     if (!s) throw new Error('expected status')
-    expect(balanceCheckMock).toHaveBeenCalledWith(supabase, COMPANY, expect.objectContaining({ id: ID_A, ledger_account: '1930' }))
+    expect(balanceCheckMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      expect.objectContaining({ id: ID_A, ledger_account: '1930', balance_reference: reference }),
+    )
     expect(s.bank).toMatchObject({ balance_check: check, balance_check_refusal: null })
     // The movement verdict and everything sign-off reads stay as they were.
     expect(s.is_reconciled).toBe(true)

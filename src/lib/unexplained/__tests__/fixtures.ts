@@ -37,7 +37,7 @@ export interface CheckFixtureOptions {
   /** Declared VAT periods as deadline tax_period labels. */
   declared?: string[]
   /** The 1930 balance the bank reported, and when; null = none reported. */
-  bankBalance?: { amount: number; at: string } | null
+  bankBalance?: { amount: number; at: string; reference?: Row } | null
   transactions?: Row[]
   /** Skatteverket saldo snapshot; null = never fetched. */
   skvSaldo?: { amount: number; at: string } | null
@@ -214,6 +214,7 @@ export function checkFixture(options: CheckFixtureOptions = {}): FakeLedgerData 
         enabled: true,
         balance: bank?.amount ?? null,
         balance_updated_at: bank?.at ?? null,
+        balance_reference: bank?.reference ?? null,
         updated_at: '2026-06-30T10:00:00.000Z',
       },
       {

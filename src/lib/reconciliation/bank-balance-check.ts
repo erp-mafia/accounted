@@ -1,7 +1,7 @@
 /**
  * The bank's own balance against the books: what the bank reported at its
  * last balance refresh and the booked balance of the account the bank account
- * books on, at the end of that same Stockholm day.
+ * books on, at the end of the bank's day for that balance (bankBalanceDay).
  *
  * Why it exists next to the bridge: the bridge judges an account by its
  * movements inside a window, without the opening balance and without ignored
@@ -29,14 +29,17 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { isSaneDateString } from '@/lib/invariants/iso-date'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 
 export interface BankBalanceCheck {
-  /** The Stockholm day the bank's balance was fetched: both sides are read at its end. */
+  /** The bank's day for its balance (bankBalanceDay): both sides are read at its end. */
   as_of: string
   /** When the balance was fetched (cash_accounts.balance_updated_at). */
   fetched_at: string
+  /** The bank's type for its balance (closingBooked, CLBD, expected, ...); null when it gave no day. */
+  balance_type: string | null
   bank_balance: number
   /** Booked balance (debit minus credit) on the account at the end of as_of, as the balance sheet reads it. */
   booked_balance: number
@@ -75,6 +78,8 @@ export interface BankBalanceCheckAccount {
   is_primary: boolean | null
   balance: number | string | null
   balance_updated_at: string | null
+  /** cash_accounts.balance_reference, as stored: read only through bankBalanceDay. */
+  balance_reference: unknown
 }
 
 interface FiscalPeriodRow {
@@ -95,6 +100,30 @@ interface BankBalanceFacts {
   unbooked_total: number | string
   ignored_count: number
   ignored_total: number | string
+}
+
+/**
+ * The day a bank balance belongs to, and its type. The bank's own day when
+ * the stored reference came with this very balance (its fetched_at is the
+ * row's balance_updated_at) and is a real day no later than the fetch;
+ * otherwise the Stockholm day of the fetch. A closingBooked balance is the
+ * close of its day, often yesterday: read on the fetch day, the rows booked
+ * since would count on the book side only.
+ */
+export function bankBalanceDay(balanceUpdatedAt: string, reference: unknown): { date: string; type: string | null } {
+  const fetchDay = todayIsoStockholm(new Date(balanceUpdatedAt))
+  const ref = reference !== null && typeof reference === 'object' ? (reference as Record<string, unknown>) : null
+  if (
+    ref &&
+    typeof ref.date === 'string' &&
+    isSaneDateString(ref.date) &&
+    ref.date <= fetchDay &&
+    typeof ref.fetched_at === 'string' &&
+    Date.parse(ref.fetched_at) === Date.parse(balanceUpdatedAt)
+  ) {
+    return { date: ref.date, type: typeof ref.type === 'string' ? ref.type : null }
+  }
+  return { date: fetchDay, type: null }
 }
 
 /**
@@ -148,7 +177,8 @@ export async function checkBankBalance(
     return { check: null, refusal: 'NO_BANK_BALANCE' }
   }
   const bankBalance = ore(Number(account.balance))
-  const asOf = todayIsoStockholm(new Date(account.balance_updated_at))
+  const day = bankBalanceDay(account.balance_updated_at, account.balance_reference)
+  const asOf = day.date
   const currency = account.currency ?? 'SEK'
 
   const [companyRead, periodsRead, factsRead] = await Promise.all([
@@ -202,6 +232,7 @@ export async function checkBankBalance(
     check: {
       as_of: asOf,
       fetched_at: account.balance_updated_at,
+      balance_type: day.type,
       bank_balance: bankBalance,
       booked_balance: bookedBalance,
       difference,

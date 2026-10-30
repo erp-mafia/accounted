@@ -5,7 +5,7 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: (...args: unknown[]) => trialBalanceMock(...args),
 }))
 
-import { checkBankBalance, type BankBalanceCheckAccount } from '../bank-balance-check'
+import { bankBalanceDay, checkBankBalance, type BankBalanceCheckAccount } from '../bank-balance-check'
 
 const COMPANY = 'company-1'
 const PERIODS = [
@@ -100,6 +100,7 @@ function account(overrides: Partial<BankBalanceCheckAccount> = {}): BankBalanceC
     is_primary: true,
     balance: 1000,
     balance_updated_at: '2026-10-26T10:00:00Z',
+    balance_reference: null,
     ...overrides,
   }
 }
@@ -152,6 +153,7 @@ describe('checkBankBalance', () => {
     expect(result.check).toEqual({
       as_of: '2026-10-26',
       fetched_at: '2026-10-26T10:00:00Z',
+      balance_type: null,
       bank_balance: 1000,
       booked_balance: 700,
       difference: 300,
@@ -192,6 +194,20 @@ describe('checkBankBalance', () => {
     expect(result.check?.as_of).toBe('2026-10-26')
     expect(rpcCalls[0].args.p_through).toBe('2026-10-26')
     expect(result.check?.difference).toBe(0)
+  })
+
+  it('reads both sides on the bank\'s own day when it gave one with this balance', async () => {
+    // The bank's closingBooked figure is the close of the 25th; a 300 kr
+    // verifikat on the 26th is not in it and must not count as a difference.
+    const { supabase, rpcCalls } = client()
+    bookedOn({ '2026-10-25': 1000 })
+    const result = await checkBankBalance(
+      supabase,
+      COMPANY,
+      account({ balance_reference: { date: '2026-10-25', type: 'closingBooked', fetched_at: '2026-10-26T10:00:00+00:00' } }),
+    )
+    expect(result.check).toMatchObject({ as_of: '2026-10-25', fetched_at: '2026-10-26T10:00:00Z', balance_type: 'closingBooked', difference: 0 })
+    expect(rpcCalls[0].args.p_through).toBe('2026-10-25')
   })
 
   it('counts nothing booked before the first fiscal year', async () => {
@@ -236,5 +252,27 @@ describe('checkBankBalance', () => {
   it('throws when a read fails rather than reporting a difference', async () => {
     const { supabase } = client({ factsError: 'permission denied' })
     await expect(checkBankBalance(supabase, COMPANY, account())).rejects.toThrow('Kunde inte läsa bankens transaktioner')
+  })
+})
+
+describe('bankBalanceDay', () => {
+  const at = '2026-10-26T10:00:00.123Z'
+  const ref = (overrides: Record<string, unknown> = {}) => ({ date: '2026-10-23', type: 'CLBD', fetched_at: '2026-10-26T10:00:00.123+00:00', ...overrides })
+
+  it('takes the bank\'s day and type when the reference came with this balance', () => {
+    expect(bankBalanceDay(at, ref())).toEqual({ date: '2026-10-23', type: 'CLBD' })
+    expect(bankBalanceDay(at, ref({ date: '2026-10-26', type: null }))).toEqual({ date: '2026-10-26', type: null })
+  })
+
+  it.each([
+    ['no reference', null],
+    ['a reference from an earlier balance', ref({ fetched_at: '2026-10-25T10:00:00+00:00' })],
+    ['a day after the fetch', ref({ date: '2026-10-27' })],
+    ['an impossible day', ref({ date: '2026-02-30' })],
+    ['a timestamp for a day', ref({ date: '2026-10-23T00:00:00Z' })],
+    ['no stamp', ref({ fetched_at: undefined })],
+    ['a bare string', '2026-10-23'],
+  ])('falls back to the Stockholm day of the fetch on %s', (_label, reference) => {
+    expect(bankBalanceDay(at, reference)).toEqual({ date: '2026-10-26', type: null })
   })
 })
