@@ -271,4 +271,11 @@ describe('the Bolaget doors', () => {
     expect(sessionRouteDoor('PUT /api/bolaget/owner-tax/k10/:year/owners/:partyId')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
     expect(sessionRouteDoor('POST /api/commitments/agreements')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
   })
+
+  it('opens a person\'s forecast rows with the same door as forecast:write, not the tax door of /api/reports', () => {
+    for (const key of ['POST /api/reports/cash-forecast/rows', 'POST /api/reports/cash-forecast/rows/:id/cancel']) {
+      expect(sessionRouteDoor(key), key).toMatchObject({ permission: 'bookkeeping.write', effect: 'housekeeping', stageable: false })
+    }
+    expect(sessionRouteDoor('POST /api/reports/vat-declaration/filings')).toMatchObject({ permission: 'tax.prepare', effect: 'ledger' })
+  })
 })

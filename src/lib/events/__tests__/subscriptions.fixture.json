@@ -234,7 +234,8 @@
   ],
   "transaction.synced": [
     "event-log",
-    "inbox-bank-match"
+    "inbox-bank-match",
+    "forecast-realise"
   ],
   "woocommerce.connected": [
     "suggestion-detectors"

@@ -70,6 +70,7 @@
       "lib/composition/event-consumers.ts -> lib/events/handlers/agent-feedback-relay-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/document-read-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/event-log-handler",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/forecast-realise-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/inbox-bank-match-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/inbox-companion-handler",
       "lib/composition/event-consumers.ts -> lib/invoices/supplier-invoice-handler",

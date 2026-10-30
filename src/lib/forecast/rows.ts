@@ -314,6 +314,51 @@ export async function upsertForecastRows(
   }
 }
 
+// ---------------------------------------------------------------------------
+// A person's row
+// ---------------------------------------------------------------------------
+
+export const CreateManualForecastRowInput = z.object({
+  expected_date: isoDateSchema,
+  amount: z.number().positive().max(1_000_000_000),
+  direction: z.enum(['in', 'out']),
+  category: z.enum(FORECAST_ROW_CATEGORIES),
+  confidence: z.enum(FORECAST_ROW_CONFIDENCES).optional(),
+  note: z.string().trim().max(500).nullable().optional(),
+})
+export type CreateManualForecastRowInput = z.infer<typeof CreateManualForecastRowInput>
+
+/**
+ * A row a person types in on the Likviditetsprognos page: source manual and
+ * no outside key (cash_forecast_rows_external_pair), so no upsert ever names
+ * it; it leaves the forecast by being cancelled or realised. The session's
+ * RLS decides who may write it: a writing member of the active company. The
+ * API's door for the same money is the upsert, keyed by the caller's system.
+ */
+export async function createManualForecastRow(
+  ctx: OperationContext,
+  input: CreateManualForecastRowInput,
+): Promise<OperationOutcome<{ row: ForecastRowView }>> {
+  const { data, error } = await ctx.supabase
+    .from('cash_forecast_rows')
+    .insert({
+      company_id: ctx.companyId,
+      expected_date: input.expected_date,
+      amount: roundOre(input.amount),
+      direction: input.direction,
+      category: input.category,
+      confidence: input.confidence ?? 'likely',
+      note: input.note ? input.note : null,
+      source: 'manual',
+      created_by: ctx.userId,
+    })
+    .select('id, expected_date, amount, direction, currency, category, source, external_source, external_id, confidence, dimension_value_id, invoice_id, supplier_invoice_id, status, matched_transaction_id, note, created_at, updated_at')
+    .single()
+  if (error) return writeFailed(error)
+  ctx.log.info('cash forecast row added', { cashForecastRowId: (data as ForecastRowRecord).id })
+  return { ok: true, data: { row: view(data as ForecastRowRecord) }, created: true }
+}
+
 function writeFailed(error: { message?: string; code?: string }): OperationOutcome<never> {
   // A unique violation the upsert could not absorb: sending the batch again resolves it.
   if (error.code === '23505') return { ok: false, code: 'CASH_FORECAST_ROWS_CONFLICT', details: { reason: error.message } }

@@ -166,6 +166,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     libraryOnly: true,
     dimensions: true,
   },
+  {
+    // Likviditetsprognos (accounted#136): where the bank balance is heading
+    // for 13 ISO weeks, from the open invoices, the payment queue, salaries,
+    // the skattekonto and the forecast rows. Looks forward from today rather
+    // than over a period, so it owns its route.
+    slug: 'likviditetsprognos',
+    labelKey: 'name_likviditetsprognos',
+    descKey: 'desc_likviditetsprognos',
+    category: 'interim',
+    params: 'none',
+    route: '/reports/likviditetsprognos',
+    searchTerms:
+      'likviditet likviditetsprognos kassaprognos kassaflödesprognos prognos framåt banksaldo saldo räcker pengarna betalningsförmåga cash forecast liquidity',
+  },
 
   // --- Bokslut (year-end) ---
   {

@@ -23,6 +23,7 @@ import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
 import { relayAgentFeedback } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import { enqueueDocumentRead } from '@/lib/events/handlers/document-read-handler'
 import { proposeInboxBankMatches } from '@/lib/events/handlers/inbox-bank-match-handler'
+import { realiseForecastRowsOnArrival } from '@/lib/events/handlers/forecast-realise-handler'
 import { followReceiptOnSupplierPayment } from '@/lib/events/handlers/inbox-companion-handler'
 import { PERSISTED_EVENT_TYPES, writeEventLog } from '@/lib/events/handlers/event-log-handler'
 import { detectorsByEventType, runEventDetectors } from '@/lib/suggestions/handler'
@@ -76,6 +77,15 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     owner: 'inbox',
     eventTypes: ['transaction.synced'],
     handle: (event) => proposeInboxBankMatches(event.payload),
+  }),
+  // Actuals replace forecasts: an arriving bank row that pays an open
+  // liquidity forecast row marks it realised, so the money is not counted
+  // again in the projection (lib/forecast/realise.ts). Never books.
+  eventConsumer({
+    id: 'forecast-realise',
+    owner: 'ledger',
+    eventTypes: ['transaction.synced'],
+    handle: (event) => realiseForecastRowsOnArrival(event.payload),
   }),
   // The receipt follows its invoice: a supplier invoice registered from an
   // inbox item that came with its receipt is settled against a bank row, and
