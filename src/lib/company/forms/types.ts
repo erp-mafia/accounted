@@ -76,6 +76,12 @@ export interface LegalFormProfile {
      */
     memberCapital: boolean
     /**
+     * ÅRL 4 kap. 2 § andra stycket: capitalised own development expenditure
+     * needs the same amount moved from free equity to a fond för
+     * utvecklingsutgifter (2089). Aktiebolag and ekonomisk förening.
+     */
+    developmentFund: boolean
+    /**
      * Fond för yttre underhåll, a bundet post of its own moved only by
      * omföring (K3 38.14-38.15, BRL 9 kap. 5 §): BAS 2088 for a
      * bostadsrättsförening, null for a form without one.

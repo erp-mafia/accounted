@@ -1,0 +1,1 @@
+[2026-10-26] New business event kind ledger.k3_transition (producer-named, booked as system): the transition to K3's adjustments against equity (K3 35.11) are neither a manual voucher nor a year-end closing, and the equity specification needs to tell them apart.

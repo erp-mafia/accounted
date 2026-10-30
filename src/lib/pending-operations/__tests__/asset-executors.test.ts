@@ -237,7 +237,8 @@ describe('commitPendingOperation: update_asset', () => {
       makePendingOp({ operation_type: 'update_asset', params: { asset_id: ASSET_ID, changes: { name: 'Renamed' } } }),
     )
     expect(result.status).toBe('committed')
-    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID, { name: 'Renamed' })
+    // The approver is the user an own-development mark's audit row names.
+    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID, { name: 'Renamed' }, { userId: 'user-1' })
     expect(result.data).toMatchObject({ asset_id: ASSET_ID, name: 'Renamed', has_posted_depreciation: true })
   })
 

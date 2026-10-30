@@ -26,6 +26,8 @@ import {
   loadDispositionState,
 } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
+import { closingDeficitOf, postDeferredTax } from '@/lib/bokslut/tax-provision/deferred-tax-service'
+import { buildDevelopmentFundProposal } from '@/lib/bokslut/development-fund'
 import type { JournalEntry } from '@/types'
 
 /**
@@ -51,6 +53,11 @@ const DISPOSITION_ORDER: Record<string, number> = {
   sarskild_loneskatt: 2,
   periodiseringsfond_avsattning: 3,
   bolagsskatt: 4,
+  // After bolagsskatt: the loss carried forward it may recognise is the
+  // bolagsskatt computation's closing underskott (K3 years only).
+  uppskjuten_skatt_kap29: 5,
+  // An equity transfer (ÅRL 4 kap. 2 §): no effect on the items above.
+  fond_for_utvecklingsutgifter: 6,
 }
 
 /**
@@ -169,6 +176,14 @@ const ItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('bolagsskatt'),
   }).strict(),
+  // Uppskjuten skatt (K3 kap. 29): computed from the saved inputs, nothing to send.
+  z.object({
+    kind: z.literal('uppskjuten_skatt_kap29'),
+  }).strict(),
+  // Fond för utvecklingsutgifter (K3): computed from the ledger, nothing to send.
+  z.object({
+    kind: z.literal('fond_for_utvecklingsutgifter'),
+  }).strict(),
   z.object({
     kind: z.literal('sarskild_loneskatt'),
     manualAdjustment: z.number().optional(),
@@ -248,6 +263,20 @@ export const POST = withRouteContext(
       // produces correct amounts on top of what's already there. A future
       // RPC-level wrapper (Phase 5+) will make this atomic.
       for (const item of sortedItems) {
+        if (item.kind === 'uppskjuten_skatt_kap29') {
+          // Its own posting function: the voucher and the items it was
+          // computed from in one transaction (commit_deferred_tax).
+          const state = await loadDispositionState(supabase, companyId, period)
+          const bolagsskatt = await bolagsskattDisposition(supabase, companyId, state, {
+            pendingResultEffect: 0,
+            schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
+          })
+          const entry = await postDeferredTax(supabase, companyId, user.id, period, {
+            closingDeficit: closingDeficitOf(bolagsskatt),
+          })
+          if (entry) created.push({ kind: item.kind, entry })
+          continue
+        }
         const proposal = await computeProposal(item, supabase, companyId, period)
         if (!proposal) continue
 
@@ -358,6 +387,14 @@ async function computeProposal(
 ): Promise<ProposedDisposition | null> {
   const fiscalPeriodId = period.id
   switch (item.kind) {
+    case 'uppskjuten_skatt_kap29':
+      // Posted by postDeferredTax in the POST loop, never here.
+      return null
+    case 'fond_for_utvecklingsutgifter': {
+      const form = await resolveCompanyEntityType(supabase, companyId)
+      const fund = await buildDevelopmentFundProposal(supabase, companyId, fiscalPeriodId, form)
+      return fund?.proposal ?? null
+    }
     case 'bolagsskatt': {
       // The preview's own computation (bolagsskattDisposition) on the ledger
       // as it stands now: bolagsskatt is sorted LAST, so every disposition of

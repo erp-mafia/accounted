@@ -134,6 +134,7 @@ describe('registration', () => {
     expect(staging.filter((t) => t.agentReason === 'own').map((t) => t.name).sort()).toEqual([
       'gnubok_credit_invoice',
       'gnubok_mark_no_document_required',
+      'gnubok_post_asset_value_adjustment',
       'gnubok_reverse_journal_entry',
       'gnubok_tag_journal_lines',
       'gnubok_undo_sie_import',

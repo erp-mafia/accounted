@@ -1,0 +1,1 @@
+[2026-10-26] The K3 transition voucher is source_type system with business event kind ledger.k3_transition, not a new source type: a source_type CHECK rewrite races the other K3 branches. P1's equity specification can map the kind to andrad_redovisningsprincip.

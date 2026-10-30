@@ -1,0 +1,1 @@
+[2026-10-27] The fond för utvecklingsutgifter follows assets.own_development, not the ledger's 1010-1019, and proposes nothing while 101x holds more than the register explains: a purchased licence carries no fund, and an imported fund is never moved on a guess.

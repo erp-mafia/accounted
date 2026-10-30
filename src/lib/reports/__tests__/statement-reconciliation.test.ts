@@ -7,6 +7,8 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
 }))
 

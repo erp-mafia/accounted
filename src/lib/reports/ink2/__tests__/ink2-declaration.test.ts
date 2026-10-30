@@ -18,6 +18,8 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
   MEMBERSHIP_FEE_ACCOUNT: '3901',
 }))
@@ -26,7 +28,7 @@ import { generateINK2Declaration } from '../ink2-engine'
 import { generateSRUSubmission } from '../sru-generator'
 import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import { loadBuildingTaxAdjustment, loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type { TrialBalanceRow } from '@/types'
 
 const COMPANY_ID = 'company-1'
@@ -359,6 +361,32 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(register(true, 20_000) as any)
     expect(blocked((await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)).warnings)).toEqual([])
+  })
+})
+
+describe('generateINK2Declaration: buildings on their tax plan (INK2S 4.9)', () => {
+  it('adds a book depreciation above the tax plan back on 7666 and a deduction below it on 7765', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 0,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+    vi.mocked(loadBuildingTaxAdjustment).mockResolvedValueOnce({ net: 10_000.6, lines: [], warnings: ['Lager: ange skattemässig avskrivning'] })
+    const plus = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    // Whole kronor: 506 000 + 10 000.
+    expect(plus.ink2s['7666']).toBe(10_000)
+    expect(plus.ink2s['7765']).toBe(0)
+    expect(plus.ink2s['7670']).toBe(516_000)
+    expect(plus.warnings).toContain('Lager: ange skattemässig avskrivning')
+    const sru = generateSRUSubmission(plus).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7666 10000')
+    expect(validateInk2BlanketterSru(sru).isValid).toBe(true)
+
+    vi.mocked(loadBuildingTaxAdjustment).mockResolvedValueOnce({ net: -6_000, lines: [], warnings: [] })
+    const minus = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(minus.ink2s['7765']).toBe(6_000)
+    expect(minus.ink2s['7670']).toBe(500_000)
   })
 })
 

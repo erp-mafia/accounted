@@ -1,0 +1,1 @@
+[2026-10-27] K3 operation ids are prefixed by the module that owns the code: assets.* (assets block), k3-transition.*, deferred-tax.* and accounting-policies.* (year-end block), not fiscal-periods.* or company.*, so the module coverage maps id and v1 path to one module.

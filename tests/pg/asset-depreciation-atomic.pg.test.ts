@@ -647,7 +647,7 @@ describe('opening edits and depreciation posting share the asset row lock', () =
   it('the 7-argument wrapper without an opening snapshot is gone (20261012100800)', async () => {
     const { rows } = await getPool().query<{ legacy: string | null; current: string | null }>(
       `SELECT to_regprocedure('public.commit_asset_depreciation(uuid, uuid, uuid, uuid, numeric, text, text)')::text AS legacy,
-              to_regprocedure('public.commit_asset_depreciation(uuid, uuid, uuid, uuid, numeric, numeric, date, text, text)')::text AS current`,
+              to_regprocedure('public.commit_asset_depreciation(uuid, uuid, uuid, uuid, numeric, numeric, date, text, text, jsonb)')::text AS current`,
     )
     expect(rows[0].legacy).toBeNull()
     expect(rows[0].current).not.toBeNull()

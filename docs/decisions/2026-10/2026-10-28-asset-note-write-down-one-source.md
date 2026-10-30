@@ -1,0 +1,1 @@
+[2026-10-28] Each nedskrivning in the asset note has one source: posted through the register, it is in the register roll-forward (K2 and K3); what the ledger's write-down accounts hold beyond that (by hand, before Accounted) is shown from the ledger in its own note, not blocked.

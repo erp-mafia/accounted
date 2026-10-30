@@ -1,0 +1,1 @@
+[2026-10-26] Mark is category land with useful_life_months 0 (a CHECK ties 0 to land) rather than a nullable life, so the column stays a number for every reader (K3 notes); a land write-down books on 1118, the only 12x8 in the post Byggnader och mark.

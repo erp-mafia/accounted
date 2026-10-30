@@ -246,6 +246,11 @@ export interface ArsredovisningData {
    *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error: the
    *  user can still download to iterate. */
   warnings: string[]
+  /** Faults the build found that make the document wrong as filed (the
+   *  anläggningar note not tying to the balansräkning while the register
+   *  holds write-downs). Completeness reports each as an error, so the
+   *  version cannot be locked. Absent when there is none. */
+  errors?: string[]
   /** Manual disclosure overrides persisted on arsredovisning_narratives.
    *  Drive the long-term debt, säkerheter, eventualförpliktelser, and
    *  koncernförhållanden notes. Null means "use the boilerplate". */

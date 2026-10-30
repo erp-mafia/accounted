@@ -1,0 +1,1 @@
+[2026-10-26] K3 components live in asset_components; assets.k3_components, acquisition_cost and the asset opening become a trigger-kept read-only projection: one source of truth, while readers that predate the table (K3 notes, v1 field, P0's dispatch) keep the books' figures.

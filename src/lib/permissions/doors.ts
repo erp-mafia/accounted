@@ -609,6 +609,8 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/company/:id/delete': SETTINGS,
     '/api/company/:id/migration-reset': SETTINGS,
     'PATCH /api/company/current': SETTINGS,
+    // The 18.7 model choice (K3 18.3A): requireAdmin today.
+    'PATCH /api/company/accounting-policies': SETTINGS,
     '/api/company/members': MEMBERS,
     'PATCH /api/onboarding/state': SETTINGS,
     'PUT /api/settings': SETTINGS,
@@ -637,6 +639,8 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/bookkeeping': BOOK,
     '/api/bookkeeping/accounts': BOOK_RECORD,
     'POST /api/bookkeeping/proposal-preview': READ,
+    // Computes the transition vouchers and writes nothing; commit is BOOK.
+    'POST /api/bookkeeping/k3-transition/preview': READ,
     '/api/bookkeeping/fiscal-periods': PERIODS,
     'POST /api/bookkeeping/fiscal-periods/:id/accruals': BOOK,
     '/api/bookkeeping/fiscal-periods/:id/depreciation': BOOK,

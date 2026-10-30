@@ -273,6 +273,15 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     'proposal is read-only; posting goes through a generic voucher',
   ),
   'PUT /api/bookkeeping/fiscal-periods/:id/bokslutsdispositioner': gap('P3', 'save dispositioner adjustments'),
+  'POST /api/bookkeeping/k3-transition': covered([`POST ${V}/k3-transition`, 'gnubok_start_k3_transition']),
+  'PATCH /api/bookkeeping/k3-transition': covered([`PATCH ${V}/k3-transition`, 'gnubok_update_k3_transition']),
+  'DELETE /api/bookkeeping/k3-transition': covered([`DELETE ${V}/k3-transition`, 'gnubok_delete_k3_transition']),
+  'POST /api/bookkeeping/k3-transition/preview': covered([`POST ${V}/k3-transition/commit`, 'gnubok_commit_k3_transition'], 'the commit operation\'s dry run'),
+  'POST /api/bookkeeping/k3-transition/commit': covered([`POST ${V}/k3-transition/commit`, 'gnubok_commit_k3_transition']),
+  'PUT /api/assets/:id/transition-split': covered([`PUT ${V}/assets/:id/transition-split`, 'gnubok_split_asset_at_k3_transition']),
+  'PUT /api/assets/:id/tax-plan': covered([`PUT ${V}/assets/:id/tax-plan`, 'gnubok_set_asset_tax_plan']),
+  'PATCH /api/company/accounting-policies': covered([`PATCH ${V}/accounting-policies`, 'gnubok_set_development_model']),
+  'PUT /api/bookkeeping/fiscal-periods/:id/deferred-tax': covered([`PUT ${V}/fiscal-periods/:id/deferred-tax`, 'gnubok_set_deferred_tax_inputs']),
   'PATCH /api/bookkeeping/fiscal-periods/:id/bokslut-checklist': gap('P3', 'tick a bokslut checklist item'),
   'PATCH /api/bookkeeping/fiscal-periods/:id/forenklat-arsbokslut': gap('P3', 'förenklat årsbokslut eligibility confirmation, notes and signatories; v1 and MCP read them (reports.forenklat-arsbokslut)'),
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/compliance': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/compliance`, 'gnubok_update_arsredovisning_compliance']),
@@ -729,6 +738,14 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/assets/:id': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
   'DELETE /api/assets/:id': covered([`DELETE ${V}/assets/:id`, 'gnubok_delete_asset']),
   'POST /api/assets/:id/dispose': covered([`POST ${V}/assets/:id/dispose`, 'gnubok_dispose_asset']),
+  // The component register (K3 17.4-17.5): add, change and remove are the
+  // full component list of PATCH /assets/:id (component_id names an
+  // existing one).
+  'POST /api/assets/:id/components': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
+  'PATCH /api/assets/:id/components/:componentId': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
+  'DELETE /api/assets/:id/components/:componentId': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
+  'POST /api/assets/:id/components/:componentId/replace': covered([`POST ${V}/assets/:id/components/:componentId/replace`, 'gnubok_replace_asset_component']),
+  'POST /api/assets/:id/value-adjustments': covered([`POST ${V}/assets/:id/value-adjustments`, 'gnubok_post_asset_value_adjustment']),
   'PATCH /api/assets/:id/identification': gap('P3', 'a building\'s fastighetsbeteckning and taxeringsvärde, a vehicle\'s registration number and bilförmån; dashboard first behind BOLAGET_COMPANY_IDS'),
 
   // ── Payroll ────────────────────────────────────────────────────────
@@ -1065,6 +1082,21 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 166 -> 167 (2026-10-27): switching how the semesterlöneskuld is booked,
  * dashboard only: the switch posts a catch-up verifikat behind a previewed
  * confirm; stäm av per datum has its v1 door.
+ * 167 -> 168 (2026-10-27, accounted#111): K3 component replacement, dashboard
+ * first; the operation lands with the K3 doors MR.
+ * 168 -> 169 (2026-10-27, accounted#111): the K3 nedskrivning vouchers,
+ * dashboard first; the operation lands with the K3 doors MR.
+ * 169 -> 170 (2026-10-27, accounted#111): the K3 uppskjuten skatt inputs,
+ * dashboard first; the operation lands with the K3 doors MR.
+ * 170 -> 171 (2026-10-27, accounted#111): the K3 18.7 development model,
+ * dashboard first; the operation lands with the K3 doors MR.
+ * 171 -> 172 (2026-10-27, accounted#111): a building's tax plan, dashboard
+ * first; the operation lands with the K3 doors MR.
+ * 172 -> 178 (2026-10-27, accounted#111): the K3 transition (start, note facts,
+ * drop, preview, commit) and the split at it, dashboard first; the
+ * operations land with the K3 doors MR.
+ * 178 -> 167 (2026-10-27, accounted#111): the K3 doors (lib/operations/k3.ts)
+ * cover the eleven K3 gaps above.
  * 167 -> 168 (2026-10-29, Bolaget W5): a building's or vehicle's
  * identification fields on the asset register, dashboard first behind
  * BOLAGET_COMPANY_IDS.

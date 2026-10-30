@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `448`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `459`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -24,6 +24,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/invoices/:id",
   "DELETE /api/v1/companies/:companyId/journal-entries/:id",
   "DELETE /api/v1/companies/:companyId/journal-entries/:id/no-document-required",
+  "DELETE /api/v1/companies/:companyId/k3-transition",
   "DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId",
   "DELETE /api/v1/companies/:companyId/reports/vat-declaration/filings",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
@@ -101,6 +102,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/journal-entries/:id",
   "GET /api/v1/companies/:companyId/journal-entries/:id/rattelse-log",
   "GET /api/v1/companies/:companyId/k10/:year",
+  "GET /api/v1/companies/:companyId/k3-transition",
   "GET /api/v1/companies/:companyId/ku20/:year",
   "GET /api/v1/companies/:companyId/ku31/:year",
   "GET /api/v1/companies/:companyId/measures",
@@ -209,6 +211,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/health",
   "GET /api/v1/operations/:id",
   "GET /api/v1/portfolio/overview",
+  "PATCH /api/v1/companies/:companyId/accounting-policies",
   "PATCH /api/v1/companies/:companyId/accounts/:number",
   "PATCH /api/v1/companies/:companyId/agreements/:id",
   "PATCH /api/v1/companies/:companyId/assets/:id",
@@ -230,6 +233,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/journal-entries/:id",
   "PATCH /api/v1/companies/:companyId/journal-entries/:id/notes",
+  "PATCH /api/v1/companies/:companyId/k3-transition",
   "PATCH /api/v1/companies/:companyId/owner-loans/:id",
   "PATCH /api/v1/companies/:companyId/pos-sales/connections/:connectionId/settings",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
@@ -256,7 +260,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/agreements",
   "POST /api/v1/companies/:companyId/agreements/:id/end",
   "POST /api/v1/companies/:companyId/assets",
+  "POST /api/v1/companies/:companyId/assets/:id/components/:componentId/replace",
   "POST /api/v1/companies/:companyId/assets/:id/dispose",
+  "POST /api/v1/companies/:companyId/assets/:id/value-adjustments",
   "POST /api/v1/companies/:companyId/bank-connections/:connectionId/sync",
   "POST /api/v1/companies/:companyId/bank-feed/invites",
   "POST /api/v1/companies/:companyId/beneficial-owners/assessments",
@@ -349,6 +355,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/journal-entries/:id/strike-lines",
   "POST /api/v1/companies/:companyId/journal-entries/batch-create",
   "POST /api/v1/companies/:companyId/journal-entries/no-document-required",
+  "POST /api/v1/companies/:companyId/k3-transition",
+  "POST /api/v1/companies/:companyId/k3-transition/commit",
   "POST /api/v1/companies/:companyId/owner-loans",
   "POST /api/v1/companies/:companyId/owner-loans/:id/interest",
   "POST /api/v1/companies/:companyId/packages/:packageId/disable",
@@ -444,11 +452,14 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/webshop-orders/:orderId/book",
   "POST /api/v1/companies/:companyId/webshop-orders/book-day",
   "POST /api/v1/webhook-deliveries/:id/retry",
+  "PUT /api/v1/companies/:companyId/assets/:id/tax-plan",
+  "PUT /api/v1/companies/:companyId/assets/:id/transition-split",
   "PUT /api/v1/companies/:companyId/cash-accounts/payee-defaults",
   "PUT /api/v1/companies/:companyId/employees/:id/absence",
   "PUT /api/v1/companies/:companyId/employees/:id/opening-balances",
   "PUT /api/v1/companies/:companyId/employees/:id/worked-days",
   "PUT /api/v1/companies/:companyId/employees/opening-balances",
+  "PUT /api/v1/companies/:companyId/fiscal-periods/:id/deferred-tax",
   "PUT /api/v1/companies/:companyId/inbox-items/:id/purchase-category",
   "PUT /api/v1/companies/:companyId/k10/:year/owners/:partyId",
   "PUT /api/v1/companies/:companyId/supplier-invoices/attest-policy",
@@ -457,7 +468,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
 
 exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-modules 1`] = `
 {
-  "assets": 6,
+  "assets": 10,
   "bank-feed": 7,
   "byra": 1,
   "capital": 15,
@@ -477,7 +488,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "transactions": 31,
   "vat": 1,
   "webshop": 5,
-  "year-end": 25,
+  "year-end": 32,
 }
 `;
 

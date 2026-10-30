@@ -4132,6 +4132,9 @@ export interface YearEndResult {
 export type AssetCategory =
   | 'immaterial'
   | 'building'
+  /** Mark: never depreciated (unlimited useful life, K2 10.29, K3 17.4);
+   *  useful_life_months is 0. */
+  | 'land'
   | 'land_improvement'
   | 'machinery'
   | 'equipment'
@@ -4152,28 +4155,84 @@ export type AssetDisposalType = 'sale' | 'scrap' | 'business_transfer'
 export type AssetJamkningDirection = 'increase' | 'decrease' | 'none' | 'transferred'
 
 /**
- * K3 component (BFNAR 2012:1 ch 17.4: komponentavskrivning). When a
- * substantial asset (typically real estate) has significant components with
- * materially different useful lives, K3 reporting requires each component to
- * be depreciated on its own life rather than treating the asset as a single
- * unit. Components are stored as an array on `Asset.k3_components`; when
- * non-null, the depreciation engine routes through `computeComponentDepreciation`
- * and sums per-component linear depreciation (with the same pro-ration logic
- * as the asset-level linear method).
+ * K3 component as callers write it (BFNAR 2012:1 17.4: komponentavskrivning):
+ * the create and update input of a component, and the read-only projection
+ * on `Asset.k3_components`. The register itself is `AssetComponent`
+ * (public.asset_components); the projection lists its active rows with
+ * their `component_id`.
  *
- * Validation (enforced in `lib/bokslut/assets/k3-components.ts`):
- *   - sum(components.cost) === asset.acquisition_cost (±1 kr tolerance)
- *   - every component: cost > 0, useful_life_months > 0
- *   - salvage_value (if present) ≤ component cost
- *   - non-empty array when set to non-null
- *
- * Salvage_value defaults to 0 when omitted.
+ * Validation (lib/bokslut/assets/k3-components.ts): costs sum to the asset's
+ * acquisition cost, cost > 0, a positive whole number of months or null for
+ * a component that is not depreciated (mark, K3 17.13), salvage value between
+ * 0 and the cost, an opening amount with its date.
  */
 export interface K3Component {
+  /** Set on an existing component (update input, projection). */
+  component_id?: string
   name: string
   cost: number
-  useful_life_months: number
+  /** null: not depreciated (mark has an unlimited useful life, K3 17.13). */
+  useful_life_months: number | null
   salvage_value?: number
+  /** Defaults to the asset's acquisition date. */
+  acquisition_date?: string | null
+  /** K3 17.18: when the component can be used. Defaults to its acquisition date. */
+  depreciation_start_date?: string | null
+  /** Accumulated depreciation before the component's history in Accounted. */
+  opening_accumulated_depreciation?: number
+  opening_depreciation_date?: string | null
+}
+
+/**
+ * One row of public.asset_components: a component of a fixed asset with its
+ * own plan and history (K3 17.4-17.5A, 17.13, 17.18, 17.21A). NUMERIC
+ * columns arrive as strings from PostgREST.
+ */
+export interface AssetComponent {
+  id: string
+  user_id: string
+  company_id: string
+  asset_id: string
+  name: string
+  cost: number | string
+  useful_life_months: number | null
+  salvage_value: number | string
+  acquisition_date: string
+  depreciation_start_date: string | null
+  opening_accumulated_depreciation: number | string
+  opening_depreciation_date: string | null
+  replaces_component_id: string | null
+  derecognised_at: string | null
+  derecognition_journal_entry_id: string | null
+  derecognition_depreciation: number | string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * One row of public.asset_value_adjustments: a posted nedskrivning or its
+ * reversal (ÅRL 4:5, K3 27), per component for a component asset. It counts
+ * while its voucher is posted; `journal_entry.status` is embedded by the
+ * asset reads so a storno ('reversed') takes it out. NUMERIC columns arrive
+ * as strings from PostgREST.
+ */
+export interface AssetValueAdjustment {
+  id: string
+  asset_id: string
+  component_id: string | null
+  kind: 'impairment' | 'impairment_reversal'
+  /** The balansdag the recoverable amount was assessed on. */
+  adjustment_date: string
+  fiscal_period_id: string
+  amount: number | string
+  recoverable_amount: number | string | null
+  reason: string
+  expense_account: string
+  accumulated_account: string
+  journal_entry_id: string
+  journal_entry?: { status: JournalEntryStatus } | null
+  created_at: string
 }
 
 export interface Asset {
@@ -4185,7 +4244,28 @@ export interface Asset {
   acquisition_date: string
   acquisition_cost: number
   salvage_value: number
+  /** 0 for land (category 'land'): not depreciated. */
   useful_life_months: number
+  /** K3 17.18: the day depreciation starts (the asset can be used). Null:
+   *  the acquisition date. Optional so rows read before the column existed
+   *  stay valid. */
+  depreciation_start_date?: string | null
+  /** IL 19 kap. 5 § / 20 kap. 5 §: tax depreciation in percent a year of a
+   *  building or markanläggning; null when no tax plan is stated. */
+  tax_depreciation_rate?: number | string | null
+  /** The day the tax plan starts; null: the acquisition date. */
+  tax_depreciation_from?: string | null
+  /** IL 19 kap. 5 a §: primäravdrag on a newly built hyreshus. */
+  tax_primary_allowance?: boolean
+  /** Set by the database when the tax plan is stated: the plan applies to
+   *  fiscal years starting on or after it, never to a year already closed
+   *  or locked, so a declared INK2 never moves. */
+  tax_plan_applies_from?: string | null
+  /** The company's own development capitalised under the K3
+   *  aktiveringsmodell (18.7), on 101x: what the fond för
+   *  utvecklingsutgifter follows (ÅRL 4 kap. 2 §). False for a purchased
+   *  intangible, wherever it sits. */
+  own_development?: boolean
   depreciation_method: DepreciationMethod
   bas_asset_account: string
   bas_accumulated_account: string
@@ -4224,11 +4304,19 @@ export interface Asset {
   jamkning_total_years?: number | null
   jamkning_original_deduction_percent?: number | null
   jamkning_new_deduction_percent?: number | null
-  /** K3 component depreciation (BFNAR 2012:1 ch.17.4). When non-null, the
-   *  depreciation engine sums per-component linear depreciation instead of
-   *  applying `depreciation_method` to the asset as a whole. Null for K2
-   *  companies (the API rejects writes for accounting_framework='k2'). */
+  /** Read-only projection of the active components (component_id, name,
+   *  cost, life, salvage), kept by a database trigger. Null for an asset
+   *  without components. Write components through the register
+   *  (asset_components), never this column. */
   k3_components: K3Component[] | null
+  /** The component register rows, embedded by listAssets/getAsset
+   *  (components:asset_components(*)), derecognised ones included. Absent
+   *  when a caller selected only the asset row. */
+  components?: AssetComponent[]
+  /** Posted nedskrivningar and reversals, embedded by listAssets/getAsset
+   *  (value_adjustments:asset_value_adjustments(...)). Absent when a caller
+   *  selected only the asset row. */
+  value_adjustments?: AssetValueAdjustment[]
   /** Ackumulerad avskrivning booked before the asset entered Accounted (a
    *  previous system), stated per `opening_depreciation_date`. Never posted
    *  by Accounted: the amount is already in the imported 12x9 balance. The

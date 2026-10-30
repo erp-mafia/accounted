@@ -3,6 +3,8 @@ import { createLogger } from '@/lib/logger'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
+import { frameworkForYear } from '@/lib/bokslut/framework-for-year'
+import type { AccountingFramework } from '@/types'
 import { stockCountEnabledFor } from '@/lib/env/stock-count-switch'
 
 const log = createLogger('bokslut/checklist')
@@ -31,6 +33,8 @@ export interface ChecklistItemDef {
   auto: boolean
   /** Where the work is done. */
   href?: string
+  /** Only under these frameworks: not applicable (computed) in any other year. */
+  frameworks?: readonly AccountingFramework[]
 }
 
 export const BOKSLUT_CHECKLIST: readonly ChecklistItemDef[] = [
@@ -46,6 +50,11 @@ export const BOKSLUT_CHECKLIST: readonly ChecklistItemDef[] = [
   { key: 'inventory_valued', group: 'vardering', label_sv: 'Varulager inventerat och värderat (LVP)', label_en: 'Inventory counted and valued (lower of cost or market)', auto: false },
   { key: 'doubtful_receivables', group: 'vardering', label_sv: 'Osäkra kundfordringar bedömda och nedskrivna vid behov', label_en: 'Doubtful receivables assessed and written down where needed', auto: false },
   { key: 'depreciation_posted', group: 'vardering', label_sv: 'Avskrivningar bokförda enligt anläggningsregistret', label_en: 'Depreciation posted per the fixed asset register', auto: false, href: '/bookkeeping/year-end' },
+  { key: 'impairment_indications', group: 'vardering', label_sv: 'Prövat om någon anläggningstillgång behöver skrivas ned (värdenedgång som kan antas bestå) och nedskrivningar bokförda', label_en: 'Checked whether any fixed asset needs a write-down (a decline in value expected to last) and write-downs posted', hint_sv: 'ÅRL 4 kap. 5 §, K3 27.3: indikationer som skada, föråldring, fallande marknadsvärde eller lägre avkastning. Görs per tillgång under Anläggningstillgångar.', hint_en: 'ÅRL 4 kap. 5 §, K3 27.3: indications such as damage, obsolescence, a falling market value or lower returns. Done per asset under Fixed assets.', auto: false, href: '/assets' },
+  { key: 'k3_transition', group: 'vardering', label_sv: 'Övergången till K3 genomförd, om tidigare årsredovisningar upprättades enligt K2', label_en: 'Transition to K3 completed, if earlier annual reports were prepared under K2', hint_sv: 'K3 kapitel 35: komponentuppdelning vid övergången (35.18), uppskjuten skatt i ingångsbalansen eller lättnadsregeln 35.27, justeringar mot eget kapital i första K3-året (35.11).', hint_en: 'K3 chapter 35: component split at the transition (35.18), opening deferred tax or the 35.27 relief, adjustments against equity in the first K3 year (35.11).', auto: false, href: '/bookkeeping/year-end', frameworks: ['k3'] },
+  { key: 'depreciation_review', group: 'vardering', label_sv: 'Nyttjandeperioder, restvärden och avskrivningsmetoder omprövade', label_en: 'Useful lives, residual values and depreciation methods reviewed', hint_sv: 'K3 17.15, 17.17 och 17.20: en ändring gäller framåt (K3 10.9) och planeras om från det som återstår.', hint_en: 'K3 17.15, 17.17 and 17.20: a change applies prospectively (K3 10.9) and the rest is planned from what is left.', auto: false, href: '/assets', frameworks: ['k3'] },
+  { key: 'component_review', group: 'vardering', label_sv: 'Komponentuppdelningen kontrollerad för väsentliga tillgångar, utbytta delar borttagna', label_en: 'Component breakdown checked for significant assets, replaced parts derecognised', hint_sv: 'K3 17.4, 17.5 och 17.21A.', hint_en: 'K3 17.4, 17.5 and 17.21A.', auto: false, href: '/assets', frameworks: ['k3'] },
+  { key: 'deferred_tax', group: 'dispositioner', label_sv: 'Uppskjuten skatt beräknad på temporära skillnader och bokförd', label_en: 'Deferred tax calculated on temporary differences and posted', hint_sv: 'K3 kap. 29. Obeskattade reserver redovisas brutto i juridisk person (K3 29.37).', hint_en: 'K3 chapter 29. Untaxed reserves stay gross in the legal entity (K3 29.37).', auto: false, href: '/bookkeeping/year-end', frameworks: ['k3'] },
   { key: 'dispositions_posted', group: 'dispositioner', label_sv: 'Bokslutsdispositioner bokförda (periodiseringsfond, överavskrivningar)', label_en: 'Appropriations posted (tax allocation reserve, excess depreciation)', auto: false, href: '/bookkeeping/year-end' },
   { key: 'tax_provision', group: 'dispositioner', label_sv: 'Årets skatt beräknad och bokförd', label_en: 'Current tax calculated and posted', auto: false, href: '/bookkeeping/year-end' },
   { key: 'no_drafts', group: 'kontroll', label_sv: 'Inga utkast kvar i perioden', label_en: 'No draft entries left in the period', auto: true, href: '/bookkeeping?status=draft' },
@@ -113,8 +122,15 @@ export function computeAutoStates(
   accounts: ReconciliationAccount[] | null,
   readiness: ChecklistReadinessInput | null,
   periodEnd: string,
+  /** The year's framework; null when it could not be read (no step is then ruled out). */
+  framework: AccountingFramework | null = null,
 ): Map<string, ChecklistState> {
   const out = new Map<string, ChecklistState>()
+  if (framework) {
+    for (const def of BOKSLUT_CHECKLIST) {
+      if (def.frameworks && !def.frameworks.includes(framework)) out.set(def.key, 'not_applicable')
+    }
+  }
   if (accounts) {
     out.set('bank_signed', allSigned(accounts.filter((a) => a.kind === 'bank' && !a.superseded_by), periodEnd))
     out.set('skattekonto_signed', allSigned(accounts.filter((a) => a.kind === 'skattekonto'), periodEnd))
@@ -139,7 +155,8 @@ export function assembleChecklist(
   const byKey = new Map(rows.map((r) => [r.item_key, r]))
   const items: ChecklistItem[] = BOKSLUT_CHECKLIST.map((def) => {
     const row = byKey.get(def.key)
-    const auto = def.auto ? (autoStates.get(def.key) ?? null) : null
+    // A framework-scoped step is computed as not applicable in other years.
+    const auto = def.auto || def.frameworks ? (autoStates.get(def.key) ?? null) : null
     return {
       ...def,
       auto_state: auto,
@@ -226,8 +243,14 @@ export async function buildBokslutChecklist(
     log.warn('reconciliation accounts unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
   }
   const readiness = await readinessRead
+  let framework: AccountingFramework | null = null
+  try {
+    framework = await frameworkForYear(supabase, companyId, fiscalPeriodId)
+  } catch (err) {
+    log.warn('framework unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
+  }
 
-  const checklist = assembleChecklist(period, computeAutoStates(accounts, readiness, period.period_end), rows)
+  const checklist = assembleChecklist(period, computeAutoStates(accounts, readiness, period.period_end, framework), rows)
   // Where the stock count is on, the inventory step leads to it; signing a
   // count marks the step done (lib/bokslut/stock-count/signing.ts).
   if (stockCountEnabledFor(companyId)) {

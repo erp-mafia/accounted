@@ -385,11 +385,23 @@ export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
  *
  * `salvage_value` is optional; the engine treats omission as 0.
  */
+const COMPONENT_DATE = ISO_DATE_RE
+
 export const K3ComponentSchema = z.object({
+  component_id: z.string().uuid().optional().describe('An existing component (update); omit to register a new one.'),
   name: z.string().min(1, 'Komponentens namn krävs.'),
   cost: z.number().positive('Anskaffningsvärdet måste vara större än 0.'),
-  useful_life_months: z.number().int().positive('Nyttjandeperioden måste vara ett positivt heltal månader.'),
+  useful_life_months: z
+    .number()
+    .int()
+    .positive('Nyttjandeperioden måste vara ett positivt heltal månader.')
+    .nullable()
+    .describe('Months; null for a component that is not depreciated (mark, K3 17.13).'),
   salvage_value: z.number().nonnegative().optional(),
+  acquisition_date: z.string().regex(COMPONENT_DATE).nullable().optional().describe('yyyy-MM-dd; defaults to the asset acquisition date.'),
+  depreciation_start_date: z.string().regex(COMPONENT_DATE).nullable().optional().describe('yyyy-MM-dd the component can be used (K3 17.18); defaults to its acquisition date.'),
+  opening_accumulated_depreciation: z.number().nonnegative().optional().describe('Accumulated depreciation before the component entered Accounted, SEK; never posted.'),
+  opening_depreciation_date: z.string().regex(COMPONENT_DATE).nullable().optional().describe('yyyy-MM-dd the opening amount is stated per.'),
 })
 
 export const CustomerTypeSchema = z.enum([

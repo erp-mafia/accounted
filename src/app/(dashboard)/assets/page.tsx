@@ -28,6 +28,7 @@ type AssetRow = Asset & { has_posted_depreciation?: boolean; deletable?: boolean
 const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
   immaterial: 'category_immaterial',
   building: 'category_building',
+  land: 'category_land',
   land_improvement: 'category_land_improvement',
   machinery: 'category_machinery',
   equipment: 'category_equipment',
@@ -185,7 +186,11 @@ export default function AssetsPage() {
                         {formatCurrency(Number(asset.acquisition_cost))}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
-                        {t('useful_life_format', { years, months: asset.useful_life_months })}
+                        {asset.k3_components && asset.k3_components.length > 0
+                          ? t('components.count', { count: asset.k3_components.length })
+                          : asset.category === 'land'
+                            ? t('not_depreciated')
+                            : t('useful_life_format', { years, months: asset.useful_life_months })}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
                         {disposed ? (

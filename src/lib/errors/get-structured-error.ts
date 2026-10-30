@@ -145,6 +145,14 @@ interface StructuredErrorOptions {
 /**
  * Pull a stable code out of various error shapes.
  */
+/**
+ * The shape of an application error code: upper-case words joined by
+ * underscores, digits allowed inside a word (INVALID_K3_COMPONENTS). A
+ * single word must be letters only, so a five-character SQLSTATE such as
+ * P0002 that reached here is never taken for one.
+ */
+const APPLICATION_CODE = /^(?:[A-Z_]+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$/
+
 function extractCode(error: unknown): string | null {
   if (typeof error !== 'object' || error === null) return null
 
@@ -155,7 +163,7 @@ function extractCode(error: unknown): string | null {
   if (obj.code === 'PT409') return conflictCode(obj.message)
 
   // Typed bookkeeping error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', ... }
-  if (typeof obj.code === 'string' && /^[A-Z_]+$/.test(obj.code)) {
+  if (typeof obj.code === 'string' && APPLICATION_CODE.test(obj.code)) {
     return obj.code
   }
 
@@ -163,7 +171,7 @@ function extractCode(error: unknown): string | null {
   if (typeof obj.error === 'object' && obj.error !== null) {
     const inner = obj.error as Record<string, unknown>
     if (inner.code === 'PT409') return conflictCode(inner.message)
-    if (typeof inner.code === 'string' && /^[A-Z_]+$/.test(inner.code)) {
+    if (typeof inner.code === 'string' && APPLICATION_CODE.test(inner.code)) {
       return inner.code
     }
   }

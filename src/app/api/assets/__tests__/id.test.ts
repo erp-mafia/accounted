@@ -24,6 +24,18 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 const requireWriteMock = vi.fn()
+// The framework of the year the asset is acquired in (frameworkOnDate, the
+// per-year resolver): set with each company row below.
+const frameworkOnDateMock = vi.hoisted(() => vi.fn(async (): Promise<'k2' | 'k3'> => 'k2'))
+vi.mock('@/lib/bokslut/framework-for-year', () => ({
+  frameworkOnDate: frameworkOnDateMock,
+  frameworkForYear: vi.fn(async () => 'k2'),
+}))
+vi.mock('@/lib/company/accounting-framework', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/accounting-framework')>()),
+  frameworkOnDate: frameworkOnDateMock,
+}))
+
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
@@ -53,6 +65,7 @@ const routeParams = { params: Promise.resolve({ id: 'asset-1' }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  frameworkOnDateMock.mockResolvedValue('k2')
   reset()
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
   requireWriteMock.mockResolvedValue({ ok: true })
@@ -129,6 +142,7 @@ describe('POST /api/assets', () => {
   // .claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:24.
   it('lets a K2 company create an immaterial asset on the category defaults', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockCreateAsset.mockResolvedValue({ id: 'asset-licence' } as never)
 
     const response = await POST(createMockRequest('/api/assets', {
@@ -168,6 +182,7 @@ describe('POST /api/assets', () => {
     'rejects a K2 company explicitly overriding onto %s with 422',
     async (assetAccount, accumulatedAccount) => {
       enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
+      frameworkOnDateMock.mockResolvedValue('k2')
 
       const { status, body } = await parseJsonResponse<{
         error: { code: string; message: string }
@@ -203,6 +218,7 @@ describe('POST /api/assets', () => {
   // the wording drops both and keeps the actionable 1090 remedy.
   it('rejects an enskild firma on 1010 without citing BFNAR 2016:10 or K3', async () => {
     enqueue({ data: { accounting_framework: 'k2', entity_type: 'enskild_firma' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
 
     const { status, body } = await parseJsonResponse<{
       error: { code: string; message: string; message_en: string }
@@ -237,6 +253,7 @@ describe('POST /api/assets', () => {
 
   it('rejects a K2 company overriding the ACCUMULATED account onto 1019 with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
 
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(createMockRequest('/api/assets', {
@@ -265,6 +282,7 @@ describe('POST /api/assets', () => {
   // since the companies read behind it discards its error.
   it('does not tell the user to switch accounting framework in the rejection', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
 
     const { body } = await parseJsonResponse<{
       error: { message: string; message_en: string }
@@ -295,6 +313,7 @@ describe('POST /api/assets', () => {
 
   it('accepts a K2 company creating an immaterial asset on a purchased pair (1030/1039)', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockCreateAsset.mockResolvedValue({ id: 'asset-patent' } as never)
 
     const response = await POST(createMockRequest('/api/assets', {
@@ -321,6 +340,7 @@ describe('POST /api/assets', () => {
 
   it('accepts a K3 company creating an immaterial asset on the 1010/1019 defaults', async () => {
     enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k3')
     mockCreateAsset.mockResolvedValue({ id: 'asset-dev' } as never)
 
     const response = await POST(createMockRequest('/api/assets', {
@@ -366,6 +386,7 @@ describe('PATCH /api/assets/[id]', () => {
 
   it('rejects k3_components for a K2 company with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
 
@@ -385,11 +406,44 @@ describe('PATCH /api/assets/[id]', () => {
     expect(mockUpdateAsset).not.toHaveBeenCalled()
   })
 
+  // B1/F1: companies.accounting_framework holds the LATEST year's. With the
+  // next year elected K3, an asset acquired in the current K2 year may not
+  // take components (BFNAR 2016:10 10.2): the acquisition year decides.
+  it('judges components by the year the asset was acquired in, not the company\'s latest framework', async () => {
+    enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000, acquisition_date: '2026-03-01' } as any)
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { k3_components: [{ name: 'Stomme', cost: 100000, useful_life_months: 600 }] },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await PATCH(req, routeParams))
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K3_REQUIRED_FOR_COMPONENTS')
+    expect(frameworkOnDateMock).toHaveBeenCalledWith(supabase, 'company-1', '2026-03-01')
+
+    const create = await POST(createMockRequest('/api/assets', {
+      method: 'POST',
+      body: {
+        name: 'Kontorshus',
+        category: 'building',
+        acquisition_date: '2026-03-01',
+        acquisition_cost: 100_000,
+        useful_life_months: 600,
+        k3_components: [{ name: 'Stomme', cost: 100_000, useful_life_months: 600 }],
+      },
+    }), { params: Promise.resolve({}) } as never)
+    expect(create.status).toBe(422)
+    expect(mockCreateAsset).not.toHaveBeenCalled()
+  })
+
   it('validates the component sum against the NEW acquisition_cost when both change', async () => {
     // Regression: stored cost is 100 000 but the PATCH raises it to 120 000.
     // Components summing to 120 000 must pass — previously they were checked
     // against the stale stored cost and wrongly rejected.
     enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k3')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -414,6 +468,7 @@ describe('PATCH /api/assets/[id]', () => {
 
   it('rejects components that sum to the OLD cost when the PATCH changes the cost', async () => {
     enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k3')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
 
@@ -436,6 +491,7 @@ describe('PATCH /api/assets/[id]', () => {
 
   it('rejects a K2 company patching the asset account onto 1010 with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',
@@ -465,6 +521,7 @@ describe('PATCH /api/assets/[id]', () => {
     // Explicit accounts suppress the realign in updateAsset(), so the gate has
     // to evaluate the override rather than the (now lawful) category defaults.
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'equipment',
@@ -499,6 +556,7 @@ describe('PATCH /api/assets/[id]', () => {
   // raises its range error. Those rejections must NOT claim punkt 10.4.
   it('rejects a K2 company patching onto 1370 without citing the intangible rule', async () => {
     enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',
@@ -536,6 +594,7 @@ describe('PATCH /api/assets/[id]', () => {
   // only, so this is lawful and the defaults must land on the acquired pair.
   it('lets a K2 company recategorize to immaterial (defaults land on 1090/1099)', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'equipment',
@@ -566,11 +625,12 @@ describe('PATCH /api/assets/[id]', () => {
     // triple itself (asset-service.test.ts pins the realigned pair).
     expect(mockUpdateAsset).toHaveBeenCalledWith(supabase, 'company-1', 'asset-1', {
       category: 'immaterial',
-    })
+    }, { userId: 'user-1' })
   })
 
   it('allows a K2 company moving a legacy 1010 asset onto a purchased pair', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',
@@ -593,6 +653,7 @@ describe('PATCH /api/assets/[id]', () => {
 
   it('allows a K3 company patching the asset account onto 1010', async () => {
     enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k3')
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',
@@ -629,5 +690,26 @@ describe('PATCH /api/assets/[id]', () => {
 
     expect(status).toBe(200)
     expect(mockUpdateAsset).toHaveBeenCalled()
+  })
+
+  // R1: an asset already on 1010 is marked as own development from the
+  // edit form; the service writes it through the audited door.
+  it('passes the own development mark to the service, and 400 for a non-boolean', async () => {
+    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', own_development: true } as never)
+    const req = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: true } })
+    expect((await parseJsonResponse(await PATCH(req, routeParams))).status).toBe(200)
+    expect(mockUpdateAsset.mock.calls[0][3]).toEqual({ own_development: true })
+
+    const bad = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: 'ja' } })
+    expect((await parseJsonResponse(await PATCH(bad, routeParams))).status).toBe(400)
+  })
+
+  it('answers 400 with the reason when the asset is not on 1010-1019', async () => {
+    const { AssetOwnDevelopmentAccountError } = await import('@/lib/bokslut/assets/asset-service')
+    mockUpdateAsset.mockRejectedValue(new AssetOwnDevelopmentAccountError())
+    const req = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: true } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('OWN_DEVELOPMENT_ACCOUNT')
   })
 })

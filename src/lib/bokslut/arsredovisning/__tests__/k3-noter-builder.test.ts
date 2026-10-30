@@ -118,6 +118,13 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).toContain('Finansiella instrument')
   })
 
+  it('says mark is not depreciated when the books hold mark, and only then', () => {
+    expect(principles().body).not.toContain('Mark skrivs inte av.')
+    expect(buildK3RedovisningsPrinciper({ hasComponents: false, deferredTax: 'none', hasCapitalizedLease: false, holdsLand: true }).body).toContain(
+      'Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod. Mark skrivs inte av.',
+    )
+  })
+
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
     const note = principles()
     expect(note.body).not.toMatch(/Komponentavskrivning/)
@@ -335,6 +342,52 @@ describe('buildMateriellaAnlaggningsNot', () => {
     // Total acquisition cost text (with sv-SE separator)
     // Just confirm 5 000 000 appears as a sub-total somewhere
     expect(note!.body).toMatch(/5\s?000\s?000/)
+  })
+
+  // F3: mark has no useful life; the filed note may never read "0 år" for it.
+  it('states that mark is not depreciated instead of giving it an avskrivningstid', () => {
+    const land = {
+      name: 'Tomt Sjövägen 12',
+      category: 'land',
+      acquisition_date: '2020-01-01',
+      acquisition_cost: 900_000,
+      k3_components: null,
+      disposed_at: null,
+      useful_life_months: 0,
+    }
+    const only = buildMateriellaAnlaggningsNot({ noteNumber: 3, assets: [land] })
+    expect(only?.body).toContain('Mark skrivs inte av.')
+    expect(only?.body).not.toMatch(/: 0 år|land|Avskrivningstider/)
+
+    const withBuilding = buildMateriellaAnlaggningsNot({
+      noteNumber: 3,
+      assets: [land, { ...land, name: 'Kontorshus', category: 'building', useful_life_months: 600 }],
+    })
+    expect(withBuilding?.body).toMatch(/Byggnader: 50 år/)
+    expect(withBuilding?.body).toContain('Mark skrivs inte av.')
+    expect(withBuilding?.body).not.toMatch(/: 0 år/)
+  })
+
+  it('gives a mark component no avskrivningstid either', () => {
+    const note = buildMateriellaAnlaggningsNot({
+      noteNumber: 3,
+      assets: [
+        {
+          name: 'Kontorshus',
+          category: 'building',
+          acquisition_date: '2020-01-01',
+          acquisition_cost: 1_000_000,
+          k3_components: [
+            { name: 'Stomme', acquisition_cost: 900_000, accumulated_depreciation: 90_000, useful_life_months: 1200 },
+            { name: 'Mark', acquisition_cost: 100_000, accumulated_depreciation: 0, useful_life_months: 0 },
+          ],
+          disposed_at: null,
+          useful_life_months: 1200,
+        },
+      ],
+    })
+    expect(note?.body).toMatch(/Mark: .*\(skrivs inte av\)/)
+    expect(note?.body).not.toMatch(/avskrivningstid 0 år/)
   })
 
   it('skips disposed assets in the calculation', () => {

@@ -1,0 +1,1 @@
+[2026-10-26] The K3 18.7 model is a companies column set in settings, required before own development is capitalised, and not switchable away from the aktiveringsmodell while such assets exist: that is a change of accounting policy (K3 kap. 10), not a setting.

@@ -8,7 +8,7 @@ import {
   sumPostedYearEndDispositions,
 } from './tax-provision/bolagsskatt-calculator'
 import { incomeTaxInResult } from './tax-provision/income-tax-accounts'
-import { loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
+import { loadBuildingTaxAdjustment, loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
 import type { TaxAdjustmentSnapshot } from './types'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
 import {
@@ -20,6 +20,8 @@ import {
   type ExistingFond,
 } from './reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
+import { buildDeferredTaxProposal, closingDeficitOf } from './tax-provision/deferred-tax-service'
+import { buildDevelopmentFundProposal } from './development-fund'
 import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
 import type { EntityType } from '@/types'
 
@@ -45,6 +47,8 @@ export interface DispositionState {
   /** Bolagsskatt already on 8910 (this flow's and any manual posting). */
   bookedTax: number
   existingFonder: ExistingFond[]
+  /** INK2S 4.9: book depreciation on fast egendom against its tax plan. */
+  buildingTaxAdjustment: number
 }
 
 export async function loadDispositionState(
@@ -53,7 +57,7 @@ export async function loadDispositionState(
   period: { id: string; period_start: string; period_end: string; opening_balance_entry_id: string | null },
   form?: EntityType,
 ): Promise<DispositionState> {
-  const [incomeStatement, postedEffect, taxAdjustments, bookedTax, existingFonder] = await Promise.all([
+  const [incomeStatement, postedEffect, taxAdjustments, bookedTax, existingFonder, buildingTax] = await Promise.all([
     generateIncomeStatement(supabase, companyId, period.id),
     sumPostedYearEndDispositions(supabase, companyId, period.id),
     loadTaxAdjustmentSnapshot(supabase, companyId, period.id, form),
@@ -65,6 +69,7 @@ export async function loadDispositionState(
       period.period_start,
       period.opening_balance_entry_id,
     ),
+    loadBuildingTaxAdjustment(supabase, companyId, period),
   ])
   return {
     fiscalPeriodId: period.id,
@@ -75,6 +80,7 @@ export async function loadDispositionState(
     taxAdjustments,
     bookedTax,
     existingFonder,
+    buildingTaxAdjustment: Math.trunc(buildingTax.net),
   }
 }
 
@@ -130,6 +136,7 @@ export function avsattningDisposition(
     resultBeforeTax(state) + state.postedEffect.total + alreadyProvisioned + options.pendingResultEffect
     + options.schablonintaktAmount
     + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
+    + state.buildingTaxAdjustment
     - (taxAdjustments.deficitCarryforward ?? 0)
   return proposeAvsattning({
     skattemassigtResultatBeforeAvsattning: base,
@@ -157,6 +164,8 @@ export async function bolagsskattDisposition(
       nonTaxableIncome: state.taxAdjustments.nonTaxableIncome,
       deficitCarryforward: state.taxAdjustments.deficitCarryforward ?? 0,
       schablonintaktPeriodiseringsfond: options.schablonintaktAmount,
+      // INK2S 4.9, the same figure the declaration files.
+      other: state.buildingTaxAdjustment,
     },
   })
 }
@@ -313,6 +322,27 @@ export async function buildDispositionsProposal(
     proposals.push(bolagsskatt)
   }
 
+  // Uppskjuten skatt last, in a K3 year: it is not part of the tax base
+  // (8940 is income tax: added back with 8900-8989 when booked by hand, and
+  // this flow's own posting is year_end, outside the result), and the loss
+  // carried forward it may recognise is the bolagsskatt computation's
+  // closing underskott.
+  const deferred = await buildDeferredTaxProposal(supabase, companyId, fiscalPeriodId, {
+    closingDeficit: closingDeficitOf(bolagsskatt),
+  })
+  if (deferred?.proposal) proposals.push(deferred.proposal)
+  if (deferred?.snapshot.needsInputs) {
+    warnings.push(
+      `Bokföringen har uppskjuten skatt (netto ${deferred.snapshot.opening} kr på 2240 och 1370) men inget underlag för uppskjuten skatt är sparat för året. Ingen uppskjuten skatt föreslås förrän underlaget är sparat, så att saldot inte återförs mot 8940 av misstag (K3 kap. 29).`,
+    )
+  }
+
+  // The fond för utvecklingsutgifter (K3, ÅRL 4 kap. 2 §): an equity
+  // transfer, no effect on any figure above.
+  const fund = await buildDevelopmentFundProposal(supabase, companyId, fiscalPeriodId, form)
+  if (fund?.warning) warnings.push(fund.warning)
+  if (fund?.proposal) proposals.push(fund.proposal)
+
   return {
     entityType,
     fiscalPeriod: period,
@@ -321,6 +351,7 @@ export async function buildDispositionsProposal(
     taxAdjustments,
     completedDispositions,
     warnings,
+    ...(deferred ? { deferredTax: deferred.snapshot } : {}),
   }
 }
 

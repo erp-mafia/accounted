@@ -26,6 +26,8 @@ const EMITTED_INK2S_ROWS: Record<keyof INK2SRutor, string | null> = {
   '7653': '4.3c',
   '7754': '4.5c',
   '7763': '4.14a',
+  '7666': '4.9',
+  '7765': '4.9',
   '7670': '4.15',
   '7770': '4.16',
 }
@@ -60,6 +62,8 @@ function sampleDeclaration(overrides: Partial<INK2SRutor>): INK2Declaration {
       '7653': 0,
       '7754': 0,
       '7763': 0,
+      '7666': 0,
+      '7765': 0,
       '7670': 0,
       '7770': 0,
       ...overrides,

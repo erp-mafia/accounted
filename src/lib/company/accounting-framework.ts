@@ -301,3 +301,33 @@ export async function previousYearFrameworkOf(
     reliable: isReliableFrameworkSource(row.source),
   }
 }
+
+/**
+ * The framework of the fiscal year a day falls in, for an action that
+ * belongs to a day rather than a year: an asset registered as acquired on
+ * it (K3 components, own development, the Ej K2 accounts). A day outside
+ * every fiscal year reads the year running today
+ * (resolveCurrentAccountingFramework). The SQL side reads the same rule
+ * through public.fiscal_framework_on.
+ */
+export async function frameworkOnDate(
+  supabase: SupabaseClient,
+  companyId: string,
+  day: string | null | undefined,
+): Promise<AccountingFramework> {
+  if (day) {
+    const { data, error } = await supabase
+      .from('fiscal_periods')
+      .select('id')
+      .eq('company_id', companyId)
+      .lte('period_start', day)
+      .gte('period_end', day)
+      .order('period_start', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw new Error(`Kunde inte läsa räkenskapsåret: ${error.message}`)
+    const id = (data as { id?: string } | null)?.id
+    if (id) return resolveAccountingFramework(supabase, companyId, id)
+  }
+  return resolveCurrentAccountingFramework(supabase, companyId)
+}

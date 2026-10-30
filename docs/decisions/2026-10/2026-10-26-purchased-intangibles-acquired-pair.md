@@ -1,0 +1,1 @@
+[2026-10-26] Purchased intangibles default to 1090/1099 under K3 as under K2; 1010/1019 hold only the company's own development, opted into per asset and only on the aktiveringsmodell (K3 18.7). Existing K3 rows on 1010 keep their accounts.

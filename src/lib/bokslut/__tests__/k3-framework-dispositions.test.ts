@@ -8,6 +8,11 @@
  * no uppskjuten_skatt proposal ever appears, alongside the disposition math
  * that remains (periodiseringsfond, overavskrivningar, bolagsskatt).
  *
+ * Since 2026-10-26 (K3 plan phase 2) a K3 year may carry deferred tax on
+ * real temporary differences and a recognised loss (K3 29.19), under its own
+ * kind uppskjuten_skatt_kap29: never on the reserves, and nothing at all
+ * until the user has stated a difference or recognised a loss.
+ *
  * Mocks generateIncomeStatement directly so the test can drive numeric
  * inputs without touching the database.
  */
@@ -43,6 +48,8 @@ function makeSupabase(opts: {
   periodEnd?: string
   /** Existing periodiseringsfond rows the builder queries. */
   periodiseringsfondRows?: Array<{ account_number: string; cohort_year: number; balance: number; must_return_this_year: boolean }>
+  /** The K3 deferred tax inputs of the year. */
+  deferredTaxAssessment?: { loss_recognised: boolean; loss_reason: string | null; manual_items: unknown[] }
 }): ChainableMock {
   const periodEnd = opts.periodEnd ?? '2026-12-31'
   // The builder makes several .from(...) queries. We respond per-table.
@@ -98,6 +105,14 @@ function makeSupabase(opts: {
           }),
         }),
       }
+    }
+    if (table === 'deferred_tax_assessments') {
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        maybeSingle: () => Promise.resolve({ data: opts.deferredTaxAssessment ?? null, error: null }),
+      }
+      return chain
     }
     if (table === 'journal_entry_lines') {
       // Used by listExistingPeriodiseringsfonder and calculateSarskildLoneskatt.
@@ -262,6 +277,26 @@ describe('buildDispositionsProposal: K3 framework', () => {
     const bolagsskatt = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(avsattning?.amount).toBe(225_000)
     expect(bolagsskatt?.amount).toBe(139_050)
+  })
+
+  it('proposes K3 deferred tax on a recognised loss only, on 8940/1370, never on the reserves', async () => {
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: -100_000,
+    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+    const supabase = makeSupabase({
+      entityType: 'aktiebolag',
+      accountingFramework: 'k3',
+      deferredTaxAssessment: { loss_recognised: true, loss_reason: 'Ny storkund från januari.', manual_items: [] },
+    })
+    const result = await buildDispositionsProposal(
+      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
+      'co',
+      'fp1',
+    )
+    const deferred = result.proposals.find((p) => p.kind === 'uppskjuten_skatt_kap29')
+    expect(deferred?.amount).toBe(20_600)
+    expect(deferred?.lines.map((l) => l.account_number).sort()).toEqual(['1370', '8940'])
+    expect(result.deferredTax?.items.map((item) => item.kind)).toEqual(['loss_carryforward'])
   })
 
   it('does NOT add an uppskjuten_skatt proposal for K2 aktiebolag', async () => {

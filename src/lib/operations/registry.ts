@@ -246,6 +246,7 @@ import {
 import { webshopOrdersBook, webshopOrdersBookDay, webshopOrdersGet, webshopOrdersList, webshopOrdersOssUnderlag } from './webshop-orders'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
+import { K3_OPERATIONS } from './k3'
 import { BUDGET_OPERATIONS } from './budgets'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
@@ -520,6 +521,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   ...SUPPLIER_INVOICE_ATTEST_OPERATIONS,
   // Packages: read their status (winding down included) and stage a switch on or off; approval by an owner or admin.
   ...PACKAGE_OPERATIONS,
+  // K3 (accounted#111): nedskrivning, component replacement, a building's tax plan, the deferred tax inputs,
+  // the 18.7 model, and the transition to K3 with its component split.
+  ...K3_OPERATIONS,
   // Budgets (accounted#134): named versions per fiscal year, their amounts, copy and spread, and budget against actual.
   ...BUDGET_OPERATIONS,
 ]

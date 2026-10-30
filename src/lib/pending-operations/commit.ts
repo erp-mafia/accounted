@@ -4609,6 +4609,7 @@ async function commitCreateAsset(
 
 async function commitUpdateAsset(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
@@ -4622,7 +4623,8 @@ async function commitUpdateAsset(
   const gate = await checkUpdateAssetGates(supabase, companyId, parsed.data, existing)
   if (gate) return { error: gate.message_en, errorCode: gate.code, status: gate.status }
   try {
-    const asset = await updateFixedAsset(supabase, companyId, assetId, parsed.data)
+    // The approver acts: the own-development mark's audit row names them.
+    const asset = await updateFixedAsset(supabase, companyId, assetId, parsed.data, { userId })
     const posted = await hasPostedDepreciation(supabase, companyId, assetId)
     return { data: { asset_id: asset.id, ...assetView(asset, posted) } }
   } catch (err) {
@@ -7788,7 +7790,7 @@ async function commitPendingOperationInner(
         result = await commitCreateAsset(supabase, userId, companyId, pendingOp.params)
         break
       case 'update_asset':
-        result = await commitUpdateAsset(supabase, companyId, pendingOp.params)
+        result = await commitUpdateAsset(supabase, userId, companyId, pendingOp.params)
         break
       case 'dispose_asset':
         result = await commitDisposeAsset(supabase, userId, companyId, pendingOp.params)

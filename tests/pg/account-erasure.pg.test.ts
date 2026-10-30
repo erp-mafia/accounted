@@ -73,6 +73,10 @@ const RETAINED = new Set([
   'accrual_schedule_installments.user_id',
   'accrual_schedules.user_id',
   'assets.user_id',
+  'asset_components.user_id', // Who registered a K3 component; the anläggningsregister is the company's.
+  'asset_value_adjustments.user_id', // Who posted a nedskrivning; räkenskapsinformation tied to its verifikat.
+  'deferred_tax_assessments.updated_by', // Who last edited the deferred tax inputs of a fiscal year (SET NULL on a hard delete).
+  'k3_transitions.created_by', // Who started the company's transition to K3 (SET NULL on a hard delete).
   'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.
   'budgets.user_id', // Who created a budget version; company planning data, the company keeps it.
   'agreements.created_by', // Who registered an agreement by hand (Avtal och åtaganden); the company keeps the record.

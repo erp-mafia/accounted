@@ -336,6 +336,203 @@ export class AssetOpeningChangedError extends Error {
   }
 }
 
+/**
+ * The K3 component split a posting was computed with no longer matches the
+ * register (a component was added, replaced or removed in between):
+ * recalculate the proposal.
+ */
+export class AssetComponentsChangedError extends Error {
+  readonly code = 'ASSET_COMPONENTS_CHANGED'
+  constructor() {
+    super('Asset components changed: recalculate the proposal before posting')
+    this.name = 'AssetComponentsChangedError'
+  }
+}
+
+/** The refusals of a component replacement that leave nothing posted. */
+export type AssetComponentRefusal =
+  | 'ASSET_COMPONENT_NOT_FOUND'
+  | 'ASSET_COMPONENT_NOT_ACTIVE'
+  | 'ASSET_LAST_COMPONENT'
+  | 'ASSET_COMPONENT_STATE_CHANGED'
+  | 'ASSET_COMPONENT_IMPAIRED'
+
+export class AssetComponentRefusedError extends Error {
+  readonly code: AssetComponentRefusal
+  constructor(reason: string) {
+    const code = (
+      [
+        'ASSET_COMPONENT_NOT_FOUND',
+        'ASSET_COMPONENT_NOT_ACTIVE',
+        'ASSET_LAST_COMPONENT',
+        'ASSET_COMPONENT_STATE_CHANGED',
+        'ASSET_COMPONENT_IMPAIRED',
+      ] as const
+    ).find((known) => known === reason) ?? 'ASSET_COMPONENT_STATE_CHANGED'
+    super(code)
+    this.code = code
+    this.name = 'AssetComponentRefusedError'
+  }
+}
+
+/** Why a nedskrivning or its reversal (ÅRL 4:5, K3 27) cannot be posted. */
+export type AssetValueAdjustmentBlock =
+  | 'disposed'
+  | 'period_locked'
+  | 'before_acquisition'
+  | 'not_at_balance_sheet_date'
+  | 'later_depreciation_posted'
+  | 'later_adjustment'
+  | 'year_not_depreciated'
+  | 'history_incomplete'
+  | 'no_write_down'
+  | 'nothing_to_reverse'
+  | 'goodwill_reversal'
+  | 'components_changed'
+  | 'exceeds_carrying_amount'
+  | 'exceeds_write_down'
+
+const VALUE_ADJUSTMENT_BLOCK_SV: Record<AssetValueAdjustmentBlock, string> = {
+  disposed: 'Tillgången är avyttrad och kan inte skrivas ned.',
+  period_locked: 'Räkenskapsåret är låst eller stängt.',
+  before_acquisition: 'Räkenskapsåret slutar före tillgångens anskaffningsdatum.',
+  not_at_balance_sheet_date: 'En nedskrivning bokförs per balansdagen, räkenskapsårets sista dag.',
+  later_depreciation_posted: 'Avskrivning för ett senare räkenskapsår är redan bokförd. Återför den med storno först.',
+  later_adjustment: 'En senare nedskrivning eller återföring är redan bokförd. Återför den med storno först.',
+  year_not_depreciated: 'Bokför årets avskrivning för tillgången först: nedskrivningen prövas mot det redovisade värdet efter avskrivning.',
+  history_incomplete:
+    'Avskrivningen för tidigare år finns inte i anläggningsregistret, så det redovisade värdet är inte känt. Bokför de åren eller ange redan avskrivet belopp först.',
+  no_write_down: 'Återvinningsvärdet är inte lägre än det redovisade värdet: ingen nedskrivning behövs (K3 27.2).',
+  nothing_to_reverse:
+    'Det finns ingen nedskrivning att återföra: ingen är bokförd, eller återvinningsvärdet ryms inte över det redovisade värdet (K3 27.15).',
+  goodwill_reversal: 'En nedskrivning av goodwill får inte återföras (ÅRL 4 kap. 5 §).',
+  components_changed: 'Komponenterna har ändrats sedan beräkningen. Räkna om och försök igen.',
+  exceeds_carrying_amount: 'Nedskrivningen är större än det redovisade värdet. Räkna om och försök igen.',
+  exceeds_write_down: 'Återföringen är större än nedskrivningen som återstår. Räkna om och försök igen.',
+}
+
+/** The refusals commit_asset_value_adjustment raises (PT409 message) by reason. */
+const VALUE_ADJUSTMENT_RPC_REFUSALS: Record<string, AssetValueAdjustmentBlock> = {
+  ASSET_DISPOSED: 'disposed',
+  NOT_AT_BALANCE_SHEET_DATE: 'not_at_balance_sheet_date',
+  LATER_DEPRECIATION_POSTED: 'later_depreciation_posted',
+  LATER_ADJUSTMENT_POSTED: 'later_adjustment',
+  EXCEEDS_CARRYING_AMOUNT: 'exceeds_carrying_amount',
+  EXCEEDS_WRITE_DOWN: 'exceeds_write_down',
+  GOODWILL_REVERSAL_FORBIDDEN: 'goodwill_reversal',
+  ASSET_COMPONENTS_CHANGED: 'components_changed',
+}
+
+export function valueAdjustmentBlockFromRpc(message: string): AssetValueAdjustmentBlock | null {
+  return VALUE_ADJUSTMENT_RPC_REFUSALS[message] ?? null
+}
+
+/**
+ * A nedskrivning or reversal that cannot be posted, before or by
+ * commit_asset_value_adjustment; nothing was posted. The message is the
+ * Swedish reason (409 ASSET_VALUE_ADJUSTMENT_BLOCKED).
+ */
+export class AssetValueAdjustmentBlockedError extends Error {
+  readonly code = 'ASSET_VALUE_ADJUSTMENT_BLOCKED'
+  constructor(readonly reason: AssetValueAdjustmentBlock) {
+    super(VALUE_ADJUSTMENT_BLOCK_SV[reason])
+    this.name = 'AssetValueAdjustmentBlockedError'
+  }
+}
+
+/** Why the transition to K3 (BFNAR 2012:1 kap. 35), or a split at it, cannot proceed. */
+export type K3TransitionBlock =
+  | 'not_k3'
+  | 'already_started'
+  | 'not_started'
+  | 'committed'
+  | 'has_splits'
+  | 'period_locked'
+  | 'asset_disposed'
+  | 'asset_not_splittable'
+  | 'asset_acquired_under_k3'
+  | 'later_depreciation_posted'
+  | 'asset_impaired'
+  | 'asset_has_components'
+  | 'split_in_use'
+  | 'asset_changed'
+
+const K3_TRANSITION_BLOCK_SV: Record<K3TransitionBlock, string> = {
+  not_k3: 'Räkenskapsåret upprättas inte enligt K3. Välj K3 för året först.',
+  already_started: 'Övergången till K3 är redan påbörjad. Kapitel 35 tillämpas en gång (K3 punkt 35.1).',
+  not_started: 'Påbörja övergången till K3 först.',
+  committed:
+    'Övergången till K3 är redan bokförd. Återför övergångsverifikationen med storno för att ändra den.',
+  has_splits: 'Ångra komponentuppdelningarna som gjorts vid övergången först.',
+  period_locked: 'Räkenskapsåret är låst eller stängt.',
+  asset_disposed: 'Tillgången är avyttrad.',
+  asset_not_splittable:
+    'Bara materiella anläggningstillgångar delas upp på komponenter (K3 punkt 17.4), och mark skrivs aldrig av.',
+  asset_acquired_under_k3:
+    'Tillgången är anskaffad under ett K3-år: dela upp den på komponenter i anläggningsregistret i stället.',
+  later_depreciation_posted:
+    'Avskrivning är redan bokförd för tillgången från övergångsdagen. Återför den med storno först.',
+  asset_impaired: 'Tillgången har en nedskrivning. Återför den innan tillgången delas upp på komponenter.',
+  asset_has_components: 'Tillgången är redan uppdelad på komponenter.',
+  split_in_use:
+    'Uppdelningen kan inte ändras längre: en komponent har avskrivits, bytts ut eller tillkommit efter övergången.',
+  asset_changed: 'Tillgången har ändrats sedan beräkningen. Räkna om och försök igen.',
+}
+
+/** The refusals the K3 transition RPCs raise (PT409 message) by reason. */
+const K3_TRANSITION_RPC_REFUSALS: Record<string, K3TransitionBlock> = {
+  K3_TRANSITION_NOT_STARTED: 'not_started',
+  K3_TRANSITION_NOT_K3: 'not_k3',
+  K3_TRANSITION_COMMITTED: 'committed',
+  K3_TRANSITION_HAS_SPLITS: 'has_splits',
+  ASSET_DISPOSED: 'asset_disposed',
+  ASSET_NOT_SPLITTABLE: 'asset_not_splittable',
+  ASSET_ACQUIRED_UNDER_K3: 'asset_acquired_under_k3',
+  LATER_DEPRECIATION_POSTED: 'later_depreciation_posted',
+  ASSET_IMPAIRED: 'asset_impaired',
+  ASSET_HAS_COMPONENTS: 'asset_has_components',
+  TRANSITION_SPLIT_IN_USE: 'split_in_use',
+  ASSET_COMPONENTS_CHANGED: 'asset_changed',
+}
+
+export function k3TransitionBlockFromRpc(message: string): K3TransitionBlock | null {
+  return K3_TRANSITION_RPC_REFUSALS[message] ?? null
+}
+
+/**
+ * The transition to K3, or a component split at it, refused before or by
+ * its RPC; nothing was written. The message is the Swedish reason (409
+ * K3_TRANSITION_BLOCKED).
+ */
+export class K3TransitionBlockedError extends Error {
+  readonly code = 'K3_TRANSITION_BLOCKED'
+  constructor(readonly reason: K3TransitionBlock) {
+    super(K3_TRANSITION_BLOCK_SV[reason])
+    this.name = 'K3TransitionBlockedError'
+  }
+}
+
+/** Transition input that cannot be booked, with the Swedish rule (400 INVALID_K3_TRANSITION). */
+export class K3TransitionInvalidError extends Error {
+  readonly code = 'INVALID_K3_TRANSITION'
+  constructor(message: string) {
+    super(message)
+    this.name = 'K3TransitionInvalidError'
+  }
+}
+
+/**
+ * The year's deferred tax is already posted (commit_deferred_tax): a new
+ * calculation needs the earlier voucher reversed first (409).
+ */
+export class DeferredTaxAlreadyPostedError extends Error {
+  readonly code = 'DEFERRED_TAX_ALREADY_POSTED'
+  constructor() {
+    super('DEFERRED_TAX_ALREADY_POSTED')
+    this.name = 'DeferredTaxAlreadyPostedError'
+  }
+}
+
 export class AssetDepreciationRefusedError extends Error {
   readonly code = ASSET_DEPRECIATION_REFUSED
   constructor(public readonly reason: AssetDepreciationRefusal) {
@@ -688,6 +885,14 @@ export type BookkeepingOperation =
   | 'fetch_asset_disposal_entry'
   | 'commit_asset_depreciation'
   | 'fetch_asset_depreciation_entry'
+  | 'commit_asset_component_replacement'
+  | 'fetch_asset_component_replacement_entry'
+  | 'commit_asset_value_adjustment'
+  | 'fetch_asset_value_adjustment_entry'
+  | 'commit_deferred_tax'
+  | 'fetch_deferred_tax_entry'
+  | 'commit_k3_transition'
+  | 'fetch_k3_transition_entry'
   | 'load_collected_payment_rows'
   | 'load_collections_rebook'
   | 'create_reversal_entry'

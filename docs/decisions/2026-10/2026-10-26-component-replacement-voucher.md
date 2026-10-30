@@ -1,0 +1,1 @@
+[2026-10-26] A component replacement posts one voucher (commit_asset_component_replacement: to-date charge, 12x9 and 12x0 off, carrying amount to 797x) and registers the new part with no voucher; its storno releases the part via a reversal hook on system vouchers.

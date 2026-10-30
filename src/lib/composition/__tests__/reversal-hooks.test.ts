@@ -24,6 +24,9 @@ const leaves = vi.hoisted(() => ({
   syncCustomerLossAfterReversal: vi.fn(async () => {}),
   assertCounterpartySetoffReversible: vi.fn(async () => {}),
   syncCounterpartySetoffAfterReversal: vi.fn(async () => {}),
+  assertComponentReplacementReversible: vi.fn(async () => {}),
+  assertValueAdjustmentReversible: vi.fn(async () => {}),
+  releaseComponentsAfterReversal: vi.fn(async () => {}),
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
@@ -48,6 +51,11 @@ vi.mock('@/lib/invoices/counterparty-setoff/reversal', () => ({
   assertCounterpartySetoffReversible: leaves.assertCounterpartySetoffReversible,
   syncCounterpartySetoffAfterReversal: leaves.syncCounterpartySetoffAfterReversal,
 }))
+vi.mock('@/lib/bokslut/assets/component-reversal', () => ({
+  assertComponentReplacementReversible: leaves.assertComponentReplacementReversible,
+  assertValueAdjustmentReversible: leaves.assertValueAdjustmentReversible,
+  releaseComponentsAfterReversal: leaves.releaseComponentsAfterReversal,
+}))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
 import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
@@ -69,6 +77,7 @@ const HOOK_LEAVES: Record<string, string> = {
   'collections-payout': 'collections/settlement-reversal',
   'customer-loss': 'customer-loss/reversal',
   'counterparty-setoff': 'invoices/counterparty-setoff/reversal',
+  'asset-component-replacement': 'bokslut/assets/component-reversal',
 }
 
 /**
@@ -226,6 +235,15 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
     expect(leaves.syncCounterpartySetoffAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'user-1', 'entry-1', {
       id: 'storno-1',
     })
+  })
+
+  it('asset-component-replacement: both asset checks before, releaseComponentsAfterReversal after', async () => {
+    await hook('asset-component-replacement').beforeReversal!(ctx)
+    expect(leaves.assertComponentReplacementReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.assertValueAdjustmentReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.releaseComponentsAfterReversal).not.toHaveBeenCalled()
+    await hook('asset-component-replacement').afterReversal!(ctx)
+    expect(leaves.releaseComponentsAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
   })
 
   it('passes a leaf refusal through untouched', async () => {

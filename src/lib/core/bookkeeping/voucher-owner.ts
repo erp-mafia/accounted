@@ -328,7 +328,30 @@ async function findOwner(
           .eq('disposal_journal_entry_id', root.id)
           .limit(1)
           .maybeSingle()
-  const found = data as { asset?: unknown; id?: string; name?: string } | null
+  let found = data as { asset?: unknown; id?: string; name?: string } | null
+  // A K3 component replacement is a system voucher too, owned by the asset
+  // whose component it took off the books (asset_components).
+  if (!found && source.via === 'asset_disposal') {
+    const { data: component } = await supabase
+      .from('asset_components')
+      .select('asset:assets!asset_components_asset_id_fkey(id, name)')
+      .eq('company_id', companyId)
+      .eq('derecognition_journal_entry_id', root.id)
+      .limit(1)
+      .maybeSingle()
+    found = component as { asset?: unknown } | null
+  }
+  // So is a nedskrivning or its reversal (asset_value_adjustments).
+  if (!found && source.via === 'asset_disposal') {
+    const { data: adjustment } = await supabase
+      .from('asset_value_adjustments')
+      .select('asset:assets!asset_value_adjustments_asset_id_fkey(id, name)')
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', root.id)
+      .limit(1)
+      .maybeSingle()
+    found = adjustment as { asset?: unknown } | null
+  }
   const embedded = found && 'asset' in found ? found.asset : found
   const asset = (Array.isArray(embedded) ? embedded[0] : embedded) as { id?: string; name?: string } | null
   if (!asset?.id) return null

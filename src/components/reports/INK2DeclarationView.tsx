@@ -15,7 +15,7 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import type { INK2Declaration } from '@/lib/reports/ink2/types'
+import { ink2sBuildingRows, type INK2Declaration } from '@/lib/reports/ink2/types'
 import {
   INK2R_RUTA_LABELS,
   INK2R_ASSET_CODES,
@@ -328,6 +328,9 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 label="Andra ej skattepliktiga intäkter"
                 amount={data.ink2s['7754']}
               />
+              {ink2sBuildingRows(data.ink2s).map((row) => (
+                <DeclarationRutaRow key={row.field} code="4.9" label={row.label} amount={row.amount} />
+              ))}
               <DeclarationRutaRow
                 code="4.14a"
                 label="Outnyttjat underskott från föregående beskattningsår"

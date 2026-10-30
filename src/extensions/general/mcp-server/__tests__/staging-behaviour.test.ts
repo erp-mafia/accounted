@@ -447,6 +447,9 @@ function inspectSource(tool: Tool): string[] {
 
 const stagingTools = tools.filter(isStagingTool)
 
+/** The sweeps below run every staging tool in turn (CI hit the 5 s default at 5.3 s). */
+const SWEEP_TIMEOUT_MS = 30_000
+
 /**
  * What each tool the stage bridge carries needs to get past its own
  * validation and pre-reads. A new bridge target with no working entry fails
@@ -615,6 +618,68 @@ const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
   },
 }
 
+// The K3 doors' register rows (lib/operations/k3.ts).
+const K3_MACHINE = {
+  name: 'Maskin',
+  category: 'machinery',
+  acquisition_date: '2026-01-01',
+  acquisition_cost: 100000,
+  salvage_value: 0,
+  useful_life_months: 60,
+  opening_accumulated_depreciation: 0,
+  opening_depreciation_date: null,
+  depreciation_start_date: null,
+  disposed_at: null,
+  k3_components: null,
+  components: [],
+  value_adjustments: [],
+  bas_asset_account: '1220',
+  bas_accumulated_account: '1229',
+  bas_expense_account: '7832',
+}
+const K3_COMPONENT = {
+  user_id: USER_ID,
+  company_id: COMPANY_ID,
+  asset_id: SOME_UUID,
+  useful_life_months: 480,
+  salvage_value: '0',
+  acquisition_date: '2026-01-01',
+  depreciation_start_date: null,
+  opening_accumulated_depreciation: '0',
+  opening_depreciation_date: null,
+  replaces_component_id: null,
+  derecognised_at: null,
+  derecognition_journal_entry_id: null,
+  derecognition_depreciation: '0',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+const K3_BUILDING = {
+  ...K3_MACHINE,
+  name: 'Kontorshus',
+  category: 'building',
+  acquisition_cost: 1000000,
+  useful_life_months: 1200,
+  bas_asset_account: '1110',
+  bas_accumulated_account: '1119',
+  bas_expense_account: '7821',
+  components: [
+    { ...K3_COMPONENT, id: SOME_UUID, name: 'Tak', cost: '300000', sort_order: 0 },
+    { ...K3_COMPONENT, id: '44444444-4444-4444-8444-444444444444', name: 'Stomme', cost: '700000', useful_life_months: 1200, sort_order: 1 },
+  ],
+}
+const K3_TRANSITION = {
+  fiscal_period_id: SOME_UUID,
+  deferred_tax_relief: true,
+  relief_rules: [],
+  changed_principles: '',
+  journal_entry_id: null,
+  opening_deferred_tax: 0,
+  deferred_tax_items: [],
+  committed_at: null,
+  journal_entry: null,
+}
+
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Kapital och utdelning (Bolaget, generated only while BOLAGET_COMPANY_IDS
   // names a company): an aktiebolag whose aktiebok holds one owner of 1 000
@@ -742,6 +807,84 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       },
       company_settings: { bookkeeping_locked_through: null },
     },
+  },
+  // K3 (lib/operations/k3.ts). A machine whose 2026 depreciation is posted,
+  // written down on the balansdag: the preview reads the register and the
+  // year, never the value adjustment RPC or the engine.
+  gnubok_post_asset_value_adjustment: {
+    rows: {
+      assets: K3_MACHINE,
+      fiscal_periods: { id: SOME_UUID, ...FISCAL_YEAR_2026, locked_at: null },
+      depreciation_schedules: { fiscal_period_id: SOME_UUID, planned_depreciation: 20000, journal_entry_id: SOME_UUID },
+    },
+  },
+  // A roof replaced on a two-component building in 2026, nothing posted yet.
+  gnubok_replace_asset_component: {
+    rows: {
+      assets: K3_BUILDING,
+      fiscal_periods: { id: SOME_UUID, ...FISCAL_YEAR_2026, locked_at: null },
+    },
+    empty: ['depreciation_schedules', 'depreciation_schedule_components'],
+  },
+  // A building's tax plan: no verifikat, the asset row only.
+  gnubok_set_asset_tax_plan: {
+    args: { tax_depreciation_rate: 2 },
+    rows: { assets: { ...K3_BUILDING, components: [] } },
+  },
+  // A plain building split at the transition to K3 (35.18): the preview
+  // computes the components and never calls the split RPC.
+  gnubok_split_asset_at_k3_transition: {
+    args: {
+      components: [
+        { name: 'Stomme', carrying_amount: 700000, useful_life_months: 1200, salvage_value: 0 },
+        { name: 'Tak', carrying_amount: 300000, useful_life_months: 480, salvage_value: 0 },
+      ],
+    },
+    rows: {
+      k3_transitions: { fiscal_period: { period_start: '2026-01-01' } },
+      assets: { ...K3_BUILDING, acquisition_date: '2016-01-01', components: [], k3_components: null },
+      depreciation_schedules: { planned_depreciation: 0, fiscal_period: { period_end: '2025-12-31' } },
+    },
+    empty: ['asset_transition_splits'],
+  },
+  // The deferred tax inputs of an open K3 year.
+  gnubok_set_deferred_tax_inputs: {
+    rows: {
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null, closing_entry_id: null },
+      companies: { accounting_framework: 'k3' },
+    },
+  },
+  // The 18.7 model, chosen by an owner of a K3 company.
+  gnubok_set_development_model: {
+    rows: {
+      company_members: { role: 'owner' },
+      companies: { accounting_framework: 'k3', development_expenditure_model: null },
+    },
+  },
+  // The start of the transition on an open K3 year, none started before.
+  gnubok_start_k3_transition: {
+    rows: {
+      fiscal_periods: { name: '2026', ...FISCAL_YEAR_2026, locked_at: null },
+      companies: { accounting_framework: 'k3' },
+    },
+    empty: ['k3_transitions'],
+  },
+  // An uncommitted transition with no splits left.
+  gnubok_delete_k3_transition: {
+    rows: { k3_transitions: K3_TRANSITION },
+    counts: { asset_transition_splits: 0 },
+  },
+  // The commit under the 35.27 relief with one stated adjustment: the
+  // preview builds the lines and never calls the commit RPC or the engine.
+  gnubok_commit_k3_transition: {
+    rows: {
+      k3_transitions: K3_TRANSITION,
+      fiscal_periods: { id: SOME_UUID, name: '2026', ...FISCAL_YEAR_2026, locked_at: null },
+      // The transition year is reported under K3 (its own framework row).
+      fiscal_period_frameworks: { framework: 'k3', source: 'election' },
+      companies: { entity_type: 'aktiebolag' },
+    },
+    empty: ['asset_transition_splits'],
   },
   // Year-end stock count (Bolaget, generated only while BOLAGET_COMPANY_IDS
   // names a company): a draft counted on balansdagen needs no roll-forward
@@ -1063,7 +1206,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
   // A register row that never reached the books: no posted depreciation.
-  gnubok_delete_asset: { empty: ['depreciation_schedules'] },
+  // Nothing posted: no depreciation and no nedskrivning (K3, ÅRL 4:5).
+  gnubok_delete_asset: { empty: ['depreciation_schedules', 'asset_value_adjustments'] },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
   // An empty first year (crm#1450): the STABLE preview answers ok.
@@ -1616,7 +1760,7 @@ describe('a tool that declares the staged envelope only stages', () => {
         unreached.join('\n'),
     ).toEqual([])
     expect(staleGates).toEqual([])
-  })
+  }, SWEEP_TIMEOUT_MS)
 
   it('STOPS_AT_LAST_GATE names only tools the bridge carries, and never grows past today', () => {
     const carried = new Set(STAGE_BRIDGE_TARGETS.map((t) => t.name))

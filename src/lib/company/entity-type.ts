@@ -298,6 +298,11 @@ export function supportsMemberCapital(entityType: EntityType): boolean {
   return legalFormProfile(entityType).equity.memberCapital
 }
 
+/** ÅRL 4 kap. 2 § andra stycket: capitalised own development needs a fond för utvecklingsutgifter. */
+export function requiresDevelopmentFund(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.developmentFund
+}
+
 /** BFL 3 kap 1 §: a fysisk person (enskild firma) is bound to the calendar year. */
 export function fiscalYearLockedToCalendar(entityType: EntityType): boolean {
   return legalFormProfile(entityType).fiscalYear.calendarOnly

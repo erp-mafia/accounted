@@ -25,6 +25,18 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 const requireWriteMock = vi.fn()
+// The framework of the year the asset is acquired in (frameworkOnDate, the
+// per-year resolver): set with each company row below.
+const frameworkOnDateMock = vi.hoisted(() => vi.fn(async (): Promise<'k2' | 'k3'> => 'k2'))
+vi.mock('@/lib/bokslut/framework-for-year', () => ({
+  frameworkOnDate: frameworkOnDateMock,
+  frameworkForYear: vi.fn(async () => 'k2'),
+}))
+vi.mock('@/lib/company/accounting-framework', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/accounting-framework')>()),
+  frameworkOnDate: frameworkOnDateMock,
+}))
+
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
@@ -57,6 +69,7 @@ const BASE_BODY = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  frameworkOnDateMock.mockResolvedValue('k2')
   reset()
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
   requireWriteMock.mockResolvedValue({ ok: true })
@@ -86,6 +99,7 @@ describe('POST /api/assets: opening accumulated depreciation', () => {
 
   it('forwards a valid opening amount and date to createAsset (no voucher path)', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockCreateAsset.mockResolvedValue({ id: 'asset-new' } as never)
 
     const res = await post({
@@ -124,6 +138,7 @@ describe('POST /api/assets: opening accumulated depreciation', () => {
 
   it('accepts an opening amount equal to the acquisition cost (fully depreciated)', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
+    frameworkOnDateMock.mockResolvedValue('k2')
     mockCreateAsset.mockResolvedValue({ id: 'asset-new' } as never)
     const res = await post({
       ...BASE_BODY,
@@ -133,12 +148,27 @@ describe('POST /api/assets: opening accumulated depreciation', () => {
     expect(res.status).toBe(200)
   })
 
-  it('rejects an opening amount combined with K3 components with 400', async () => {
+  // Founder decision 2026-09-23 refused this; reversed by K3 plan decision 4.
+  it('accepts an opening amount on a K3 component asset: the service splits it over the components', async () => {
+    enqueue({ data: { accounting_framework: 'k3' } })
+    frameworkOnDateMock.mockResolvedValue('k3')
+    mockCreateAsset.mockResolvedValue({ id: 'asset-new' } as never)
     const res = await post({
       ...BASE_BODY,
       opening_accumulated_depreciation: 10_000,
       opening_depreciation_date: '2024-12-31',
       k3_components: [{ name: 'Stomme', cost: 100_000, useful_life_months: 60 }],
+    })
+    expect(res.status).toBe(200)
+    expect(mockCreateAsset).toHaveBeenCalled()
+  })
+
+  it('rejects an opening amount above the components\' depreciable bases with 400', async () => {
+    const res = await post({
+      ...BASE_BODY,
+      opening_accumulated_depreciation: 90_000.01,
+      opening_depreciation_date: '2024-12-31',
+      k3_components: [{ name: 'Stomme', cost: 100_000, useful_life_months: 60, salvage_value: 10_000 }],
     })
     expect(res.status).toBe(400)
     expect(mockCreateAsset).not.toHaveBeenCalled()
@@ -215,6 +245,7 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
         opening_accumulated_depreciation: 40_000,
         opening_depreciation_date: '2024-12-31',
       }),
+      { userId: 'user-1' },
     )
   })
 })

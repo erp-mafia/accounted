@@ -26,6 +26,11 @@ import {
   assertCounterpartySetoffReversible,
   syncCounterpartySetoffAfterReversal,
 } from '@/lib/invoices/counterparty-setoff/reversal'
+import {
+  assertComponentReplacementReversible,
+  assertValueAdjustmentReversible,
+  releaseComponentsAfterReversal,
+} from '@/lib/bokslut/assets/component-reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
   // A reversed payment voucher puts the linked invoice or supplier invoice
@@ -105,5 +110,25 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
     beforeReversal: ({ supabase, companyId, entry }) => assertCounterpartySetoffReversible(supabase, companyId, entry.id),
     afterReversal: ({ supabase, companyId, userId, entry, storno }) =>
       syncCounterpartySetoffAfterReversal(supabase, companyId, userId, entry.id, { id: storno.id }),
+  },
+  // A K3 component replacement voucher (source_type system, like a
+  // disposal): refused once a later depreciation was planned without the
+  // replaced component; once reversed, the component is active again
+  // (lib/bokslut/assets/component-reversal.ts). Any other system voucher
+  // finds no component and passes untouched.
+  {
+    id: 'asset-component-replacement',
+    module: 'assets',
+    sourceTypes: ['system'],
+    // A nedskrivning or its reversal is a system voucher as well: refused
+    // while a later depreciation, write-down or the disposal was planned from
+    // the written-down value. Once reversed, its rows stop counting by
+    // themselves (asset_value_adjustments counts posted vouchers only).
+    beforeReversal: async ({ supabase, companyId, entry }) => {
+      await assertComponentReplacementReversible(supabase, companyId, entry.id)
+      await assertValueAdjustmentReversible(supabase, companyId, entry.id)
+    },
+    afterReversal: ({ supabase, companyId, entry }) =>
+      releaseComponentsAfterReversal(supabase, companyId, entry.id),
   },
 ])

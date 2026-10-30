@@ -52,6 +52,8 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7653': 0,
       '7754': 0,
       '7763': 0,
+      '7666': 0,
+      '7765': 0,
       '7670': 302000,
       '7770': 0,
     },

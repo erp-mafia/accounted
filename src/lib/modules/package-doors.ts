@@ -648,6 +648,13 @@ const ASSETS: PackageDoors = {
     // A building's or vehicle's identification fields (Bolaget): an edit of an existing asset.
     'PATCH /api/assets/:id/identification',
     'POST /api/assets/:id/dispose',
+    'POST /api/assets/:id/components',
+    'PATCH /api/assets/:id/components/:componentId',
+    'DELETE /api/assets/:id/components/:componentId',
+    'POST /api/assets/:id/components/:componentId/replace',
+    'POST /api/assets/:id/value-adjustments',
+    'PUT /api/assets/:id/tax-plan',
+    'PUT /api/assets/:id/transition-split',
     'DELETE /api/v1/companies/:companyId/assets/:id',
     'PATCH /api/v1/companies/:companyId/assets/:id',
     'POST /api/v1/companies/:companyId/assets/:id/dispose',
@@ -655,6 +662,10 @@ const ASSETS: PackageDoors = {
     'mcp:gnubok_dispose_asset',
     'mcp:gnubok_post_annual_depreciation',
     'mcp:gnubok_update_asset',
+    'op:assets.value-adjustments.create',
+    'op:assets.components.replace',
+    'op:assets.tax-plan.set',
+    'op:assets.transition-split.set',
   ],
 }
 

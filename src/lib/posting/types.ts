@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type {
+  commitAssetComponentReplacement,
+  commitAssetValueAdjustment,
+  commitDeferredTax,
+  commitK3Transition,
   commitAssetDepreciation,
   commitAssetDisposal,
   commitBulkBooking,
@@ -253,6 +257,10 @@ export interface SqlPostingDoors {
   commit_opening_balance_replacement: typeof replaceOpeningBalanceEntry
   commit_asset_depreciation: typeof commitAssetDepreciation
   commit_asset_disposal: typeof commitAssetDisposal
+  commit_asset_component_replacement: typeof commitAssetComponentReplacement
+  commit_asset_value_adjustment: typeof commitAssetValueAdjustment
+  commit_deferred_tax: typeof commitDeferredTax
+  commit_k3_transition: typeof commitK3Transition
   book_counterparty_setoff: typeof commitCounterpartySetoff
 }
 

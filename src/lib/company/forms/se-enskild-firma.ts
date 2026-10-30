@@ -26,6 +26,7 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     hasOwners: true,
     settlement: { withdrawal: '2013', contribution: '2018' },
     memberCapital: false,
+    developmentFund: false,
     maintenanceFund: null,
     shareRegister: false,
   },

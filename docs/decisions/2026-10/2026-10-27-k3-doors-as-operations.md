@@ -1,0 +1,1 @@
+[2026-10-27] The K3 writes (nedskrivning, component replacement, tax plan, transition split, deferred tax inputs, 18.7 model, transition start/update/delete/commit) are operations: v1 and staged MCP over the dashboard's services, dry runs through the same checks. GAP_CEILING back to 157.

@@ -1,0 +1,1 @@
+[2026-10-26] K3 components may carry opening accumulated depreciation per component (reverses the founder decision of 2026-09-23): K3 plan decision 4, approved 2026-10-26; an asset migrated or split at the K3 transition (35.18) otherwise cannot continue each component's plan.

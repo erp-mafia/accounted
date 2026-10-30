@@ -70,6 +70,10 @@ export const POSTING_SURFACE = {
     // own arguments).
     'commitAssetDepreciation', // commit_asset_depreciation
     'commitAssetDisposal', // commit_asset_disposal
+    'commitAssetComponentReplacement', // commit_asset_component_replacement
+    'commitAssetValueAdjustment', // commit_asset_value_adjustment
+    'commitDeferredTax', // commit_deferred_tax
+    'commitK3Transition', // commit_k3_transition
     'replaceOpeningBalanceEntry', // commit_opening_balance_replacement
     'commitBulkBooking', // bulk_book_transactions
     'commitMatchBatchAllocation', // match_batch_allocate

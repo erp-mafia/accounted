@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { frameworkOnDate } from '@/lib/company/accounting-framework'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
@@ -70,12 +71,13 @@ export const POST = withRouteContext(
     //    message: the egenupparbetade group cites BFNAR 2016:10 punkt 10.4,
     //    other Ej K2 accounts do not, and an enskild firma gets neither, since
     //    K2 is not its regelverk. entity_type rides along on the same fetch.
-    const { data: company } = await supabase
-      .from('companies')
-      .select('accounting_framework, entity_type')
-      .eq('id', companyId)
-      .single()
-    const isK3Company = company?.accounting_framework === 'k3'
+    // The framework of the year the asset is acquired in, not the company's
+    // latest (a next year elected K3 leaves the current year K2).
+    const [{ data: company }, framework] = await Promise.all([
+      supabase.from('companies').select('entity_type').eq('id', companyId).single(),
+      frameworkOnDate(supabase, companyId, validation.data.acquisition_date),
+    ])
+    const isK3Company = framework === 'k3'
     if (
       validation.data.k3_components !== undefined &&
       validation.data.k3_components !== null &&
@@ -92,10 +94,7 @@ export const POST = withRouteContext(
       )
     }
     if (!isK3Company) {
-      const defaults = defaultAccountsForCategory(
-        validation.data.category,
-        company?.accounting_framework,
-      )
+      const defaults = defaultAccountsForCategory(validation.data.category, framework)
       const excluded = findK2ExcludedAccount([
         validation.data.bas_asset_account ?? defaults.asset,
         validation.data.bas_accumulated_account ?? defaults.accumulated,

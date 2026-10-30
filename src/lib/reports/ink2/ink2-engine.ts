@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  loadBuildingTaxAdjustment,
   loadTaxAdjustmentSnapshot,
   MEMBERSHIP_FEE_ACCOUNT,
 } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
@@ -267,13 +268,15 @@ export async function generateINK2Declaration(
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, buildingTax] =
     await Promise.all([
       loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
+      // INK2S 4.9: buildings, markanläggningar and mark on their tax plan.
+      loadBuildingTaxAdjustment(supabase, companyId, period as FiscalPeriod),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
@@ -460,9 +463,13 @@ export async function generateINK2Declaration(
   // in full (IL 40 kap. 2 §); whatever the result cannot absorb becomes this
   // year's underskott on 4.16 and rolls forward again.
   const deficitCarryforward = Math.trunc(taxAdjustments.deficitCarryforward ?? 0)
+  // 4.9: the book depreciation and write-downs on fast egendom added back,
+  // the tax plan's deduction taken (IL 19-20 kap.), filed net.
+  const buildingAdjustment = Math.trunc(buildingTax.net)
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
+    + buildingAdjustment
     - deficitCarryforward
 
   const ink2: INK2Rutor = {
@@ -481,6 +488,8 @@ export async function generateINK2Declaration(
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
+    '7666': buildingAdjustment > 0 ? buildingAdjustment : 0,
+    '7765': buildingAdjustment < 0 ? -buildingAdjustment : 0,
     '7763': deficitCarryforward,
     '7670': taxableResult >= 0 ? taxableResult : 0,
     '7770': taxableResult < 0 ? Math.abs(taxableResult) : 0,
@@ -501,6 +510,8 @@ export async function generateINK2Declaration(
       `Medlemsavgifter ${Math.trunc(membershipFees.amount)} kr har tagits upp som ej skattepliktiga (INK2S 4.5c). De administrationskostnader som avgifterna täcker är inte avdragsgilla och ska anges som ytterligare ej avdragsgilla kostnader (INK2S 4.3c) i bokslutets skattemässiga justeringar.`,
     )
   }
+
+  warnings.push(...buildingTax.warnings)
 
   // The underskottsregister's spärrar are netted into the 4.14 a deducted
   // above: the taxable result is right, but Skatteverket's form takes the

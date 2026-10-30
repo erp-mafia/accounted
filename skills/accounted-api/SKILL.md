@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 448 endpoints.
+  pagination, scopes), and all 459 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 448 operations. Paths are shown without
+API version `2026-05-12`, 459 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -282,11 +282,12 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (66)
+### Periods and registers (73)
 
 Full detail: [references/periods.md](references/periods.md)
 
 ```text
+PATCH /companies/{companyId}/accounting-policies : Choose the K3 model for internally generated intangible assets: expense or capitalise (punkt 18.7) [scope:companies:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/accounts : List chart-of-accounts entries (BAS chart) [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/accounts : Add an account to the chart of accounts (kontoplan) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 PATCH /companies/{companyId}/accounts/{number} : Edit or deactivate an account in the chart of accounts [scope:bookkeeping:write risk:low idempotent dry-run reversible]
@@ -331,6 +332,7 @@ POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions/{version
 POST /companies/{companyId}/fiscal-periods/{id}/close : Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §) [scope:bookkeeping:write risk:high idempotent]
 POST /companies/{companyId}/fiscal-periods/{id}/close-external : Mark a migrated fiscal year as closed in the previous system (klarmarkera) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/currency-revaluation : Run FX revaluation for the fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
+PUT /companies/{companyId}/fiscal-periods/{id}/deferred-tax : Save the uppskjuten skatt inputs of a K3 year: whether the tax loss carried forward is recognised and why, and differences entered by hand [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/lock : Lock a fiscal period (no new entries can be posted into it) [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/opening-balances : Generate opening-balance verifikation for the next fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/opening-balances/correct : Correct a year's ingående balanser by storno: the full corrected IB replaces the old one [scope:bookkeeping:write risk:high idempotent dry-run]
@@ -343,6 +345,11 @@ POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end clos
 GET /companies/{companyId}/group-links : List the company's group structure: its parent, subsidiaries and associates with ownership and votes over time [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/group-links : Register a parent, subsidiary or associate of the company [scope:companies:write risk:low idempotent dry-run]
 PATCH /companies/{companyId}/group-links/{id} : Change a group link, or end it with valid_to [scope:companies:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/k3-transition : Read the company's transition to K3 (kap. 35): the first K3 year, the relief chosen, the note facts, and the assets the 35.18 split concerns [scope:reports:read risk:low idempotent reversible]
+POST /companies/{companyId}/k3-transition : Start the transition to K3 on the first K3 fiscal year (an open year reported under K3) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/k3-transition : Set the transition's 35.27 relief and the facts its notes state: the relief rules applied (35.31) and the principles changed (35.33) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/k3-transition : Drop a transition to K3 that is not committed and has no component splits left [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/k3-transition/commit : Post the transition to K3: the opening deferred tax and the stated adjustments against equity on the first day of the first K3 year [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 GET /companies/{companyId}/securities : List ställda säkerheter and eventualförpliktelser, with the årsredovisning note texts they give on a balance date [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/securities : Register a ställd säkerhet or an eventualförpliktelse [scope:companies:write risk:low idempotent dry-run]
 PATCH /companies/{companyId}/securities/{id} : Change a ställd säkerhet or an eventualförpliktelse, or release it with valid_to [scope:companies:write risk:low idempotent dry-run reversible]
@@ -751,7 +758,7 @@ GET /companies/{companyId}/unexplained/{checkId}/explain : What a difference in 
 POST /companies/{companyId}/vat/settlement : Book the momsredovisning verifikat for a VAT period, exactly as the proposal gives it [scope:bookkeeping:write risk:high idempotent dry-run]
 ```
 
-### Fixed assets (6)
+### Fixed assets (10)
 
 Full detail: [references/assets.md](references/assets.md)
 
@@ -761,7 +768,11 @@ POST /companies/{companyId}/assets : Register a fixed asset (no voucher is poste
 GET /companies/{companyId}/assets/{id} : Get one fixed asset [scope:reports:read risk:low idempotent]
 PATCH /companies/{companyId}/assets/{id} : Partially update a fixed asset [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/assets/{id} : Delete an asset that never reached the books [scope:bookkeeping:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/assets/{id}/components/{componentId}/replace : Replace a K3 component: take the replaced part off the books and register the replacing one [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/assets/{id}/dispose : Dispose a fixed asset and post the avyttring voucher [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+PUT /companies/{companyId}/assets/{id}/tax-plan : State the tax depreciation plan of a building or markanläggning: percent a year, the day it starts, the primäravdrag [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+PUT /companies/{companyId}/assets/{id}/transition-split : Split an asset on significant components at the transition to K3 (35.18), or undo the split [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/assets/{id}/value-adjustments : Write an asset down to its recoverable amount (nedskrivning), or reverse an earlier write-down, on a balansdag [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 ```
 
 ### Pending operations (approvals) (4)

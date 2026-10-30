@@ -76,6 +76,8 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'skatteverket',
       'skattekonto',
       'tax-loss-carryforwards',
+      'k3-transition',
+      'accounting-policies',
       'agreements',
       'agreement-obligations',
       'securities',
@@ -88,7 +90,9 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'reading filed VAT declarations (and beslut) from Skatteverket, the register of prior ' +
       'years\' tax losses (underskott, IL 40 kap.) per fiscal year, and the company\'s ' +
       'commitments: agreements with their expected payments, ställda säkerheter and ' +
-      'eventualförpliktelser, and the group structure.',
+      'eventualförpliktelser, and the group structure. Under K3: the deferred tax inputs ' +
+      'of a year, the 18.7 model for own development, and the transition to K3 (kap. 35: ' +
+      'start, relief and note facts, commit).',
   },
   {
     file: 'invoices.md',
@@ -223,7 +227,9 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'The anläggningsregister: register an asset (no voucher, the purchase is already booked), ' +
       'correct it while no depreciation is posted, and dispose it (sale, scrap or business transfer) ' +
       'which posts the avyttring voucher with gain/loss, VAT and jämkning. Depreciation itself is ' +
-      'proposed and posted per fiscal period through the year-end flow.',
+      'proposed and posted per fiscal period through the year-end flow. Also: a nedskrivning or ' +
+      'its reversal on a balansdag, a K3 component replaced, a building\'s tax depreciation plan ' +
+      '(INK2S 4.9), and the split on components at the transition to K3.',
   },
   {
     file: 'pending-operations.md',

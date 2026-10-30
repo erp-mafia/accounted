@@ -1,0 +1,1 @@
+[2026-10-27] Agents stage the K3 inputs but the deferred tax and the fond för utvecklingsutgifter are posted from the Bokslut page, never with gnubok_create_voucher: commit_deferred_tax records the temporary differences with the voucher, which a hand voucher would lose.
