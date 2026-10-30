@@ -22,5 +22,5 @@ export const PATCH = withRouteContext(
     await setAvstamningsbolag(operationContext(ctx), validation.data.is_avstamningsbolag)
     return NextResponse.json({ data: { is_avstamningsbolag: validation.data.is_avstamningsbolag } })
   },
-  { requireWrite: true },
+  { requireAdmin: true },
 )

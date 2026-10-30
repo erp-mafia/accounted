@@ -4,9 +4,13 @@ import { createMockRequest } from '@/tests/helpers'
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-1') }))
-vi.mock('@/lib/auth/require-write', () => ({
+// The register writes are owner/admin routes (requireAdmin): these tests act
+// as an admin; admin-doors.test.ts holds the member's refusal.
+vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
+  companyAdminRequiredResponse: (await importOriginal<typeof import('@/lib/auth/require-write')>()).companyAdminRequiredResponse,
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
   getCompanyRole: vi.fn().mockResolvedValue({ ok: true, role: 'member' }),
+  isCompanyAdmin: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('@/lib/bolaget/gate', () => ({ bolagetGate: vi.fn() }))
 vi.mock('@/lib/bolaget/share-register', async (importOriginal) => ({

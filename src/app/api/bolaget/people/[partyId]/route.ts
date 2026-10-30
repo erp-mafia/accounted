@@ -42,5 +42,5 @@ export const PATCH = withRouteContext<{ params: Promise<{ partyId: string }> }>(
     if (!outcome.ok) return errorResponseFromCode(outcome.code, ctx.log, { requestId: ctx.requestId })
     return NextResponse.json({ data: { party_id: partyId, personnummer_masked: outcome.personnummer_masked } })
   },
-  { requireWrite: true },
+  { requireAdmin: true },
 )

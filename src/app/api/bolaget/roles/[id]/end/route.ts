@@ -23,5 +23,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireAdmin: true },
 )
