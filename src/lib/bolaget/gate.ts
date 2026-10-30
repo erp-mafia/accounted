@@ -6,6 +6,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { keepsShareRegister, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { isBolagetEnabled } from '@/lib/env/bolaget-switch'
+import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
+import type { BolagetHubAccess } from './hub'
 
 export type BolagetGateCode = 'BOLAGET_DISABLED' | 'BOLAGET_NOT_FOR_LEGAL_FORM'
 
@@ -14,4 +16,15 @@ export async function bolagetGate(supabase: SupabaseClient, companyId: string): 
   if (!isBolagetEnabled(companyId)) return 'BOLAGET_DISABLED'
   const entityType = await resolveCompanyEntityType(supabase, companyId)
   return keepsShareRegister(entityType) ? null : 'BOLAGET_NOT_FOR_LEGAL_FORM'
+}
+
+/**
+ * Which halves of the Bolaget pages the company has (hub.ts): the registers
+ * by the gate above, Avtal och åtaganden by the same rollout for every form.
+ */
+export async function bolagetHubAccess(supabase: SupabaseClient, companyId: string): Promise<BolagetHubAccess> {
+  return {
+    registers: (await bolagetGate(supabase, companyId)) === null,
+    agreements: commitmentsEnabledFor(companyId),
+  }
 }

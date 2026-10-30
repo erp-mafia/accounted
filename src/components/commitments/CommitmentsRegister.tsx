@@ -2,19 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { BriefcaseIcon } from '@/components/icons'
+import { ArchiveBoxIcon, BriefcaseIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { AgreementView, GroupLinkView, ObligationView, SecurityView } from '@/lib/commitments/types'
+import { columnsWithValues, groupUpcomingPayments } from '@/lib/commitments/register-view'
+import { BolagetHeader } from '@/components/bolaget/BolagetHeader'
 import { AgreementDialog, EndAgreementDialog, GroupLinkDialog, SecurityDialog } from './CommitmentDialogs'
 
 interface Overview {
@@ -35,10 +36,26 @@ interface UpcomingRow {
   amount: number | null
   currency: string
   missed: boolean
+  /** The agreement's further payments in the window, folded into this line. */
+  more: number
 }
 
 const H2_CLASS = 'text-sm font-medium uppercase tracking-wider text-muted-foreground'
-const GROUP_BAND_CLASS = 'bg-muted/30'
+// A kind is a quiet label over its rows, not a band (founder call 2026-10-30).
+const GROUP_LABEL_CLASS = 'px-4 pb-1 pt-4 text-[12.5px] text-muted-foreground'
+// The agreement's name takes the width that is left and truncates; the
+// figures and dates beside it never wrap (no horizontal scroll on a laptop).
+const NAME_TD_CLASS = 'max-w-0 w-1/2'
+const NOWRAP = 'whitespace-nowrap tabular-nums'
+
+/** The agreement columns besides its name, each left out when no shown row fills it. */
+const AGREEMENT_CELLS = {
+  counterparty: (a: AgreementView) => a.counterparty_name,
+  amount: (a: AgreementView) => a.amount,
+  next_payment: (a: AgreementView) => a.next_payment?.due_on,
+  notice: (a: AgreementView) => a.notice_deadline?.due_date,
+  ends: (a: AgreementView) => a.ends_on,
+}
 
 function addYear(iso: string): string {
   const [y, m, d] = iso.split('-')
@@ -100,14 +117,16 @@ export function CommitmentsRegister() {
   const upcoming = useMemo<UpcomingRow[]>(() => {
     if (!overview) return []
     const horizon = addYear(overview.today)
-    const rows: UpcomingRow[] = overview.upcoming_payments.map((o) => ({
-      key: `p:${o.obligation_id}`,
-      date: o.due_on,
-      title: o.agreement_title,
-      what: o.direction === 'in' ? t('upcoming_payment_in') : t('upcoming_payment_out'),
-      amount: o.amount,
-      currency: o.currency,
-      missed: o.status === 'missed',
+    // One line per agreement, not per payment: the first one and "+N till".
+    const rows: UpcomingRow[] = groupUpcomingPayments(overview.upcoming_payments).map((p) => ({
+      key: `p:${p.agreement_id}`,
+      date: p.due_on,
+      title: p.title,
+      what: p.direction === 'in' ? t('upcoming_payment_in') : t('upcoming_payment_out'),
+      amount: p.amount,
+      currency: p.currency,
+      missed: p.missed,
+      more: p.more,
     }))
     for (const a of overview.agreements.filter((x) => x.status === 'active')) {
       for (const [key, d] of [
@@ -115,7 +134,7 @@ export function CommitmentsRegister() {
         ['end', a.end_deadline],
       ] as const) {
         if (d && d.due_date >= overview.today && d.due_date <= horizon) {
-          rows.push({ key: `d:${a.agreement_id}:${key}`, date: d.due_date, title: a.title, what: t(`upcoming_${key}`), amount: null, currency: a.currency, missed: false })
+          rows.push({ key: `d:${a.agreement_id}:${key}`, date: d.due_date, title: a.title, what: t(`upcoming_${key}`), amount: null, currency: a.currency, missed: false, more: 0 })
         }
       }
     }
@@ -123,8 +142,11 @@ export function CommitmentsRegister() {
   }, [overview, t])
 
   const loans = useMemo(() => (overview?.agreements ?? []).filter((a) => a.kind === 'loan'), [overview])
+  const shown = useMemo(() => columnsWithValues(agreements, AGREEMENT_CELLS), [agreements])
+  const columnCount = 1 + shown.size
+  // "10 417 kr/mån": the period after a slash, never on a line of its own.
   const amountText = (a: AgreementView) =>
-    a.amount == null ? '' : a.period && a.period !== 'one_time' ? t('amount_per', { amount: formatCurrency(a.amount, a.currency), period: t(`period_per.${a.period}`) }) : formatCurrency(a.amount, a.currency)
+    a.amount == null ? '' : a.period && a.period !== 'one_time' ? t('amount_per_period', { amount: formatCurrency(a.amount, a.currency), period: t(`period_short.${a.period}`) }) : formatCurrency(a.amount, a.currency)
   const validity = (from: string | null, to: string | null) =>
     from && to ? t('valid_range', { from: formatDate(from), to: formatDate(to) }) : from ? t('valid_from_only', { from: formatDate(from) }) : to ? t('valid_to_only', { to: formatDate(to) }) : ''
 
@@ -135,9 +157,10 @@ export function CommitmentsRegister() {
 
   return (
     <div className="space-y-8">
-      <PageHeader
+      <BolagetHeader
         title={t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        subtitle={t('subtitle')}
+        help={t('help')}
         action={
           canWrite ? (
             <Button size="sm" onClick={() => setAgreementDialog({ agreement: null })}>
@@ -173,14 +196,17 @@ export function CommitmentsRegister() {
                   <tbody>
                     {upcoming.map((row) => (
                       <tr key={row.key} className="hover:bg-secondary/35">
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(row.date)}</td>
-                        <td className={TD_CLASS} data-ph-mask="">
-                          {row.title}
+                        <td className={cn(TD_CLASS, NOWRAP)}>{formatDate(row.date)}</td>
+                        <td className={cn(TD_CLASS, NAME_TD_CLASS)}>
+                          <span className="block truncate" data-ph-mask="">
+                            {row.title}
+                          </span>
                         </td>
-                        <td className={TD_CLASS}>
-                          {row.missed ? <Badge variant="warning">{t('payment_missed')}</Badge> : <span className="text-muted-foreground">{row.what}</span>}
+                        <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                          {row.missed ? <span className="text-attn">{t('payment_missed')}</span> : <span className="text-muted-foreground">{row.what}</span>}
+                          {row.more > 0 && <span className="text-muted-foreground"> · {t('upcoming_more', { count: row.more })}</span>}
                         </td>
-                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.amount == null ? '' : formatCurrency(row.amount, row.currency)}</td>
+                        <td className={cn(TD_CLASS, NOWRAP, 'text-right')}>{row.amount == null ? '' : formatCurrency(row.amount, row.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -215,17 +241,17 @@ export function CommitmentsRegister() {
                   <thead>
                     <tr>
                       <th className={TH_CLASS}>{t('col_agreement')}</th>
-                      <th className={TH_CLASS}>{t('col_counterparty')}</th>
-                      <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
-                      <th className={TH_CLASS}>{t('col_next_payment')}</th>
-                      <th className={TH_CLASS}>{t('col_notice')}</th>
-                      <th className={TH_CLASS}>{t('col_ends')}</th>
+                      {shown.has('counterparty') && <th className={TH_CLASS}>{t('col_counterparty')}</th>}
+                      {shown.has('amount') && <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>}
+                      {shown.has('next_payment') && <th className={TH_CLASS}>{t('col_next_payment')}</th>}
+                      {shown.has('notice') && <th className={TH_CLASS}>{t('col_notice')}</th>}
+                      {shown.has('ends') && <th className={TH_CLASS}>{t('col_ends')}</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {byKind.map(([kind, rows]) => [
-                      <tr key={`band-${kind}`} className={GROUP_BAND_CLASS}>
-                        <td colSpan={6} className="px-4 py-2 text-[12.5px] font-medium text-muted-foreground">
+                      <tr key={`band-${kind}`}>
+                        <td colSpan={columnCount} className={GROUP_LABEL_CLASS}>
                           {t(`kind.${kind}`)}
                         </td>
                       </tr>,
@@ -237,31 +263,48 @@ export function CommitmentsRegister() {
                             className={cn('hover:bg-secondary/35', editable && 'cursor-pointer')}
                             onClick={editable ? () => setAgreementDialog({ agreement: a }) : undefined}
                           >
-                            <td className={TD_CLASS} data-ph-mask="">
-                              <span>{a.title}</span>
-                              {a.origin === 'derived' && (
-                                <Badge variant="outline" className="ml-2">
-                                  {t('origin_derived')}
-                                </Badge>
-                              )}
+                            <td className={cn(TD_CLASS, NAME_TD_CLASS)}>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="truncate" data-ph-mask="">
+                                  {a.title}
+                                </span>
+                                {/* Where the agreement came from, as a quiet mark: a derived
+                                    agreement has no detail view of its own here. */}
+                                {a.origin === 'derived' && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span tabIndex={0} aria-label={t('origin_derived')} className="inline-flex shrink-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                        <ArchiveBoxIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top">{t('origin_derived')}</TooltipContent>
+                                  </Tooltip>
+                                )}
+                              </span>
                             </td>
-                            <td className={cn(TD_CLASS, 'text-muted-foreground')} data-ph-mask="">
-                              {a.counterparty_name ?? ''}
-                            </td>
-                            <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{amountText(a)}</td>
-                            <td className={cn(TD_CLASS, 'tabular-nums')}>
-                              {a.next_payment ? (
-                                a.next_payment.status === 'missed' ? (
-                                  <Badge variant="warning">{t('payment_missed_on', { date: formatDate(a.next_payment.due_on) })}</Badge>
+                            {shown.has('counterparty') && (
+                              <td className={cn(TD_CLASS, 'max-w-0 w-1/4 text-muted-foreground')}>
+                                <span className="block truncate" data-ph-mask="">
+                                  {a.counterparty_name ?? ''}
+                                </span>
+                              </td>
+                            )}
+                            {shown.has('amount') && <td className={cn(TD_CLASS, NOWRAP, 'text-right')}>{amountText(a)}</td>}
+                            {shown.has('next_payment') && (
+                              <td className={cn(TD_CLASS, NOWRAP)}>
+                                {a.next_payment ? (
+                                  a.next_payment.status === 'missed' ? (
+                                    <span className="text-attn">{t('payment_missed_on', { date: formatDate(a.next_payment.due_on) })}</span>
+                                  ) : (
+                                    formatDate(a.next_payment.due_on)
+                                  )
                                 ) : (
-                                  formatDate(a.next_payment.due_on)
-                                )
-                              ) : (
-                                ''
-                              )}
-                            </td>
-                            <td className={cn(TD_CLASS, 'tabular-nums')}>{a.notice_deadline ? formatDate(a.notice_deadline.due_date) : ''}</td>
-                            <td className={cn(TD_CLASS, 'tabular-nums')}>{a.ends_on ? formatDate(a.ends_on) : ''}</td>
+                                  ''
+                                )}
+                              </td>
+                            )}
+                            {shown.has('notice') && <td className={cn(TD_CLASS, NOWRAP)}>{a.notice_deadline ? formatDate(a.notice_deadline.due_date) : ''}</td>}
+                            {shown.has('ends') && <td className={cn(TD_CLASS, NOWRAP)}>{a.ends_on ? formatDate(a.ends_on) : ''}</td>}
                           </tr>
                         )
                       }),
@@ -309,8 +352,8 @@ export function CommitmentsRegister() {
                         <td className={cn(TD_CLASS, 'text-muted-foreground')} data-ph-mask="">
                           {s.in_favour_of_name ?? ''}
                         </td>
-                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(s.amount)}</td>
-                        <td className={cn(TD_CLASS, 'tabular-nums text-muted-foreground')}>{validity(s.valid_from, s.valid_to)}</td>
+                        <td className={cn(TD_CLASS, NOWRAP, 'text-right')}>{formatCurrency(s.amount)}</td>
+                        <td className={cn(TD_CLASS, NOWRAP, 'text-muted-foreground')}>{validity(s.valid_from, s.valid_to)}</td>
                       </tr>
                     ))}
                   </tbody>

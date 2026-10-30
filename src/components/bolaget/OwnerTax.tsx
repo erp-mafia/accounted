@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { PageHeader } from '@/components/ui/page-header'
+import { BolagetHeader } from './BolagetHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -338,26 +338,29 @@ export function OwnerTax() {
   // ── Render ─────────────────────────────────────────────────────────
 
   const header = (
-    <PageHeader
-      title={t('title')}
-      help={<p className="text-sm">{t('help')}</p>}
-      action={
-        <div className="flex items-center gap-2">
-          <SettingsSelect aria-label={t('year')} value={String(year)} onChange={(e) => setYear(Number(e.target.value))} wrapperClassName="w-28">
-            {years.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </SettingsSelect>
-          {canWrite ? (
-            <Button size="sm" onClick={() => openLoan('borrows')}>
-              {t('new_loan')}
-            </Button>
-          ) : null}
-        </div>
-      }
-    />
+    <>
+      <BolagetHeader
+        title={t('title')}
+        subtitle={t('subtitle')}
+        help={t('help')}
+        action={
+          <div className="flex items-center gap-2">
+            <SettingsSelect aria-label={t('year')} value={String(year)} onChange={(e) => setYear(Number(e.target.value))} wrapperClassName="w-28">
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </SettingsSelect>
+            {canWrite ? (
+              <Button size="sm" onClick={() => openLoan('borrows')}>
+                {t('new_loan')}
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+    </>
   )
 
   if (loading && !data) {

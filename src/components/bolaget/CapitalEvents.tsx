@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { PageHeader } from '@/components/ui/page-header'
+import { BolagetHeader } from './BolagetHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -451,7 +451,7 @@ export function CapitalEvents() {
   if (loading && !data) {
     return (
       <div className="space-y-8">
-        <PageHeader title={t('title')} />
+        <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} />
         <Skeleton className="h-40 w-full" />
       </div>
     )
@@ -464,9 +464,10 @@ export function CapitalEvents() {
 
   return (
     <div className="space-y-8">
-      <PageHeader
+      <BolagetHeader
         title={t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        subtitle={t('subtitle')}
+        help={t('help')}
         action={
           canWrite ? (
             <div className="flex items-center gap-2">

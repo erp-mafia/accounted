@@ -427,7 +427,8 @@ export function ShareRegister() {
 
   return (
     <div className="space-y-8">
-      <BolagetHeader title={t('title')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')}>
+      <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
+          <>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" variant="outline">
@@ -454,7 +455,9 @@ export function ShareRegister() {
                 {t('new_event')}
               </Button>
             )}
-      </BolagetHeader>
+          </>
+        }
+      />
 
       {attn}
 

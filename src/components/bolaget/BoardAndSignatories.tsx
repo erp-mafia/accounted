@@ -220,13 +220,14 @@ export function BoardAndSignatories() {
 
   return (
     <div className="space-y-8">
-      <BolagetHeader title={t('title')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')}>
-            {canWrite && (
-              <Button size="sm" onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: today(), registered_at: '' })}>
-                {t('add_role')}
-              </Button>
-            )}
-      </BolagetHeader>
+      <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
+          canWrite ? (
+            <Button size="sm" onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: today(), registered_at: '' })}>
+              {t('add_role')}
+            </Button>
+          ) : undefined
+        }
+      />
 
       {attn}
 
