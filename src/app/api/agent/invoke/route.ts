@@ -310,6 +310,7 @@ export async function POST(request: Request) {
           // The language the app renders in, so the agent answers in it.
           locale: localeFromCookieHeader(request.headers.get('cookie')),
           readOnly: membership.role === 'viewer',
+          role: membership.role,
           emit: (event) => emit(event),
         })
       } catch (err) {

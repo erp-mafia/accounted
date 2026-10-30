@@ -692,6 +692,9 @@ import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createFeedTools } from './feed-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
 import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
+import type { DoorRule } from '@/lib/permissions/doors'
+import { mcpToolDoor } from './permission-doors'
+import { mcpCallShadow, type McpCallShadow } from './permission-shadow'
 import { startPackageForTool } from '@/lib/modules/package-doors'
 import { packageOffToolError, packageStartRefusal } from '@/lib/modules/package-gate'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1014,6 +1017,12 @@ export interface ActorContext {
    * Only meaningful for `type: 'api_key'`.
    */
   canApprove?: boolean
+  /**
+   * The agent identity the key belongs to (validateApiKey().agentIdentityId),
+   * when known. Attribution only: the permission shadow names the agent in
+   * what it logs. Only meaningful for `type: 'api_key'`.
+   */
+  agentIdentityId?: string | null
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -1536,6 +1545,7 @@ function windingDownBriefing(capabilities: CompanyCapabilities): {
 const OPERATION_ID_BY_TOOL: ReadonlyMap<string, string> = new Map(
   ALL_OPERATIONS.flatMap((op) => (op.mcp ? [[op.mcp.name, op.id] as const] : [])),
 )
+const OPERATION_BY_TOOL = new Map(ALL_OPERATIONS.flatMap((op) => (op.mcp ? [[op.mcp.name, op] as const] : [])))
 
 // gnubok_feedback rate limit: 1 per 60s per actor. In-memory single-process;
 // no Redis dependency. See the gnubok_feedback tool definition below.
@@ -3412,6 +3422,20 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
  */
 export function isStagingTool(t: { outputSchema?: Record<string, unknown> }): boolean {
   return t.outputSchema === STAGED_OPERATION_SCHEMA
+}
+
+/**
+ * The door a tool call goes through (src/lib/permissions/doors.ts): a
+ * generated tool's operation door, else the hand-written tool's
+ * (./permission-doors.ts). Read by the permission shadow here and, through
+ * the agent tool registry, in the in-app assistant.
+ */
+export function toolPermissionDoor(t: {
+  name: string
+  outputSchema?: Record<string, unknown>
+  annotations?: { readOnlyHint?: boolean }
+}): DoorRule | null {
+  return mcpToolDoor(t, { stageable: isStagingTool(t), operation: OPERATION_BY_TOOL.get(t.name) })
 }
 
 /**
@@ -5856,7 +5880,24 @@ export const tools: McpTool[] = [
           allowedCompanyIds: actor?.allowedCompanyIds,
           readOnlyCompanyIds: actor?.readOnlyCompanyIds,
         })
-        assertMcpCompanyWriteAccess(context, innerScope)
+        // The permission shadow, per company: the inner tool is the door.
+        const shadow =
+          actor?.type === 'api_key' && keyScopes
+            ? mcpCallShadow(
+                {
+                  userId,
+                  keyScopes,
+                  oauthKey: actor.oauthKey === true,
+                  serviceAccountId: actor.serviceAccountId ?? null,
+                  apiKeyId: actor.id ?? null,
+                  agentIdentityId: actor.agentIdentityId ?? null,
+                },
+                innerName,
+                () => toolPermissionDoor(inner),
+                true,
+              )
+            : null
+        assertMcpCompanyWriteAccess(context, innerScope, shadow?.gate(context))
         const override = perCompany[company.companyId]
         const innerArgs = {
           ...sharedArgs,
@@ -5865,15 +5906,22 @@ export const tools: McpTool[] = [
             : {}),
           ...(dryRun ? { dry_run: true } : {}),
         }
-        return runInnerTool({
-          supabase,
-          inner,
-          innerArgs,
-          companyId: company.companyId,
-          userId,
-          actor: runnerActor,
-          requestId: null,
-        })
+        try {
+          const staged = await runInnerTool({
+            supabase,
+            inner,
+            innerArgs,
+            companyId: company.companyId,
+            userId,
+            actor: runnerActor,
+            requestId: null,
+          })
+          shadow?.settled(dryRun)
+          return staged
+        } catch (err) {
+          shadow?.failed(err)
+          throw err
+        }
       }
       const companies = scope.companies.map((company) => ({ companyId: company.companyId, name: company.name }))
       // Writes stage one company at a time: the staging helper stamps the
@@ -28819,6 +28867,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let allowedCompanyIds: string[] | null = null
   let readOnlyCompanyIds: string[] | null = null
   let serviceAccountId: string | null = null
+  let agentIdentityId: string | null = null
   // `?company=<uuid>` on the URL: the connection is pinned to that company
   // (validated against membership and the allowlist below, per request).
   let pinnedCompanyId: string | null = null
@@ -28857,6 +28906,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       allowedCompanyIds,
       readOnlyCompanyIds,
     } = authResult)
+    agentIdentityId = authResult.agentIdentityId ?? null
     // A service account's key is labelled with the account's name: it is the
     // actor every record names (the key's own name is only a key label).
     if (authResult.serviceAccount) {
@@ -28988,6 +29038,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         oauthKey,
         serviceAccountId,
         canApprove: hasScope(keyScopes, 'pending_operations:approve'),
+        ...(agentIdentityId ? { agentIdentityId } : {}),
       }
 
   // ── Simple company mode ──
@@ -29468,6 +29519,24 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         (scope): scope is ApiKeyScope => scope !== undefined && scope !== null && !hasScope(keyScopes, scope)
       )
       const unmapped = !requiredScope && !UNSCOPED_TOOLS.has(toolName)
+      // The permission shadow (./permission-shadow.ts): decide() beside the
+      // write gate, told what it did. Reads nothing, changes nothing. A
+      // missing scope is not compared: scope checks stay at the wire.
+      const shadow: McpCallShadow | null = isAnonymous
+        ? null
+        : mcpCallShadow(
+            {
+              userId,
+              keyScopes,
+              oauthKey,
+              serviceAccountId,
+              apiKeyId: apiKeyId ?? null,
+              agentIdentityId,
+            },
+            toolName,
+            () => toolPermissionDoor(tool),
+            isStagingTool(tool),
+          )
       if (missingScope || unmapped) {
         const scopeError = toToolError(
           missingScope
@@ -29623,7 +29692,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             allowedCompanyIds,
             readOnlyCompanyIds,
           })
-          assertMcpCompanyWriteAccess(companyContext, requiredScope)
+          assertMcpCompanyWriteAccess(companyContext, requiredScope, shadow?.gate(companyContext))
           effectiveCompanyId = companyContext.companyId
           companyEcho = companyEchoFromContext(companyContext)
           if (companySelection === 'none') {
@@ -29909,6 +29978,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }
             if (echoedCompany) stored._meta = { company: echoedCompany }
             await resolveMcpTask(supabase, task.id, { status: 'completed', result: stored })
+            shadow?.settled((toolArgs as Record<string, unknown>).dry_run === true)
             emitToolCall({
               tool: toolName,
               requiredScope: requiredScope ?? null,
@@ -29928,6 +29998,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             // Tool failures complete the task with the standard isError
             // envelope: exactly what the synchronous call would have
             // returned. `failed` stays reserved for infrastructure errors.
+            shadow?.failed(err)
             const structured = toToolError(err, { toolName })
             const publicStructured = projectMcpPayload(structured, toolNamespace)
             await resolveMcpTask(supabase, task.id, {
@@ -30019,6 +30090,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               await withSIEExternalReport(supabase,tenantId,toolName,()=>runWithAgentReason(agentReason,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))),
               { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
             )
+        shadow?.settled((toolArgs as Record<string, unknown>).dry_run === true)
         const canonicalResult = effectiveCompanyId
           ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
           : rawResult
@@ -30081,6 +30153,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         return NextResponse.json(jsonRpc(id ?? null, decorate(response)))
       } catch (err) {
+        shadow?.failed(err)
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
         const publicStructured = projectMcpPayload(structured, toolNamespace)

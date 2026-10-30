@@ -19,6 +19,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { startPackageForKey } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { readCompletionLog, shouldWriteCompletionLog } from '@/lib/extensions/completion-log'
+import { sessionShadow } from '@/lib/permissions/shadow'
 
 const dispatcherLog = createLogger('extension-dispatcher')
 
@@ -291,11 +292,23 @@ async function handleRequest(
   const resolved: ActiveCompanyFacts = {}
   const companyId = await requireCompanyId(supabase, user.id, resolved)
 
+  // The permission shadow (lib/permissions/shadow.ts): decide() beside the
+  // role gates below, told what they did. It reads nothing and changes nothing.
+  const recordShadow = sessionShadow({
+    door: `ext:${extensionId}${route.path}`,
+    method,
+    pathname: new URL(request.url).pathname,
+    companyId,
+    userId: user.id,
+    role: resolved.role,
+  })
+
   // The invoicing-only role reaches no extension route: INVOICER_ROUTES
   // lists none, and a handler may read through a service client that RLS
   // does not narrow (lib/auth/invoicer-role.ts).
   if (isInvoicerRole(resolved.role)) {
     log.warn('extension call blocked: invoicer role', { userId: user.id })
+    recordShadow({ outcome: 'deny', code: 'INVOICER_ROUTE_NOT_ALLOWED', by: 'gate' })
     return decorateResponse(
       errorResponseFromCode('FORBIDDEN', log, {
         requestId,
@@ -312,12 +325,14 @@ async function handleRequest(
   // owner/admin predicate, requireWrite refuses viewers.
   if (route.requireAdmin) {
     if (!(await isCompanyAdmin(supabase, companyId))) {
+      recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
       return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
     }
   } else if (route.requireWrite) {
     const writeCheck = await requireWritePermission(supabase, user.id, { companyId, role: resolved.role })
     if (!writeCheck.ok) {
       log.warn('extension call blocked: write permission denied', { userId: user.id })
+      recordShadow({ outcome: 'deny', code: 'WRITE_REQUIRED', by: 'gate' })
       return decorateResponse(writeCheck.response, requestId)
     }
   }
@@ -364,6 +379,10 @@ async function handleRequest(
   // invoices) record the signed-in user as their actor, as there.
   const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId, Boolean(user.is_anonymous))
   const response = await runWithActor({ type: 'user' }, () => route.handler(handlerRequest, ctx))
+  // A 403 from the handler is a check of its own after the gates passed.
+  recordShadow(
+    response?.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },
+  )
   log.info('extension call completed', {
     durationMs: Date.now() - start,
     status: response.status,

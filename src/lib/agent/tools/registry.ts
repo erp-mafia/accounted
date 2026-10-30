@@ -1,4 +1,5 @@
 import type { AgentTool } from './types'
+import type { DoorRule } from '@/lib/permissions/doors'
 import { whenInitialized } from '@/lib/initialized'
 import { globalSingleton } from '@/lib/global-singleton'
 
@@ -14,6 +15,8 @@ import { globalSingleton } from '@/lib/global-singleton'
 // globalThis (lib/global-singleton.ts): lib/init registers the loaders through
 // its own copy of this module.
 export type AgentToolLoader = () => Promise<AgentTool[]>
+/** The permission door a tool goes through (lib/permissions/doors.ts), as the extension that defines it classifies it. */
+export type AgentToolDoorResolver = (tool: AgentTool) => DoorRule | null
 
 class AgentToolRegistry {
   private tools = new Map<string, AgentTool>()
@@ -22,6 +25,7 @@ class AgentToolRegistry {
   // load settles: on success the loaders are gone, on failure they stay and
   // the next lookup retries instead of replaying the cached rejection.
   private loading: Promise<void> | null = null
+  private doorResolver: AgentToolDoorResolver | null = null
 
   register(tool: AgentTool): void {
     this.tools.set(tool.name, tool)
@@ -50,10 +54,26 @@ class AgentToolRegistry {
     return out
   }
 
+  registerDoorResolver(resolver: AgentToolDoorResolver): void {
+    this.doorResolver = resolver
+  }
+
+  /** A tool's door, or null when no extension classified it (the permission shadow then skips it). */
+  doorOf(tool: AgentTool): DoorRule | null {
+    try {
+      return this.doorResolver?.(tool) ?? null
+    } catch {
+      // Safe to ignore: a door only feeds the permission shadow, which skips
+      // an unclassified tool; no tool call depends on it.
+      return null
+    }
+  }
+
   clear(): void {
     this.tools.clear()
     this.loaders.clear()
     this.loading = null
+    this.doorResolver = null
   }
 
   private async ensureLoaded(): Promise<void> {
@@ -81,4 +101,10 @@ export const agentToolRegistry = globalSingleton('agentToolRegistry', () => new 
 // the tools, so the module that defines them loads only when a tool is needed.
 export function registerAgentToolLoader(loader: AgentToolLoader): void {
   agentToolRegistry.registerLoader(loader)
+}
+
+// How the extension that defines the tools classifies their doors, for the
+// permission shadow in the chat loop (lib/permissions/shadow.ts).
+export function registerAgentToolDoorResolver(resolver: AgentToolDoorResolver): void {
+  agentToolRegistry.registerDoorResolver(resolver)
 }

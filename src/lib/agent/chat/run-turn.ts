@@ -15,6 +15,7 @@ import { buildSystemPrompt } from './system-prompt'
 import { loadFiscalYearInventory } from '@/lib/agent/fiscal-years'
 import { createLogger } from '@/lib/logger'
 import { isReadOnlyTool } from './read-only-tools'
+import { assistantShadow } from '@/lib/permissions/shadow'
 import { swedishToday } from '@/lib/utils'
 import type { Locale } from '@/i18n/config'
 
@@ -230,6 +231,10 @@ interface RunTurnArgs {
   // intent's read tools only, so the assistant cannot stage or write on
   // their behalf. Tools here run without the MCP dispatcher's role gate.
   readOnly?: boolean
+  // The member's role in the company, for the permission shadow
+  // (lib/permissions/shadow.ts): decide() compared with what each tool call
+  // did. Observation only; without it the shadow skips the turn.
+  role?: string
   // Emit events back to the caller. Returns false if the stream was cancelled
   // and the loop should stop emitting (best-effort).
   emit: (event: StreamEvent) => boolean
@@ -606,13 +611,29 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
         continue
       }
 
+      // The permission shadow: the assistant is a door; decide() is told
+      // what this call did and changes nothing.
+      const shadow = assistantShadow({
+        toolName: tu.name,
+        companyId,
+        userId,
+        role: args.role,
+        doorRule: () => agentToolRegistry.doorOf(tool),
+      })
       try {
         // A staging tool's `reason` is the agent's note to the approver,
         // never an input of the tool (lib/pending-operations/agent-reason.ts).
-        const { args, reason } = splitAgentReason(tool, tu.input as Record<string, unknown>)
-        const result = await runWithAgentReason(reason, () =>
-          tool.execute(args, companyId, userId, supabase, actor),
-        )
+        const { args: toolArgs, reason } = splitAgentReason(tool, tu.input as Record<string, unknown>)
+        let result: unknown
+        try {
+          result = await runWithAgentReason(reason, () =>
+            tool.execute(toolArgs, companyId, userId, supabase, actor),
+          )
+        } catch (err) {
+          shadow.failed(err)
+          throw err
+        }
+        shadow.settled(isStagedOperation(result), toolArgs.dry_run === true)
 
         // If the tool staged a pending_operation, stamp the agent metadata
         // for BFL audit reconstructability (plan §5).

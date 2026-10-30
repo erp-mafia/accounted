@@ -638,6 +638,21 @@ function assertIdList(values: unknown[], field: string): string[] {
   return ids
 }
 
+/** Why the write gate refuses a call: the invoicing-only role, a viewer, or a read-only connection. */
+export type McpWriteRefusal = 'ROLE_SCOPE_LIMITED' | 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+
+/** The write gate's verdict, null when the call may proceed (assertMcpCompanyWriteAccess throws on it). */
+export function mcpCompanyWriteRefusal(
+  context: McpCompanyContext,
+  scope: ApiKeyScope | undefined
+): McpWriteRefusal | null {
+  if (!roleAllowsScope(context.role, scope)) return 'ROLE_SCOPE_LIMITED'
+  if (!isTenantWriteScope(scope)) return null
+  if (context.role === 'viewer') return 'ROLE_READ_ONLY'
+  if (context.keyAccess === 'read') return 'CONNECTION_READ_ONLY'
+  return null
+}
+
 /**
  * Read-only gate for the MCP tools/call path: the user's role and the
  * connection's access level in the company.
@@ -657,25 +672,37 @@ function assertIdList(values: unknown[], field: string): string[] {
  * The invoicing-only role (lib/auth/invoicer-role.ts) is refused every tool,
  * read or write, outside the customer, invoice and article scopes, and every
  * company-scoped tool without a scope.
+ *
+ * `observe` hears the verdict before it is acted on (the permission shadow,
+ * ./permission-shadow.ts); it never changes it, and a throwing observer is
+ * ignored.
  */
 export function assertMcpCompanyWriteAccess(
   context: McpCompanyContext,
-  scope: ApiKeyScope | undefined
+  scope: ApiKeyScope | undefined,
+  observe?: (refusal: McpWriteRefusal | null) => void
 ): void {
-  if (!roleAllowsScope(context.role, scope)) {
+  const refusal = mcpCompanyWriteRefusal(context, scope)
+  if (observe) {
+    try {
+      observe(refusal)
+    } catch {
+      // An observer never decides.
+    }
+  }
+  if (refusal === 'ROLE_SCOPE_LIMITED') {
     throw codedError(
       'FORBIDDEN',
       `This company membership has the Invoicing role: only tools for customers, invoices (quotes and orders included) and articles are allowed${scope ? `, and this one requires the "${scope}" scope` : ''}. Ask a company owner or admin to change the role.`
     )
   }
-  if (!isTenantWriteScope(scope)) return
-  if (context.role === 'viewer') {
+  if (refusal === 'ROLE_READ_ONLY') {
     throw codedError(
       'FORBIDDEN',
       `This company membership is read-only (viewer): tools that require the "${scope}" scope change company data and are refused. Use read tools only, or ask a company owner or admin to change the role.`
     )
   }
-  if (context.keyAccess === 'read') {
+  if (refusal === 'CONNECTION_READ_ONLY') {
     throw codedError(
       'FORBIDDEN',
       `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Settings > API & MCP.`
