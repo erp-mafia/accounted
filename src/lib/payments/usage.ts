@@ -2,8 +2,9 @@
  * What a company has used of its bank payments in a month, counted the way
  * the payment initiation provider bills: every payment that reached the
  * provider (an order with a provider payment id) and every account one left
- * from. The counter is read from the orders the ledger already keeps: no
- * second ledger of usage.
+ * from, in the month a signing sent it, never the month it was drafted. The
+ * counter is read from the orders the ledger already keeps: no second ledger
+ * of usage.
  *
  * Payments are capped (founder decision 2026-10-14, while the provider
  * prices per payment and our own pricing is not set): a company may send
@@ -108,6 +109,12 @@ export async function includedBankPayments(supabase: SupabaseClient, companyId: 
   return typeof monthly === 'number' ? monthly : BANK_PAYMENTS_INCLUDED_PER_MONTH
 }
 
+/**
+ * Counted by submitted_at: the signing's claim, written right before the same
+ * request asks the provider to create the payment, and the moment the cap is
+ * checked. A new claim, after the bank cancelled the earlier payment, sets it
+ * again.
+ */
 export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsMonth> {
   const month = period && isUsagePeriod(period) ? period : currentUsagePeriod()
   const { start, end } = usagePeriodBounds(month)
@@ -116,8 +123,8 @@ export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId:
     .select('id, cash_account_id')
     .eq('company_id', companyId)
     .not('provider_payment_id', 'is', null)
-    .gte('created_at', start)
-    .lt('created_at', end)
+    .gte('submitted_at', start)
+    .lt('submitted_at', end)
     .limit(USAGE_ROW_CAP)
   if (error) throw error
   const included = await includedBankPayments(supabase, companyId)

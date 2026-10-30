@@ -6,6 +6,8 @@ const mail = vi.hoisted(() => ({ isConfigured: vi.fn(), sendEmail: vi.fn() }))
 vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn().mockResolvedValue(mail) }))
 
 import { allowanceExceededMessage, bankPaymentsAllowanceRefusal, requestMoreBankPayments, swedishMonthName } from '../allowance'
+import { createPayrollFakeDb } from '@/lib/salary/__tests__/payroll-fake-db'
+import { paymentOrderRow } from './payment-order-row'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 const USER = 'u0000000-0000-4000-8000-000000000001'
@@ -46,6 +48,21 @@ describe('bankPaymentsAllowanceRefusal', () => {
       code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
       details: { used: 9, included: 10, remaining: 1, requested: 2 },
     })
+  })
+
+  it('counts the month\'s payments by when they were sent, so drafts from last month do not reopen the cap (#127)', async () => {
+    // Ten drafted in October, all sent in November.
+    const { supabase } = createPayrollFakeDb({
+      payment_orders: Array.from({ length: 10 }, (_, i) =>
+        paymentOrderRow(COMPANY, `s${i}`, { created: '2026-10-28T08:00:00.000Z', sent: `2026-11-0${(i % 5) + 1}T09:00:00.000Z` }),
+      ),
+    })
+    expect(await bankPaymentsAllowanceRefusal(supabase, COMPANY, ['n1'], '2026-11')).toMatchObject({
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { period: '2026-11', used: 10, included: 10, remaining: 0, requested: 1 },
+    })
+    // October sent none of them, so it still has room.
+    expect(await bankPaymentsAllowanceRefusal(supabase, COMPANY, ['n1'], '2026-10')).toBeNull()
   })
 
   it('follows the company\'s own allowance, and an allowance of 0 refuses every payment', async () => {

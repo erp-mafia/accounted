@@ -496,7 +496,7 @@ describe('GET /api/payments/usage', () => {
     )
     expect(status).toBe(200)
     expect(body.data).toMatchObject({ period: '2026-10', payments_sent: 3, accounts_used: 2, extra_payments: 0 })
-    expect(findCall('payment_orders', 'gte')).toEqual(['created_at', '2026-09-30T22:00:00.000Z'])
+    expect(findCall('payment_orders', 'gte')).toEqual(['submitted_at', '2026-09-30T22:00:00.000Z'])
   })
 })
 
