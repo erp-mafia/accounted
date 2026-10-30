@@ -41,6 +41,7 @@ import { GET as getBudget, PATCH as updateBudget, DELETE as deleteBudget } from 
 import { POST as upsertLines } from '../[id]/lines/route'
 import { POST as copyActuals } from '../[id]/copy-actuals/route'
 import { POST as spread } from '../[id]/spread/route'
+import { POST as importFile } from '../[id]/import/route'
 import { GET as budgetVsActual } from '../../reports/budget-vs-actual/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -439,6 +440,57 @@ describe('POST /budgets/:id/spread', () => {
   })
 })
 
+describe('POST /budgets/:id/import', () => {
+  const sie = (text: string) => Buffer.from(text, 'utf8').toString('base64')
+  const FILE = sie('#SIETYP 4\n#RAR 0 20270101 20271231\n#KONTO 3010 "Försäljning"\n#PBUDGET 0 202701 3010 {} -10000\n')
+  const importClient = (extra: Record<string, TableMockResult> = {}) =>
+    makeClient({
+      company_members: MEMBER,
+      budgets: { data: BUDGET_ROW, error: null },
+      fiscal_periods: { data: PERIOD_ROW, error: null },
+      chart_of_accounts: { data: [{ account_number: '3010', account_name: 'Försäljning' }], error: null },
+      sie_account_mappings: { data: [], error: null },
+      dimensions: { data: [], error: null },
+      dimension_values: { data: [], error: null },
+      ...extra,
+    })
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    const res = await importFile(post(`${BASE}/budgets/${BUDGET_ID}/import`, { filename: 'b.se', content_base64: FILE }), budgetParams)
+    expect(res.status).toBe(401)
+  })
+
+  it('400 without a file, or for content that is not base64', async () => {
+    mockServiceClient.mockReturnValue(importClient())
+    expect((await importFile(post(`${BASE}/budgets/${BUDGET_ID}/import`, { filename: 'b.se' }), budgetParams)).status).toBe(400)
+    expect(
+      (await importFile(post(`${BASE}/budgets/${BUDGET_ID}/import`, { filename: 'b.se', content_base64: '###' }), budgetParams)).status,
+    ).toBe(400)
+  })
+
+  it('404 for another company\'s budget', async () => {
+    mockServiceClient.mockReturnValue(importClient({ budgets: { data: null, error: null } }))
+    const res = await importFile(post(`${BASE}/budgets/${BUDGET_ID}/import`, { filename: 'b.se', content_base64: FILE }), budgetParams)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('BUDGET_NOT_FOUND')
+  })
+
+  it('200 reads the #PBUDGET rows into one atomic save', async () => {
+    const client = importClient({ 'rpc:upsert_budget_lines': { data: { ...SAVED, inserted: 1 }, error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await importFile(post(`${BASE}/budgets/${BUDGET_ID}/import`, { filename: 'fortnox.se', content_base64: FILE }), budgetParams)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ inserted: 1, format: 'sie', sign: 'debit_positive', cells: 1, result: 10000 })
+    expect(rpcArgs(client, 'upsert_budget_lines')).toEqual({
+      p_budget_id: BUDGET_ID,
+      p_lines: [{ account_number: '3010', month: '2027-01-01', dimensions: {}, amount: -10000 }],
+    })
+  })
+})
+
 describe('GET /reports/budget-vs-actual', () => {
   const report = (query: string) => budgetVsActual(request(`${BASE}/reports/budget-vs-actual?${query}`), companyParams)
 
@@ -478,7 +530,8 @@ describe('GET /reports/budget-vs-actual', () => {
       budgets: { data: BUDGET_ROW, error: null },
       fiscal_periods: { data: PERIOD_ROW, error: null },
       'rpc:get_account_month_actuals': { data: [{ account_number: '3010', month: '2027-02-01', amount: -12000 }], error: null },
-      budget_lines: { data: [{ account_number: '3010', month: '2027-02-01', amount: '-10000.00' }], error: null },
+      // Summed in the database (get_budget_line_sums), never paged line by line.
+      'rpc:get_budget_line_sums': { data: [{ account_number: '3010', month: '2027-02-01', dim_code: null, amount: '-10000.00' }], error: null },
       chart_of_accounts: { data: [{ account_number: '3010', account_name: 'Försäljning' }], error: null },
     })
     mockServiceClient.mockReturnValue(client)
@@ -505,7 +558,15 @@ describe('GET /reports/budget-vs-actual', () => {
       p_to: '2027-02-28',
       p_dimensions: { '6': 'P001' },
     })
-    const contains = client.calls.find((c) => c.table === 'budget_lines' && c.method === 'contains')
-    expect(contains?.args).toEqual(['dimensions', { '6': 'P001' }])
+    expect(rpcArgs(client, 'get_budget_line_sums')).toEqual({
+      p_company_id: COMPANY_ID,
+      p_budget_id: BUDGET_ID,
+      p_from: '2027-01-01',
+      p_to: '2027-02-01',
+      p_dimensions: { '6': 'P001' },
+      p_exact: false,
+      p_by_month: true,
+      p_group_dim: null,
+    })
   })
 })

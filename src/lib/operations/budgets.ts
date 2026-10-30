@@ -15,6 +15,7 @@ import {
   CreateBudgetInputSchema,
   DeleteBudgetInputSchema,
   GetBudgetInputSchema,
+  ImportBudgetOptionsSchema,
   ListBudgetsInputSchema,
   SpreadInputSchema,
   UpdateBudgetInputSchema,
@@ -31,6 +32,7 @@ import {
   updateBudget,
   upsertBudgetLines,
 } from '@/lib/budgets/service'
+import { importBudgetFile } from '@/lib/import/budget/import-budget'
 import { BUDGET_EXAMPLE_ACCOUNTS } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { defineOperation, type AnyOperation } from './types'
 
@@ -459,6 +461,118 @@ export const reportsBudgetVsActual = defineOperation({
   run: (ctx, input) => budgetVsActual(ctx, input),
 })
 
+/** ~3 MB of file: the hosted request body limit is 4.5 MB and base64 adds a third. */
+const MAX_IMPORT_BASE64_CHARS = 4_000_000
+
+export const budgetsImport = defineOperation({
+  id: 'budgets.import',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Import a budget file (SIE #PBUDGET, Excel or CSV) into a budget.',
+    description:
+      'Reads a budget file into one budget, all cells or none. A SIE file contributes its #PBUDGET rows (the month\'s budget per account and object, SIE sign); the rows for months of the budget\'s fiscal year are read and the file\'s other years are counted as skipped. A spreadsheet (xlsx, xls, csv, ods) is read in one of two layouts found from its header row: long (konto, månad as YYYY-MM, belopp, optionally dim and kod, or a projekt or kostnadsställe column) or wide (konto and one column per month, headed 2027-01 or jan). Accounts go through the same account mapping as the SIE ledger import, against the company\'s chart of accounts; an account the chart lacks, a balance account or an object the dimension registry lacks is skipped and named in details.skipped, never guessed. Dry-runnable: the dry run is the preview (what would be read, what is skipped and why, the budget per class and the result).',
+    useWhen: 'Moving a budget from Fortnox (its SIE export carries #PBUDGET) or from a spreadsheet, before following it up with GET /reports/budget-vs-actual.',
+    doNotUseFor: 'A few cells (POST /budgets/{id}/lines), or the bookkeeping itself (POST /imports/sie).',
+    pitfalls: [
+      'Send the file bytes base64-encoded in content_base64, up to about 3 MB of file; the filename\'s extension decides SIE or spreadsheet.',
+      'A spreadsheet\'s sign is read from its class 3 rows unless sign is sent: revenue positive means revenue_positive. sign_suspect true in the answer means revenue reads as a cost or costs as revenue: check the sign before saving.',
+      'replace true removes the budget\'s cells the file leaves out; without it the file is written over the budget and other cells stay.',
+      'Nothing for the budget\'s year answers 400 BUDGET_IMPORT_NOTHING_TO_IMPORT with the skipped lists in details.',
+    ],
+    example: {
+      request: { filename: 'budget-2027.xlsx', content_base64: 'UEsDBBQ…', replace: true },
+      response: {
+        data: {
+          budget_id: '7c1d…',
+          inserted: 240,
+          updated: 0,
+          deleted: 0,
+          unchanged: 0,
+          format: 'wide',
+          sign: 'revenue_positive',
+          detected_sign: 'revenue_positive',
+          replace: true,
+          rows_read: 240,
+          cells: 240,
+          accounts: 20,
+          mapped_accounts: [],
+          skipped: { accounts_not_in_chart: [], balance_accounts: [], unknown_objects: [], rows: 0, months_outside_year: 0, unreadable: [], unreadable_count: 0 },
+          file_years: [],
+          class_totals: [{ account_class: 3, amount: 1200000 }],
+          result: 150000,
+          sign_suspect: false,
+        },
+        meta: META,
+      },
+    },
+  },
+  input: ImportBudgetOptionsSchema.extend({
+    budget_id: z.string().uuid().describe('The budget to read the file into.'),
+    filename: z.string().trim().min(1).max(255).describe('The file name with its extension, e.g. "budget-2027.xlsx" or "fortnox.se".'),
+    content_base64: z
+      .string()
+      .min(4)
+      .max(MAX_IMPORT_BASE64_CHARS)
+      .regex(/^[A-Za-z0-9+/\r\n]+={0,2}\s*$/, 'content_base64 must be base64.')
+      .describe('The file\'s bytes, base64-encoded.'),
+  }),
+  output: z.object({
+    ...SaveCounts,
+    format: z.enum(['sie', 'long', 'wide']),
+    sign: z.enum(['debit_positive', 'revenue_positive']),
+    detected_sign: z.enum(['debit_positive', 'revenue_positive']).nullable(),
+    replace: z.boolean(),
+    rows_read: z.number().int(),
+    cells: z.number().int(),
+    accounts: z.number().int(),
+    mapped_accounts: z.array(z.object({ source: z.string(), target: z.string() })),
+    skipped: z.object({
+      accounts_not_in_chart: z.array(z.string()),
+      balance_accounts: z.array(z.string()),
+      unknown_objects: z.array(z.object({ dim_no: z.string(), code: z.string() })),
+      rows: z.number().int(),
+      months_outside_year: z.number().int(),
+      unreadable: z.array(z.object({ line: z.number().int(), reason: z.enum(['record', 'amount', 'month', 'dimension']) })),
+      unreadable_count: z.number().int(),
+    }),
+    file_years: z.array(z.object({ year_index: z.number().int(), start: z.string(), end: z.string() })),
+    class_totals: z.array(z.object({ account_class: z.number().int(), amount: z.number() })),
+    result: z.number(),
+    sign_suspect: z.boolean(),
+  }),
+  errorCodes: [
+    'BUDGET_NOT_FOUND',
+    'BUDGET_ARCHIVED',
+    'BUDGET_IMPORT_UNSUPPORTED_FILE',
+    'BUDGET_IMPORT_FILE_TOO_LARGE',
+    'BUDGET_IMPORT_UNREADABLE',
+    'BUDGET_IMPORT_NO_BUDGET_IN_FILE',
+    'BUDGET_IMPORT_LAYOUT_UNKNOWN',
+    'BUDGET_IMPORT_NOTHING_TO_IMPORT',
+  ],
+  http: { method: 'POST', path: `${BUDGET_PATH}/import`, pathParams: { id: 'budget_id' } },
+  // v1 only, no MCP tool: the file itself would be the staged params (kept
+  // verbatim in pending_operations). An agent that holds a budget writes it
+  // with gnubok_upsert_budget_lines instead.
+  run: (ctx, input, { dryRun }) => {
+    const bytes = Buffer.from(input.content_base64, 'base64')
+    return importBudgetFile(
+      ctx,
+      {
+        budget_id: input.budget_id,
+        filename: input.filename,
+        bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+        sign: input.sign,
+        replace: input.replace,
+      },
+      { dryRun },
+    )
+  },
+})
+
 export const BUDGET_OPERATIONS: readonly AnyOperation[] = [
   budgetsList,
   budgetsGet,
@@ -468,5 +582,6 @@ export const BUDGET_OPERATIONS: readonly AnyOperation[] = [
   budgetsLinesUpsert,
   budgetsCopyActuals,
   budgetsSpread,
+  budgetsImport,
   reportsBudgetVsActual,
 ]

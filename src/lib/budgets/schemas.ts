@@ -119,6 +119,47 @@ export const BudgetVsActualInputSchema = z
     }
   })
 
+/**
+ * The dashboard grid (budgetGrid in service.ts): which lines it shows.
+ * untagged: the lines without a tag (editable); tag: the lines tagged exactly
+ * dim_no = dim_code (editable); sum: every line summed per account and month
+ * (read-only, the view of a budget kept per home). Default: sum when the
+ * budget has tagged lines, else untagged.
+ */
+export const BudgetGridInputSchema = z
+  .object({
+    budget_id: BudgetIdSchema,
+    mode: z.enum(['untagged', 'tag', 'sum']).optional(),
+    dim_no: z.string().regex(/^[1-9][0-9]{0,3}$/).optional(),
+    dim_code: z.string().min(1).max(40).regex(/^[^"{}]+$/).optional(),
+  })
+  .superRefine((input, ctx) => {
+    if ((input.dim_no === undefined) !== (input.dim_code === undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['dim_code'], message: 'dim_no and dim_code go together.' })
+    }
+    if (input.mode === 'tag' && input.dim_no === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['dim_no'], message: 'mode tag needs dim_no and dim_code.' })
+    }
+  })
+
+/** How a spreadsheet writes its amounts; a SIE file is always debit positive. */
+export const BudgetImportSignSchema = z
+  .enum(['debit_positive', 'revenue_positive'])
+  .describe(
+    'debit_positive: the SIE sign (revenue negative). revenue_positive: as the resultatrapport (revenue positive, costs negative). Default: read from the file (revenue positive on class 3 means revenue_positive). Ignored for a SIE file.',
+  )
+
+/** The options of a budget import; the file itself travels beside them. */
+export const ImportBudgetOptionsSchema = z.object({
+  sign: BudgetImportSignSchema.optional(),
+  replace: z
+    .boolean()
+    .optional()
+    .describe(
+      'true: the budget\'s amounts become the file\'s, and cells the file leaves out are removed. Default false: the file\'s cells are written over the budget and other cells stay.',
+    ),
+})
+
 export type ListBudgetsInput = z.output<typeof ListBudgetsInputSchema>
 export type GetBudgetInput = z.output<typeof GetBudgetInputSchema>
 export type CreateBudgetInput = z.output<typeof CreateBudgetInputSchema>
@@ -128,3 +169,6 @@ export type UpsertBudgetLinesInput = z.output<typeof UpsertBudgetLinesInputSchem
 export type CopyActualsInput = z.output<typeof CopyActualsInputSchema>
 export type SpreadInput = z.output<typeof SpreadInputSchema>
 export type BudgetVsActualInput = z.output<typeof BudgetVsActualInputSchema>
+export type BudgetGridInput = z.output<typeof BudgetGridInputSchema>
+export type BudgetImportSign = z.output<typeof BudgetImportSignSchema>
+export type ImportBudgetOptions = z.output<typeof ImportBudgetOptionsSchema>

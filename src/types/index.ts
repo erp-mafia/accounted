@@ -2804,11 +2804,39 @@ export interface LatestVoucherPerSeries {
   last_number: number
 }
 
+/**
+ * The budget a report compares with (accounted#134). `applied` is false when
+ * the window cuts a month: a budget is kept per whole month, so the report
+ * then shows no budget figures rather than wrong ones.
+ */
+export interface ReportBudget {
+  budget_id: string
+  name: string
+  is_default: boolean
+  applied: boolean
+  /** 'YYYY-MM': the months the budget figures cover; null when not applied. */
+  from_month: string | null
+  to_month: string | null
+}
+
+/**
+ * Budget against actual for one row: budget in the report's sign, deviation
+ * = actual - budget (positive is a better result), deviation_percent =
+ * deviation / |budget| in percent, null without a budget.
+ */
+export interface BudgetComparison {
+  budget: number
+  deviation: number
+  deviation_percent: number | null
+}
+
 export interface ResultatrapportRow {
   account_number: string
   account_name: string
   current_period: number
   prior_period: number
+  /** Set when the report has an applied budget. */
+  budget?: BudgetComparison
 }
 
 export interface ResultatrapportGroup {
@@ -2817,6 +2845,7 @@ export interface ResultatrapportGroup {
   rows: ResultatrapportRow[]
   subtotal_current: number
   subtotal_prior: number
+  subtotal_budget?: BudgetComparison
 }
 
 export interface ResultatrapportReport {
@@ -2827,6 +2856,9 @@ export interface ResultatrapportReport {
   prior_period: { start: string; end: string } | null
   /** Omitted when the window holds no posted vouchers, or the report is dimension-filtered. */
   latest_vouchers?: LatestVoucherPerSeries[]
+  /** The budget asked for (budget_id); its figures sit on the rows when applied. */
+  budget?: ReportBudget
+  net_result_budget?: BudgetComparison
 }
 
 // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
@@ -2843,6 +2875,9 @@ export interface DimensionPnlRow {
   account_name: string
   values: number[]
   total: number
+  /** With an applied budget: the budget per column and in total, report sign. */
+  budget_values?: number[]
+  budget_total?: number
 }
 
 export interface DimensionPnlGroup {
@@ -2851,6 +2886,8 @@ export interface DimensionPnlGroup {
   rows: DimensionPnlRow[]
   subtotals: number[]
   subtotal_total: number
+  budget_subtotals?: number[]
+  budget_subtotal_total?: number
 }
 
 export interface DimensionPnlReport {
@@ -2860,6 +2897,9 @@ export interface DimensionPnlReport {
   net_per_column: number[]
   net_total: number
   period: { start: string; end: string }
+  budget?: ReportBudget
+  budget_net_per_column?: number[]
+  budget_net_total?: number
 }
 
 export interface BalansrapportRow {

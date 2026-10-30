@@ -263,6 +263,9 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'budgets.lines.upsert': BOOK_RECORD,
   'budgets.copy-actuals': BOOK_RECORD,
   'budgets.spread': BOOK_RECORD,
+  // The file import writes the budget like the grid save; its dry run (the
+  // v1 preview) is the same operation's.
+  'budgets.import': BOOK_RECORD,
   'suppliers.create': BOOK_RECORD,
   'suppliers.update': BOOK_RECORD,
   // companies:write operations a member does in the app today (requireWrite
@@ -638,6 +641,10 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     // The IB review's SIE file: requireAdmin today.
     'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': SETTINGS_LEDGER,
     '/api/dimensions': BOOK_RECORD,
+    // Budgets (accounted#134): planning data, a register write like
+    // budgets.* (OPERATION_DOORS); the import's preview only reads.
+    '/api/budgets': BOOK_RECORD,
+    'POST /api/budgets/:id/import/preview': READ,
     'POST /api/dimensions/tagging/apply': BOOK,
     '/api/cash-accounts': BOOK_RECORD,
     // invoice_payee_defaults: its RLS write policy is owner and admin.

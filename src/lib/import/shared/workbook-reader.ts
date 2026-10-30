@@ -58,7 +58,42 @@ export async function readBestSheet(
 ): Promise<{ sheetName: string; rawData: string[][] }> {
   const XLSX = await import('xlsx')
   const workbook = await readWorkbookFromBuffer(buffer, filename)
+  const bestSheet = largestSheet(XLSX, workbook)
 
+  const sheet = workbook.Sheets[bestSheet]
+  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: false,
+  })
+
+  return { sheetName: bestSheet, rawData }
+}
+
+/**
+ * readBestSheet's sheet with each cell's value instead of its formatted
+ * text: a number stays a number and a date stays its serial. The formatted
+ * text of a cell formatted `#,##0` is "12,000" whatever the user's locale,
+ * which a Swedish amount reader takes for 12,00. A CSV is still read as the
+ * text the file holds (no value guessing), so every CSV cell is a string.
+ */
+export async function readBestSheetValues(
+  buffer: ArrayBuffer,
+  filename: string,
+): Promise<{ sheetName: string; rows: (string | number)[][] }> {
+  const XLSX = await import('xlsx')
+  const workbook = await readWorkbookFromBuffer(buffer, filename, { raw: true })
+  const bestSheet = largestSheet(XLSX, workbook)
+  const rows: (string | number)[][] = XLSX.utils.sheet_to_json(workbook.Sheets[bestSheet], {
+    header: 1,
+    defval: '',
+    raw: true,
+  })
+  return { sheetName: bestSheet, rows }
+}
+
+/** The sheet with the most rows: the header sheet is not always the first one. */
+function largestSheet(XLSX: typeof import('xlsx'), workbook: WorkBook): string {
   let bestSheet = workbook.SheetNames[0]
   let bestRowCount = 0
   for (const name of workbook.SheetNames) {
@@ -70,13 +105,5 @@ export async function readBestSheet(
       bestSheet = name
     }
   }
-
-  const sheet = workbook.Sheets[bestSheet]
-  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  })
-
-  return { sheetName: bestSheet, rawData }
+  return bestSheet
 }

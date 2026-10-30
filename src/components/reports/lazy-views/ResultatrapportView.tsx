@@ -4,6 +4,7 @@ import React from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
+import { AttnLine } from '@/components/ui/attn-line'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
@@ -18,11 +19,30 @@ import { formatAmount } from '@/lib/utils'
 import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
-import type { ResultatrapportReport } from '@/types'
+import type { BudgetComparison, ResultatrapportReport } from '@/types'
 
-export default function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; drilldown: AccountDrilldown }) {
+/** A deviation's percent, one decimal ("12,5 %"); blank without a budget. */
+function formatPercent(percent: number | null): string {
+  if (percent === null) return ''
+  return `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(percent)} %`
+}
+
+/** Budget, Avvikelse (kr) and Avvikelse (%): a positive deviation is a better result. */
+function BudgetCells({ figures }: { figures: BudgetComparison | undefined }) {
+  const tone = !figures || figures.deviation === 0 ? '' : figures.deviation > 0 ? 'text-success' : 'text-destructive'
+  return (
+    <>
+      <td className="px-4 py-1.5 text-right tabular-nums">{figures ? formatAmount(figures.budget) : ''}</td>
+      <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatAmount(figures.deviation) : ''}</td>
+      <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatPercent(figures.deviation_percent) : ''}</td>
+    </>
+  )
+}
+
+export default function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, budgetId = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; budgetId?: string | null; drilldown: AccountDrilldown }) {
   const t = useTranslations('reports')
-  const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
+  // The budget rides in the same query, so the PDF and xlsx carry it too.
+  const reportQs = `${reportQuery(periodId, dateRange, dimensionFilter)}${budgetId ? `&budget_id=${budgetId}` : ''}`
   const { data, loading, error } = useReportData<ResultatrapportReport>(
     `/api/reports/resultatrapport?${reportQs}`,
     'Kunde inte hämta resultatrapport',
@@ -47,11 +67,13 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
   }
 
   const hasPrior = data.prior_period !== null
-  const colCount = 4
+  const hasBudget = data.budget?.applied === true
+  const colCount = hasBudget ? 7 : 4
 
   return (
     <div className="space-y-4">
       {/* The export menu and the latest-voucher line share one row. */}
+      {data.budget && !hasBudget && <AttnLine>{t('budget_partial_month')}</AttnLine>}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {latestVouchers && (
           <p className="text-sm text-muted-foreground">
@@ -80,6 +102,18 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                   >
                     Innevarande
                   </th>
+                  {hasBudget && (
+                    <>
+                      <th
+                        className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                        title={`${data.budget!.name}: ${data.budget!.from_month} - ${data.budget!.to_month}`}
+                      >
+                        {t('budget_column')}
+                      </th>
+                      <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">{t('deviation_column')}</th>
+                      <th className="text-right font-medium px-4 py-2 w-24 tabular-nums">{t('deviation_percent_column')}</th>
+                    </>
+                  )}
                   <th
                     className="text-right font-medium px-4 py-2 w-32 tabular-nums"
                     title={hasPrior ? `${data.prior_period!.start} till ${data.prior_period!.end}` : undefined}
@@ -107,6 +141,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                         </td>
                         <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
+                        {hasBudget && <BudgetCells figures={row.budget} />}
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                           {hasPrior ? formatAmount(row.prior_period) : '-'}
                         </td>
@@ -117,6 +152,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                         Summa
                       </td>
                       <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_current)}</td>
+                      {hasBudget && <BudgetCells figures={group.subtotal_budget} />}
                       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                         {hasPrior ? formatAmount(group.subtotal_prior) : '-'}
                       </td>
@@ -131,11 +167,19 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
 
       <Card>
         <CardContent className="p-6">
-          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto]">
+          <div className={`grid gap-x-6 items-baseline ${hasBudget ? 'grid-cols-[1fr_auto_auto_auto]' : 'grid-cols-[1fr_auto_auto]'}`}>
             <span className="text-sm font-medium">Beräknat resultat</span>
             <span className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
               {formatAmount(data.net_result_current)} kr
             </span>
+            {hasBudget && data.net_result_budget && (
+              <span className="tabular-nums text-sm text-right" title={t('budget_column')}>
+                {t('budget_result_line', {
+                  budget: formatAmount(data.net_result_budget.budget),
+                  deviation: formatAmount(data.net_result_budget.deviation),
+                })}
+              </span>
+            )}
             <span className="tabular-nums text-sm text-muted-foreground w-32 text-right">
               {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>

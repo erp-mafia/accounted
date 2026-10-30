@@ -91,6 +91,27 @@ export interface SIEObjectBalance {
 }
 
 /**
+ * Budget per period from #PBUDGET (SIE types 2 and 3, optional in 4E):
+ * `#PBUDGET yearIndex period account {objects} amount [quantity]`. The
+ * period is a month (YYYYMM), the amount that month's budgeted change in the
+ * SIE sign (debit positive), the year the #RAR with the same index. Not part
+ * of the bookkeeping: the ledger import leaves these rows alone and the
+ * budget import reads them (lib/import/budget/read-file.ts).
+ */
+export interface SIEPeriodBudget {
+  yearIndex: number
+  /** 'YYYY-MM' */
+  month: string
+  account: string
+  /** SIE dimension number to object code; absent for an empty list ({}). */
+  dimensions?: Record<string, string>
+  amount: number
+  quantity?: number
+  /** The file line, for the import preview's messages. */
+  line: number
+}
+
+/**
  * Transaction line from #TRANS tag inside #VER block
  */
 export interface SIETransactionLine {
@@ -190,6 +211,8 @@ export interface ParsedSIEFile {
   // import jobs, test fixtures) lack them, so readers use `?? []`.
   objectOpeningBalances?: SIEObjectBalance[]   // #OIB
   objectClosingBalances?: SIEObjectBalance[]   // #OUB
+  // Budget per month (#PBUDGET). Optional for the same reason.
+  periodBudgets?: SIEPeriodBudget[]
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]

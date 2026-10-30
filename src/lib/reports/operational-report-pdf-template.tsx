@@ -8,6 +8,7 @@ import {
 } from '@react-pdf/renderer'
 import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
 import type {
+  BudgetComparison,
   CompanySettings,
   LatestVoucherPerSeries,
   ResultatrapportReport,
@@ -263,6 +264,25 @@ const styles = StyleSheet.create({
   },
 })
 
+/** A deviation in percent, one decimal: "12,5 %"; blank without a budget. */
+function formatPercent(percent: number | null | undefined): string {
+  if (percent === null || percent === undefined) return ''
+  return pdfNumberText(
+    `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(percent)} %`,
+  )
+}
+
+/** The Budget, Avvikelse and Avvikelse % cells of one row. */
+function BudgetCells({ figures, style }: { figures: BudgetComparison | undefined; style: (typeof styles)[keyof typeof styles] }) {
+  return (
+    <>
+      <Text style={style}>{figures ? formatAmount(figures.budget) : ''}</Text>
+      <Text style={style}>{figures ? formatAmount(figures.deviation) : ''}</Text>
+      <Text style={[style, { width: 60 }]}>{formatPercent(figures?.deviation_percent)}</Text>
+    </>
+  )
+}
+
 function formatAmount(amount: number): string {
   // pdfNumberText: Intl emits U+2212 (true minus), which the bundled
   // Helvetica/Courier fonts lack, so negatives would render as positives.
@@ -280,11 +300,13 @@ interface CommonHeaderProps {
   period: { start: string; end: string }
   /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
   filterNote?: string
+  /** Which budget the Budget columns read (accounted#134). */
+  budgetNote?: string
   /** Highest posted voucher per series in the window. Reconciliation aid (#1267). */
   latestVouchers?: LatestVoucherPerSeries[]
 }
 
-function HeaderBlock({ title, company, period, filterNote, latestVouchers }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, filterNote, budgetNote, latestVouchers }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
@@ -305,6 +327,9 @@ function HeaderBlock({ title, company, period, filterNote, latestVouchers }: Com
         )}
         {filterNote && (
           <Text style={styles.period}>{filterNote}</Text>
+        )}
+        {budgetNote && (
+          <Text style={styles.period}>{budgetNote}</Text>
         )}
       </View>
       <View style={styles.companyInfo}>
@@ -346,19 +371,24 @@ interface ResultatrapportPDFProps {
   generatedAt: string
   /** Partial-view disclosure line (dimension-filtered exports). */
   filterNote?: string
+  /** Which budget the Budget columns read, or why there are none. */
+  budgetNote?: string
 }
 
-export function ResultatrapportPDF({ report, company, generatedAt, filterNote }: ResultatrapportPDFProps) {
+export function ResultatrapportPDF({ report, company, generatedAt, filterNote, budgetNote }: ResultatrapportPDFProps) {
   const hasPrior = report.prior_period !== null
+  // Budget, Avvikelse and Avvikelse % need the width of a landscape page.
+  const hasBudget = report.budget?.applied === true
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="A4" orientation={hasBudget ? 'landscape' : 'portrait'} style={styles.page}>
         <HeaderBlock
           title="Resultatrapport"
           company={company}
           period={report.period}
           filterNote={filterNote}
+          budgetNote={budgetNote}
           latestVouchers={report.latest_vouchers}
         />
 
@@ -366,6 +396,13 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
           <Text style={[styles.tableHeaderText, styles.colAmount]}>Innevarande</Text>
+          {hasBudget && (
+            <>
+              <Text style={[styles.tableHeaderText, styles.colAmount]}>Budget</Text>
+              <Text style={[styles.tableHeaderText, styles.colAmount]}>Avvikelse</Text>
+              <Text style={[styles.tableHeaderText, styles.colAmount, { width: 60 }]}>Avv. %</Text>
+            </>
+          )}
           {hasPrior && (
             <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Föregående</Text>
           )}
@@ -382,6 +419,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
                 <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
+                {hasBudget && <BudgetCells figures={row.budget} style={styles.colAmount} />}
                 {hasPrior && (
                   <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
                 )}
@@ -390,6 +428,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
+              {hasBudget && <BudgetCells figures={group.subtotal_budget} style={styles.subtotalAmount} />}
               {hasPrior && (
                 <Text style={[styles.subtotalAmount, { color: '#666' }]}>
                   {formatAmount(group.subtotal_prior)}
@@ -405,6 +444,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             <Text style={styles.summaryAmountEmphasis}>
               {formatAmount(report.net_result_current)}
             </Text>
+            {hasBudget && <BudgetCells figures={report.net_result_budget} style={styles.summaryAmountEmphasis} />}
             {hasPrior && (
               <Text style={[styles.summaryAmountEmphasis, { color: '#666' }]}>
                 {formatAmount(report.net_result_prior)}

@@ -338,6 +338,16 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ),
   'POST /api/bookkeeping/proposal-preview': uiOnly('preview of an unsaved booking proposal (read-only, POST for its body); agents get the same lines from the categorize dry run'),
 
+  // ── Budgets (accounted#134) ────────────────────────────────────────
+  'POST /api/budgets': covered([`POST ${V}/budgets`, 'gnubok_create_budget']),
+  'PATCH /api/budgets/:id': covered([`PATCH ${V}/budgets/:id`, 'gnubok_update_budget']),
+  'DELETE /api/budgets/:id': covered([`DELETE ${V}/budgets/:id`, 'gnubok_delete_budget']),
+  'POST /api/budgets/:id/lines': covered([`POST ${V}/budgets/:id/lines`, 'gnubok_upsert_budget_lines']),
+  'POST /api/budgets/:id/spread': covered([`POST ${V}/budgets/:id/spread`, 'gnubok_spread_budget']),
+  'POST /api/budgets/:id/copy-actuals': covered([`POST ${V}/budgets/:id/copy-actuals`, 'gnubok_copy_actuals_to_budget']),
+  'POST /api/budgets/:id/import': covered([`POST ${V}/budgets/:id/import`], 'v1 only: the file would be the staged params; an agent writes cells with gnubok_upsert_budget_lines'),
+  'POST /api/budgets/:id/import/preview': covered([`POST ${V}/budgets/:id/import`], 'the v1 import\'s dry run'),
+
   // ── Dimensions ─────────────────────────────────────────────────────
   'POST /api/dimensions': covered([`POST ${V}/dimensions`, 'gnubok_create_dimension']),
   'PATCH /api/dimensions/:id': covered([`PATCH ${V}/dimensions/:id`, 'gnubok_update_dimension']),

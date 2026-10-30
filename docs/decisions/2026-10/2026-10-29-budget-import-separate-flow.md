@@ -1,0 +1,1 @@
+[2026-10-29] Budget import is its own flow (dry run = preview, one atomic save), not a step of the SIE ledger import job: a budget is planning data, needs no period holds, numbering or undo, and a Fortnox file's #PBUDGET rows stay out of the bookkeeping (accounted#134).

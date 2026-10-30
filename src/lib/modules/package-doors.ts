@@ -99,6 +99,8 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   // The Bolaget registers (aktiebok, roles): Bokföring's package, never switched off.
   bolaget: null,
   bookkeeping: null,
+  // Budgets (accounted#134): planning beside the resultatrapport, part of Bokföring.
+  budgets: null,
   byra: null,
   calendar: null,
   // Avtal och åtaganden (Bolaget, lib/commitments): registers beside the

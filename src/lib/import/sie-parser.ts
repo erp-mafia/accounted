@@ -24,6 +24,7 @@ import type {
   SIEAccount,
   SIEBalance,
   SIEObjectBalance,
+  SIEPeriodBudget,
   SIEVoucher,
   SIETransactionLine,
   SIEDimension,
@@ -552,6 +553,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const dimensionValues: SIEDimensionValue[] = []
   const objectOpeningBalances: SIEObjectBalance[] = []
   const objectClosingBalances: SIEObjectBalance[] = []
+  const periodBudgets: SIEPeriodBudget[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -838,6 +840,41 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           break
         }
 
+        case 'PBUDGET': {
+          // #PBUDGET yearIndex period account {objects} amount [quantity]
+          // The month's budgeted change (not cumulative), SIE sign. Kept apart
+          // from the bookkeeping: only the budget import reads these rows.
+          const yearIndex = parseInt(parseStringField(fields[1] ?? ''), 10)
+          const period = parseStringField(fields[2] ?? '').trim()
+          const account = parseStringField(fields[3] ?? '').trim()
+          const periodMatch = /^(\d{4})(0[1-9]|1[0-2])$/.exec(period)
+          if (!Number.isInteger(yearIndex) || !periodMatch || !account) {
+            addIssue(issues, 'warning', lineNum, 'Ogiltig budgetrad (#PBUDGET): raden hoppas över', tag)
+            break
+          }
+          // The object list is compulsory in the record ({} when empty);
+          // a writer that leaves it out still gets its amount read.
+          let fieldIndex = 4
+          let dims: Record<string, string> | undefined
+          if (fields[fieldIndex]?.startsWith('{')) {
+            dims = parseObjectList(fields[fieldIndex], issues, lineNum)
+            fieldIndex++
+          }
+          const amount = parseAmountField(fields[fieldIndex++], tag, issues, lineNum, account, yearIndex)
+          if (amount === null) break
+          const row: SIEPeriodBudget = {
+            yearIndex,
+            month: `${periodMatch[1]}-${periodMatch[2]}`,
+            account,
+            amount,
+            line: lineNum,
+          }
+          if (dims) row.dimensions = dims
+          if (fields[fieldIndex]) row.quantity = parseNumberField(fields[fieldIndex])
+          periodBudgets.push(row)
+          break
+        }
+
         case 'VER': {
           // #VER series number date "description" [regdate] [signature]
           // Some programs quote all fields, so strip quotes from number/date too
@@ -968,7 +1005,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         default:
           // Unknown tag - add info issue for notable ones.
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag}, ignoreras`, tag)
           }
       }
@@ -1056,6 +1093,18 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     )
   }
 
+  // A budget in the file is not bookkeeping: the ledger import leaves it
+  // out, and says where it goes instead of dropping it silently.
+  if (periodBudgets.length > 0) {
+    addIssue(
+      issues,
+      'info',
+      0,
+      `Filen innehåller ${periodBudgets.length} budgetrader (#PBUDGET). De ingår inte i bokföringen: läs in filen under Budget, Importera, för att få med budgeten.`,
+      'PBUDGET'
+    )
+  }
+
   // Calculate statistics
   const currentFiscalYear = header.fiscalYears.find((fy) => fy.yearIndex === 0)
   const totalTransactionLines = vouchers.reduce((sum, v) => sum + v.lines.length, 0)
@@ -1068,6 +1117,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     resultBalances,
     objectOpeningBalances,
     objectClosingBalances,
+    periodBudgets,
     vouchers,
     dimensions,
     dimensionValues,

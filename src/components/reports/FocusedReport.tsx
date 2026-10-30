@@ -13,6 +13,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { BudgetPicker } from '@/components/reports/BudgetPicker'
 import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Ink2FilingHelp } from '@/components/reports/Ink2FilingHelp'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
@@ -80,6 +81,9 @@ const LonejournalView = dynamic(() =>
   { loading: ReportBodyLoading },
 )
 
+/** The reports that take a budget (accounted#134): Budget and Avvikelse beside the actuals. */
+const BUDGET_SLUGS = new Set(['resultatrapport', 'dimension-pnl'])
+
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
  * a back link to the library, the shared fiscal-year selector (restored from
@@ -124,6 +128,9 @@ function FocusedReportInner({
   const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(() =>
     DIMENSION_FILTER_SLUGS.has(slug) ? fromUrl.dimension : null,
   )
+  // The budget the report compares with (accounted#134): a year's own, so it
+  // resets with the year.
+  const [budgetId, setBudgetId] = useState<string | null>(null)
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
@@ -131,6 +138,7 @@ function FocusedReportInner({
   // presets and the dimension picker share one row.
   const showRange = DATE_RANGE_SLUGS.has(slug) && !!selectedPeriodBounds
   const showDim = DIMENSION_FILTER_SLUGS.has(slug) && !!selectedPeriod
+  const showBudget = BUDGET_SLUGS.has(slug) && !!selectedPeriod
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
   // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
@@ -217,6 +225,7 @@ function FocusedReportInner({
                   period ? { start: period.period_start, end: period.period_end } : null,
                 )
                 setDateRange({})
+                setBudgetId(null)
               }}
               includeAllOption={false}
               hideFuturePeriods
@@ -234,7 +243,7 @@ function FocusedReportInner({
           slot), so no report spends a row on one button. A standalone page
           with no filter renders no row, which would still take the stack's
           gap. */}
-      {(showRange || showDim || !isStandalone) && (
+      {(showRange || showDim || showBudget || !isStandalone) && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           {showRange && selectedPeriodBounds && (
             <ReportDateRange
@@ -250,6 +259,7 @@ function FocusedReportInner({
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
+          {showBudget && <BudgetPicker periodId={selectedPeriod} value={budgetId} onChange={setBudgetId} />}
           {!isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2 print:hidden" />}
         </div>
       )}
@@ -263,6 +273,7 @@ function FocusedReportInner({
           periodId={selectedPeriod}
           dateRange={dateRange}
           dimensionFilter={dimensionFilter}
+          budgetId={showBudget ? budgetId : null}
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
           filesInk2={filesInk2}
@@ -287,6 +298,7 @@ function FocusedView({
   periodId,
   dateRange,
   dimensionFilter,
+  budgetId,
   accountFilter,
   isEnskildFirma,
   filesInk2,
@@ -298,6 +310,7 @@ function FocusedView({
   periodId: string
   dateRange: DateRangeValue
   dimensionFilter: DimensionFilterValue | null
+  budgetId: string | null
   accountFilter: string | null
   isEnskildFirma: boolean
   filesInk2: boolean
@@ -306,9 +319,9 @@ function FocusedView({
 }) {
   switch (slug) {
     case 'resultatrapport':
-      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} drilldown={drilldown} />
+      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} budgetId={budgetId} drilldown={drilldown} />
     case 'dimension-pnl':
-      return <DimensionPnlView periodId={periodId} dateRange={dateRange} />
+      return <DimensionPnlView periodId={periodId} dateRange={dateRange} budgetId={budgetId} />
     case 'balansrapport':
       return <BalansrapportView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'trial-balance':

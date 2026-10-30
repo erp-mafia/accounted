@@ -3,6 +3,10 @@ import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dbError } from '@/lib/errors/db-error'
 import { resultatrapportRows, signedAmount } from './resultatrapport'
+// Same class labels as resultatrapport: the report is its per-dimension
+// sibling and must read identically. Stays-Swedish surface (report labels).
+import { RESULT_CLASS_LABELS as CLASS_LABELS } from './result-class-labels'
+import { loadReportBudget } from '@/lib/budgets/report-budget'
 import type {
   DimensionPnlColumn,
   DimensionPnlGroup,
@@ -10,17 +14,6 @@ import type {
   DimensionPnlRow,
   TrialBalanceRow,
 } from '@/types'
-
-// Same class labels as resultatrapport: the report is its per-dimension
-// sibling and must read identically. Stays-Swedish surface (report labels).
-const CLASS_LABELS: Record<number, string> = {
-  3: '3 Rörelsens inkomster/intäkter',
-  4: '4 Material- och varukostnader',
-  5: '5 Övriga externa kostnader',
-  6: '6 Övriga externa kostnader',
-  7: '7 Personalkostnader',
-  8: '8 Finansiella poster och bokslutsdispositioner',
-}
 
 /**
  * Resultat per projekt / kostnadsställe (Fortnox "Resultatrapport projekt").
@@ -47,7 +40,17 @@ export async function generateDimensionPnl(
   // [fromDate, toDate], each bound defaulting to the period's own. Callers
   // validate both against the period (parseReportDateRange on the routes,
   // parseReportRangeArgs in the MCP tool), exactly as for resultatrapport.
-  options?: { fromDate?: string; toDate?: string }
+  options?: {
+    fromDate?: string
+    toDate?: string
+    /**
+     * The budget view (accounted#134): each column's budget is the budget
+     * lines tagged with that value, "(Utan dimension)" the lines without a
+     * tag on this dimension, Totalt every line. A value or an account with a
+     * budget but nothing booked gets its column or row. Whole months only.
+     */
+    budgetId?: string
+  }
 ): Promise<DimensionPnlReport> {
   // Both entry points (route, MCP tool) validate, but the generator is
   // exported: guard here too. The number is the key read from each line's
@@ -72,13 +75,23 @@ export async function generateDimensionPnl(
   // exclusion, class 3-8 scope and sign are one definition, so the two
   // reports cannot drift apart again (they did once, when resultatrapport
   // moved from closing to window amounts). The tagged pass runs alongside.
-  const [pnlRows, bucketRows] = await Promise.all([
+  const [pnlRows, bucketRows, budget] = await Promise.all([
     resultatrapportRows(supabase, companyId, fiscalPeriodId, {
       fromDate: options?.fromDate,
       toDate: options?.toDate,
     }),
     fetchTaggedBuckets(supabase, companyId, fiscalPeriodId, sieDimNo, options),
+    options?.budgetId
+      ? loadReportBudget(supabase, companyId, {
+          budgetId: options.budgetId,
+          fiscalPeriodId,
+          period: { start: period.period_start, end: period.period_end },
+          window: { from: options.fromDate ?? period.period_start, to: options.toDate ?? period.period_end },
+          groupDim: sieDimNo,
+        })
+      : Promise.resolve(null),
   ])
+  const budgetApplied = budget?.info.applied ? budget : null
   const totalByAccount = new Map<string, TrialBalanceRow>()
   for (const r of pnlRows) totalByAccount.set(r.account_number, r)
 
@@ -122,6 +135,12 @@ export async function generateDimensionPnl(
     buckets.set(row.account_number, byCode)
   }
 
+  // A value with a budget but nothing booked yet (a home bought this year)
+  // is a column too.
+  for (const byCode of budgetApplied?.byAccountCode.values() ?? []) {
+    for (const code of byCode.keys()) if (code) codesSeen.add(code)
+  }
+
   const codes = [...codesSeen].sort((a, b) => a.localeCompare(b, 'sv'))
 
   // ── Matrix rows: tagged columns + untagged residual + Totalt ───
@@ -132,7 +151,24 @@ export async function generateDimensionPnl(
   const accountRows: AccountRow[] = []
   let anyUntagged = false
 
-  for (const tbRow of pnlRows) {
+  // Budget-only accounts join the ledger's rows with nothing booked.
+  const rowSources: TrialBalanceRow[] = [...pnlRows]
+  for (const account of budgetApplied?.byAccount.keys() ?? []) {
+    if (totalByAccount.has(account)) continue
+    rowSources.push({
+      account_number: account,
+      account_name: budgetApplied!.accountNames.get(account) ?? '',
+      account_class: Number(account[0]),
+      opening_debit: 0,
+      opening_credit: 0,
+      period_debit: 0,
+      period_credit: 0,
+      closing_debit: 0,
+      closing_credit: 0,
+    })
+  }
+
+  for (const tbRow of rowSources) {
     const total = roundOre(signedAmount(tbRow))
     const byCode = buckets.get(tbRow.account_number)
     const tagged = codes.map((code) => {
@@ -143,7 +179,18 @@ export async function generateDimensionPnl(
     if (Math.abs(untagged) >= 0.005) anyUntagged = true
 
     const values = [...tagged, untagged]
-    if (Math.abs(total) < 0.005 && values.every((v) => Math.abs(v) < 0.005)) continue
+    const budgetByCode = budgetApplied?.byAccountCode.get(tbRow.account_number)
+    const budgetValues = budgetApplied ? [...codes.map((code) => budgetByCode?.get(code) ?? 0), budgetByCode?.get('') ?? 0] : null
+    const budgetTotal = budgetApplied?.byAccount.get(tbRow.account_number) ?? 0
+    if (budgetValues && Math.abs(budgetValues[codes.length]!) >= 0.005) anyUntagged = true
+    // A budget whose values cancel out over the columns (+1000 on one home,
+    // -1000 on another) still has columns to show.
+    if (
+      Math.abs(total) < 0.005 &&
+      values.every((v) => Math.abs(v) < 0.005) &&
+      (budgetValues ?? []).every((v) => Math.abs(v) < 0.005) &&
+      Math.abs(budgetTotal) < 0.005
+    ) continue
 
     accountRows.push({
       account_number: tbRow.account_number,
@@ -151,13 +198,17 @@ export async function generateDimensionPnl(
       account_class: tbRow.account_class,
       values,
       total,
+      ...(budgetValues ? { budget_values: budgetValues, budget_total: budgetTotal } : {}),
     })
   }
 
   // Drop the untagged column when everything is tagged.
   const columnCount = codes.length + (anyUntagged ? 1 : 0)
   if (!anyUntagged) {
-    for (const row of accountRows) row.values = row.values.slice(0, codes.length)
+    for (const row of accountRows) {
+      row.values = row.values.slice(0, codes.length)
+      if (row.budget_values) row.budget_values = row.budget_values.slice(0, codes.length)
+    }
   }
 
   const columns: DimensionPnlColumn[] = [
@@ -182,6 +233,14 @@ export async function generateDimensionPnl(
       rows: rows.map(({ account_class: _klass, ...row }) => row),
       subtotals,
       subtotal_total: roundOre(rows.reduce((s, r) => s + r.total, 0)),
+      ...(budgetApplied
+        ? {
+            budget_subtotals: Array.from({ length: columnCount }, (_, i) =>
+              roundOre(rows.reduce((s, r) => s + (r.budget_values?.[i] ?? 0), 0))
+            ),
+            budget_subtotal_total: roundOre(rows.reduce((s, r) => s + (r.budget_total ?? 0), 0)),
+          }
+        : {}),
     })
   }
 
@@ -206,6 +265,15 @@ export async function generateDimensionPnl(
       start: options?.fromDate ?? period.period_start,
       end: options?.toDate ?? period.period_end,
     },
+    ...(budget ? { budget: budget.info } : {}),
+    ...(budgetApplied
+      ? {
+          budget_net_per_column: Array.from({ length: columnCount }, (_, i) =>
+            roundOre(accountRows.reduce((s, r) => s + (r.budget_values?.[i] ?? 0), 0))
+          ),
+          budget_net_total: roundOre(accountRows.reduce((s, r) => s + (r.budget_total ?? 0), 0)),
+        }
+      : {}),
   }
 }
 

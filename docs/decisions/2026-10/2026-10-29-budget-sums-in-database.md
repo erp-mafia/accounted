@@ -1,0 +1,1 @@
+[2026-10-29] Budget reads are summed in the database (get_budget_line_sums) for the grid, the reports and budget-vs-actual: a budget per home is accounts x months x homes lines, and every reader needs one figure per account (and month or value), not the lines (accounted#134).

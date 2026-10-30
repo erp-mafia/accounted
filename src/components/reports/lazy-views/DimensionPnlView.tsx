@@ -3,6 +3,9 @@
 import React, { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
+import { AttnLine } from '@/components/ui/attn-line'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { dimensionPnlMeasure, type DimensionPnlMeasure } from '@/lib/reports/dimension-pnl-measure'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import {
@@ -19,13 +22,15 @@ import type { DimensionPnlReport } from '@/types'
 
 // --- Resultat per projekt/kostnadsställe (dimension P&L matrix) ---
 
-export default function DimensionPnlView({ periodId, dateRange }: { periodId: string; dateRange: DateRangeValue }) {
+export default function DimensionPnlView({ periodId, dateRange, budgetId = null }: { periodId: string; dateRange: DateRangeValue; budgetId?: string | null }) {
   const t = useTranslations('reports')
   const [dimNo, setDimNo] = useState('6')
-  const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}`
+  // With a budget: Utfall, Budget or Avvikelse in the same matrix (accounted#134).
+  const [measure, setMeasure] = useState<DimensionPnlMeasure>('actual')
+  const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}${budgetId ? `&budget_id=${budgetId}` : ''}`
   // Race-safe when the pivot or the window changes mid-flight: only the
   // answer for the current query string lands.
-  const { data, loading, error } = useReportData<DimensionPnlReport>(
+  const { data: raw, loading, error } = useReportData<DimensionPnlReport>(
     `/api/reports/dimension-pnl?${reportQs}`,
     'Kunde inte hämta rapporten',
   )
@@ -79,7 +84,7 @@ export default function DimensionPnlView({ periodId, dateRange }: { periodId: st
     )
   }
 
-  if (!data || data.groups.length === 0) {
+  if (!raw || raw.groups.length === 0) {
     return (
       <div className="space-y-4">
         {pivotPicker}
@@ -91,6 +96,9 @@ export default function DimensionPnlView({ periodId, dateRange }: { periodId: st
     )
   }
 
+  const budgetApplied = raw.budget?.applied === true
+  const data = dimensionPnlMeasure(raw, budgetApplied ? measure : 'actual')
+
   const columnLabel = (c: DimensionPnlReport['columns'][number]) =>
     c.code === null ? '(Utan dimension)' : c.code
 
@@ -98,9 +106,21 @@ export default function DimensionPnlView({ periodId, dateRange }: { periodId: st
 
   return (
     <div className="space-y-4">
+      {raw.budget && !budgetApplied && <AttnLine>{t('budget_partial_month')}</AttnLine>}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           {pivotPicker}
+          {budgetApplied && (
+            <SegmentedControl<DimensionPnlMeasure>
+              value={measure}
+              onChange={setMeasure}
+              options={[
+                { value: 'actual', label: t('measure_actual') },
+                { value: 'budget', label: t('budget_column') },
+                { value: 'deviation', label: t('deviation_column') },
+              ]}
+            />
+          )}
           {/* The window the amounts cover, as the server computed it: a
               quarter picked above reads as that quarter, not the year to date. */}
           <p className="text-sm text-muted-foreground tabular-nums">
