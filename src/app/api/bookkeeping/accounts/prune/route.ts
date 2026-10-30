@@ -13,7 +13,8 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // Two phases:
 //   { dry_run: true }
 //     → returns the deletable set (non-system accounts with zero journal
-//       usage) plus the used remainder, without changing anything.
+//       usage and no budget lines) plus the used remainder, without
+//       changing anything.
 //   { dry_run: false, account_numbers: [...] }
 //     → deletes the requested accounts, re-verifying every guard server-side.
 //       The client list is a selection from the preview, not an authority:
@@ -89,8 +90,26 @@ export const POST = withRouteContext(
         ]),
       )
 
+      // An account a budget uses is not unused either (accounted#134). Its
+      // lines would go with the account (ON DELETE CASCADE), so it stays.
+      const { data: budgetUsage, error: budgetUsageError } = await supabase.rpc(
+        'get_account_budget_line_counts',
+        { p_company_id: companyId },
+      )
+      if (budgetUsageError) {
+        return NextResponse.json({ error: getUserErrorMessage(budgetUsageError) }, { status: 500 })
+      }
+      const budgetLinesByAccount = new Map<string, number>(
+        (budgetUsage ?? []).map((u: { account_number: string; budget_line_count: number }) => [
+          u.account_number,
+          Number(u.budget_line_count),
+        ]),
+      )
+
       const isDeletable = (a: ChartAccountRow) =>
-        !a.is_system_account && !usageByAccount.has(a.account_number)
+        !a.is_system_account &&
+        !usageByAccount.has(a.account_number) &&
+        !budgetLinesByAccount.has(a.account_number)
 
       if (dry_run) {
         const deletable = accounts.filter(isDeletable).map((a) => ({
@@ -108,6 +127,7 @@ export const POST = withRouteContext(
             account_name: a.account_name,
             is_system_account: a.is_system_account,
             usage_count: usageByAccount.get(a.account_number) ?? 0,
+            budget_line_count: budgetLinesByAccount.get(a.account_number) ?? 0,
           }))
         return NextResponse.json({ data: { deletable, used } })
       }

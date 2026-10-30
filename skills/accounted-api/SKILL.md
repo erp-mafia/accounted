@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 434 endpoints.
+  pagination, scopes), and all 443 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 434 operations. Paths are shown without
+API version `2026-05-12`, 443 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -687,12 +687,20 @@ POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employe
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
-### Reports (43)
+### Reports (52)
 
 Full detail: [references/reports.md](references/reports.md)
 
 ```text
 GET /companies/{companyId}/audit-trail : The audit log: every trigger-recorded change to the books and their settings, newest first [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/budgets : List the budgets (named versions per fiscal year) [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/budgets : Create a budget for a fiscal year [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/budgets/{id} : Read one budget and its amounts per account, month and dimension [scope:reports:read risk:low idempotent]
+PATCH /companies/{companyId}/budgets/{id} : Rename a budget, make it the default, or archive or restore it [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/budgets/{id} : Delete a budget and its amounts [scope:bookkeeping:write risk:low idempotent dry-run]
+POST /companies/{companyId}/budgets/{id}/copy-actuals : Fill a budget with last year's booked result, optionally scaled [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/budgets/{id}/lines : Save amounts in a budget (account, month, dimension cells) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/budgets/{id}/spread : Spread a yearly amount over the months of a budget [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/measures : The defined measures: id, name, precise definition, parameters and the report each equals [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/measures/{measureId} : One defined measure: the value, its definition, what it covers, caveats and an explain handle [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/measures/{measureId}/explain : What a defined measure adds: contributors and the journal lines or invoices behind it, paged [scope:reports:read risk:low idempotent]
@@ -702,6 +710,7 @@ GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning
 GET /companies/{companyId}/reports/balance-sheet/pdf : Balance sheet (balansräkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/behandlingshistorik : Behandlingshistorik (BFL 5 kap. 11 §): who changed what in the books, and when, for a räkenskapsår [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/bokslutsbilagor : Bokslutsbilagor: every balance account at the balansdag with its specification, sign-off and underlag [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/budget-vs-actual : Budget against booked result per account and month [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/continuity-check : IB/UB continuity check: opening balances match prior closing [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/dimension-pnl : Resultat per projekt or kostnadsställe: the income statement with one column per dimension value [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/forenklat-arsbokslut : Förenklat årsbokslut (ideell förening, BFNAR 2010:1): resultaträkning and balansräkning for a räkenskapsår [scope:reports:read risk:low idempotent]

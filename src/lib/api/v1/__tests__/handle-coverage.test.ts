@@ -144,6 +144,7 @@ describe('path parameter typing', () => {
       'bank/:id': null,
       'banks/:bic': null,
       'benefits/:benefitId': null,
+      'budgets/:id': null,
       'capital-changes/:id': null,
       'cash-accounts/:id': 'cash_account',
       'companies/:companyId': 'company',

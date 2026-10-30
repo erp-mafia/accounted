@@ -1,0 +1,1 @@
+[2026-10-28] Budgets cover resultatkonton (3000-8999) only in v1 (accounted#134): following up a result is the job asked for; a balance sheet budget needs opening balances and a cash forecast, a bigger feature nobody has asked for yet.

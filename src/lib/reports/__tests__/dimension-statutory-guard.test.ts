@@ -56,6 +56,11 @@ const ALLOWED_DIMENSION_READ_OPERATIONS = new Set([
   'reports.kpi',
   // dim_no picks the matrix axis (one column per value); it filters nothing.
   'reports.dimension-pnl',
+  // Budget against actual (accounted#134): resultatkonton only. The actuals
+  // come from get_account_month_actuals, which keeps 3000-8999 on both of its
+  // paths, and budget_lines' CHECK admits no other account, so the filter
+  // never reaches a balance account. Not a statutory report.
+  'reports.budget-vs-actual',
 ])
 
 /** MCP tools allowed to apply a dimension filter. */

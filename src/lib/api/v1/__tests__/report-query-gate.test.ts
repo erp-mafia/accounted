@@ -263,6 +263,8 @@ const DIMENSION_FILTER_READS = new Set([
   'reports.general-ledger',
   'reports.monthly-breakdown',
   'reports.kpi',
+  // Budget against actual: a management comparison per resultatkonto, P&L only (accounted#134).
+  'reports.budget-vs-actual',
 ])
 
 describe('every v1 report read is gated', () => {

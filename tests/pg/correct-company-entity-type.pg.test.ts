@@ -170,6 +170,30 @@ describe('correct_company_entity_type: fails closed', () => {
     expect(after.entity_type).toBe('aktiebolag')
   })
 
+  it('refuses while a budget has amounts on the chart that would be replaced (accounted#134)', async () => {
+    const { ownerId, companyId } = await seededCompany('aktiebolag')
+    const fiscalPeriodId = await insertFiscalPeriod({ userId: ownerId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31' })
+    const account = await getPool().query<{ account_number: string }>(
+      `SELECT account_number FROM public.chart_of_accounts
+        WHERE company_id = $1 AND account_number BETWEEN '3000' AND '8999'
+        ORDER BY account_number LIMIT 1`,
+      [companyId],
+    )
+    const budget = await getPool().query<{ id: string }>(
+      `INSERT INTO public.budgets (company_id, user_id, fiscal_period_id, name) VALUES ($1, $2, $3, 'Budget 2026') RETURNING id`,
+      [companyId, ownerId, fiscalPeriodId],
+    )
+    await getPool().query(
+      `INSERT INTO public.budget_lines (budget_id, company_id, account_number, month, amount) VALUES ($1, $2, $3, '2026-01-01', 100)`,
+      [budget.rows[0]!.id, companyId, account.rows[0]!.account_number],
+    )
+    const { result, after } = await correct(ownerId, companyId, 'ekonomisk_forening')
+    expect(result).toMatchObject({ ok: false, code: 'ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS', configured_references: 1 })
+    expect(after.entity_type).toBe('aktiebolag')
+    const lines = await getPool().query(`SELECT 1 FROM public.budget_lines WHERE budget_id = $1`, [budget.rows[0]!.id])
+    expect(lines.rows).toHaveLength(1)
+  })
+
   it('refuses when a learned categorization template references the chart', async () => {
     const { ownerId, companyId } = await seededCompany('aktiebolag')
     await getPool().query(

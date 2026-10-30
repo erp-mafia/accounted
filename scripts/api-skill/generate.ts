@@ -195,11 +195,13 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports', 'audit-trail', 'vat', 'measures', 'unexplained'],
+    members: ['reports', 'audit-trail', 'vat', 'measures', 'unexplained', 'budgets'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
-      'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only ' +
-      'income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; ' +
+      'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets ' +
+      '(GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue ' +
+      'negative) are compared with the books by GET /reports/budget-vs-actual. Only ' +
+      'income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; ' +
       'every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered ' +
       'report. Any other query parameter a report does not list is not applied and is named in the ' +
       'X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure ' +
