@@ -76,6 +76,7 @@ import {
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
+  OAUTH_MCP_KEY_NAME,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   scopeKind,
   validateApiKey,
@@ -112,6 +113,8 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 import { handleDeclarationFor, malformedPathIds, normalizeV1Handles, withResponseHandles } from './handles'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
+import { v1EndpointDoor, type OperationLike } from '@/lib/permissions/doors'
+import { agentShadow, type AgentShadowTarget, type TodayOutcome } from '@/lib/permissions/shadow'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const DRY_RUN_HEADER = 'X-Dry-Run'
@@ -277,6 +280,12 @@ interface ApiV1Options {
    * write is listed in KEY_OPTIONAL_WRITES (v1-write-idempotency.test.ts).
    */
   secretResponse?: boolean
+  /**
+   * The operation behind the endpoint (v1OperationHandler passes it), whose
+   * door the permission shadow reads; a hand-written endpoint is classified
+   * by its own registration.
+   */
+  doorOperation?: OperationLike
 }
 
 // Next.js 16 always passes `{ params: Promise<...> }` as the second arg.
@@ -569,11 +578,15 @@ interface CompanyGateInput {
  * false on a refusal.
  */
 type CompanyGateResult =
-  | { denied: Response; writable: false }
-  | { denied: null; writable: boolean }
+  | { denied: Response; writable: false; role?: string; permissionRefusal?: string }
+  | { denied: null; writable: boolean; role?: string }
 
-function refuse(denied: Response): CompanyGateResult {
-  return { denied, writable: false }
+/**
+ * `facts` names a refusal of the role or the key's access (what the
+ * permission shadow compares decide() with) and the role it read.
+ */
+function refuse(denied: Response, facts?: { role?: string; permissionRefusal?: string }): CompanyGateResult {
+  return { denied, writable: false, ...facts }
 }
 
 /**
@@ -660,7 +673,7 @@ async function checkCompanyAccessGate(
         message:
           'This company membership has the Invoicing role: only customers, invoices (quotes and orders included) and articles are reachable. Ask a company owner or admin to change the role.',
       },
-    }))
+    }), { role: membershipRole, permissionRefusal: 'ROLE_SCOPE_LIMITED' })
   }
 
   const isWrite =
@@ -702,7 +715,7 @@ async function checkCompanyAccessGate(
         message:
           'This company membership is read-only (viewer): write requests are refused. Ask a company owner or admin to change the role.',
       },
-    }))
+    }), { role: membershipRole, permissionRefusal: 'ROLE_READ_ONLY' })
   }
 
   // Read-only connection gate: the key reaches this company but was
@@ -727,7 +740,7 @@ async function checkCompanyAccessGate(
         message:
           'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Settings > API & MCP.',
       },
-    }))
+    }), { role: membershipRole, permissionRefusal: 'CONNECTION_READ_ONLY' })
   }
 
   // Multi-user seat gate: the API-key surface is a chokepoint like the
@@ -752,7 +765,7 @@ async function checkCompanyAccessGate(
     }
   }
 
-  return { denied: null, writable: !roleReadOnly && !connectionReadOnly }
+  return { denied: null, writable: !roleReadOnly && !connectionReadOnly, role: membershipRole }
 }
 
 /**
@@ -776,6 +789,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
     const forensic = extractForensicContext(request, log)
     // The Idempotency-Key claim this request holds until it is settled.
     let heldClaim: IdempotencyClaim | null = null
+    // The permission shadow's report of the handler's outcome (lib/permissions/
+    // shadow.ts), armed right before the handler runs, fired once.
+    let settleShadow: ((status: number) => void) | null = null
 
     try {
       // 1. Determine required scope before auth, from the route's own
@@ -884,6 +900,29 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         ...(auth.serviceAccount ? { serviceAccountId: auth.serviceAccount.id } : {}),
       })
 
+      // The permission shadow: decide() beside the role and access gates
+      // below, told what they did. It reads nothing and changes nothing. A
+      // missing scope is not compared: scope checks stay at the wire and
+      // decide() runs behind them.
+      const recordShadow = agentShadow({
+        door: `v1:${operation}`,
+        method: request.method,
+        userId: auth.userId,
+        key: {
+          kind: auth.serviceAccount
+            ? 'service_account'
+            : auth.client || auth.apiKeyName === OAUTH_MCP_KEY_NAME
+              ? 'oauth'
+              : 'manual',
+          scopes: auth.scopes,
+          apiKeyId: auth.apiKeyId ?? null,
+          agentIdentityId: auth.agentIdentityId ?? null,
+        },
+        doorRule: () => (endpoint ? v1EndpointDoor(endpoint, options.doorOperation) : null),
+      })
+      const shadowAccess = (companyId: string): AgentShadowTarget['companyAccess'] =>
+        auth.readOnlyCompanyIds?.some((id) => id.toLowerCase() === companyId.toLowerCase()) ? 'read' : 'write'
+
       // 4. Scope check. An 'authenticated' route needs the valid key above
       //    and no particular scope.
       if (requiredScope !== 'authenticated' && !hasScope(auth.scopes, requiredScope)) {
@@ -971,10 +1010,20 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         forensic,
       }
 
+      let shadowRole: string | undefined
       if (companyId !== undefined) {
         const gate = await checkCompanyAccessGate(companyGate, companyId, { companyId })
-        if (gate.denied) return gate.denied
+        if (gate.denied) {
+          if (gate.permissionRefusal) {
+            recordShadow(
+              { outcome: 'deny', code: gate.permissionRefusal, by: 'gate' },
+              { companyId, role: gate.role ?? null, companyAccess: shadowAccess(companyId) },
+            )
+          }
+          return gate.denied
+        }
         companyWritable = gate.writable
+        shadowRole = gate.role
       }
       if (malformedIds.length > 0) return await refuseMalformedIds()
 
@@ -1199,6 +1248,20 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // reason: every door that posts (categorize, batch-categorize, mark-paid,
       // a storno, ...) is bound by it in the engine, including a door added
       // later that never heard of it (#125).
+      if (companyId !== undefined) {
+        const shadowCompanyId = companyId
+        settleShadow = (status) => {
+          const today: TodayOutcome =
+            status === 403
+              ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' }
+              : { outcome: stage ? 'stage' : 'allow', dryRun }
+          recordShadow(today, {
+            companyId: shadowCompanyId,
+            role: shadowRole ?? null,
+            companyAccess: shadowAccess(shadowCompanyId),
+          })
+        }
+      }
       let response: Response = await runWithActor(
         ctx.actor,
         () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,handlerParams)),
@@ -1255,6 +1318,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         }
       }
 
+      settleShadow?.(response.status)
+      settleShadow = null
+
       ctx.log.info('op completed', {
         durationMs: Date.now() - start,
         status: response.status,
@@ -1270,6 +1336,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // 5xx are runtime errors. v1ErrorResponse logs the error itself at the
       // same threshold.
       const response = await v1ErrorResponse(err, log, { requestId })
+      settleShadow?.(response.status)
       const meta = { durationMs: Date.now() - start, status: response.status }
       if (response.status < 500) log.warn('op failed', err as Error, meta)
       else log.error('op failed', err as Error, meta)

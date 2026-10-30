@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { Extension } from '@/lib/extensions/types'
 import { buildProtectedResourceMetadata } from '@/lib/auth/protected-resource-metadata'
 import { isForbiddenOrigin, forbiddenOriginResponse } from './origin-guard'
-import { registerAgentToolLoader } from '@/lib/agent/tools/registry'
+import { registerAgentToolDoorResolver, registerAgentToolLoader } from '@/lib/agent/tools/registry'
 import type { AgentTool } from '@/lib/agent/tools/types'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
@@ -25,7 +25,12 @@ function loadServer(): Promise<ServerModule> {
 // (lib/agent/chat/*) dispatches against the core agentToolRegistry so it can
 // stay decoupled from this extension's module path. Tools satisfy the
 // AgentTool contract structurally: see lib/agent/tools/types.ts.
-registerAgentToolLoader(async () => (await loadServer()).tools as unknown as AgentTool[])
+// Their doors come with them, for the permission shadow in the chat loop.
+registerAgentToolLoader(async () => {
+  const server = await loadServer()
+  registerAgentToolDoorResolver((tool) => server.toolPermissionDoor(tool))
+  return server.tools as unknown as AgentTool[]
+})
 
 export const mcpServerExtension: Extension = {
   id: 'mcp-server',

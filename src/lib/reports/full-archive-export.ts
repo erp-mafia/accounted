@@ -1481,6 +1481,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   community_feedback: 'upvotes on shared community agent instructions; not räkenskapsinformation',
   api_keys: 'secrets',
   api_key_companies: 'per-key company allowlist (API access control), not räkenskapsinformation',
+  permission_shadow_log: 'where a permission check run in shadow mode disagreed with the live one (ids and codes, kept 7 days); diagnostics, not räkenskapsinformation',
   service_accounts:
     'non-human principals and their sponsors (API access control), not räkenskapsinformation; their creation and revocation are in audit_log and every write names the account by label',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',

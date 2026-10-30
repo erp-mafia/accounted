@@ -46,6 +46,7 @@ import { startPackageForSessionRequest } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { invoicerRouteAccess, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
+import { sessionShadow, type TodayOutcome } from '@/lib/permissions/shadow'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -143,6 +144,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
     // below is logged with the richest available { userId, companyId } context
     // (audit trail / OWASP V16), not just { requestId, operation }.
     let errLog = log
+    // The permission shadow (lib/permissions/shadow.ts): decide() beside the
+    // role gates below, told what they did. It reads nothing and changes
+    // nothing; a no-op until the role is known.
+    let recordShadow: (today: TodayOutcome) => void = () => {}
+    let handlerStarted = false
 
     try {
       const authStart = Date.now()
@@ -179,6 +185,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
       }
 
+      recordShadow = sessionShadow({
+        door: `session:${operation}`,
+        method: request.method,
+        pathname: new URL(request.url).pathname,
+        companyId,
+        userId: user.id,
+        role: resolved.role,
+      })
+
       // The invoicing-only role reaches the routes on its allowlist and
       // nothing else (lib/auth/invoicer-role.ts). A scoped route runs its
       // handler with a client that can only reach this company: the role
@@ -191,6 +206,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         const access = invoicerRouteAccess(request.method, new URL(request.url).pathname)
         if (!access) {
           userLog.warn('invoicer role refused outside its routes')
+          recordShadow({ outcome: 'deny', code: 'INVOICER_ROUTE_NOT_ALLOWED', by: 'gate' })
           return errorResponseFromCode('FORBIDDEN', userLog.child({ companyId }), {
             requestId,
             messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
@@ -205,6 +221,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       if (requireAdmin) {
         if (!(await isCompanyAdmin(supabase, companyId))) {
+          recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
           return companyAdminRequiredResponse(userLog.child({ companyId }), requestId)
         }
       } else if (requireWrite) {
@@ -221,6 +238,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         })
         if (!writeCheck.ok) {
           userLog.warn('write permission denied')
+          recordShadow({ outcome: 'deny', code: 'WRITE_REQUIRED', by: 'gate' })
           if (!writeCheck.response.headers.get('X-Request-Id')) {
             writeCheck.response.headers.set('X-Request-Id', requestId)
           }
@@ -255,6 +273,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       errLog = ctx.log
 
       const handlerStart = Date.now()
+      handlerStarted = true
       const requireCompleteLedger = typeof options.requireCompleteLedger === 'function'
         ? options.requireCompleteLedger(request) : options.requireCompleteLedger
       // Every commit the handler makes, however many frames down, is stamped
@@ -266,6 +285,10 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
           ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
           : handler(request, ctx, params))
       const handlerMs = Date.now() - handlerStart
+      // A 403 from the handler is a check of its own after the gates passed.
+      recordShadow(
+        response?.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },
+      )
 
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {
         response.headers.set('X-Request-Id', requestId)
@@ -301,6 +324,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // 5xx are runtime errors. errorResponse logs the error itself at the
       // same threshold.
       const response = errorResponse(err, errLog, { requestId })
+      if (handlerStarted) {
+        recordShadow(
+          response.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },
+        )
+      }
       const meta = { durationMs: Date.now() - start, status: response.status }
       if (response.status < 500) errLog.warn('op failed', err as Error, meta)
       else errLog.error('op failed', err as Error, meta)

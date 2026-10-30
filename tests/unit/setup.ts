@@ -23,3 +23,12 @@ vi.mock('@/lib/modules/package-gate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/modules/package-gate')>()
   return { ...actual, packageStartRefusal: vi.fn(async () => null) }
 })
+
+// The permission shadow (lib/permissions/shadow.ts) runs beside every door's
+// checks and writes a disagreement to permission_shadow_log after the
+// response. Its only I/O lives in shadow-writer.ts, stubbed here so no door
+// test reaches a database through it; a test of the shadow asserts on these
+// mocks, and a test of the writer itself uses vi.importActual.
+vi.mock('@/lib/permissions/shadow-writer', () => ({
+  insertShadowRow: vi.fn(async () => {}),
+}))

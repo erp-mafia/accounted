@@ -83,6 +83,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/permissions/shadow-log/cleanup/cron",
+      "schedule": "15 2 * * *"
+    },
+    {
       "path": "/api/events/dispatch/cron",
       "schedule": "* * * * *"
     },

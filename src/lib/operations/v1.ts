@@ -208,6 +208,7 @@ export function v1OperationHandler(op: AnyOperation) {
     },
     {
       requireScope: op.scope,
+      doorOperation: op,
       ...(isWrite ? { requireIdempotencyKey: http.requireIdempotencyKey ?? true } : { readOnly: true }),
     },
   )

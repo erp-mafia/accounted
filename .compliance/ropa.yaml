@@ -589,6 +589,45 @@ processing_activities:
       - creator_scoped_task_polling   # tasks/get requires the creating user
       - expired_rows_purged_on_creation
 
+  - id: permissions.shadow_log
+    name: Skuggloggning av behörighetsbeslut
+    purpose: >-
+      Kontrollera att den nya behörighetsmodellen svarar som dagens
+      behörighetskontroller innan den börjar tillämpas. Vid varje anrop
+      jämförs modellens svar med vad dagens kontroller gjorde; bara när de
+      skiljer sig sparas en rad med id:n och koder: företag, användare,
+      agentidentitet och API-nyckel-id när en agent anropade, vilken dörr,
+      metod, dagens utfall och felkod, modellens utfall, skäl och behörighet,
+      samt om skillnaden är avsiktlig. Inga anropsdata, namn eller fritext
+      sparas. Samma skillnad sparas högst en gång per fem minuter.
+    lawful_basis: art_6_1_f   # legitimate interest (access-control correctness)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+      - company_member
+    data_categories:
+      - user.unique_id                # user_id, agent_identity_id, api_key_id
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor; no third-country transfer.
+    retention:
+      # /api/permissions/shadow-log/cleanup/cron raderar rader äldre än 7 dagar.
+      duration: 7d
+      basis: legitimate_interest_access_control_verification
+      stored_in:
+        - permission_shadow_log
+    security_measures:
+      - service_role_only_reads_and_writes
+      - ids_and_codes_only_no_request_data
+      - deduplicated_in_application
+
   - id: arsredovisning.signature_evidence
     name: Underskriftsbevis för årsredovisning
     purpose: >-
