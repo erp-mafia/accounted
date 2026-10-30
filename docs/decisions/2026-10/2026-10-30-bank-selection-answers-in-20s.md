@@ -1,0 +1,1 @@
+[2026-10-30] The account selection answers after 20 s when its door keeps the first import alive (after), not 240 s, and the select routes get maxDuration 800: the import must start with the person present for the extended window, so it is not moved to the cron; the operation door keeps 240 s.

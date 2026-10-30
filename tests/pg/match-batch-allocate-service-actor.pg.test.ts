@@ -187,9 +187,9 @@ describe('match_batch_allocate service actor', () => {
       service_role_can: boolean
       overloads: string
     }>(
-      `SELECT has_function_privilege('anon', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,uuid[],text)', 'EXECUTE') AS anon_can,
-              has_function_privilege('authenticated', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,uuid[],text)', 'EXECUTE') AS authenticated_can,
-              has_function_privilege('service_role', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,uuid[],text)', 'EXECUTE') AS service_role_can,
+      `SELECT has_function_privilege('anon', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,uuid[],text)', 'EXECUTE') AS anon_can,
+              has_function_privilege('authenticated', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,uuid[],text)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,jsonb,jsonb,uuid[],text)', 'EXECUTE') AS service_role_can,
               (SELECT count(*) FROM pg_proc p
                  JOIN pg_namespace n ON n.oid = p.pronamespace
                 WHERE n.nspname = 'public' AND p.proname = 'match_batch_allocate')::text AS overloads`,

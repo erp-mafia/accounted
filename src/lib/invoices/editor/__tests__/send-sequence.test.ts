@@ -321,8 +321,21 @@ describe('persistAndSend: files picked in the editor confirm (#79, crm#1315, PH 
     expect(calls.map((c) => c.url)).toEqual(['/api/invoices', '/api/invoices/inv-1/send'])
   })
 
-  it('never links on a channel that does not email them (the set would be fixed unsent)', async () => {
-    for (const channel of ['manual', 'peppol'] as const) {
+  it('links them before a Peppol send too: the e-faktura carries them (crm#1545)', async () => {
+    const { fetchImpl, calls } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { data: [] } },
+      { json: { success: true } },
+    ])
+    await persistAndSend(input({ channel: 'peppol', attachmentDocumentIds: [doc1] }), fetchImpl)
+    const attachIndex = calls.findIndex((c) => c.url.endsWith('/attachments'))
+    const sendIndex = calls.findIndex((c) => c.url.endsWith('/peppol/send'))
+    expect(attachIndex).toBeGreaterThan(-1)
+    expect(attachIndex).toBeLessThan(sendIndex)
+  })
+
+  it('never links on a channel that does not carry them (the set would be fixed unsent)', async () => {
+    for (const channel of ['manual', 'kivra'] as const) {
       const { fetchImpl, calls } = stubFetch([
         { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
         { json: { success: true } },

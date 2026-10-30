@@ -4,6 +4,7 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   generatePeppolBisBillingInvoice,
+  type PeppolAttachmentFile,
   type PeppolInvoiceResult,
   type PeppolValidationIssue,
 } from '@/lib/invoices/peppol-bis-billing'
@@ -76,10 +77,12 @@ export const PEPPOL_CUSTOMER_MISSING_MESSAGE_EN = 'The invoice has no customer a
 /**
  * Run the BIS Billing 3 generator on loaded records. A missing customer is
  * reported as `customer_missing`; a failed preflight carries the issues.
+ * `attachments` are the invoice's files (crm#1545), embedded in the message.
  */
 export function generatePeppolDocument(
   invoice: PeppolInvoiceRecord,
   company: CompanySettings,
+  attachments: PeppolAttachmentFile[] = [],
 ): GeneratedPeppolInvoice | { ok: false; reason: 'customer_missing' } | { ok: false; reason: 'invalid'; issues: PeppolValidationIssue[] } {
   if (!invoice.customer) return { ok: false, reason: 'customer_missing' }
   const document = generatePeppolBisBillingInvoice({
@@ -87,6 +90,7 @@ export function generatePeppolDocument(
     customer: invoice.customer,
     items: invoice.items ?? [],
     company,
+    attachments,
   })
   if (!document.ok) return { ok: false, reason: 'invalid', issues: document.issues }
   return document

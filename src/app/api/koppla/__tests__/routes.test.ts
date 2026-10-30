@@ -36,7 +36,7 @@ import { POST as start } from '../[token]/connections/route'
 import { DELETE as abandon, GET as connection } from '../[token]/connections/[id]/route'
 import { POST as poll } from '../[token]/connections/[id]/poll/route'
 import { POST as restart } from '../[token]/connections/[id]/restart/route'
-import { POST as select } from '../[token]/connections/[id]/select/route'
+import { POST as select, maxDuration as selectMaxDuration } from '../[token]/connections/[id]/select/route'
 import { POST as sync } from '../[token]/connections/[id]/sync/route'
 import { GET as verification } from '../[token]/verification/route'
 import { POST as verificationStart } from '../[token]/verification/start/route'
@@ -274,6 +274,10 @@ describe('the signatory token routes act as the sender for the company the link 
     const consumed = db.payloads('bank_connect_invites', 'update')[0] as { consumed_at: string; connection_id: string }
     expect(consumed.connection_id).toBe(ID)
     expect(typeof consumed.consumed_at).toBe('string')
+  })
+
+  it('POST select lives on for the first import it answers before, as on the session route', () => {
+    expect(selectMaxDuration).toBe(800)
   })
 
   it('POST select leaves the link open when the service refuses', async () => {

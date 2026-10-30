@@ -513,6 +513,94 @@ describe('POST /api/v1/companies/:companyId/expense-claims', () => {
     expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
+  it('a dry run names the cost account and checks every line account against the active chart (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: {
+        data: [{ account_number: '5410' }, { account_number: '2641' }, { account_number: '2893' }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const preview = (await res.json()).data.preview
+    expect(preview).toMatchObject({ expense_account: '5410', liability_account: '2893' })
+    expect(preview.verifikat.lines.map((l: { account_number: string }) => l.account_number)).toEqual(['5410', '2641', '2893'])
+    const chartRead = client.calls.find((c) => c.table === 'chart_of_accounts' && c.method === 'in')
+    expect(chartRead?.args).toEqual(['account_number', ['5410', '2641', '2893']])
+    expect(client.calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['is_active', true] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run refuses a deactivated cost account with the commit\'s 400 ACCOUNTS_NOT_IN_CHART, writing nothing (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: [
+        // Active rows: 5410 is not among them.
+        { data: [{ account_number: '2641' }, { account_number: '2893' }], error: null },
+        // Every row, active or not: 5410 exists, so the engine would not seed it.
+        { data: [{ account_number: '5410' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(JSON.stringify(body.error)).toContain('5410')
+    expect(wrote(client)).toBe(false)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('a dry run lets a BAS account missing from the chart pass: the commit seeds it', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: [
+        { data: [{ account_number: '2641' }, { account_number: '2893' }], error: null },
+        // No row at all for 5410.
+        { data: [], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(validClaim, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run refuses a custom line on an account outside BAS 2026 (crm#1536)', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [OPEN_YEAR, OPEN_YEAR_LIST],
+      chart_of_accounts: { data: [{ account_number: '2893' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(
+      {
+        ...validClaim,
+        vat_amount: 0,
+        lines: [
+          { account_number: '5419', debit_amount: 500, credit_amount: 0 },
+          { account_number: '2893', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+      '?dry_run=true',
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(JSON.stringify(body.error)).toContain('5419')
+    expect(wrote(client)).toBe(false)
+  })
+
   it('a dry run shows the approver the dimensions the cost line will carry', async () => {
     const client = makeClient({
       company_members: MEMBER,

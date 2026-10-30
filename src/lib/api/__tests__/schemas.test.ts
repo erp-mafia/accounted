@@ -3546,6 +3546,35 @@ describe('CreateEmployeeSchema bank details', () => {
 // Employee update contract (#3008): null clears, an absent key is unchanged
 // ============================================================
 
+describe('employee semestertillagg_rate bound (crm#1529)', () => {
+  // The employee forms send the percentage field as a fraction; a
+  // kollektivavtal tillägg such as 0,8 % (0.008) must fit the 0..0.05 bound.
+  it('accepts 0,8 % on create and update, and defaults to the statutory 0,43 %', () => {
+    const create = {
+      first_name: 'Anna',
+      last_name: 'Andersson',
+      personnummer: '199001011234',
+      employment_start: '2026-01-01',
+      salary_type: 'monthly' as const,
+      monthly_salary: 30000,
+      f_skatt_status: 'a_skatt' as const,
+      tax_table_number: 33,
+      tax_municipality: 'Stockholm',
+      vacation_rule: 'sammaloneregeln' as const,
+    }
+    const created = CreateEmployeeSchema.safeParse({ ...create, semestertillagg_rate: 0.008 })
+    expect(created.success && created.data.semestertillagg_rate).toBe(0.008)
+    const defaulted = CreateEmployeeSchema.safeParse(create)
+    expect(defaulted.success && defaulted.data.semestertillagg_rate).toBe(0.0043)
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: 0.008 }).success).toBe(true)
+  })
+
+  it('refuses a percentage typed as a fraction above 5 %', () => {
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: 0.8 }).success).toBe(false)
+    expect(UpdateEmployeeSchema.safeParse({ semestertillagg_rate: -0.001 }).success).toBe(false)
+  })
+})
+
 describe('UpdateEmployeeSchema clearing optional fields', () => {
   // Every column that is nullable in the database (and in types Employee).
   const CLEARABLE = [

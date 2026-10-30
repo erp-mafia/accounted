@@ -10,10 +10,12 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 
-// The first import runs inside this request (the extended history window the
-// bank serves right after the consent); past the wait it finishes in the
-// background, so the function must outlive the default 60 s.
-export const maxDuration = 300
+// The first import starts inside this request (the extended history window
+// the bank serves right after the consent); the answer comes after a short
+// wait (INITIAL_SYNC_ANSWER_MS) and the import finishes in the background
+// (after). A two-year history with its matching passes ran past 300 s
+// (2026-10-27), so the function gets the Pro-plan ceiling with Fluid compute.
+export const maxDuration = 800
 
 const SelectSchema = z.object({
   accounts: z

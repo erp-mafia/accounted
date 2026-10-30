@@ -23,6 +23,9 @@ import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from
  * "Samlingsbetalning <date>" for two or more. Since 20261028231700 the
  * request's fee rows follow the invoices' lines as debits, before the bank
  * leg, built by the RPC call's own builder (lib/bookkeeping/payout-fee-lines.ts).
+ * Since 20261031100700 a kontantmetoden invoice with no verifikat books the
+ * lines it is handed (p_cash_lines, lib/invoices/batch-cash-method-guard.ts) in
+ * place of the 1510 clearing; the preview takes the same lines.
  * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
@@ -113,6 +116,12 @@ export function buildBatchAllocationPreview(input: {
   invoices: ReadonlyMap<string, BatchAllocationPreviewInvoice> | Record<string, BatchAllocationPreviewInvoice>
   /** The payment service's fees on the row: one debit line each, no VAT. */
   fees?: readonly PayoutFee[] | null
+  /**
+   * Kontantmetoden: customer invoice id to the revenue, moms and
+   * öresavrundning lines its sale books in place of the 1510 clearing, the
+   * RPC's p_cash_lines exactly.
+   */
+  cashLines?: Readonly<Record<string, readonly { account_number: string; debit_amount: number; credit_amount: number }[]>>
 }): BatchAllocationPreview {
   const { transaction, allocations, bankAccount } = input
   if (allocations.length === 0) throw new Error('allocations must not be empty')
@@ -154,6 +163,13 @@ export function buildBatchAllocationPreview(input: {
 
   sorted.forEach((alloc, index) => {
     const label = `${noun} ${index + 1} av ${sorted.length}`
+    const cash = isCustomer && alloc.invoice_id ? input.cashLines?.[alloc.invoice_id] : undefined
+    if (cash) {
+      for (const line of cash) {
+        lines.push({ account_number: line.account_number, description: label, debit: line.debit_amount, credit: line.credit_amount })
+      }
+      return
+    }
     const invoice = lookup(allocationSortKey(alloc))
     const remaining = invoice?.remaining_amount ?? invoice?.total ?? null
     const sameCurrency = !invoice?.currency || invoice.currency === transaction.currency

@@ -17,8 +17,12 @@
  *   2. already-explained guard: posted vouchers that already book this bank
  *      row (each invoice marked paid by hand, a Bankgirot aggregate) refuse
  *      the batch unless force=true names exactly that set;
- *   3. kontantmetoden: an invoice with no booking yet cannot be cleared off
- *      1510/2440 (its revenue/cost + moms would never reach the ledger);
+ *   3. kontantmetoden: an invoice with no booking yet has no 1510/2440 to
+ *      clear. Customer invoices of SEK paid in full book their sale in the
+ *      samlingsverifikat instead, each with the single cash match's lines
+ *      (lib/invoices/batch-cash-method-guard.ts, the RPC's p_cash_lines); anything
+ *      else (supplier invoices, a mix with booked invoices, a foreign
+ *      currency, an installment) is refused, before anything is written;
  *   3b. faktureringsmetoden with defer_invoice_booking: a supplier invoice
  *      registered without its verifikat is booked first by the Bokför step,
  *      right before the RPC (lib/supplier-invoices/registration-first.ts);
@@ -58,7 +62,13 @@ import {
   guardAlreadyExplained,
   recordExplainedOverride,
 } from '@/lib/invoices/already-explained-guard'
-import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
+import {
+  findCashMethodUnbookedAllocations,
+  planBatchCashLines,
+  type BatchCashLine,
+} from '@/lib/invoices/batch-cash-method-guard'
+import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import {
   buildBatchAllocationPreview,
   type BatchAllocationPreviewInvoice,
@@ -226,13 +236,43 @@ export async function matchTransactionBatch(
     txLog.error('match-batch: kontantmetoden check failed', cashCheck.error as Error)
     return failed(cashCheck.error)
   }
+  // The sale of each unbooked customer invoice is booked in the
+  // samlingsverifikat itself (crm#1539); what that entry cannot carry keeps
+  // the refusal, with the reason.
+  let cashLines: Record<string, BatchCashLine[]> | undefined
   if (cashCheck.unbooked.length > 0) {
-    const numbers = cashCheck.unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
-    return {
-      ok: false,
-      code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
-      messageSv: `${getErrorEntry('BATCH_CASH_METHOD_UNBOOKED_INVOICE')?.message_sv ?? ''} Obokförda fakturor: ${numbers}.`.trim(),
-      details: { invoices: cashCheck.unbooked },
+    const plan = await planBatchCashLines(supabase, companyId, transactionId, allocations, cashCheck.unbooked)
+    if (!plan.ok && 'error' in plan) {
+      txLog.error('match-batch: kontantmetoden plan failed', plan.error as Error)
+      return failed(plan.error)
+    }
+    if (!plan.ok) {
+      const numbers = cashCheck.unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
+      return {
+        ok: false,
+        code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+        messageSv: `${getErrorEntry('BATCH_CASH_METHOD_UNBOOKED_INVOICE')?.message_sv ?? ''} Obokförda fakturor: ${numbers}.`.trim(),
+        details: {
+          invoices: cashCheck.unbooked,
+          unsupported: plan.unsupported,
+          ...(plan.invoiceId ? { invoice_id: plan.invoiceId } : {}),
+        },
+      }
+    }
+    cashLines = plan.cashLines
+    // The engine seeds a standard BAS account the chart lacks (3740 the
+    // first time a payment lands a sub-krona off); the RPC cannot, and
+    // refuses an account that is not active. A deactivated or non-BAS
+    // account refuses here, before anything is written.
+    const accounts = cashLineAccounts(cashLines)
+    let unresolvable: string[]
+    try {
+      unresolvable = await findUnresolvableAccounts(supabase, companyId, accounts)
+    } catch (err) {
+      return failed(err)
+    }
+    if (unresolvable.length > 0) {
+      return { ok: false, code: 'BATCH_CASH_LINES_INVALID', details: { reason: 'account', accounts: unresolvable } }
     }
   }
 
@@ -277,8 +317,11 @@ export async function matchTransactionBatch(
       detectFailed,
       registrations: registrations.plans,
       sales: sales.plans,
+      cashLines,
     })
   }
+
+  if (cashLines) await backfillStandardBASAccounts(supabase, companyId, userId, cashLineAccounts(cashLines))
 
   if (explained.status === 'overridden') {
     txLog.warn('match-batch: already-explained guard bypassed', {
@@ -344,6 +387,7 @@ export async function matchTransactionBatch(
         transactionId,
         allocations,
         ...(feeLines.length > 0 ? { feeLines } : {}),
+        ...(cashLines ? { cashLines } : {}),
         ...(businessEvents ? { businessEvents } : {}),
       },
     ],
@@ -408,6 +452,11 @@ export async function matchTransactionBatch(
       ? { warnings: [...booked.warnings, ...bookedSales.warnings] }
       : {}),
   }
+}
+
+/** The accounts the kontantmetoden lines book on, each once. */
+function cashLineAccounts(cashLines: Record<string, BatchCashLine[]>): string[] {
+  return Array.from(new Set(Object.values(cashLines).flatMap((lines) => lines.map((line) => line.account_number))))
 }
 
 /** The registrations a batch posted, keyed for partialPostedIds. */
@@ -501,6 +550,8 @@ async function previewMatchBatch(
     detectFailed: boolean
     registrations: Extract<RegistrationFirstPlan, { required: true }>[]
     sales: RequiredSaleFirstPlan[]
+    /** Kontantmetoden: the lines each unbooked invoice books in place of 1510. */
+    cashLines?: Record<string, BatchCashLine[]>
   },
 ): Promise<OperationOutcome<MatchBatchResult>> {
   const { supabase, companyId, log } = ctx
@@ -593,6 +644,7 @@ async function previewMatchBatch(
     allocations,
     invoices,
     fees: input.fees,
+    cashLines: guard.cashLines,
   })
 
   return {

@@ -443,33 +443,50 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     })
   })
 
-  it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
-    // No depreciation_schedules row, but a manual credit to the asset's 1259
-    // accumulated account exists in the ledger: must still block.
-    const { supabase } = mockForUpdate(makeAssetRow(), {
-      postedCount: 0,
-      otherAssetEntryIds: [],
-      accumulatedCredits: [{ journal_entry_id: 'manual-entry-1' }],
+  it('corrects the basis when the 12x9 account carries credits the engine did not post (crm#1511)', async () => {
+    // A migrated asset: its accumulated account holds the previous system's
+    // avskrivningar and a hand-booked rättelse, no engine depreciation. The
+    // cost and the opening amount are corrected together, as the rättelse
+    // left them; the guard reads no ledger.
+    const { supabase, captured } = mockForUpdate(
+      makeAssetRow({
+        category: 'machinery',
+        acquisition_date: '2025-04-01',
+        acquisition_cost: 100000,
+        useful_life_months: 60,
+        bas_asset_account: '1210',
+        bas_accumulated_account: '1219',
+        bas_expense_account: '7831',
+        opening_accumulated_depreciation: 30000,
+        opening_depreciation_date: '2026-06-30',
+      }),
+      {
+        postedCount: 0,
+        accumulatedCredits: [{ journal_entry_id: 'imported-g1' }, { journal_entry_id: 'manual-rattelse' }],
+      },
+    )
+    const result = await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
+      acquisition_cost: 120000,
+      opening_accumulated_depreciation: 34000,
+      opening_depreciation_date: '2026-08-31',
     })
-    await expect(
-      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_date: '2025-08-15' }),
-    ).rejects.toBeInstanceOf(AssetCorrectionBlockedError)
+    expect(result.acquisition_cost).toBe(120000)
+    expect(captured.update).toMatchObject({
+      acquisition_cost: 120000,
+      opening_accumulated_depreciation: 34000,
+      opening_depreciation_date: '2026-08-31',
+    })
+    const tables = supabase.from.mock.calls.map(([table]) => table)
+    expect(tables).not.toContain('journal_entry_lines')
+    expect(tables).not.toContain('journal_entries')
   })
 
-  it('allows a correction when the only 1259 credit is a sibling asset’s engine entry', async () => {
-    // Two computers share 1259. The sibling was depreciated via the engine, so
-    // its journal entry is attributable to the OTHER asset and must NOT block a
-    // correction of this still-undepreciated asset (no false positive).
-    const { supabase, captured } = mockForUpdate(makeAssetRow(), {
-      postedCount: 0,
-      otherAssetEntryIds: ['sibling-engine-entry'],
-      accumulatedCredits: [{ journal_entry_id: 'sibling-engine-entry' }],
-    })
-    const result = await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
-      acquisition_date: '2025-08-15',
-    })
-    expect(result.acquisition_date).toBe('2025-08-15')
-    expect(captured.update).toMatchObject({ acquisition_date: '2025-08-15' })
+  it('blocks the same correction once the engine has posted a depreciation of the asset', async () => {
+    // The one predicate get_asset reports as has_posted_depreciation.
+    const { supabase } = mockForUpdate(makeAssetRow(), { postedCount: 1 })
+    await expect(
+      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_cost: 9000 }),
+    ).rejects.toMatchObject({ code: 'ASSET_CORRECTION_BLOCKED', reason: 'depreciation_posted' })
   })
 })
 

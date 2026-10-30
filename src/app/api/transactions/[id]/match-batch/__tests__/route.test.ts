@@ -66,8 +66,27 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
 const { mockFindCashUnbooked } = vi.hoisted(() => ({
   mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
 }))
+// Its kontantmetoden plan (planBatchCashLines) is reached only when the
+// guard names unbooked invoices; its lines are pinned by
+// lib/invoices/__tests__/batch-cash-method-lines.test.ts, and the account checks
+// are the engine's own (account-validation, account-backfill).
+const { mockPlanCashLines } = vi.hoisted(() => ({
+  mockPlanCashLines: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, cashLines: {} })),
+}))
 vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
   findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+  planBatchCashLines: mockPlanCashLines,
+}))
+const { mockFindUnresolvable, mockBackfill } = vi.hoisted(() => ({
+  mockFindUnresolvable: vi.fn(async (..._args: unknown[]): Promise<string[]> => []),
+  mockBackfill: vi.fn(async (..._args: unknown[]): Promise<string[]> => []),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: mockFindUnresolvable,
+}))
+vi.mock('@/lib/bookkeeping/account-backfill', () => ({
+  backfillStandardBASAccounts: mockBackfill,
 }))
 
 // An honoured force override is written to behandlingshistorik after the RPC
@@ -392,12 +411,13 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('refuses unbooked invoices under kontantmetoden before the RPC can clear 1510', async () => {
+  it('refuses unbooked invoices under kontantmetoden the samlingsverifikat cannot book, before the RPC can clear 1510', async () => {
     enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     mockFindCashUnbooked.mockResolvedValueOnce({
       ok: true,
       unbooked: [{ kind: 'customer_invoice', id: INV_UUID, invoice_number: '231' }],
     })
+    mockPlanCashLines.mockResolvedValueOnce({ ok: false, unsupported: 'partial_payment', invoiceId: INV_UUID })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
       method: 'POST',
@@ -412,9 +432,105 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
     expect(body.error.details?.invoices[0].id).toBe(INV_UUID)
+    expect(body.error.details).toMatchObject({ unsupported: 'partial_payment', invoice_id: INV_UUID })
     expect(mockFindCashUnbooked).toHaveBeenCalledWith(mockSupabase, 'company-1', [
       { kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 },
     ])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('books unbooked kontantmetoden invoices paid in full in the samlingsverifikat (crm#1539)', async () => {
+    const INV_B = '77777777-7777-4777-8777-777777777777'
+    const allocations = [
+      { kind: 'customer_invoice', invoice_id: INV_UUID, amount: 500 },
+      { kind: 'customer_invoice', invoice_id: INV_B, amount: 563 },
+    ]
+    const cashLines = {
+      [INV_UUID]: [
+        { account_number: '3001', debit_amount: 0, credit_amount: 400 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 100 },
+      ],
+      [INV_B]: [
+        { account_number: '3001', debit_amount: 0, credit_amount: 450 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 112.5 },
+        { account_number: '3740', debit_amount: 0, credit_amount: 0.5 },
+      ],
+    }
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [
+        { kind: 'customer_invoice', id: INV_UUID, invoice_number: '231' },
+        { kind: 'customer_invoice', id: INV_B, invoice_number: '232' },
+      ],
+    })
+    mockPlanCashLines.mockResolvedValueOnce({ ok: true, cashLines })
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-cash',
+        voucher_series: 'A',
+        voucher_number: 13,
+        tx_id: TX_UUID,
+        allocations: [
+          { kind: 'customer_invoice', invoice_id: INV_UUID, payment_id: 'ip-1', status: 'paid', paid_amount: 500, remaining_amount: 0, amount: 500 },
+          { kind: 'customer_invoice', invoice_id: INV_B, payment_id: 'ip-2', status: 'paid', paid_amount: 562.5, remaining_amount: 0, amount: 563 },
+        ],
+        total_allocated: 1063,
+        cash_method: true,
+        leftover: 0,
+      },
+      error: null,
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      data: { journal_entry_id: string; allocations: Array<{ status: string }> }
+    }>(response)
+    expect(status).toBe(200)
+    expect(body.data.journal_entry_id).toBe('je-batch-cash')
+    expect(body.data.allocations.map((a) => a.status)).toEqual(['paid', 'paid'])
+    expect(mockPlanCashLines).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      TX_UUID,
+      allocations,
+      expect.arrayContaining([expect.objectContaining({ id: INV_UUID })]),
+    )
+    // The standard accounts the lines book on are seeded as the engine seeds them.
+    expect(mockFindUnresolvable).toHaveBeenCalledWith(mockSupabase, 'company-1', ['3001', '2611', '3740'])
+    expect(mockBackfill).toHaveBeenCalledWith(mockSupabase, 'company-1', 'user-1', ['3001', '2611', '3740'])
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'match_batch_allocate',
+      expect.objectContaining({ p_tx_id: TX_UUID, p_allocations: allocations, p_cash_lines: cashLines }),
+    )
+  })
+
+  it('refuses a kontantmetoden line on an account the engine cannot resolve, before the RPC', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_UUID, invoice_number: '231' }],
+    })
+    mockPlanCashLines.mockResolvedValueOnce({
+      ok: true,
+      cashLines: { [INV_UUID]: [{ account_number: '3001', debit_amount: 0, credit_amount: 1000 }] },
+    })
+    mockFindUnresolvable.mockResolvedValueOnce(['3001'])
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_CASH_LINES_INVALID')
+    expect(mockBackfill).not.toHaveBeenCalled()
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 

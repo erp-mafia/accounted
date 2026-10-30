@@ -97,6 +97,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import RefundCreditNoteDialog from '@/components/invoices/RefundCreditNoteDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import QuotePartDialog from '@/components/invoices/QuotePartDialog'
 import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
@@ -398,6 +400,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [isSendingPeppol, setIsSendingPeppol] = useState(false)
   const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
+  // A file uploading into the Peppol dialog's Bilagor: the send waits (crm#1545).
+  const [peppolAttachmentsBusy, setPeppolAttachmentsBusy] = useState(false)
   // Whether this deployment has a contracted Access Point switched on; the
   // menu item stays a truthful "provider required" note otherwise.
   const [peppolTransportAvailable, setPeppolTransportAvailable] = useState(false)
@@ -3517,6 +3521,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('peppol_send_text_rows_left_out', { count: peppolTextRowsLeftOut })}
             </AttnLine>
           )}
+          {/* Bilagor ride inside the e-faktura on a draft (crm#1545). */}
+          {canWrite && offersInvoiceAttachments({ channel: 'peppol', status: invoice.status, isSandbox, canEmail }) && (
+            <InvoiceAttachmentsSection
+              target={{ kind: 'invoice', invoiceId: invoice.id }}
+              channel="peppol"
+              disabled={isSendingPeppol}
+              onBusyChange={setPeppolAttachmentsBusy}
+            />
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -3525,7 +3538,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {t('delete_dialog_cancel')}
             </Button>
-            <Button onClick={() => void sendViaPeppol()} loading={isSendingPeppol}>
+            <Button
+              onClick={() => void sendViaPeppol()}
+              loading={isSendingPeppol}
+              disabled={peppolAttachmentsBusy}
+            >
               {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
             </Button>
           </DialogFooter>

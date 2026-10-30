@@ -167,7 +167,15 @@ export interface SelectView {
 export const CONSENT_DAYS = 180
 /** A pending attempt older than this was abandoned, unless a second signatory is still to sign. */
 export const STALE_ATTEMPT_MS = 60 * 60 * 1000
-/** The first import answers inside this; a longer one finishes in the background. */
+/**
+ * How long the account selection waits for the first import before it
+ * answers that the import runs on (sync_pending). A door that keeps the work
+ * alive past its answer (keepAlive: the two select routes) answers after the
+ * short wait: a two-year history with its matching passes ran up to four
+ * minutes behind a spinner. A door without one is the only thing keeping the
+ * import running, so it waits the long way.
+ */
+export const INITIAL_SYNC_ANSWER_MS = 20_000
 export const INITIAL_SYNC_WAIT_MS = 240_000
 /** Svea Bank lists accounts under a first consent and reads them under a second one naming them. */
 export const SVEA_BIC = 'SVEASESS'
@@ -1167,18 +1175,19 @@ async function saveSelection(
     return { ok: true, data: { connection: view, sync: null, sync_pending: false } }
   }
 
-  // The first import runs now so the person sees their transactions at once
-  // (the extended history window the bank serves right after the consent);
-  // past the wait it keeps going, and the cron retries whatever did not land.
+  // The first import starts now, with the person present, so it gets the
+  // extended history window the bank serves right after the consent; past the
+  // wait it keeps going (keepAlive), and the cron retries whatever did not land.
   const sync = runOpenPaymentsSync(ctx.supabase, {
     companyId: ctx.companyId, userId: ctx.userId, connectionId: connection.id, log: ctx.log,
     trigger: 'initial', signer: options.signer, now: options.now,
   })
   sync.catch(() => {})
+  const waitMs = options.keepAlive ? INITIAL_SYNC_ANSWER_MS : INITIAL_SYNC_WAIT_MS
   let timer: ReturnType<typeof setTimeout> | undefined
   const result = await Promise.race([
     sync,
-    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), INITIAL_SYNC_WAIT_MS) }),
+    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs) }),
   ]).catch(() => null)
   if (timer) clearTimeout(timer)
   if (!result) options.keepAlive?.(sync)

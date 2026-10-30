@@ -39,6 +39,8 @@ interface SendConfirmDialogProps {
    * section as the invoice page's send dialog, so both send steps offer it.
    */
   attachments?: InvoiceAttachmentsTarget | null
+  /** The send that carries the files (crm#1545): Peppol takes PDFs only. */
+  attachmentsChannel?: 'email' | 'peppol'
   confirmLabel: string
   confirmDisabled: boolean
   busy: boolean
@@ -58,6 +60,7 @@ export function SendConfirmDialog({
   voucher,
   extra,
   attachments = null,
+  attachmentsChannel = 'email',
   confirmLabel,
   confirmDisabled,
   busy,
@@ -109,7 +112,12 @@ export function SendConfirmDialog({
         </dl>
 
         {attachments && (
-          <InvoiceAttachmentsSection target={attachments} disabled={busy} onBusyChange={setAttachmentsBusy} />
+          <InvoiceAttachmentsSection
+            target={attachments}
+            disabled={busy}
+            onBusyChange={setAttachmentsBusy}
+            channel={attachmentsChannel}
+          />
         )}
 
         {voucher?.kind === 'lines' && (

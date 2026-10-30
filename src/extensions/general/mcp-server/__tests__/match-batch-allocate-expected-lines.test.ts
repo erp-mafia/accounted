@@ -55,8 +55,12 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
 const { mockFindCashUnbooked } = vi.hoisted(() => ({
   mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
 }))
+// planBatchCashLines: unbooked invoices the samlingsverifikat cannot book
+// (here: an installment); its lines are pinned by
+// lib/invoices/__tests__/batch-cash-method-lines.test.ts.
 vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
   findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+  planBatchCashLines: vi.fn(async () => ({ ok: false, unsupported: 'partial_payment' })),
 }))
 
 import { tools } from '../server'

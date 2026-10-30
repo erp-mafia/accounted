@@ -102,6 +102,7 @@ Books a business cost someone paid privately: Debit the cost account (net), Debi
 - employee_id wins over claimant_name: the employee's own name is stored.
 - A date in a locked period or behind the company lock date returns 400 PERIOD_LOCKED; no open fiscal year returns EXPENSE_CLAIM_NO_FISCAL_PERIOD.
 - expense_account is a STRING in class 4-8 ("5410"), never a number.
+- A dry run answers the would-be verifikat in preview.verifikat.lines (account_number, debit_amount, credit_amount) and refuses what the commit refuses: a line account that is deactivated or not in BAS 2026 returns 400 ACCOUNTS_NOT_IN_CHART. A BAS account merely missing from the chart passes; the commit adds it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

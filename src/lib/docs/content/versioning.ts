@@ -100,16 +100,22 @@ Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true
 
 - All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface: dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
 - \`data.preview\` holds the would-be record (same shape as the success response).
-- For **financial** writes (invoices, journal entries, period ops, salary) the preview also carries \`staged_operation_id\`, the \`journal_lines\` that would be posted, \`account_deltas\`, and \`voucher_number_assigned_on_commit\` (a projection: the committed number can differ by one or two if another writer takes the next number first).
+- For writes that post a verifikat, the preview carries the lines that would be posted, each with \`account_number\` (a string), \`debit_amount\` and \`credit_amount\`, under the resource's own field (for example \`preview.lines\` on \`POST /journal-entries\`, \`preview.verifikat.lines\` on \`POST /expense-claims\`). On those two the accounts are checked as the commit checks them: one that is deactivated or not in BAS 2026 answers \`400 ACCOUNTS_NOT_IN_CHART\`. No voucher number is drawn; the dry run of \`POST /journal-entries/{id}/commit\` answers \`preview.voucher_number_assigned_on_commit\`, a projection another writer can take first.
 
 \`\`\`json
 {
   "data": {
     "dry_run": true,
-    "preview": { ... },
-    "staged_operation_id": "po_...",
-    "journal_lines": [{ "account": "1510", "debit": 12500, "credit": 0 }],
-    "voucher_number_assigned_on_commit": "A-2026-043"
+    "preview": {
+      "verifikat": {
+        "lines": [
+          { "account_number": "5410", "debit_amount": 400, "credit_amount": 0 },
+          ...
+        ],
+        "total_debit": 500,
+        "total_credit": 500
+      }
+    }
   },
   "meta": { "request_id": "req_...", "api_version": "${API_V1_VERSION}" }
 }

@@ -36,6 +36,8 @@ import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { roundOre, sumOre } from '@/lib/money'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import {
   createPayoutBatch,
   deleteExpenseClaim,
@@ -281,12 +283,26 @@ export async function createExpenseClaim(
       if (totalDebit !== totalCredit || totalDebit <= 0) {
         return { ok: false, code: 'EXPENSE_CLAIM_INVALID_LINES', details: { reason: 'unbalanced' } }
       }
+      // The engine resolves the lines' accounts only when the commit posts;
+      // the same read-only verdict here, answered with the error the commit
+      // would answer, so a dry run that passes is a commit that posts
+      // (crm#1536). A BAS account absent from the chart passes (the engine
+      // seeds it); a deactivated or non-BAS number does not.
+      const unresolvable = await findUnresolvableAccounts(
+        supabase,
+        companyId,
+        plan.lines.map((l) => l.account_number),
+      )
+      if (unresolvable.length > 0) {
+        return { ok: false, code: 'ACCOUNTS_NOT_IN_CHART', error: new AccountsNotInChartError(unresolvable) }
+      }
       return {
         ok: true,
         dryRun: true,
         preview: {
           claimant_name: plan.claimantName,
           employee_id: plan.employeeId,
+          expense_account: input.expense_account,
           liability_account: plan.liabilityAccount,
           expense_date: input.expense_date,
           fiscal_period_id: plan.fiscalPeriodId,

@@ -23,7 +23,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { vacationDaysFromInput, vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
+import {
+  semestertillaggRateFromPercentInput,
+  semestertillaggRateToPercent,
+  vacationDaysFromInput,
+  vacationPayRateFromPercentInput,
+  vacationPayRateToPercent,
+} from '@/lib/salary/vacation-pay-rate'
 import { daysOffPerYear } from '@/lib/salary/vacation-net-days'
 import {
   validateEmployeeBankAccount,
@@ -262,6 +268,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       // Always sent: an empty field (or a rule that hides it) clears the
       // kollektivavtal rate back to the statutory one.
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
+      // Sent only while the field is visible (sammalöneregeln, the one rule
+      // that reads it); an empty field is the statutory 0,43 %. Hidden, the
+      // stored rate is kept. crm#1529
+      semestertillagg_rate: vacationRule === 'sammaloneregeln'
+        ? semestertillaggRateFromPercentInput(form.get('semestertillagg_rate'))
+        : undefined,
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
       // Only with a changed degree on sammalöneregeln: recorded in audit_log.
@@ -569,6 +581,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         {employee.vacation_pay_rate != null && (
           <DefRow label={t('form_vacation_pay_rate')}>
             <span className="tabular-nums">{vacationPayRateToPercent(employee.vacation_pay_rate)} %</span>
+          </DefRow>
+        )}
+        {employee.vacation_rule === 'sammaloneregeln' && (
+          <DefRow label={t('form_semestertillagg_rate')}>
+            <span className="tabular-nums">{semestertillaggRateToPercent(employee.semestertillagg_rate)} %</span>
           </DefRow>
         )}
         {dimensionsEnabled && (
@@ -934,6 +951,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                           disabled={!canWrite}
                         />
                         <p className="text-xs text-muted-foreground">{t('form_vacation_pay_rate_hint')}</p>
+                      </div>
+                    )}
+                    {vacationRule === 'sammaloneregeln' && (
+                      <div className="space-y-2">
+                        <Label htmlFor="semestertillagg_rate">{t('form_semestertillagg_rate')}</Label>
+                        <Input
+                          id="semestertillagg_rate"
+                          name="semestertillagg_rate"
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          max="5"
+                          placeholder="0.43"
+                          defaultValue={semestertillaggRateToPercent(employee.semestertillagg_rate)}
+                          disabled={!canWrite}
+                        />
+                        <p className="text-xs text-muted-foreground">{t('form_semestertillagg_rate_hint')}</p>
                       </div>
                     )}
                   </div>

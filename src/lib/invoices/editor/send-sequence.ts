@@ -14,7 +14,7 @@ import type { InvoiceDocumentType } from '@/types'
  *       faktura is then finalized (POST /finalize numbers it and emits
  *       invoice.created), the same step the detail page requires before a
  *       send.
- *  2. Attach (email channel only, #79): the files picked in the confirm
+ *  2. Attach (email and Peppol, #79, crm#1545): the files picked in the confirm
  *     before the document existed are already in the archive (uploaded
  *     there as they were picked); POST /api/invoices/{id}/attachments links
  *     them to the saved draft, the same route the invoice page's send
@@ -77,8 +77,9 @@ export interface SendSequenceInput {
   /** Kontantfaktura: issue it already paid to this 19xx account (crm#1281). */
   paidAtIssue?: { account_number: string } | null
   /**
-   * Archived documents to email after the PDF (#79), linked to the saved
-   * draft before the send. Email channel only: nothing else carries them.
+   * Archived documents sent with the invoice (#79): after the PDF in an
+   * email, embedded in an e-faktura (crm#1545). Linked to the saved draft
+   * before the send; the other channels do not carry them.
    */
   attachmentDocumentIds?: string[]
 }
@@ -216,9 +217,10 @@ export async function persistAndSend(
 
   if (input.paidAtIssue) return issuePaid(fetchImpl, input, invoiceId, invoiceNumber, input.paidAtIssue)
 
-  // 2. Attach. Only what this email carries: a mark-sent or an e-faktura
+  // 2. Attach. Only what this send carries: a mark-sent or a mailbox send
   // would fix the set without sending it to anyone.
-  const attachmentIds = input.channel === 'email' ? input.attachmentDocumentIds ?? [] : []
+  const carriesAttachments = input.channel === 'email' || input.channel === 'peppol'
+  const attachmentIds = carriesAttachments ? input.attachmentDocumentIds ?? [] : []
   if (attachmentIds.length > 0) {
     const attached = await step(
       fetchImpl,
