@@ -299,6 +299,26 @@
     "hash": "b3c4f7262c322611e206c1e3d43cadbe31f5156746269a62d0d0ad35b0ac6c5a",
     "version": 2
   },
+  "horizontal/swedish-travel-expenses": {
+    "hash": "339d141849224f02d234cccc22a1314b7c26584750c5fe632cbab38a3c9d41d3",
+    "version": 1
+  },
+  "horizontal/swedish-travel-expenses/bookkeeping-entries": {
+    "hash": "aa67f3d8a0ce6374dd13779b32f49cf846dd968061b5756bfd352fb4f07d7860",
+    "version": 1
+  },
+  "horizontal/swedish-travel-expenses/documentation-and-policy": {
+    "hash": "6507e2055f6dd069e0aa53576ca09ab9483637392895c6b07c3a82bb216acd1f",
+    "version": 1
+  },
+  "horizontal/swedish-travel-expenses/tax-rules": {
+    "hash": "ca81be2c94d2acac4a5c0e272f764810e15bc4153112250454b95ab8c8bb2570",
+    "version": 1
+  },
+  "horizontal/swedish-travel-expenses/vat-on-travel": {
+    "hash": "51ec762768a642587c8fffce016999feec3fb739e1700b8e1615b6110570ab60",
+    "version": 1
+  },
   "horizontal/swedish-vat": {
     "hash": "ccdff4aae46c297cb65cd8ebf672fa2f5bb1051f8ad3809c23310728c9247216",
     "version": 5
