@@ -87,6 +87,7 @@ import {
 } from '@/lib/bookkeeping/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -838,6 +839,9 @@ const CreateInvoiceBaseSchema = z.object({
     .max(200)
     .optional()
     .describe('Märkning. Omitted or empty on POST /invoices: the customer\'s invoice_marking.'),
+  // Leveransadress (crm#1547): printed on the PDF, Peppol BG-13. Omitted
+  // leaves a draft's address alone; null or {} clears it.
+  delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
   notes: z.string().optional(),
   // Optional online payment link (manual MVP): the user pastes a link created
   // in their PSP dashboard (e.g. a Stripe Payment Link). https-only because the

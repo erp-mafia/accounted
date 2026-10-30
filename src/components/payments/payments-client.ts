@@ -26,6 +26,8 @@ export interface PayableAccount {
   reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | 'bank_not_supported' | null
   /** private for the owner's personal agreement (no verification asked at signing), else corporate. Absent from servers before it. */
   account_context?: PaymentAccountContext
+  /** The company's primary bank account, which a skattekonto inbetalning is booked against. Absent from servers before it. */
+  is_primary?: boolean
 }
 
 export interface PaymentsAvailability {

@@ -9,6 +9,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAmountInput } from '@/lib/money'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
+import { payingAccountName } from '@/lib/payments/paying-account-label'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
@@ -32,7 +33,10 @@ type DeclarationRef = { source?: 'vat_declaration' | 'agi'; period?: string }
  * Betala via banken for the skattekonto, from Skattekonto (Betalningsuppgifter)
  * or the Hem row Betala in till Skatteverket:
  *   preview: one screen. The account to pay from (the choice
- *            PayViaBankDialog offers), the amount (what the next charge lacks,
+ *            PayViaBankDialog offers, opening on the primary bank account:
+ *            the skattekonto inbetalning is booked against it and the
+ *            Skatteverket payment file pays from it; another pick gets one
+ *            muted line saying so), the amount (what the next charge lacks,
  *            changeable), the payment day (the banking day before Skatteverket
  *            draws, changeable) and the OCR number the money carries to
  *            bankgiro 5050-1055. Nothing is written: it is the server's dry
@@ -104,8 +108,8 @@ interface PaySkattekontoViaBankDialogProps {
 export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone, source = null, sourceLabel }: PaySkattekontoViaBankDialogProps) {
   const t = useTranslations('skattekonto_bank_payment')
   const tb = useTranslations('bank_payments')
-  const bank = useBankPaymentDialog(open)
-  const { availability, usage, accountId, account, fail } = bank
+  const bank = useBankPaymentDialog(open, { preferPrimary: true })
+  const { availability, usage, accountId, account, primaryAccount, fail } = bank
 
   const [phase, setPhase] = useState<Phase>('preview')
   /** What the person typed in the amount field; until they type, it shows the preview's amount. */
@@ -256,6 +260,12 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
       }
     >
       <p className="text-[13px]">{t('destination')}</p>
+      {/* Paid from another account than the inbetalning is booked against, the bank and the books part ways: said, not refused. */}
+      {primaryAccount && accountId && accountId !== primaryAccount.id && (
+        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+          {t('account_not_booked', { account: payingAccountName(primaryAccount) })}
+        </p>
+      )}
 
       <dl className="space-y-3 text-[13px]">
         <div className="flex items-baseline justify-between gap-4">

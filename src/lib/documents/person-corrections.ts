@@ -97,7 +97,8 @@ function valueAt(reading: Record<string, unknown>, path: PersonFieldPath): { hel
 /**
  * The replacement reading with every value a person corrected on the
  * previous reading copied over, and the list of those paths kept. A hand-set
- * total stays a verified total (totalSource null). Pure.
+ * total stays a verified total (totalSource null) and the amount due (no
+ * prepaidAmount). Pure.
  */
 export function keepPersonCorrections<T extends object>(previous: unknown, next: T): T {
   const paths = personFieldPaths(previous)
@@ -112,7 +113,12 @@ export function keepPersonCorrections<T extends object>(previous: unknown, next:
     else out[group] = { ...(isRecord(out[group]) ? out[group] : {}), [key]: value }
     kept.push(path)
   }
-  if (kept.includes('totals.total')) out.totalSource = null
+  if (kept.includes('totals.total')) {
+    out.totalSource = null
+    // A person's total is the amount due (mergeInboxItemFields): a new reading's prepaid deduction does not apply to it.
+    const totals = out.totals
+    if (isRecord(totals) && totals.prepaidAmount != null) out.totals = { ...totals, prepaidAmount: null }
+  }
   return withPersonFields(out as T, kept)
 }
 

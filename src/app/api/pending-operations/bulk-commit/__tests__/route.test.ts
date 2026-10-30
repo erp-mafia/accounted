@@ -309,6 +309,54 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       expect(mockCommit).not.toHaveBeenCalled()
     })
 
+    it('commits acknowledged webshop orders and keeps one with a warning individual (I12)', async () => {
+      const order = (id: string, warnings: string[]) =>
+        makeOp({
+          id,
+          operation_type: 'book_webshop_order',
+          risk_level: 'high',
+          params: { webshop_order_id: 'o-1', lines: [] },
+          preview_data: {
+            row_type: 'order',
+            total_sek: 125,
+            warnings,
+            journal_entry: { entry_date: '2026-10-14', lines: [{ account_number: '1686', debit_amount: 125, credit_amount: 0 }] },
+          },
+        })
+      enqueue({ data: [order(VALID_ID_1, []), order(VALID_ID_2, ['foreign_vat'])] })
+      mockCommit.mockResolvedValue({ status: 'committed', data: {} })
+
+      const request = createMockRequest('/api/pending-operations/bulk-commit', {
+        method: 'POST',
+        body: { ids: [VALID_ID_1, VALID_ID_2], acknowledged_groups: ['webshop_order_book'] },
+      })
+      const { status, body } = await parseJsonResponse<{
+        data: { results: Array<{ id: string; status: string }> }
+      }>(await POST(request, emptyParams))
+
+      expect(status).toBe(200)
+      expect(body.data.results.map((r) => r.status)).toEqual(['committed', 'skipped'])
+      expect(mockCommit).toHaveBeenCalledTimes(1)
+      expect(mockRecordAppApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ sharedAcknowledgment: 'webshop_order_book' }),
+      )
+    })
+
+    it('does not let the webshop acknowledgment approve a samlingsverifikat', async () => {
+      enqueue({ data: [samlingsverifikat(VALID_ID_1)] })
+
+      const request = createMockRequest('/api/pending-operations/bulk-commit', {
+        method: 'POST',
+        body: { ids: [VALID_ID_1], acknowledged_groups: ['webshop_order_book'] },
+      })
+      const { body } = await parseJsonResponse<{
+        data: { results: Array<{ id: string; status: string }> }
+      }>(await POST(request, emptyParams))
+
+      expect(body.data.results.map((r) => r.status)).toEqual(['skipped'])
+      expect(mockCommit).not.toHaveBeenCalled()
+    })
+
     it('answers 400 for a group name it does not know', async () => {
       const request = createMockRequest('/api/pending-operations/bulk-commit', {
         method: 'POST',

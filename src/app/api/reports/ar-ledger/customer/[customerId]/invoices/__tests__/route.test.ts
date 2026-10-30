@@ -12,13 +12,14 @@ vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-vi.mock('@/lib/bookkeeping/currency-utils', () => ({
+vi.mock('@/lib/bookkeeping/currency-utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/currency-utils')>()),
   resolveSekAmount: vi.fn((amount: number) => amount),
 }))
 
 import { GET } from '../route'
 import { AR_LEDGER_STATUSES } from '@/lib/reports/ar-ledger'
-import { reskontraRpcPorts, type ReskontraTables } from '@/tests/reskontra-rpc-port'
+import { creditedInvoiceRead, reskontraRpcPorts, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 
 /**
  * The customer lookup is a table read; the invoices, their set-offs, begäran
@@ -42,6 +43,8 @@ function buildSupabase(
   return {
     rpc,
     from: vi.fn().mockImplementation((table: string) => {
+      // The credit notes' originals (lib/reports/credited-pairs.ts).
+      if (table === 'invoices') return creditedInvoiceRead(tables.invoices ?? [], failures.invoices)
       if (table !== 'customers') throw new Error(`unexpected read of ${table}`)
       return {
         select: vi.fn().mockReturnThis(),
@@ -349,5 +352,28 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: ROT/RUT awa
   it('leaves out a paid invoice whose begäran is settled in full', async () => {
     const lines = await linesFor(item('paid', 3000))
     expect(Object.keys(lines)).toEqual(['inv-plain'])
+  })
+})
+
+describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: a credited invoice and its credit note (crm#1537)', () => {
+  const row = { currency: 'SEK', exchange_rate: null, notes: null, paid_amount: 0 }
+  const original = (total: number) => ({ ...row, id: 'orig', invoice_number: 'F-1', invoice_date: '2026-06-01', due_date: '2026-07-01', total, status: 'credited' })
+  const note = (total: number) => ({ ...row, id: 'kr', invoice_number: 'KR-1', invoice_date: '2026-10-20', due_date: '2026-10-20', total, status: 'sent', credited_invoice_id: 'orig' })
+  const open = { ...row, id: 'open', invoice_number: 'F-2', invoice_date: '2026-09-01', due_date: '2026-10-01', total: 500, status: 'sent' }
+
+  async function linesFor(invoices: Record<string, unknown>[]) {
+    authWith(buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, { invoices }))
+    const res = await GET(createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices'), createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string; outstanding: number }> } }
+    return body.data.lines.map((line) => [line.invoice_id, line.outstanding])
+  }
+
+  it('lists neither row of a full credit, like the aggregate', async () => {
+    expect(await linesFor([original(1000), note(-1000), open])).toEqual([['open', 500]])
+  })
+
+  it('keeps the rest of a partial credit on the original', async () => {
+    expect(await linesFor([original(1000), note(-400)])).toEqual([['orig', 600]])
   })
 })

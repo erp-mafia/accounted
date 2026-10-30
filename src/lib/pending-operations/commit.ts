@@ -2461,6 +2461,8 @@ async function commitUpdateInvoice(
     your_reference: changes.your_reference ?? existing.your_reference ?? undefined,
     our_reference: changes.our_reference ?? existing.our_reference ?? undefined,
     invoice_marking: changes.invoice_marking ?? existing.invoice_marking ?? undefined,
+    // Omitted = the builder leaves the stored address alone; null clears it.
+    delivery_address: changes.delivery_address,
     notes: changes.notes ?? existing.notes ?? undefined,
     // Not editable through this operation: fed back so the builder echoes the
     // stored values instead of clearing them.

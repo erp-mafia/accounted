@@ -1599,6 +1599,7 @@ Creates a supplier invoice in `registered` status and posts the registration jou
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
+- A dry run answers the would-be verifikat in preview.verifikat (entry_date, lines with account_number, debit_amount, credit_amount), null when the registration posts none (kontantmetoden, defer_invoice_booking), and refuses what the commit refuses: a line account that is deactivated or not in BAS 2026 returns 400 ACCOUNTS_NOT_IN_CHART. A BAS account merely missing from the chart passes; the commit adds it.
 - invoice_date must fall within an open fiscal period: a date covered by a locked period or the company-wide bookkeeping lock returns 400 PERIOD_LOCKED.
 - Under faktureringsmetoden the registration JE is posted atomically with the SI row. JE failure aborts the whole call and no SI row is left behind (strict-mode).
 - supplier_id must reference an existing, non-archived supplier in the same company: 404 SUPPLIER_NOT_FOUND otherwise.

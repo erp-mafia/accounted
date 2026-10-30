@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { CreateInvoiceItemSchema, InvoiceQrModeSchema } from '@/lib/api/schemas'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
 
@@ -25,6 +26,8 @@ const InvoiceChangesSchema = z
     our_reference: z.string().optional(),
     // Fakturamärkning: buyer-required marking, separate from your_reference.
     invoice_marking: z.string().max(200).optional(),
+    // Leveransadress (crm#1547); null or {} clears it.
+    delivery_address: InvoiceDeliveryAddressSchema.nullable().optional(),
     // The one payment QR code on the PDF; null = back to the company's
     // invoice_qr_mode.
     qr_mode: InvoiceQrModeSchema.nullable().optional(),

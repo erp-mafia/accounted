@@ -339,10 +339,40 @@ export function reskontraRpcPorts(tables: ReskontraTables): Record<string, (args
 }
 
 /**
+ * The one table read the ledger makes beside its RPCs: the invoice each
+ * credit note credits (lib/reports/credited-pairs.ts), by company and ids.
+ * A failure keyed 'invoices' answers that error instead.
+ */
+export function creditedInvoiceRead(rows: Row[], failure: { message: string; code?: string } | undefined) {
+  const filters: { companyId?: unknown; ids?: unknown[] } = {}
+  const chain = {
+    select: () => chain,
+    eq: (column: string, value: unknown) => {
+      if (column === 'company_id') filters.companyId = value
+      return chain
+    },
+    in: (column: string, values: unknown[]) => {
+      if (column === 'id') filters.ids = values
+      return chain
+    },
+    then: (resolve: (value: unknown) => void) => {
+      if (failure) return resolve({ data: null, error: failure })
+      const companyId = String(filters.companyId)
+      const data = rows
+        .filter((row) => (row.company_id ?? companyId) === companyId && (filters.ids ?? []).includes(row.id))
+        .map((row) => ({ id: row.id, credited_invoice_id: row.credited_invoice_id ?? null }))
+      return resolve({ data, error: null })
+    },
+  }
+  return chain
+}
+
+/**
  * A supabase client whose rpc() answers through the ports from the tables
  * `tables()` returns at call time, so a test can assign its books after the
  * client is made. Every call is recorded; a name in `failures()` answers
- * that error instead. Table reads are not expected and throw.
+ * that error instead. Table reads are not expected and throw, except the
+ * credit notes' originals (creditedInvoiceRead).
  */
 export function createReskontraClient(
   tables: () => ReskontraTables,
@@ -359,6 +389,7 @@ export function createReskontraClient(
       return { data: port(args), error: null }
     }),
     from: vi.fn((table: string) => {
+      if (table === 'invoices') return creditedInvoiceRead(tables().invoices ?? [], failures().invoices)
       throw new Error(`createReskontraClient: unexpected read of ${table}`)
     }),
   }

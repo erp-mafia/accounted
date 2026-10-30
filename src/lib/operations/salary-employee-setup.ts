@@ -538,7 +538,7 @@ export const employeesBenefitsCreate = defineOperation({
     name: 'gnubok_add_employee_benefit',
     title: 'Add Employee Benefit',
     description:
-      "Stage registering a förmån on an employee: the monthly förmånsvärde you supply (e.g. bilförmån from Skatteverket's calculator; bike takes annual_market_value). Every salary run whose payment date is within valid_from..valid_to adds it to the tax basis.",
+      "Stage a standing förmån on an employee: the monthly förmånsvärde you supply (e.g. bilförmån from Skatteverket's calculator; bike takes annual_market_value). Each run paid within valid_from..valid_to adds it to the tax basis. One month only (kostförmån): gnubok_add_payslip_line.",
     keywords: ['lägg till förmån', 'ny förmån', 'bilförmån', 'förmånsbil', 'kostförmån', 'cykelförmån', 'bostadsförmån', 'friskvård', 'förmånsvärde'],
     stage: {
       pendingType: 'add_employee_benefit',

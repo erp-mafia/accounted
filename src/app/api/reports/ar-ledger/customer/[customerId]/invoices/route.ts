@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from '@/lib/reports/ar-ledger-invoices'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
+import { fetchCreditedInvoiceIds, netCreditedPairs } from '@/lib/reports/credited-pairs'
 import {
   liveReceivableOutstanding,
   skatteverketSettledByInvoice,
@@ -67,7 +68,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
   const creditUsed = creditNoteCreditUsed(population)
   // Skatteverket's payouts on ROT/RUT deductions, as in generateARLedger.
   const settled = skatteverketSettledByInvoice(population)
-  const outstandingOf = new Map(
+  const ownOutstanding = new Map(
     population.map((inv) => [
       inv.id,
       outstandingWithCreditUsed(
@@ -80,9 +81,25 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       ),
     ])
   )
+  // Each credit note set against the invoice it credits, as in generateARLedger.
+  const creditNoteIds = population.filter((inv) => (Number(inv.total) || 0) < 0).map((inv) => inv.id)
+  const paired = netCreditedPairs(
+    population,
+    ownOutstanding,
+    creditNoteIds.length > 0 ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds) : new Map<string, string>()
+  )
+  const outstandingOf = paired.outstanding
   // A paid invoice is only read for a deduction Skatteverket has yet to pay
-  // out: once it has, the invoice is not a receivable (as in generateARLedger).
-  const invoices = population.filter((inv) => !(inv.status === 'paid' && outstandingOf.get(inv.id) === 0))
+  // out: once it has, the invoice is not a receivable; a credited invoice
+  // with nothing left and a used-up credit note are settled by credit (as in
+  // generateARLedger).
+  const invoices = population.filter(
+    (inv) =>
+      !(
+        outstandingOf.get(inv.id) === 0 &&
+        (inv.status === 'paid' || inv.status === 'credited' || paired.settledByCredit.has(inv.id))
+      )
+  )
 
   // The registration journal entry of each invoice: the invoice engine's own
   // (source_type 'invoice_created'), or else the verifikat the invoice is

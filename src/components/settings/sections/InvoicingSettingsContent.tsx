@@ -9,6 +9,7 @@ import { InvoiceTypesSettings } from '@/components/settings/InvoiceTypesSettings
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
+import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SelfBillingSettings, selfBillingSettingsUpdates } from '@/components/settings/SelfBillingSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -71,8 +72,17 @@ export function InvoicingSettingsContent() {
         <InvoiceSettingsForm
           settings={settings}
           // Invoice kinds on/off, right after Fakturainställningar: each
-          // switch saves itself, independent of the form's Spara.
-          afterInvoiceSettings={<InvoiceTypesSettings />}
+          // switch saves itself, independent of the form's Spara. Kundorder
+          // sits beside them: its menu row lives under Fakturering, where
+          // people look for the switch (crm#1513).
+          afterInvoiceSettings={
+            <>
+              <InvoiceTypesSettings />
+              <SettingsGroup>
+                <NavGateToggle setting="sales_orders_enabled" namespace="sales_orders" href="/sales-orders" />
+              </SettingsGroup>
+            </>
+          }
         />
         {/* Självfakturor on the purchase side, saved with this form (crm#1367). */}
         <SelfBillingSettings settings={settings} />

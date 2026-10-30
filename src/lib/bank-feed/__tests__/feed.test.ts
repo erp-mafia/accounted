@@ -257,6 +257,37 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
   })
 
+  it('announces a first import of thousands of rows in chunked reads, and logs a failed read instead of swallowing it', async () => {
+    const many = Array.from({ length: 1500 }, (_, i) => ({ id: `tx-${i}` }))
+    mocks.syncAccount.mockResolvedValue({ imported: 1500, duplicates: 0, errors: 0, transactionIds: many.map((r) => r.id), returnedMinBookingDate: '2026-10-05', returnedMaxBookingDate: '2026-10-11', requestedFromDate: '2026-10-03', historyNarrowed: false, truncated: false })
+    const ok = stub({
+      bank_connections: [{ data: row(), error: null }],
+      company_members: [{ data: { role: 'member' }, error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [(chain: { method: string; args: unknown[] }[]) => {
+        const ids = chain.find((c) => c.method === 'in')?.args[1] as string[]
+        return { data: many.filter((r) => ids.includes(r.id)), error: null }
+      }],
+    })
+    expect(await run(ok.supabase, { trigger: 'manual', signer: PRESENT })).toMatchObject({ ok: true, imported: 1500 })
+    const reads = ok.calls.filter((c) => c.table === 'transactions' && c.method === 'in').map((c) => (c.args[1] as string[]).length)
+    expect(reads).toEqual([200, 200, 200, 200, 200, 200, 200, 100])
+    expect(mocks.emit).toHaveBeenCalledTimes(1)
+    expect(mocks.emit.mock.calls[0][0]).toMatchObject({ type: 'transaction.synced', payload: { transactions: many } })
+
+    mocks.emit.mockClear()
+    const failing = stub({
+      bank_connections: [{ data: row(), error: null }],
+      company_members: [{ data: { role: 'member' }, error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [{ data: null, error: { message: 'URI too long' } }],
+    })
+    // The rows are stored and the sync persisted: the sync still answers ok.
+    expect(await run(failing.supabase, { trigger: 'manual', signer: PRESENT })).toMatchObject({ ok: true, imported: 1500 })
+    expect(mocks.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('not announced'), expect.objectContaining({ connectionId: 'conn-1', message: 'URI too long' }))
+  })
+
   it('gives a never-synced connection the extended window, no cooldown, and records the first import', async () => {
     const { supabase } = stub({
       bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: new Date(NOW - 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],

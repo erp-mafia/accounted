@@ -51,6 +51,22 @@ describe('readPaymentAccounts', () => {
   })
 })
 
+describe('readPaymentAccounts: the primary bank account', () => {
+  it('reads is_primary and answers it on every account, false where the row says nothing', async () => {
+    const mock = createTableMockSupabase({
+      cash_accounts: { data: [{ ...rows[0], is_primary: true }, { ...rows[1], is_primary: null }] },
+    })
+
+    const accounts = await readPaymentAccounts(mock.supabase as unknown as SupabaseClient, COMPANY)
+
+    expect(mock.findCall('cash_accounts', 'select')?.[0]).toContain('is_primary')
+    expect(accounts.map((a) => ({ id: a.id, is_primary: a.is_primary }))).toEqual([
+      { id: OPEN_PAYMENTS_ACCOUNT, is_primary: true },
+      { id: ENABLE_BANKING_ACCOUNT, is_primary: false },
+    ])
+  })
+})
+
 describe('readPaymentAccounts at a bank the provider does not pay from', () => {
   it('lists the account as not payable with bank_not_supported, which the dialogs name (crm#1424)', async () => {
     const svea = { ...rows[0], iban: 'SE4496600000000012345678', bank_connection: { bank_name: 'Svea Bank', bic: 'SVEASESS', affiliated_aspsp_id: null, psu_type: 'business' } }

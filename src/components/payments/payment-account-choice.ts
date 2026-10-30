@@ -20,3 +20,15 @@ export function pickPaymentAccount<T extends ChoosableAccount>(
   const byId = (id: string | null | undefined) => (id ? payable.find((a) => a.id === id) : undefined)
   return byId(preferred) ?? byId(remembered) ?? payable[0]
 }
+
+/**
+ * The company's primary bank account among a dialog's accounts, payable or
+ * not; null when none is marked (or a server from before the flag). The
+ * skattekonto dialog prefers it: a skattekonto inbetalning is booked against
+ * it (the __PRIMARY_SEK__ rule) and the Skatteverket payment file pays from
+ * it, so a tax payment opened on the account a supplier payment last used
+ * left from one account while the books credited another.
+ */
+export function primaryPaymentAccount<T extends ChoosableAccount & { is_primary?: boolean }>(accounts: readonly T[]): T | null {
+  return accounts.find((a) => a.is_primary === true) ?? null
+}

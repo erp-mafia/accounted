@@ -22,11 +22,18 @@ import type { z } from 'zod'
 import { eventBus } from '@/lib/events'
 import {
   createSupplierInvoiceRegistrationEntry,
+  buildSupplierInvoiceRegistrationEntryInput,
   buildSupplierInvoicePrivatelyPaidLines,
   largestExpenseAccount,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
-import { registerExpenseClaim } from '@/lib/expenses/expense-claims-service'
+import {
+  planExpenseClaim,
+  registerExpenseClaim,
+  type RegisterExpenseClaimFailure,
+  type RegisterExpenseClaimInput,
+} from '@/lib/expenses/expense-claims-service'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { ownerFallbackName, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
 import {
@@ -36,7 +43,7 @@ import {
 import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accrued-cost-guard'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { supplierInvoiceBooksOnRegistration, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import { sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
@@ -48,7 +55,7 @@ import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
-import { roundOre } from '@/lib/money'
+import { roundOre, sumOre } from '@/lib/money'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   defaultVatRateForTreatment,
@@ -67,7 +74,14 @@ import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-r
 import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
-import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem, SupplierInvoiceReverseChargeKind } from '@/types'
+import type {
+  CreateJournalEntryLineInput,
+  Currency,
+  EntityType,
+  SupplierInvoice,
+  SupplierInvoiceItem,
+  SupplierInvoiceReverseChargeKind,
+} from '@/types'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
@@ -159,6 +173,25 @@ export interface CreateSupplierInvoicePreview {
   /** VAT per rate as booked: the document's own figure or the VAT on the summed base. */
   vat_by_rate: DocumentRateVat[]
   would_create_registration_journal_entry: boolean
+  /**
+   * The verifikat the registration would post, built by the commit's own
+   * builders (crm#1536): the registration verifikat, or the utlägg verifikat
+   * when a person paid. Null when the registration posts none (kontantmetoden,
+   * defer_invoice_booking).
+   */
+  verifikat: SupplierInvoicePreviewVerifikat | null
+}
+
+export interface SupplierInvoicePreviewVerifikat {
+  entry_date: string
+  lines: Array<{
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    dimensions?: Record<string, string>
+  }>
+  total_debit: number
+  total_credit: number
 }
 
 export interface CreatedSupplierInvoice {
@@ -692,6 +725,41 @@ export async function createSupplierInvoice(
   } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount, total })
 
   if (dryRun) {
+    // The verifikat the commit would post, from the commit's own builders,
+    // with its accounts judged as the engine judges them when it posts: the
+    // dry run used to answer 200 for a deactivated or non-BAS account the
+    // commit refuses (crm#1536).
+    const verifikat = await previewRegistrationVerifikat(ctx, {
+      header: {
+        id: '',
+        // Drawn at registration; the builders read it only for line text.
+        arrival_number: null,
+        supplier_invoice_number: selfBilled ? null : (body.supplier_invoice_number ?? null),
+        is_self_billed: selfBilled,
+        invoice_date: body.invoice_date,
+        delivery_date: body.delivery_date || null,
+        currency: fx.rate.currency,
+        exchange_rate: fx.rate.exchangeRate,
+        vat_treatment: vatTreatment,
+        reverse_charge: reverseCharge,
+        reverse_charge_kind: reverseChargeKind.kind,
+        default_dimensions: body.default_dimensions ?? {},
+        total,
+      } as unknown as SupplierInvoice,
+      items,
+      supplierType: supplier.supplier_type as string,
+      supplierName: supplier.name as string,
+      entityType,
+      body,
+      booksOnRegistration,
+      paidPrivately,
+      total,
+      vatAmount,
+      exchangeRate: fx.rate.exchangeRate,
+      documentId,
+      inboxItemId: inboxItem?.id,
+    })
+    if (!verifikat.ok) return verifikat
     return {
       ok: true,
       dryRun: true,
@@ -726,6 +794,7 @@ export async function createSupplierInvoice(
         items,
         vat_by_rate: documentVat.byRate,
         would_create_registration_journal_entry: booksOnRegistration || paidPrivately,
+        verifikat: verifikat.verifikat,
       },
     }
   }
@@ -876,43 +945,34 @@ export async function createSupplierInvoice(
     // the expense_claims row, with the invoice's full kontering as the
     // lines, regardless of accounting_method. The person then shows up under
     // "Betala ut utlägg" and the bank matcher closes the debt.
-    const payer = body.employee_id ? 'employee' : 'owner'
-    const liabilityAccount = resolveExpenseLiabilityAccount(entityType, payer)
-    const claimDescription = buildSupplierDescription(
-      'Faktura',
-      invoice.supplier_invoice_number as string,
-      supplier.name as string,
-      `(ankomstnr ${invoice.arrival_number})`,
-    )
     let claimResult: Awaited<ReturnType<typeof registerExpenseClaim>>
     try {
-      claimResult = await registerExpenseClaim(supabase, companyId, userId, {
-        description: claimDescription,
-        expense_date: invoice.invoice_date as string,
-        amount: total,
-        vat_amount: vatAmount,
-        currency: fx.rate.currency as Currency,
-        exchange_rate: fx.rate.exchangeRate ?? undefined,
-        expense_account: largestExpenseAccount(items as unknown as SupplierInvoiceItem[]),
-        employee_id: body.employee_id ?? undefined,
-        claimant_name: payer === 'owner' ? body.claimant_name?.trim() || ownerFallbackName(entityType) : undefined,
-        document_id: documentId ?? undefined,
-        inbox_item_id: inboxItem?.id,
-        // A reverse-charge invoice paid by a person (an EU SaaS on the
-        // owner's card, crm#1377) books the same fiktiv moms and basis pair
-        // as its registration verifikat would: who paid does not change who
-        // reports the moms.
-        lines: buildSupplierInvoicePrivatelyPaidLines(
-          invoice as SupplierInvoice,
-          items as unknown as SupplierInvoiceItem[],
-          liabilityAccount,
-          claimDescription,
-          {
-            supplierType: supplier.supplier_type as string,
-            chartVatTreatments: reverseCharge ? await fetchChartVatTreatments(supabase, companyId) : undefined,
-          },
-        ),
-      })
+      claimResult = await registerExpenseClaim(
+        supabase,
+        companyId,
+        userId,
+        await privatelyPaidClaimInput(supabase, companyId, {
+          header: invoice as SupplierInvoice,
+          items,
+          supplierType: supplier.supplier_type as string,
+          entityType,
+          body,
+          description: buildSupplierDescription(
+            'Faktura',
+            invoice.supplier_invoice_number as string,
+            supplier.name as string,
+            `(ankomstnr ${invoice.arrival_number})`,
+          ),
+          expenseDate: invoice.invoice_date as string,
+          currency: fx.rate.currency,
+          exchangeRate: fx.rate.exchangeRate,
+          reverseCharge,
+          total,
+          vatAmount,
+          documentId,
+          inboxItemId: inboxItem?.id,
+        }),
+      )
     } catch (err) {
       // The claims service removes its own claim row before rethrowing; the
       // invoice row is ours to remove.
@@ -940,19 +1000,11 @@ export async function createSupplierInvoice(
         }
       }
       await hardDeleteSupplierInvoice(supabase, companyId, invoiceId, log, 'expense_claim')
-      if (claimResult.code === 'FISCAL_PERIOD_NOT_FOUND') {
-        return { ok: false, code: 'SI_CREATE_NO_FISCAL_PERIOD', details: { invoice_date: body.invoice_date } }
+      const failure = privatelyPaidClaimFailure(claimResult, body.invoice_date)
+      if (failure.code === 'SI_CREATE_FAILED') {
+        log.error('expense claim registration failed', new Error(claimResult.detail ?? claimResult.code), { invoiceId })
       }
-      if (claimResult.code === 'EMPLOYEE_NOT_FOUND') return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
-      // The pair guard in the claims writer: the other half of this purchase is booked already.
-      if (claimResult.code === 'INBOX_ITEM_PAIR_BOOKED') {
-        return { ok: false, code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED', details: { reason: claimResult.detail ?? claimResult.code } }
-      }
-      if (claimResult.code === 'INVALID_LINES') {
-        return invalid('expense_claim_lines_invalid', { detail: claimResult.detail ?? null })
-      }
-      log.error('expense claim registration failed', new Error(claimResult.detail ?? claimResult.code), { invoiceId })
-      return { ok: false, code: 'SI_CREATE_FAILED', details: { reason: claimResult.code, step: 'expense_claim' } }
+      return failure
     }
 
     const claim = claimResult.claim
@@ -1185,6 +1237,183 @@ export async function createSupplierInvoice(
     paymentJournalEntryId,
     expenseClaim,
     warnings,
+  }
+}
+
+/**
+ * What the utlägg writer gets for an invoice a person paid: the commit hands
+ * it to registerExpenseClaim and the dry run to planExpenseClaim, so the
+ * preview is the kontering the commit posts. `header` is the inserted row on
+ * the commit and the would-be row in a dry run.
+ */
+async function privatelyPaidClaimInput(
+  supabase: SupabaseClient,
+  companyId: string,
+  args: {
+    header: SupplierInvoice
+    items: ComputedSupplierInvoiceItem[]
+    supplierType: string
+    entityType: EntityType
+    body: CreateSupplierInvoiceInput
+    description: string
+    expenseDate: string
+    currency: string
+    exchangeRate: number | null
+    reverseCharge: boolean
+    total: number
+    vatAmount: number
+    documentId: string | null
+    inboxItemId: string | undefined
+  },
+): Promise<RegisterExpenseClaimInput> {
+  const payer = args.body.employee_id ? 'employee' : 'owner'
+  const liabilityAccount = resolveExpenseLiabilityAccount(args.entityType, payer)
+  const items = args.items as unknown as SupplierInvoiceItem[]
+  return {
+    description: args.description,
+    expense_date: args.expenseDate,
+    amount: args.total,
+    vat_amount: args.vatAmount,
+    currency: args.currency as Currency,
+    exchange_rate: args.exchangeRate ?? undefined,
+    expense_account: largestExpenseAccount(items),
+    employee_id: args.body.employee_id ?? undefined,
+    claimant_name:
+      payer === 'owner' ? args.body.claimant_name?.trim() || ownerFallbackName(args.entityType) : undefined,
+    document_id: args.documentId ?? undefined,
+    inbox_item_id: args.inboxItemId,
+    // A reverse-charge invoice paid by a person (an EU SaaS on the owner's
+    // card, crm#1377) books the same fiktiv moms and basis pair as its
+    // registration verifikat would: who paid does not change who reports
+    // the moms.
+    lines: buildSupplierInvoicePrivatelyPaidLines(args.header, items, liabilityAccount, args.description, {
+      supplierType: args.supplierType,
+      chartVatTreatments: args.reverseCharge ? await fetchChartVatTreatments(supabase, companyId) : undefined,
+    }),
+  }
+}
+
+/** The claims writer's refusal as this service answers it, on the commit and in a dry run. */
+function privatelyPaidClaimFailure(
+  failure: RegisterExpenseClaimFailure,
+  invoiceDate: string,
+): CreateSupplierInvoiceFailure {
+  if (failure.code === 'FISCAL_PERIOD_NOT_FOUND') {
+    return { ok: false, code: 'SI_CREATE_NO_FISCAL_PERIOD', details: { invoice_date: invoiceDate } }
+  }
+  if (failure.code === 'EMPLOYEE_NOT_FOUND') return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
+  // The pair guard in the claims writer: the other half of this purchase is booked already.
+  if (failure.code === 'INBOX_ITEM_PAIR_BOOKED') {
+    return { ok: false, code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED', details: { reason: failure.detail ?? failure.code } }
+  }
+  if (failure.code === 'INVALID_LINES') {
+    return invalid('expense_claim_lines_invalid', { detail: failure.detail ?? null })
+  }
+  return { ok: false, code: 'SI_CREATE_FAILED', details: { reason: failure.code, step: 'expense_claim' } }
+}
+
+/**
+ * The verifikat a registration would post, without posting it (crm#1536).
+ * Built by what the commit posts through: the utlägg plan when a person paid
+ * (planExpenseClaim, the read-only half of registerExpenseClaim), else the
+ * registration builder when the invoice books now. Its accounts are then
+ * judged as the engine judges them when it posts (findUnresolvableAccounts):
+ * a BAS 2026 account merely absent from the chart passes, because the engine
+ * adds it; a deactivated account or a number outside BAS refuses with the
+ * AccountsNotInChartError the commit answers. Every refusal is the commit's
+ * own. Null when the registration posts no verifikat (kontantmetoden,
+ * defer_invoice_booking): the accounts are judged when the invoice is booked.
+ */
+async function previewRegistrationVerifikat(
+  ctx: CreateSupplierInvoiceContext,
+  args: {
+    header: SupplierInvoice
+    items: ComputedSupplierInvoiceItem[]
+    supplierType: string
+    supplierName: string
+    entityType: EntityType | null
+    body: CreateSupplierInvoiceInput
+    booksOnRegistration: boolean
+    paidPrivately: boolean
+    total: number
+    vatAmount: number
+    exchangeRate: number | null
+    documentId: string | null
+    inboxItemId: string | undefined
+  },
+): Promise<{ ok: true; verifikat: SupplierInvoicePreviewVerifikat | null } | CreateSupplierInvoiceFailure> {
+  const { supabase, companyId } = ctx
+  let entryDate: string
+  let lines: CreateJournalEntryLineInput[]
+  const step = args.paidPrivately ? 'expense_claim' : 'registration_journal_entry'
+  try {
+    if (args.paidPrivately && args.entityType) {
+      const input = await privatelyPaidClaimInput(supabase, companyId, {
+        header: args.header,
+        items: args.items,
+        supplierType: args.supplierType,
+        entityType: args.entityType,
+        body: args.body,
+        description: buildSupplierDescription('Faktura', args.header.supplier_invoice_number, args.supplierName),
+        expenseDate: args.header.invoice_date,
+        currency: args.header.currency,
+        exchangeRate: args.exchangeRate,
+        reverseCharge: args.header.reverse_charge === true,
+        total: args.total,
+        vatAmount: args.vatAmount,
+        documentId: args.documentId,
+        inboxItemId: args.inboxItemId,
+      })
+      const planned = await planExpenseClaim(supabase, companyId, input, { dryRun: true })
+      if (!planned.ok) return privatelyPaidClaimFailure(planned, args.body.invoice_date)
+      entryDate = input.expense_date
+      lines = planned.plan.lines
+    } else if (args.booksOnRegistration) {
+      const input = await buildSupplierInvoiceRegistrationEntryInput(
+        supabase,
+        companyId,
+        args.header,
+        args.items as unknown as SupplierInvoiceItem[],
+        args.supplierType,
+        args.supplierName,
+      )
+      if (!input) {
+        return { ok: false, code: 'SI_CREATE_NO_FISCAL_PERIOD', details: { invoice_date: args.body.invoice_date } }
+      }
+      entryDate = input.entry_date
+      lines = input.lines
+    } else {
+      return { ok: true, verifikat: null }
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREATE_FAILED', error: err }
+    ctx.log.error('supplier invoice dry run could not build the verifikat', err as Error)
+    return {
+      ok: false,
+      code: 'SI_CREATE_FAILED',
+      details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown', step },
+    }
+  }
+
+  const unresolvable = await findUnresolvableAccounts(supabase, companyId, lines.map((l) => l.account_number))
+  if (unresolvable.length > 0) {
+    return { ok: false, code: 'SI_CREATE_FAILED', error: new AccountsNotInChartError(unresolvable) }
+  }
+
+  return {
+    ok: true,
+    verifikat: {
+      entry_date: entryDate,
+      lines: lines.map((l) => ({
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        // The approver sees the tags the verifikat will carry.
+        ...(l.dimensions && Object.keys(l.dimensions).length > 0 ? { dimensions: l.dimensions } : {}),
+      })),
+      total_debit: sumOre(lines.map((l) => l.debit_amount)),
+      total_credit: sumOre(lines.map((l) => l.credit_amount)),
+    },
   }
 }
 

@@ -195,6 +195,14 @@ function isBulkSelectable(op: PendingOperation): boolean {
   return !(period && period.status !== 'open')
 }
 
+// The shared acknowledgment's title and amount labels per what it covers:
+// bank samlingsverifikat (crm#1489), webshop orders (I12), or both.
+const SHARED_ACK_LABEL_KEYS = {
+  bank: { title: 'shared_ack_title', incoming: 'shared_ack_incoming', outgoing: 'shared_ack_outgoing' },
+  webshop: { title: 'shared_ack_title_webshop', incoming: 'shared_ack_orders', outgoing: 'shared_ack_refunds' },
+  mixed: { title: 'shared_ack_title_mixed', incoming: 'shared_ack_amount_in', outgoing: 'shared_ack_amount_out' },
+} as const
+
 /** One operation's outcome in a bulk approval (bulk-commit route). */
 interface BulkItemResult {
   id: string
@@ -929,6 +937,12 @@ export default function PendingOperationsPage() {
     [bulkEligible, selectedIds],
   )
   const groupSummary = useMemo(() => summarizeSharedAcknowledgment(selectedGroupOps), [selectedGroupOps])
+  // What the acknowledgment names: bank samlingsverifikat, webshop orders, or both.
+  const groupKind = useMemo<keyof typeof SHARED_ACK_LABEL_KEYS>(() => {
+    const groups = new Set(selectedGroupOps.map(sharedAcknowledgmentGroup))
+    if (groups.size !== 1) return 'mixed'
+    return groups.has('webshop_order_book') ? 'webshop' : 'bank'
+  }, [selectedGroupOps])
   const bulkConfirmCount = selectedCount - (groupAcknowledged ? 0 : selectedGroupOps.length)
 
   const selectedBreakdown = useMemo(() => {
@@ -1633,7 +1647,9 @@ export default function PendingOperationsPage() {
               whole group, stating what it posts, instead of one per row. */}
           {selectedGroupOps.length > 0 && (
             <div className="space-y-2 rounded-lg border bg-muted/30 px-3 py-2">
-              <p className="font-medium">{t('shared_ack_title', { count: groupSummary.count })}</p>
+              <p className="font-medium">
+                {t(SHARED_ACK_LABEL_KEYS[groupKind].title, { count: groupSummary.count })}
+              </p>
               <p className="text-xs text-muted-foreground">{t('shared_ack_body')}</p>
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs tabular-nums">
                 {groupSummary.date_from && (
@@ -1648,13 +1664,13 @@ export default function PendingOperationsPage() {
                 )}
                 {groupSummary.incoming > 0 && (
                   <>
-                    <dt className="text-muted-foreground">{t('shared_ack_incoming')}</dt>
+                    <dt className="text-muted-foreground">{t(SHARED_ACK_LABEL_KEYS[groupKind].incoming)}</dt>
                     <dd>{formatCurrency(groupSummary.incoming)}</dd>
                   </>
                 )}
                 {groupSummary.outgoing > 0 && (
                   <>
-                    <dt className="text-muted-foreground">{t('shared_ack_outgoing')}</dt>
+                    <dt className="text-muted-foreground">{t(SHARED_ACK_LABEL_KEYS[groupKind].outgoing)}</dt>
                     <dd>{formatCurrency(groupSummary.outgoing)}</dd>
                   </>
                 )}

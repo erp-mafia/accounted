@@ -105,9 +105,29 @@ function linesOf(raw: unknown): ReadingInvoiceLine[] {
 }
 
 /**
+ * What the extraction's totals deduct from the total as settled before this
+ * payment (BT-113: an applied balance, a credit, a deposit), signed like the
+ * total so that the amount due is total minus it; 0 for none. Read as a
+ * magnitude, whichever sign it was printed with; one larger than the total
+ * is no reading of a deduction and counts as none (crm#1518).
+ */
+export function prepaidDeduction(totals: unknown): number {
+  const { total, prepaidAmount } = recordOf(totals)
+  const sum = num(total)
+  const prepaid = num(prepaidAmount)
+  if (sum === undefined || prepaid === undefined || prepaid === 0) return 0
+  const magnitude = roundOre(Math.abs(prepaid))
+  if (magnitude > roundOre(Math.abs(sum))) return 0
+  return sum < 0 ? -magnitude : magnitude
+}
+
+/**
  * The canonical values of an inbox extraction (InvoiceExtractionResult, as
  * stored: older readings lack the optional fields). The seller country is
  * derived from the VAT identifier, since the extraction reads no country.
+ * The amount due is the total less what was settled before this payment
+ * (BT-115 = BT-112 - BT-113): a receipt paid from an account balance is due
+ * nothing, while the total stays what is booked.
  */
 export function projectExtraction(raw: unknown): ReadingValueMap {
   if (!isRecord(raw)) return {}
@@ -128,7 +148,9 @@ export function projectExtraction(raw: unknown): ReadingValueMap {
   put(out, 'invoice_issue_date', str(invoice.invoiceDate))
   put(out, 'payment_due_date', str(invoice.dueDate))
   put(out, 'invoice_currency_code', str(invoice.currency)?.toUpperCase())
-  put(out, 'amount_due_for_payment', num(totals.total))
+  const total = num(totals.total)
+  const prepaid = prepaidDeduction(totals)
+  put(out, 'amount_due_for_payment', total === undefined || prepaid === 0 ? total : roundOre(total - prepaid))
   const breakdown = vatBreakdownOf(raw.vatBreakdown)
   if (breakdown.length > 0) out.vat_breakdown = breakdown
   put(out, 'remittance_information', str(invoice.paymentReference))
@@ -389,6 +411,8 @@ export interface CorroborationContext {
   supplier: SupplierCard | null
   /** Öresavrundning read with the amount due, for the VAT breakdown sum. */
   roundingAmount: number | null
+  /** What the reading deducted from the total as settled before this payment (prepaidDeduction): the breakdown adds up to the total. */
+  prepaidAmount?: number
 }
 
 function registerSays(field: ReadingFieldName, value: unknown, card: SupplierCard | null): boolean {
@@ -419,13 +443,13 @@ function vatIdentifierAgrees(values: ReadingValueMap): boolean {
   return org !== null && vat !== null && vat === `SE${org}01`
 }
 
-/** The breakdown's taxable amounts and VAT, with the öresavrundning, add up to the amount due (one öre per row of slack). */
-function breakdownAddsUp(values: ReadingValueMap, roundingAmount: number | null): boolean {
+/** The breakdown's taxable amounts and VAT, with the öresavrundning and less the prepaid amount, add up to the amount due (one öre per row of slack). */
+function breakdownAddsUp(values: ReadingValueMap, roundingAmount: number | null, prepaidAmount: number): boolean {
   const total = values.amount_due_for_payment
   const rows = values.vat_breakdown
   if (total === undefined || !rows || rows.length === 0) return false
   const sum = sumOre(rows.flatMap((r) => [r.vat_category_taxable_amount, r.vat_category_tax_amount]))
-  const expected = roundOre(sum + (roundingAmount ?? 0))
+  const expected = roundOre(sum + (roundingAmount ?? 0) - prepaidAmount)
   return Math.abs(roundOre(total - expected)) <= roundOre(0.01 * rows.length)
 }
 
@@ -437,7 +461,7 @@ export function corroborationsFor(field: ReadingFieldName, value: unknown, ctx: 
   if ((field === 'seller_legal_registration_identifier' || field === 'seller_vat_identifier') && vatIdentifierAgrees(ctx.values)) {
     found.push('vat_identifier')
   }
-  if ((field === 'amount_due_for_payment' || field === 'vat_breakdown') && breakdownAddsUp(ctx.values, ctx.roundingAmount)) {
+  if ((field === 'amount_due_for_payment' || field === 'vat_breakdown') && breakdownAddsUp(ctx.values, ctx.roundingAmount, ctx.prepaidAmount ?? 0)) {
     found.push('vat_breakdown')
   }
   return found

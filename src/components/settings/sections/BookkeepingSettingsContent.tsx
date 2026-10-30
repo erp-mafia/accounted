@@ -273,7 +273,6 @@ export function BookkeepingSettingsContent() {
         )}
         <DimensionsToggle />
         <NavGateToggle setting="mileage_enabled" namespace="mileage" href="/mileage" />
-        <NavGateToggle setting="sales_orders_enabled" namespace="sales_orders" href="/sales-orders" />
         {/* K3 kapitel 23: pågående arbeten live on their own page under bokslut. */}
         {contractRevenueEnabled() && (
           <SettingsRow label={tContract('settings_label')} help={tContract('settings_help')}>

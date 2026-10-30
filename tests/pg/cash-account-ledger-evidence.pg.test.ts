@@ -10,7 +10,8 @@ import {
   seedCompany,
 } from './fixtures'
 
-// pg-real coverage for 20261010210000_cash_account_ledger_evidence (crm#1066):
+// pg-real coverage for 20261010210000_cash_account_ledger_evidence (crm#1066),
+// last replaced by 20261031110900 (the balance kind reads the ledger summaries):
 // what the books say about which 19xx ledger account a connected bank account
 // belongs on. cash_account_ledger_evidence returns two kinds of row:
 // 'transactions' (unbooked bank rows matching a posted line by date and signed
@@ -24,8 +25,29 @@ type Evidence = { cash_account_id: string; kind: string; ledger_account: string;
 const EVIDENCE = `SELECT cash_account_id, kind, ledger_account, hits, balance_date::text AS balance_date
   FROM public.cash_account_ledger_evidence($1)`
 
-async function evidence(companyId: string): Promise<Evidence[]> {
+async function readEvidence(companyId: string): Promise<Evidence[]> {
   return (await getPool().query<Evidence>(EVIDENCE, [companyId])).rows
+}
+
+/**
+ * The evidence with the company's ledger summaries built (a new company
+ * starts built, so this is the path production takes) and again with them
+ * not built (the line read): every case below expects one answer from both
+ * (20261031110900).
+ */
+async function evidence(companyId: string): Promise<Evidence[]> {
+  const { rows } = await getPool().query<{ ready: boolean }>('SELECT public.ledger_account_days_ready($1) AS ready', [
+    companyId,
+  ])
+  expect(rows[0].ready).toBe(true)
+  const summaries = await readEvidence(companyId)
+  await getPool().query('DELETE FROM public.ledger_account_days_companies WHERE company_id = $1', [companyId])
+  try {
+    expect(await readEvidence(companyId)).toEqual(summaries)
+  } finally {
+    await getPool().query('INSERT INTO public.ledger_account_days_companies (company_id) VALUES ($1)', [companyId])
+  }
+  return summaries
 }
 
 function of(rows: Evidence[], cashAccountId: string, kind: string): Record<string, number | string | null> {
@@ -484,6 +506,26 @@ describe('cash_account_ledger_evidence: the bank balance against ledger balances
     const rows = await evidence(owner.companyId)
     expect(of(rows, account, 'balance')).toEqual({ '1920': '2026-01-15' })
     expect(of(rows, account, 'transactions')).toEqual({ '1920': 1 })
+  })
+
+  it('reads the latest day a posted line moved the account, past a day only a stornerad verifikat moved', async () => {
+    const owner = await seedCompany()
+    await bankVoucher(owner, '1920', 1000, '2026-01-10')
+    // 500,00 booked on 2026-01-20 and stornerad on 2026-02-01, after the
+    // last bank row: up to the feed, 2026-01-20 holds only reversed lines.
+    // The summaries sum posted and reversed lines alike, so the day is asked
+    // of the journal instead of taken as the latest booked day.
+    const stornerad = await bankVoucher(owner, '1920', 500, '2026-01-20')
+    await getPool().query(`UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`, [stornerad])
+    await bankVoucher(owner, '1920', -500, '2026-02-01', { sourceType: 'storno' })
+    const account = await connectedAccount(owner, '1940', { balance: 900 })
+    await bankRow(owner, account, -50, '2026-01-05')
+    await bankRow(owner, account, -100, '2026-01-21')
+
+    // 900,00 + 100,00 = 1 000,00 at the end of 2026-01-10, the ledger's
+    // 1 000,00. Taken as booked, 2026-01-20 would read 1 500,00 and the
+    // match would be lost.
+    expect(of(await evidence(owner.companyId), account, 'balance')).toEqual({ '1920': '2026-01-10' })
   })
 
   it('never matches a zero balance', async () => {
