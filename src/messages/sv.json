@@ -18000,6 +18000,7 @@
     "nothing_to_pay": "Rättelsen ger ingen skillnad att betala ut jämfört med den tidigare körningen."
   },
   "salary_bank_payment": {
+    "account_not_booked": "Lönen bokförs mot {account}. Betalar du från ett annat konto stämmer bokföringen inte med banken.",
     "section_title": "Betala via banken",
     "section_prompt": "Betala nettolönen direkt från företagets konto: en betalning per anställd, alla signerade med ett BankID.",
     "section_prompt_again": "Banken betalade inte ut lönen till alla. Betala igen till de anställda som saknar en betalning.",

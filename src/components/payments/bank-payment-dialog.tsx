@@ -29,14 +29,21 @@ import {
  * against the cap, the company's verification where the picked account needs
  * it, and a toast for a failure in the person's language. One place, so the
  * dialogs cannot drift apart on any of it.
+ *
+ * preferredAccountId is the account the dialog should open on while it can
+ * pay: a salary run passes the account its verifikat credits, so the
+ * salaries leave from the account the books say they leave from (PH 220).
+ * It may arrive after the accounts; until the person picks one in the
+ * picker, the default follows it.
  */
-export function useBankPaymentDialog(open: boolean) {
+export function useBankPaymentDialog(open: boolean, { preferredAccountId = null }: { preferredAccountId?: string | null } = {}) {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   /** This month's bank payments against the cap; null until read (informational, the server decides). */
   const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
-  const [accountId, setAccountId] = useState('')
+  /** The account the person picked in the picker; null while the dialog's default stands. */
+  const [picked, setPicked] = useState<string | null>(null)
 
   const fail = useCallback(
     (title: string, error: unknown) => {
@@ -53,8 +60,8 @@ export function useBankPaymentDialog(open: boolean) {
       .then((data) => {
         if (cancelled) return
         setAvailability(data)
-        const pick = defaultPaymentAccount(data.accounts.filter((a) => a.payable))
-        if (pick) setAccountId(pick.id)
+        // Each opening starts from the default again, as when it was picked here.
+        setPicked(null)
         if (data.available) {
           fetchBankPaymentsUsage().then(
             (u) => {
@@ -75,6 +82,12 @@ export function useBankPaymentDialog(open: boolean) {
   }, [open])
 
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
+  const defaultAccountId = useMemo(
+    () => defaultPaymentAccount(payableAccounts, preferredAccountId)?.id ?? '',
+    [payableAccounts, preferredAccountId],
+  )
+  const accountId = picked && payableAccounts.some((a) => a.id === picked) ? picked : defaultAccountId
+  const setAccountId = useCallback((id: string) => setPicked(id), [])
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
   // With no payable account, a bank the provider does not pay from is named
   // instead of the IBAN requirement it already meets (crm#1424).

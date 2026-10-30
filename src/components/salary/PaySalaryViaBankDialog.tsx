@@ -24,11 +24,16 @@ import type { OverpaidEmployee } from '@/lib/salary/payment/payable'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { type ErrorLocale } from '@/lib/errors/get-error-message'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
+import type { PayingAccountSummary } from '@/lib/payments/paying-account'
+import { payingAccountName } from '@/lib/payments/paying-account-label'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 /**
  * Betala via banken for a salary run, from the run page:
- *   preview: one screen. The account to pay from, the payment day (the
+ *   preview: one screen. The account to pay from (the one the run's
+ *            salary verifikat credits, as the payment file, unless the
+ *            person picks another; then one muted line says the books
+ *            credit the other account, PH 220), the payment day (the
  *            banking day before payday, changeable) and every employee's net
  *            pay to the account on the employee card, by name with the
  *            account masked. Nothing is written: it is the server's dry run
@@ -100,16 +105,22 @@ interface PaySalaryViaBankDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   salaryRunId: string
+  /**
+   * The account the run's salary verifikat credits the net pay on (a booked
+   * run's verifikat, else the primary the booking will credit): the account
+   * the dialog opens on. undefined while unknown.
+   */
+  bookedAccount?: PayingAccountSummary
   /** Called when the dialog closes after anything changed (drafts made, approved or sent to the bank). */
   onDone?: () => void
 }
 
-export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId, onDone }: PaySalaryViaBankDialogProps) {
+export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId, bookedAccount, onDone }: PaySalaryViaBankDialogProps) {
   const t = useTranslations('salary_bank_payment')
   const tb = useTranslations('bank_payments')
   const tc = useTranslations('salary_correction_payment')
   const locale = useLocale() as ErrorLocale
-  const bank = useBankPaymentDialog(open)
+  const bank = useBankPaymentDialog(open, { preferredAccountId: bookedAccount?.cash_account_id ?? null })
   const { availability, usage, accountId, account, fail } = bank
 
   const [phase, setPhase] = useState<Phase>('preview')
@@ -221,6 +232,12 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
         )
       }
     >
+      {/* Paid from another account than the verifikat credits, the bank and the books part ways: said, not refused. */}
+      {bookedAccount?.cash_account_id && accountId && accountId !== bookedAccount.cash_account_id && (
+        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+          {t('account_not_booked', { account: payingAccountName(bookedAccount) })}
+        </p>
+      )}
       <dl className="space-y-3 text-[13px]">
         <div className="flex items-center justify-between gap-4">
           <dt>

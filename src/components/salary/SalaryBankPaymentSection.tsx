@@ -9,6 +9,7 @@ import { DetailSection } from '@/components/ui/detail-section'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { fetchPaymentsAvailability, listPaymentOrders, type PaymentOrder } from '@/components/payments/payments-client'
+import type { PaymentFileAccountView } from '@/lib/salary/payment/payment-account'
 import { formatCurrency } from '@/lib/utils'
 
 const PaySalaryViaBankDialog = dynamic(() => import('./PaySalaryViaBankDialog'), { loading: DialogLoadingSkeleton })
@@ -85,11 +86,14 @@ export function useSalaryBankPayments(salaryRunId: string, enabled: boolean): Sa
 /** PaySalaryViaBankDialog, loaded when opened: from the header's Betala via banken or the section's Betala igen. */
 export function SalaryBankPaymentDialog({
   salaryRunId,
+  fileAccount,
   open,
   onClose,
   onDone,
 }: {
   salaryRunId: string
+  /** The account the run's salary verifikat credits (usePaymentFileAccount); undefined while unknown. */
+  fileAccount?: PaymentFileAccountView
   open: boolean
   onClose: () => void
   /** Called when the dialog closes after anything changed: the run may have moved to paid. */
@@ -100,6 +104,7 @@ export function SalaryBankPaymentDialog({
     <PaySalaryViaBankDialog
       open
       salaryRunId={salaryRunId}
+      bookedAccount={fileAccount?.account}
       onOpenChange={(next) => {
         if (!next) onClose()
       }}

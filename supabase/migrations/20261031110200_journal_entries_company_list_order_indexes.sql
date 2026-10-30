@@ -1,0 +1,58 @@
+-- journal_entries: a company's verifikat in the verifikat list's two orders.
+--
+-- The list's all-years path (GET /api/bookkeeping/journal-entries without a
+-- fiscal period: "Alla år", the default date sort) asks PostgREST for one
+-- company's entries in date order (entry_date, voucher_series,
+-- voucher_number, id, all in one direction) or in voucher order
+-- (voucher_series, voucher_number, id), first N, with the lines embedded.
+-- No index served either order inside a company, so Postgres had two bad
+-- plans to pick from:
+--
+--   Date order: walk the global idx_journal_entries_entry_date backwards
+--   over every tenant's rows, fetch each heap row, and keep the ones whose
+--   company_id matches, hoping to find N early. The fewer (or older) the
+--   company's verifikat, the further the walk: on production (read-only
+--   EXPLAIN as the requesting user, 2026-10-29) a company with 23 entries
+--   walks 340 000 rows to fill a page of 20, one with 260 walks 527 000, and
+--   a company with no entries walks all 2.43 M. That hits the 8 s statement
+--   timeout: six 503s for four users in four days (PostHog "Journal
+--   entries: canceling statement due to statement timeout"), every one of
+--   them this shape, all from companies with at most 260 verifikat.
+--
+--   Voucher order: aggregate the lines of every one of the company's
+--   entries (the embedded lines are a lateral join below the sort), then
+--   sort and keep N. Cost grows with the company: on the largest company
+--   (34 000 entries, 148 000 lines) the plan aggregates all of them for a
+--   page of 50. Since 2026-09-11 that shape ran 902 times, mean 294 ms,
+--   max 7.5 s, half a second short of the timeout.
+--
+-- With these indexes both orders are a range scan of the company's own
+-- entries, already in order (a btree scans both ways, so one index serves
+-- ascending and descending), that stops after N rows and aggregates lines
+-- for those N only: the cost of a page is bounded by the page, never by the
+-- table or the company.
+--
+-- Why not reuse idx_journal_entries_company_posted_date_id (company_id,
+-- entry_date, id) WHERE status IN ('posted', 'reversed'): the list filters
+-- status <> 'cancelled' AND status <> 'draft', which the planner cannot
+-- prove implies that predicate, and rewriting the filter to match it would
+-- rest on PostgREST's parameterised statements getting custom plans (a
+-- generic plan never proves a partial-index predicate). A plain index holds
+-- for every plan.
+--
+-- idx_journal_entries_entry_date stays for now: other readers may scan it
+-- across tenants. Once this has run a while, its idx_scan shows whether
+-- anything but the trap above used it.
+--
+-- Plain CREATE INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
+-- migration transaction (precedent 20260710101000, 20261027060517). Each
+-- build holds a SHARE lock on journal_entries: reads go on, writes to
+-- journal_entries wait for the build. 2.43 M rows on production;
+-- idx_journal_entries_posted_needs_doc on the same table took 4.7 s on
+-- 2026-10-23 (per 20261027060517), so expect writes to pause for roughly
+-- 10 to 20 s for the two.
+CREATE INDEX IF NOT EXISTS idx_journal_entries_company_date_voucher
+  ON public.journal_entries (company_id, entry_date, voucher_series, voucher_number, id);
+
+CREATE INDEX IF NOT EXISTS idx_journal_entries_company_voucher
+  ON public.journal_entries (company_id, voucher_series, voucher_number, id);

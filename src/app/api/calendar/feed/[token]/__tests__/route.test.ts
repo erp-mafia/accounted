@@ -82,6 +82,21 @@ describe('GET /api/calendar/feed/[token]', () => {
  * UTC is already the next day in Stockholm, in summer (UTC+2) and in winter
  * (UTC+1).
  */
+describe('GET /api/calendar/feed/[token]: invoices', () => {
+  it('lists real invoices only: never a credit note, whatever its status (crm#1435)', async () => {
+    enqueue({ data: { ...FEED, include_invoices: true } }) // calendar_feeds lookup
+    enqueue({ data: { user_id: 'user-1' } }) // company_members lookup
+    enqueue({ data: null }) // access tracking update
+    enqueue({ data: [] }) // deadlines page 1
+    enqueue({ data: [] }) // invoices page 1
+    const [req, ctx] = tokenRequest('66666666-6666-6666-6666-666666666666')
+    const res = await GET(req, ctx)
+    expect(res.status).toBe(200)
+    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+    expect(findCalls('invoices', 'is')).toEqual([['credited_invoice_id', null]])
+  })
+})
+
 describe('GET /api/calendar/feed/[token]: window from the Swedish day', () => {
   afterEach(() => {
     vi.useRealTimers()

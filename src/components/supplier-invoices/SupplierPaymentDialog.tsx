@@ -282,7 +282,7 @@ export function SupplierPaymentDialog({
                       value={paySek}
                       onChange={(e) => setPaySek(e.target.value)}
                       placeholder={markPaidPreview?.paid_sek != null ? formatAmount(markPaidPreview.paid_sek) : undefined}
-                      disabled={editor.isEditing}
+                      disabled={editor.isEdited}
                       className="w-full sm:w-48 text-right tabular-nums"
                     />
                     {markPaidPreview?.paid_sek != null && (
@@ -318,12 +318,12 @@ export function SupplierPaymentDialog({
                   <PaymentPreviewLinesCard
                     editor={editor}
                     lines={markPaidPreview && !markPaidPreviewFailed ? markPaidPreview.lines : null}
-                    canEdit={!!markPaidPreview && (!markPaidPreviewFailed || editor.isEditing)}
+                    canEdit={!!markPaidPreview && (!markPaidPreviewFailed || editor.isEdited)}
                     disabled={isProcessing}
                   >
                     {/* A failed preview hides rows left over from other inputs
                         and says why; the user's own edited rows stay. */}
-                    {markPaidPreviewFailed && !editor.isEditing && (
+                    {markPaidPreviewFailed && !editor.isEdited && (
                       <div className="space-y-2">
                         {markPaidPreviewError?.registrationFirst && (
                           <p className="text-sm text-muted-foreground">{tMatch('registration_first_refused')}</p>
@@ -347,7 +347,7 @@ export function SupplierPaymentDialog({
                   </Button>
                   <Button
                     onClick={() => handleMarkPaid(false)}
-                    disabled={isProcessing || (editor.isEditing && !editor.validation.isValid)}
+                    disabled={isProcessing || !editor.validation.isValid}
                   >
                     {isProcessing ? t('processing') : t('register_payment')}
                   </Button>

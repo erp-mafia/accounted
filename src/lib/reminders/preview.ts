@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { resolveInvoiceReplyTo } from '@/lib/invoices/email-recipients'
+import { filterOverdueInvoices, OWED_INVOICE_STATUSES } from '@/lib/invoices/overdue'
 import { loadReminderContext } from './facts'
 import { decideReminder, reminderSchedule, type ReminderDecision, type ReminderLevel } from './policy'
 import { FINAL_REMINDER_PAY_WITHIN_DAYS, renderReminderEmail } from './templates'
@@ -37,13 +38,9 @@ export class NoInvoiceToPreviewError extends Error {
 }
 
 async function sampleInvoiceId(db: SupabaseClient, companyId: string, today: string): Promise<string | null> {
-  const issued = ['sent', 'overdue', 'partially_paid']
-  const overdue = await db
-    .from('invoices')
-    .select('id')
-    .eq('company_id', companyId)
-    .in('status', issued)
-    .lt('due_date', today)
+  // The one overdue rule (lib/invoices/overdue.ts): a sent credit note or a
+  // proforma past its date is nothing to remind about (crm#1435).
+  const overdue = await filterOverdueInvoices(db.from('invoices').select('id').eq('company_id', companyId), today)
     .order('due_date', { ascending: false })
     .limit(1)
   if (overdue.error) throw new Error(`invoice lookup failed: ${overdue.error.message}`)
@@ -53,7 +50,9 @@ async function sampleInvoiceId(db: SupabaseClient, companyId: string, today: str
     .from('invoices')
     .select('id')
     .eq('company_id', companyId)
-    .in('status', [...issued, 'paid'])
+    .eq('document_type', 'invoice')
+    .is('credited_invoice_id', null)
+    .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
     .order('invoice_date', { ascending: false })
     .limit(1)
   if (latest.error) throw new Error(`invoice lookup failed: ${latest.error.message}`)

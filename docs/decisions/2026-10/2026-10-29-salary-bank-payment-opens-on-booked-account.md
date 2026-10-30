@@ -1,0 +1,1 @@
+[2026-10-29] Betala via banken for a salary run opens on the account the salary verifikat credits (the payment file's account), not the account a supplier payment used last; picking another is allowed and one muted line says the books then do not match the bank, instead of refusing it (PH 220).

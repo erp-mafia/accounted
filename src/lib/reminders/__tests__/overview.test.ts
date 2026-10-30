@@ -92,6 +92,21 @@ describe('loadReminderOverview', () => {
     expect(loadReminderContext).not.toHaveBeenCalled()
   })
 
+  it('counts and offers what the one overdue rule counts: never a sent credit note or a proforma (crm#1435)', async () => {
+    const mock = createTableMockSupabase({
+      company_settings: { data: { send_invoice_reminders: false, reminders_enabled_at: null, reminder_days_level_1: 10, reminder_days_level_2: 20, reminder_days_level_3: 30 } },
+      collection_connections: { data: [] },
+      invoices: { data: [{ id: 'own' }], count: 1 },
+    })
+    await loadReminderOverview(mock.supabase as unknown as SupabaseClient, 'company-1', { now: NOW, sendingEnabled: true })
+    // The overdue list is the first invoices query (filterOverdueInvoices, lib/invoices/overdue.ts).
+    expect(mock.findCall('invoices', 'select')).toEqual(['id', { count: 'exact' }])
+    expect(mock.findCalls('invoices', 'is')[0]).toEqual(['credited_invoice_id', null])
+    expect(mock.payloads('invoices', 'eq').slice(0, 2)).toEqual(['company_id', 'document_type'])
+    expect(mock.findCalls('invoices', 'gt')[0]).toEqual(['remaining_amount', 0])
+    expect(mock.findCalls('invoices', 'lt')[0]).toEqual(['due_date', '2026-12-17'])
+  })
+
   it('says when there were more overdue invoices than it looked at', async () => {
     const overview = await loadReminderOverview(db({ invoices: { data: [{ id: 'own' }], count: 250 } }), 'company-1', { now: NOW, sendingEnabled: true })
     expect(overview).toMatchObject({ overdueCount: 250, pickableTruncated: true })

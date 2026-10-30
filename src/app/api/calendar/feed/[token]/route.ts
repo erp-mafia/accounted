@@ -117,7 +117,8 @@ export async function GET(
 
       // Invoices with a real due date to remind about: drafts, cancelled and
       // credited invoices have no payable due date and would leak
-      // speculative amounts into the subscriber's calendar.
+      // speculative amounts into the subscriber's calendar. Neither has a
+      // credit note: it is never owed, whatever its status (crm#1435).
       feed.include_invoices
         ? fetchAllRows<Invoice>(
             ({ from, to }) =>
@@ -129,6 +130,7 @@ export async function GET(
                 // A quote's due_date only mirrors its expiry; it is not a
                 // payment date. Proformas and delivery notes are not owed.
                 .eq('document_type', 'invoice')
+                .is('credited_invoice_id', null)
                 .gte('due_date', startStr)
                 .lte('due_date', endStr)
                 .order('due_date')

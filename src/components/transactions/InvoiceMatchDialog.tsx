@@ -215,10 +215,12 @@ export default function InvoiceMatchDialog({
   // The fee account the user named for a payout short of the invoice: never
   // preselected either, since it settles the invoice in full.
   const [feeAccount, setFeeAccount] = useState<string | null>(null)
+  // The user's edited rows belong to one match as well.
   useEffect(() => {
     setOverpaymentAccount(null)
     setFeeAccount(null)
-  }, [transactionId, invoiceId])
+    stopEditing()
+  }, [transactionId, invoiceId, stopEditing])
 
   useEffect(() => {
     if (!open || !transactionId || targetBlocked) {
@@ -416,7 +418,7 @@ export default function InvoiceMatchDialog({
                     variant="default"
                     size="sm"
                     onClick={() => handleConfirm({ storno_existing: true })}
-                    disabled={isConfirming || (editor.isEditing && !editor.validation.isValid)}
+                    disabled={isConfirming || !editor.validation.isValid}
                   >
                     {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
                   </Button>
@@ -1024,7 +1026,8 @@ export default function InvoiceMatchDialog({
               // Blocked target: the route rejects this unconditionally, so the
               // button has no reachable success path.
               targetBlocked ||
-              (editor.isEditing && !editor.validation.isValid) ||
+              // The user's rows, in the grid or kept after Klart, book only once valid.
+              !editor.validation.isValid ||
               // Block confirm when cross-currency lookup failed and the user
               // hasn't typed a manual rate yet. Same-currency and auto-rate
               // paths pass through unaffected.
@@ -1041,7 +1044,7 @@ export default function InvoiceMatchDialog({
               // successful preview to enter, so today this only relaxes the
               // guard in the defense-in-depth branch of
               // isInvoiceBookingRateMissing.)
-              (invoiceRateMissing && !(editor.isEditing && editor.validation.isValid)) ||
+              (invoiceRateMissing && !(editor.isEdited && editor.validation.isValid)) ||
               // A customer overpayment books only on the account the user
               // picked, and only once the preview shows that account's rows.
               (!!customerOverpayment &&
