@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage, isUsagePeriod, usagePeriodBounds } from '../usage'
+import { BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage, isUsagePeriod, readBankPaymentsMonth, usagePeriodBounds } from '../usage'
+import { createPayrollFakeDb } from '@/lib/salary/__tests__/payroll-fake-db'
+import { paymentOrderRow } from './payment-order-row'
+
+const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 
 describe('usagePeriodBounds', () => {
   it('spans the month in Stockholm time, across the summer-time change', () => {
@@ -35,12 +39,29 @@ describe('getBankPaymentsUsage', () => {
       extra_accounts: 0,
     })
     expect(BANK_PAYMENTS_INCLUDED_PER_MONTH).toBe(10)
-    // Only orders with a provider payment id, created inside the month, for this company.
+    // Only orders with a provider payment id, sent to the bank inside the month, for this company.
     expect(db.findCall('payment_orders', 'not')).toEqual(['provider_payment_id', 'is', null])
-    expect(db.findCall('payment_orders', 'gte')).toEqual(['created_at', '2026-09-30T22:00:00.000Z'])
-    expect(db.findCall('payment_orders', 'lt')).toEqual(['created_at', '2026-10-31T23:00:00.000Z'])
+    expect(db.findCall('payment_orders', 'gte')).toEqual(['submitted_at', '2026-09-30T22:00:00.000Z'])
+    expect(db.findCall('payment_orders', 'lt')).toEqual(['submitted_at', '2026-10-31T23:00:00.000Z'])
     // The company's own allowance is asked for, and its absence means the default.
     expect(db.findCall('company_bank_payment_allowances', 'eq')).toEqual(['company_id', 'c0000000-0000-4000-8000-000000000001'])
+  })
+
+  it('counts a payment in the month it was sent to the bank, not the month it was drafted (#127)', async () => {
+    const { supabase } = createPayrollFakeDb({
+      payment_orders: [
+        // Drafted 30 October, signed and sent 2 November.
+        paymentOrderRow(COMPANY, 'late', { created: '2026-10-30T08:00:00.000Z', sent: '2026-11-02T09:00:00.000Z' }),
+        // Sent at 23:30 on 31 October, Stockholm time.
+        paymentOrderRow(COMPANY, 'october', { created: '2026-10-05T08:00:00.000Z', sent: '2026-10-31T22:30:00.000Z' }),
+        // Drafted in October and never sent.
+        paymentOrderRow(COMPANY, 'unsent', { created: '2026-10-29T08:00:00.000Z', sent: null }),
+      ],
+    })
+
+    expect((await readBankPaymentsMonth(supabase, COMPANY, '2026-10')).sent.map((r) => r.id)).toEqual(['october'])
+    expect((await readBankPaymentsMonth(supabase, COMPANY, '2026-11')).sent.map((r) => r.id)).toEqual(['late'])
+    expect(await getBankPaymentsUsage(supabase, COMPANY, '2026-11')).toMatchObject({ period: '2026-11', payments_sent: 1, remaining_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH - 1 })
   })
 
   it('uses the allowance a founder set for the company instead of the default', async () => {

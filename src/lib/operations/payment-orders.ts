@@ -1073,7 +1073,8 @@ export const paymentsUsage = defineOperation({
     summary: 'Bank payments sent and accounts used in a month, against the monthly cap.',
     description:
       'Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, ' +
-      'in one month in Stockholm time, against what the company may send per month. Payments are capped: included_payments is ' +
+      'in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing ' +
+      'sent it to the provider, not the month it was drafted. Payments are capped: included_payments is ' +
       'the cap (10 a month unless raised for the company), remaining_payments what the month still takes, and a BankID signing ' +
       'that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files ' +
       'are not counted. The month defaults to the current one.',

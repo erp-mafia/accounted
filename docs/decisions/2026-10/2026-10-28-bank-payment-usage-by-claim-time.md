@@ -1,0 +1,1 @@
+[2026-10-28] Bank payments count in the month of payment_orders.submitted_at (the signing's claim, right before the provider create), not a new provider_payment_at column: every claim sets it, a re-claim renews it, and the cap is checked at that same moment (#127).

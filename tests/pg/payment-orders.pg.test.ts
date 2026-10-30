@@ -843,6 +843,9 @@ describe('claim_payment_orders_for_signing', () => {
     const renewed = second.orders![0]!.end_to_end_id as string
     expect(renewed).toMatch(/^ACC[0-9a-f]{32}$/)
     expect(renewed).not.toBe(order.end_to_end_id)
+    // submitted_at dates the new claim: the bank payments counter (lib/payments/usage.ts) puts the payment in its month.
+    const dated = await getPool().query(`SELECT $1::timestamptz < submitted_at AS later FROM public.payment_orders WHERE id = $2`, [first.orders![0]!.submitted_at, order.id])
+    expect(dated.rows[0].later).toBe(true)
     const events = await getPool().query(
       `SELECT detail ->> 'previous_end_to_end_id' AS previous
          FROM public.payment_order_events WHERE payment_order_id = $1 AND event_type = 'submitted' ORDER BY occurred_at`,
@@ -896,11 +899,15 @@ describe('rebatch_payment_orders_for_signing', () => {
   it('starts the same signing again when every payment still waits, after checking its invoices again', async () => {
     const ctx = await signingWithTwoPayments()
     await getPool().query(`UPDATE public.payment_order_batches SET provider_batch_id = 'basket-same' WHERE id = $1`, [ctx.batchId])
+    const claimedAt = `SELECT id, submitted_at::text FROM public.payment_orders WHERE batch_id = $1 ORDER BY id`
+    const before = await getPool().query(claimedAt, [ctx.batchId])
 
     const result = await rebatch(ctx.companyId, ctx.userId, ctx.batchId)
 
     expect(result).toMatchObject({ ok: true, same: true, batch: { id: ctx.batchId, status: 'created' } })
     expect(result.orders!.map((o) => o.id).sort()).toEqual([ctx.firstId, ctx.secondId].sort())
+    // Signing again leaves submitted_at: the payments reached the bank when first claimed, and count in that month.
+    expect((await getPool().query(claimedAt, [ctx.batchId])).rows).toEqual(before.rows)
     const batches = await getPool().query(`SELECT count(*)::int AS n FROM public.payment_order_batches WHERE company_id = $1`, [ctx.companyId])
     expect(batches.rows[0].n).toBe(1)
 
