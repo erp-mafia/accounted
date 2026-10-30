@@ -175,6 +175,34 @@
     "hash": "7c53e8233a57dffd31d161147373cf154f354939f4367a5f3a17fdf0a0e2a72c",
     "version": 3
   },
+  "horizontal/swedish-k3-k4-judgment": {
+    "hash": "2ed476051c0c2f7684dd7d829224f11ea101f02488847f5fb72d43b1e9365c73",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/k3-chapters": {
+    "hash": "624934bb3e6e9ca9edb1fe42bfc7d14109977e3ca18cc0f40777864e151cbb02",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/k3-checklist": {
+    "hash": "ceb07116d2528173f625fe1172a88557d5da4a1a190f0c8a2e4e8ba2c6cac5d3",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/k3-transition": {
+    "hash": "ddc4730dfbd7a80c103570845c96103831b372f7b1bb5f008be24101588ddc0b",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/k4-rfr2": {
+    "hash": "8011ac296babee9b74a9b557aa1389d3a9135385d1d5951474804b71f78628c9",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/professional-judgment": {
+    "hash": "89324a6c4b37963fdc0afaf8d0be724e2586a21e6429e4044b08cb64844b7ec6",
+    "version": 1
+  },
+  "horizontal/swedish-k3-k4-judgment/watch-list": {
+    "hash": "70c8f27e177d7f5da7a3732025c6dd5ca9014cd6129a50bf586578e27775230e",
+    "version": 1
+  },
   "horizontal/swedish-payroll": {
     "hash": "a4e284d7b71b449391433856a7894533f16bb47dce716d30807e4bf1d6193455",
     "version": 7
