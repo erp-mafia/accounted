@@ -255,6 +255,18 @@ describe('bank_balance_vs_bank equals the bank balance minus the balance sheet r
     })
   })
 
+  it('reads the books on the bank\'s own day when the bank dated its balance', async () => {
+    // The bank's closingBooked figure is the close of 29 June, fetched on the
+    // 30th: 1930 then stood at 55 500, before the 150 booked on the 30th (Ränta).
+    const at = '2026-06-30T10:00:00.000Z'
+    const reference = { date: '2026-06-29', type: 'closingBooked', fetched_at: '2026-06-30T10:00:00+00:00' }
+    const onBankDay = await bankRow(ledger({ bankBalance: { amount: 55500, at, reference } }))
+    expect(onBankDay).toMatchObject({ status: 'ok', difference: 0, as_of: '2026-06-29', facts: { balance_type: 'closingBooked' } })
+    // Read on the fetch day instead, the verifikat of the 30th shows as a difference.
+    const onFetchDay = await bankRow(ledger({ bankBalance: { amount: 55500, at } }))
+    expect(onFetchDay).toMatchObject({ status: 'unexplained', difference: 150, as_of: '2026-06-30' })
+  })
+
   it('cannot check an account the bank reported no balance for, nor a payment-provider account', async () => {
     const data = await check(ledger(), 'bank_balance_vs_bank')
     const savings = data.results.find((r) => r.subject.kind === 'bank_account' && r.subject.cash_account_id === CA_1940)!

@@ -3,12 +3,13 @@
  * booked balance of the account it books on, on the day the bank reported it.
  *
  * The bank's side is the booked balance the last PSD2 balance refresh stored
- * on the cash account (cash_accounts.balance, dated by balance_updated_at),
- * the figure the reconciliation page prints as "Banken visar". The ledger
- * side is the balance sheet's figure for that account at the end of that day
- * (the trial balance with the closing entry, as the bank_balance measure
- * reads it). Comparing on the bank's own date keeps a balance fetched days
- * ago from showing every later verifikat as a difference.
+ * on the cash account (cash_accounts.balance), dated by the bank's own day
+ * for it when the bank gave one, else by the fetch (bankBalanceDay): the
+ * figure the reconciliation page prints as "Banken visar". The ledger side is
+ * the balance sheet's figure for that account at the end of that day (the
+ * trial balance with the closing entry, as the bank_balance measure reads
+ * it). Comparing on the bank's own date keeps a balance fetched days ago, or
+ * a close of yesterday, from showing every later verifikat as a difference.
  *
  * Basis: 1930 Företagskonto (every bank account) is reconciled against the
  * bank statement, Phase 1 of the bokslut (swedish-year-end-closing).
@@ -19,12 +20,11 @@
  * the books have not. What they do not cover is the residual.
  */
 import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
-import { todayIsoStockholm } from '@/lib/dates/iso'
 import { toHandle } from '@/lib/handles'
 import { tiesOut } from '@/lib/measures/explain'
 import { fiscalPeriodContaining } from '@/lib/measures/params'
 import { roundOre } from '@/lib/money'
-import { bookedBalancesAt } from '@/lib/reconciliation/bank-balance-check'
+import { bankBalanceDay, bookedBalancesAt } from '@/lib/reconciliation/bank-balance-check'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { cannotCheck, companyFacts, kronor, noFiscalPeriod, sourceFailed, statusFor, sumOre } from '../shared'
@@ -57,6 +57,7 @@ interface CashAccountRow {
   iban: string | null
   balance: number | string | null
   balance_updated_at: string | null
+  balance_reference: unknown
   updated_at: string | null
 }
 
@@ -118,7 +119,7 @@ async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
     ledgerCurrency = (await companyFacts(ctx)).ledgerCurrency
     const { data, error } = await ctx.supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, balance, balance_updated_at, updated_at')
+      .select('id, name, ledger_account, currency, iban, balance, balance_updated_at, balance_reference, updated_at')
       .eq('company_id', ctx.companyId)
       .eq('enabled', true)
       .order('ledger_account', { ascending: true })
@@ -177,7 +178,8 @@ async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
         })
       }
       const reported = roundOre(Number(row.balance))
-      const asOf = todayIsoStockholm(new Date(row.balance_updated_at))
+      const day = bankBalanceDay(row.balance_updated_at, row.balance_reference)
+      const asOf = day.date
       try {
         const period = await fiscalPeriodContaining(ctx, asOf)
         if (!period) return cannotCheck(subject, asOf, noFiscalPeriod(asOf), sidesOf(reported, null, row.ledger_account))
@@ -195,7 +197,7 @@ async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
               : `Banken visade ${kronor(reported)} ${asOf} men ${row.ledger_account} har ${kronor(booked)} bokfört: differens ${kronor(difference)}.`,
           sides: sidesOf(reported, booked, row.ledger_account),
           refusal: null,
-          facts: { balance_fetched_at: row.balance_updated_at },
+          facts: { balance_fetched_at: row.balance_updated_at, balance_type: day.type },
           source: { cashAccountId: row.id, account: row.ledger_account, reported, booked },
         }
       } catch (err) {
@@ -278,9 +280,9 @@ export const bankBalanceVsBank: CheckDefinition<BankSource> = {
   name_sv: 'Bokfört banksaldo mot bankens saldo',
   name_en: 'Booked bank balance against the bank\'s balance',
   definition:
-    'Per bank account in the cash account register (giro and bank accounts; a reconnect duplicate counted once): the booked balance the bank reported at its last balance refresh (cash_accounts.balance, dated balance_updated_at) minus the booked balance (debit minus credit) of the ledger account the bank account books on, at the end of that same Stockholm day, read as the balance sheet reads it. Zero means the books hold exactly what the bank held that day. Accounts without a reported balance, in another currency than the ledger, or sharing a ledger account cannot be checked.',
+    'Per bank account in the cash account register (giro and bank accounts; a reconnect duplicate counted once): the booked balance the bank reported at its last balance refresh (cash_accounts.balance) minus the booked balance (debit minus credit) of the ledger account the bank account books on, at the end of the bank\'s day for that balance (the day the bank gave with it, else the Stockholm day of the refresh), read as the balance sheet reads it. Zero means the books hold exactly what the bank held that day. Accounts without a reported balance, in another currency than the ledger, or sharing a ledger account cannot be checked.',
   definition_sv:
-    'Per bankkonto i kontoregistret: saldot banken rapporterade vid senaste saldohämtningen minus bokfört saldo (debet minus kredit) på kontot bankkontot bokförs på, vid slutet av samma dag, så som balansräkningen läser det. Noll betyder att bokföringen har exakt det banken hade den dagen. Konton utan saldo från banken, i annan valuta än bokföringen eller som delar bokföringskonto kan inte kontrolleras.',
+    'Per bankkonto i kontoregistret: saldot banken rapporterade vid senaste saldohämtningen minus bokfört saldo (debet minus kredit) på kontot bankkontot bokförs på, vid slutet av bankens dag för saldot (den dag banken angav, annars dagen saldot hämtades), så som balansräkningen läser det. Noll betyder att bokföringen har exakt det banken hade den dagen. Konton utan saldo från banken, i annan valuta än bokföringen eller som delar bokföringskonto kan inte kontrolleras.',
   basis:
     'Bank accounts (1920 Plusgiro, 1930 Företagskonto) are reconciled against the bank statement, Phase 1 of the bokslut (swedish-year-end-closing). A bank movement that is not booked also breaks BFL 5 kap. 2 § timing once it is old enough (see unbooked_bank_lines_overdue).',
   unit: 'SEK',

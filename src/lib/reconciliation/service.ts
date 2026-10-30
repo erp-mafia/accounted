@@ -64,6 +64,7 @@ interface CashAccountRow {
   balance: number | null
   available_balance: number | null
   balance_updated_at: string | null
+  balance_reference: unknown
   updated_at: string | null
 }
 
@@ -302,7 +303,7 @@ export async function listReconciliationAccounts(
 
   const cashAccountsRead = supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
+    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, updated_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .order('is_primary', { ascending: false })
@@ -492,7 +493,7 @@ export async function getAccountStatus(
   if (parsed.kind === 'bank') {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
+      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, updated_at')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle()
