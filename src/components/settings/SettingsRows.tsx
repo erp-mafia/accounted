@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ChevronLeftIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { HelpPopover, type HelpPopoverContent } from '@/components/ui/help-popover'
+import { openNativePicker } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
   Select,
@@ -190,9 +191,23 @@ const SETTINGS_FIELD_CLASS =
   'focus-visible:border-foreground/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 ' +
   'disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground'
 
-/** Boxed text input that fills the control column (read-only values render disabled). */
-export function SettingsInput({ className, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...rest} className={cn(SETTINGS_FIELD_CLASS, 'h-9', className)} />
+/**
+ * Boxed text input that fills the control column (read-only values render
+ * disabled). A date field opens its calendar on a click anywhere, as the
+ * shared Input does: in Chromium a click on the text only selects a segment,
+ * and the settings date fields (fiscal year, lock date) were rage-clicked.
+ */
+export function SettingsInput({ className, onClick, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...rest}
+      onClick={(e) => {
+        onClick?.(e)
+        if (!e.defaultPrevented) openNativePicker(e.currentTarget)
+      }}
+      className={cn(SETTINGS_FIELD_CLASS, 'h-9', className)}
+    />
+  )
 }
 
 /** Boxed textarea sibling of SettingsInput. */

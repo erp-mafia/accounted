@@ -440,6 +440,7 @@ import {
 import { describeAliasConflicts, describeArgHint, normalizeReportArgAliases } from './report-arg-aliases'
 import { decodeLiteralUnicodeEscapes, decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
+import { loadSuggestedMatches, SUGGESTION_POINTER_COLUMNS, type SuggestionPointerRow } from './match-suggestions'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { inboxAddressCarriesName, resolveInboxAddress } from '@/lib/documents/inbox-address'
@@ -1054,7 +1055,14 @@ export interface McpToolAnnotations {
 // shared frozen object emits exactly the JSON an inline literal did; nothing
 // mutates a tool's annotations after registration. Tools whose hints need
 // a per-tool explanation keep an inline block with comments.
+// An own item's id as create_skill returned it, or its own/<id> slug.
+const OwnSkillIdSchema = z.string().trim().transform((id) => id.replace(/^own\//, '')).pipe(z.string().uuid())
+// delete: true takes only the id; anything else would be ignored, so it is refused.
+const DeleteSkillArgsSchema = z.object({ company_skill_id: OwnSkillIdSchema, delete: z.literal(true) }).strict()
 const CreateSkillArgsSchema = z.object({
+  // Set: replace that own item's content (same id) instead of saving a new one.
+  company_skill_id: OwnSkillIdSchema.optional(),
+  delete: z.literal(false).optional(),
   // What the user makes: a flow is steps, knowledge and an analysis are text.
   kind: z.enum(['workflow', 'rules', 'analysis']).default('workflow'),
   name: z.string().min(1).max(120),
@@ -1067,6 +1075,28 @@ const CreateSkillArgsSchema = z.object({
 }).strict().refine((input) => input.kind === 'workflow' ? input.steps.length > 0 : input.text.trim().length > 0, {
   message: 'A workflow needs steps; knowledge and an analysis need text',
 })
+
+/**
+ * The company's own private item an agent may replace or delete (crm#1506).
+ * Never a catalog row (atom_id), never a firm-wide item (team_id: the firm's
+ * owners change those in Accounted) and never one shared with the community,
+ * whose text is frozen for review until the user withdraws it.
+ */
+async function requireOwnPrivateSkill(supabase: SupabaseClient, companyId: string, id: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('company_skills')
+    .select('id, atom_id, share_status')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data || data.atom_id) {
+    throw codedRefusal('NOT_FOUND', `Own item not found: own/${id} is not an own item of this company. gnubok_list_skills lists the added ones (tier own).`)
+  }
+  if (data.share_status !== 'private') {
+    throw codedRefusal('CONFLICT', `own/${id} is shared with the community, so its text is frozen. The user withdraws the sharing in Accounted first.`)
+  }
+}
 
 const ANNOTATIONS_READ_ONLY = {
   readOnlyHint: true,
@@ -6873,7 +6903,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        slug: { type: 'string', description: 'Slug returned by list_skills or get_task. own/<uuid> requires company access.' },
+        slug: { type: 'string' },
       },
       required: ['slug'],
     },
@@ -6934,12 +6964,16 @@ export const tools: McpTool[] = [
 
   withRetryKey({
     name: 'gnubok_create_skill',
-    title: 'Create Own Item',
-    description: 'Save a confirmed item as a draft.',
+    title: 'Save Own Item',
+    description: 'Save a confirmed item as a draft; company_skill_id replaces that item, delete: true removes it.',
+    // Agents look for an update or delete tool by name (crm#1506); never serialized.
+    keywords: ['update', 'edit', 'replace', 'delete', 'remove', 'uppdatera', 'ändra', 'ta bort', 'radera'],
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        company_skill_id: { type: 'string' },
+        delete: { type: 'boolean' },
         kind: { type: 'string', enum: ['workflow', 'rules', 'analysis'] },
         name: { type: 'string' },
         description: { type: 'string' },
@@ -6949,7 +6983,8 @@ export const tools: McpTool[] = [
         told: { type: 'string' },
         language: { type: 'string', enum: ['sv', 'en'] },
       },
-      required: ['name', 'description'],
+      // name and description are required to save (CreateSkillArgsSchema),
+      // but a delete takes only the id, so the schema cannot demand them.
     },
     outputSchema: {
       type: 'object',
@@ -6959,8 +6994,36 @@ export const tools: McpTool[] = [
       },
       required: ['company_skill_id', 'slug'],
     },
-    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    // delete: true removes an own item, so the tool is destructive.
+    annotations: ANNOTATIONS_DESTRUCTIVE_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase) {
+      if (args.delete === true) {
+        const parsedDelete = DeleteSkillArgsSchema.safeParse(args)
+        if (!parsedDelete.success) throw fieldValidationError('Invalid skill deletion', zodFieldIssues(parsedDelete.error, args))
+        const id = parsedDelete.data.company_skill_id
+        await requireOwnPrivateSkill(supabase, companyId, id)
+        const { data, error } = await supabase
+          .from('company_skills')
+          .delete()
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .is('atom_id', null)
+          .eq('share_status', 'private')
+          .select('id')
+          .maybeSingle()
+        if (error) throw error
+        if (!data) throw codedRefusal('CONFLICT', `own/${id} changed while it was deleted. Read it again with gnubok_list_skills.`)
+        // The knowledge chosen for this flow goes with it, as when the user
+        // deletes it in Accounted (DELETE /api/skills/[id]). The item is gone
+        // either way, so a failed clean-up is logged, not surfaced.
+        const { error: choicesError } = await supabase
+          .from('company_agent_knowledge')
+          .delete()
+          .eq('company_id', companyId)
+          .eq('agent_id', `own/${id}`)
+        if (choicesError) log.warn('Knowledge choices of a deleted own flow were left behind', { skillId: id, error: choicesError.message })
+        return { company_skill_id: id, slug: `own/${id}`, deleted: true }
+      }
       const parsedArgs = CreateSkillArgsSchema.safeParse(args)
       if (!parsedArgs.success) throw fieldValidationError('Invalid skill', zodFieldIssues(parsedArgs.error, args))
       const input = parsedArgs.data
@@ -6989,6 +7052,24 @@ export const tools: McpTool[] = [
           'Invalid skill',
           zodFieldIssues(body.error, skill.body).map((issue) => ({ ...issue, field: 'text' })),
         )
+      }
+      if (input.company_skill_id) {
+        const id = input.company_skill_id
+        await requireOwnPrivateSkill(supabase, companyId, id)
+        // Back to draft: text an AI wrote reaches no agent until a person adds
+        // it in Accounted, whether it is new or replaces an added item.
+        const { data: replaced, error: replaceError } = await supabase
+          .from('company_skills')
+          .update({ kind: input.kind, name: skill.name, description: skill.description, body: skill.body, draft: true })
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .is('atom_id', null)
+          .eq('share_status', 'private')
+          .select('id')
+          .maybeSingle()
+        if (replaceError) throw replaceError
+        if (!replaced) throw codedRefusal('CONFLICT', `own/${id} changed while it was replaced. Read it again with gnubok_list_skills.`)
+        return { company_skill_id: id, slug: `own/${id}` }
       }
       const { data, error } = await supabase
         .from('company_skills')
@@ -8143,13 +8224,15 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_uncategorized_transactions',
     keywords: ['okategoriserade', 'banktransaktioner', 'kontohändelser', 'att bokföra'],
     title: 'List Uncategorized Transactions',
-    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account. batch_suggestion (a Bankgirot split) feeds gnubok_match_batch_allocate.',
+    // suggested_match (crm#1510): paid for by the limit/offset notes, which
+    // restated what every paginated tool's limit and offset are.
+    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account. batch_suggestion (a Bankgirot split) feeds gnubok_match_batch_allocate. suggested_match is Accounted\'s own match: the user approves it in Att göra.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        limit: { type: 'number', description: 'Max results to return, 1-100 (default 20)' },
-        offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
+        limit: { type: 'number', description: '1-100, default 20' },
+        offset: { type: 'number' },
         cash_account_id: { type: 'string' },
       },
       examples: [{}, { limit: 100, offset: 100 }],
@@ -8207,7 +8290,7 @@ export const tools: McpTool[] = [
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
           'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
-          'counterparty_account, counterparty_iban, original_description, external_id',
+          'counterparty_account, counterparty_iban, original_description, external_id, ' + SUGGESTION_POINTER_COLUMNS,
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -8271,6 +8354,13 @@ export const tools: McpTool[] = [
         ? await loadGiroRegister(supabase, companyId)
         : null
 
+      // crm#1510: the match Accounted already suggests for the row (the one
+      // Att göra shows a person), so an agent asks the user to approve it
+      // instead of staging a second booking or calling the invoice overdue.
+      // The raw pointers are read for it, not returned. Undeclared like the
+      // rest (payload-size.bench).
+      const suggestedMatches = await loadSuggestedMatches(supabase, companyId, pageRows as unknown as SuggestionPointerRow[])
+
       const rows = pageRows.map((t) => {
         const parts = partsByTransaction.get(t.id) ?? []
         const allocations =
@@ -8279,10 +8369,19 @@ export const tools: McpTool[] = [
             : null
         const giro = giroRegister ? readGiroCounterparty(t as unknown as GiroRow, giroRegister) : null
         // The bank text is read for the giro, not returned: description carries the row's text.
-        const { original_description: _bankText, ...row } = t as typeof t & { original_description?: string | null }
+        const {
+          original_description: _bankText,
+          potential_supplier_invoice_id: _si,
+          potential_invoice_id: _ci,
+          potential_journal_entry_id: _je,
+          potential_match_confidence: _conf,
+          ...row
+        } = t as typeof t & { original_description?: string | null } & Omit<SuggestionPointerRow, 'id'>
+        const suggested = suggestedMatches.get(t.id)
         return {
           ...row,
           ...(giro ? { giro_counterparty: giroCounterpartyForWire(giro) } : {}),
+          ...(suggested ? { suggested_match: suggested } : {}),
           transaction_id: t.id,
           cash_account_id: t.cash_account_id ?? null,
           cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
@@ -14270,7 +14369,14 @@ export const tools: McpTool[] = [
         .single()
 
       if (txError || !transaction) throw codedRefusal('NOT_FOUND', 'Transaction not found')
-      if (transaction.amount <= 0) throw new Error('Only income transactions (amount > 0) can be matched to invoices')
+      // crm#1510: an outgoing row is a supplier payment; say where that goes
+      // instead of leaving the agent to stage a categorization beside it.
+      if (transaction.amount <= 0) {
+        throw codedRefusal(
+          'MATCH_INVOICE_NOT_INCOME',
+          'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, or under kontantmetoden the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
+        )
+      }
       if (transaction.invoice_id) throw new Error('Transaction is already linked to an invoice')
 
       const { data: invoice, error: invError } = await supabase

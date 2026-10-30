@@ -6,14 +6,18 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 import { cancelPaymentOrder } from '@/lib/payments/orders/lifecycle'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 
-/** Nothing to send yet: the body is an empty JSON object. */
-const CancelSchema = z.object({})
+/**
+ * release_unsigned: let go here of a payment the bank holds unsigned and
+ * refused to cancel, once the refusal said it is releasable (crm#1282).
+ */
+const CancelSchema = z.object({ release_unsigned: z.boolean().optional() })
 
 /**
  * POST /api/payments/orders/:id/cancel: cancel a bank payment. Before the
  * bank has it, it is cancelled here; after that only when the bank confirms.
  * An order whose bank outcome is unknown is resolved by a person instead
- * (POST /api/payments/orders/:id/resolve).
+ * (POST /api/payments/orders/:id/resolve). An unsigned payment the bank will
+ * not cancel is released here only on release_unsigned (isReleasableUnsigned).
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'payment_orders.cancel',
@@ -24,7 +28,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const signer = signerFromRequest(request, null)
     const outcome = await cancelPaymentOrder(
       { supabase, companyId, userId: user.id, log },
-      { orderId: id, signer: { ipAddress: signer.ipAddress, userAgent: signer.userAgent } },
+      {
+        orderId: id,
+        signer: { ipAddress: signer.ipAddress, userAgent: signer.userAgent },
+        releaseUnsigned: validation.data.release_unsigned === true,
+      },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

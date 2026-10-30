@@ -35,8 +35,16 @@ describe('focusDecision', () => {
       makeItem({ extracted_data: reading({ documentKind: 'receipt', payment: { method: 'card', cardLast4: '4471' }, totals: { total: 120 } }) }),
     )
     expect(d.question).toBe('who_paid')
-    expect(d.evidence).toEqual({ kind: 'paid_with', method: 'card', cardLast4: '4471' })
+    expect(d.evidence).toEqual({ kind: 'paid_with', method: 'card', cardLast4: '4471', cardKnown: false })
     expect(d.actions).toEqual(['match_purchase', 'expense', 'not_underlag'])
+  })
+
+  it('the card number is the card that paid only when the company knows it (crm#1534)', () => {
+    const read = reading({ documentKind: 'receipt', payment: { method: 'card', cardLast4: '6776' }, totals: { total: 214 } })
+    expect(focusDecision(makeItem({ extracted_data: read, payment_card_known: true })).evidence).toMatchObject({ cardLast4: '6776', cardKnown: true })
+    // Unknown, or not checked (an older list): shown as read, never as fact.
+    expect(focusDecision(makeItem({ extracted_data: read, payment_card_known: false })).evidence).toMatchObject({ cardKnown: false })
+    expect(focusDecision(makeItem({ extracted_data: read })).evidence).toMatchObject({ cardKnown: false })
   })
 
   it('shows the amount and date when nothing says how it was paid, and nothing when nothing was read', () => {
@@ -354,7 +362,8 @@ describe('focusDecision: an invoice its receipt says is paid', () => {
   it('asks who paid, with the receipt\'s card as the evidence, instead of how it will be paid', () => {
     const d = focusDecision(invoice, { companion: receipt })
     expect(d.question).toBe('who_paid')
-    expect(d.evidence).toEqual({ kind: 'paid_with', method: 'card', cardLast4: '3667' })
+    expect(d.evidence).toEqual({ kind: 'paid_with', method: 'card', cardLast4: '3667', cardKnown: false })
+    expect(focusDecision(invoice, { companion: { ...receipt, payment_card_known: true } }).evidence).toMatchObject({ cardKnown: true })
     expect(d.actions).toEqual(['match_purchase', 'expense', 'not_underlag'])
     // Never "register it unpaid" or "pay it in the bank": the receipt says it is paid.
     expect(d.actions).not.toContain('register_invoice')

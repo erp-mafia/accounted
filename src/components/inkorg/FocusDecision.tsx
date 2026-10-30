@@ -743,7 +743,7 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
         return t('ev_issued', { date: shortDate(evidence.date, locale) })
       case 'paid_with':
         return evidence.method === 'card' && evidence.cardLast4
-          ? t('ev_paid_card_last4', { last4: evidence.cardLast4 })
+          ? t(evidence.cardKnown ? 'ev_paid_card_last4' : 'ev_paid_card_last4_unknown', { last4: evidence.cardLast4 })
           : t(`ev_paid_${evidence.method}`)
       case 'amount':
         return evidence.date

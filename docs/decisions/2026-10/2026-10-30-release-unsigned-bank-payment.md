@@ -1,0 +1,1 @@
+[2026-10-30] A person may release here an order whose payment the bank holds unsigned (RCVD/PDNG) and refuses to cancel, 30 min after its last BankID start: cancelled with the payment id kept, never a signed or accepted one; no machine door (crm#1282).

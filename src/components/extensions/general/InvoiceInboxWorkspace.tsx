@@ -228,6 +228,10 @@ interface InboxItem {
   purchase_category?: InboxPurchaseCategory | null
   // What else the evidence points to, offered in the category dialog; same read.
   purchase_category_alternatives?: PurchaseCategoryAlternative[]
+  // Whether the card number read off it (extracted_data.payment.cardLast4)
+  // is one of the company's own cards (crm#1534), derived by GET /items and
+  // GET /items/:id; null when none was read. Only true shows it as fact.
+  payment_card_known?: boolean | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
   // page-count gate skipped a PDF above the auto-extract limit (issue #553).
@@ -3100,7 +3104,11 @@ function FieldsRail({
               <span className="text-muted-foreground w-14 shrink-0">{t('payment_label')}</span>
               <span>
                 {t(`payment_${data.payment.method}`)}
-                {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
+                {data.payment.cardLast4
+                  ? item.payment_card_known === true
+                    ? ` •• ${data.payment.cardLast4}`
+                    : ` •• ${data.payment.cardLast4} (${t('payment_card_unknown')})`
+                  : ''}
                 {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
               </span>
             </div>

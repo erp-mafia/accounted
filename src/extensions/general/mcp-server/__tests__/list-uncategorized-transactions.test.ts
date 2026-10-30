@@ -235,6 +235,53 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(findCalls('bank_transaction_parts', 'eq')).toEqual([['company_id', 'company-1']])
   })
 
+  it("carries Accounted's own open match as suggested_match and leaves out a stale pointer (crm#1510)", async () => {
+    // The agent listed a bankgiro payment of a supplier invoice without the
+    // suggestion Att göra showed the person, reported the invoice overdue and
+    // staged its own booking beside it.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const base = { currency: 'SEK', reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: null, potential_invoice_id: null, potential_supplier_invoice_id: null, potential_journal_entry_id: null, potential_match_confidence: null }
+    enqueuePage(enqueue, [
+      { ...base, id: 't-si', date: '2026-10-27', description: 'Bg betalning', merchant_name: 'Leverantör AB', amount: -2494, potential_supplier_invoice_id: 'si-open' },
+      { ...base, id: 't-stale', date: '2026-10-27', description: 'Bg betalning', merchant_name: 'Leverantör AB', amount: -100, potential_supplier_invoice_id: 'si-paid' },
+      { ...base, id: 't-je', date: '2026-10-26', description: 'Inbetalning', merchant_name: 'Kund AB', amount: 500, potential_match_method: 'amount_date', potential_journal_entry_id: 'je-1', potential_match_confidence: '0.9' },
+      { ...base, id: 't-plain', date: '2026-10-26', description: 'Avgift', merchant_name: 'Banken', amount: -39 },
+    ])
+    enqueue({ data: [], error: null }) // bank_transaction_parts
+    enqueue({
+      data: [
+        { id: 'si-open', supplier_invoice_number: '74079', remaining_amount: '2494.00', status: 'overdue' },
+        { id: 'si-paid', supplier_invoice_number: '1', remaining_amount: '0', status: 'paid' },
+      ],
+      error: null,
+    }) // supplier_invoices
+    enqueue({ data: [{ id: 'je-1', voucher_series: 'a', voucher_number: 12, status: 'posted' }], error: null }) // journal_entries
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<Record<string, unknown>>
+    }
+
+    const byId = new Map(result.transactions.map((t) => [t.transaction_id, t]))
+    expect(byId.get('t-si')?.suggested_match).toEqual({
+      kind: 'supplier_invoice',
+      supplier_invoice_id: 'si-open',
+      invoice_number: '74079',
+      remaining_amount: 2494,
+    })
+    expect(byId.get('t-stale')).not.toHaveProperty('suggested_match')
+    expect(byId.get('t-je')?.suggested_match).toEqual({ kind: 'journal_entry', journal_entry_id: 'je-1', voucher: 'A12', confidence: 0.9 })
+    expect(byId.get('t-plain')).not.toHaveProperty('suggested_match')
+    // The raw pointers are read for the suggestion, not returned.
+    for (const row of result.transactions) {
+      expect(row).not.toHaveProperty('potential_supplier_invoice_id')
+      expect(row).not.toHaveProperty('potential_journal_entry_id')
+    }
+    expect(findCalls('supplier_invoices', 'in')).toEqual([['id', ['si-open', 'si-paid']]])
+    expect(findCalls('supplier_invoices', 'eq')).toEqual([['company_id', 'company-1']])
+    // No row points at a customer invoice: that read is skipped.
+    expect(findCalls('invoices', 'in')).toHaveLength(0)
+  })
+
   it('says whose giro a nameless row shows: the own bankgiro, or the one supplier card (crm#1204)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     const base = { currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: null }

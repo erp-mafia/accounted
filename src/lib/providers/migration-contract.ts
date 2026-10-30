@@ -394,6 +394,22 @@ export function migrationRefusals(job: Pick<ProviderMigrationJob, 'refused_resou
 }
 
 /**
+ * The registers a job asked for that came back without a single record and
+ * were not refused (crm#1516). provider_migration_counts groups the records
+ * the job saved, so such a register has no counts row, and the wizard showed
+ * no line for it: an empty register read the same as one never asked for.
+ * A refused register is left out: its refusal names it with the remedy.
+ */
+export function emptyMigrationRegisters(
+  job: Pick<ProviderMigrationJob, 'resources' | 'refused_resources'>,
+  counts: readonly Pick<MigrationResourceCounts, 'resource'>[],
+): MigrationResource[] {
+  const counted = new Set<string>(counts.map((row) => row.resource))
+  return MIGRATION_RESOURCES.filter((resource) =>
+    (job.resources ?? []).includes(resource) && !counted.has(resource) && !job.refused_resources?.[resource])
+}
+
+/**
  * The values a refusal group's message takes: `{provider}`, and `{what}`,
  * the refused registers by their labels in lower case ("leverantörer,
  * leverantörsfakturor").

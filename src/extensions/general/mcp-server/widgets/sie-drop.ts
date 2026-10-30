@@ -9,8 +9,9 @@ import { SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-fi
  * 100 KB+ file imports without token-by-token reproduction risk. Flow:
  * drop → gnubok_sie_preflight (verdict shown in the card) → user clicks
  * Importera → gnubok_import_sie with the preflight's mappings (stages for
- * approval as always). The tool's upload_url stays available as a fallback
- * for hosts without the widget.
+ * approval as always). For a year already imported, the button adds only the
+ * file's new verifikat (on_existing_year=append, crm#1544). The tool's
+ * upload_url stays available as a fallback for hosts without the widget.
  *
  * Company binding (crm#1201): the tool result names target_company, the
  * company the card was opened for. The card shows it before anything is
@@ -306,6 +307,27 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     return html ? '<div class="notices">' + html + '</div>' : '';
   }
 
+  // A year that is already imported (issue #108, crm#1544): the preflight's
+  // append plan says which of the file's verifikat are new. The card offers
+  // to add only those, never the whole year again. Possible duplicates and
+  // series choices stay in the app's wizard.
+  function appendOffer(sc) {
+    const a = sc.verdict === 'duplicate' ? sc.append : null;
+    return a && !a.refusal && a.counts && a.counts.toAdd > 0 ? a : null;
+  }
+
+  function renderAppend(a) {
+    if (!a || !a.counts) return '';
+    let html = '';
+    if (a.refusal) html += '<div class="error">' + esc(a.refusal.message) + '</div>';
+    (a.warnings || []).forEach(function(w) { html += '<div class="action">' + esc(w) + '</div>'; });
+    if (!a.refusal && a.counts.possibleDuplicates > 0) {
+      html += '<div class="action">' + a.counts.possibleDuplicates + ' verifikat liknar redan bokförda och läggs inte till. ' +
+        'Ska de med: lägg till filen i importguiden på app.accounted.se/import?mode=sie.</div>';
+    }
+    return html ? '<div class="notices">' + html + '</div>' : '';
+  }
+
   function renderReport(sc) {
     drop.textContent = fileState.name;
     // The company the server checked the file against. It must be the card's
@@ -313,7 +335,10 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     const checked = sc.target_company || null;
     const wrongTarget = !!(target && checked && checked.company_id !== target.company_id);
     const blocked = wrongTarget || ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
-    const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings') && !blocked;
+    const append = blocked ? null : appendOffer(sc);
+    fileState.append = !!append;
+    fileState.importLabel = append ? 'Lägg till ' + append.counts.toAdd + ' nya verifikat' : 'Importera';
+    const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings' || !!append) && !blocked;
     const f = sc.file || {};
     const rows = [
       ['Importeras till', companyLabel(checked || target)],
@@ -322,10 +347,14 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       ['Verifikat', String(f.voucher_count != null ? f.voucher_count : '?')],
       ['Konton', String(f.account_count != null ? f.account_count : '?')],
     ];
+    if (sc.verdict === 'duplicate' && sc.append && sc.append.counts) {
+      rows.push(['Redan bokförda', String(sc.append.counts.present)], ['Nya', String(sc.append.counts.toAdd)]);
+    }
     let html = '<span class="status ' + (ok ? 'ok' : 'bad') + '">' +
       (blocked ? 'Fel företag'
         : sc.verdict === 'ok' ? 'Ser korrekt ut'
         : sc.verdict === 'ok_with_warnings' ? 'OK med anmärkningar'
+        : append ? 'Året är redan importerat: nya verifikat kan läggas till'
         : sc.verdict === 'duplicate' ? 'Redan importerad'
         : sc.verdict === 'blocked' ? 'Kan inte importeras nu'
         : 'Ogiltig fil') + '</span>';
@@ -337,6 +366,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         ', inte för ' + esc(companyLabel(target)) + '. Importera inte härifrån; be agenten öppna importkortet igen.</div></div>';
     }
     html += renderNotices(sc);
+    if (!blocked && sc.verdict === 'duplicate') html += renderAppend(sc.append);
     el('report').innerHTML = html;
     const toggle = document.getElementById('toggle-notices');
     if (toggle) {
@@ -347,6 +377,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       });
     }
     show('report');
+    el('import').textContent = fileState.importLabel;
     if (ok) { show('actions'); el('import').disabled = false; }
     else hide('actions');
   }
@@ -364,7 +395,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     if (!fileState || !fileState.preflight) return;
     el('import').disabled = true;
     el('import').textContent = 'Importerar…';
-    callTool('gnubok_import_sie', forTarget({
+    const importArgs = {
       filename: fileState.name,
       file_content_base64: fileState.base64,
       sha256: fileState.sha256,
@@ -374,7 +405,11 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       // preflight says so, and the import is admitted only without the file's.
       import_opening_balances: fileState.preflight.import_opening_balances !== false,
       import_transactions: true
-    })).then(function(res) {
+    };
+    // Only the file's new verifikat, as their own batch; the server plans it
+    // again at staging and at approval, and books no IB for an append.
+    if (fileState.append) importArgs.on_existing_year = 'append';
+    callTool('gnubok_import_sie', forTarget(importArgs)).then(function(res) {
       const sc = parseResult(res);
       if (sc && sc.operation_id) {
         // Stage + arm in ONE step: the next click is already the deliberate
@@ -389,11 +424,11 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         note('Importen är förberedd och väntar på godkännande i chatten eller i Accounted.');
       }
       sendNotification('ui/updateContext', {
-        content: 'SIE-importen av ' + fileState.name + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande i importkortet.'
+        content: 'SIE-importen av ' + fileState.name + (fileState.append ? ' (bara filens nya verifikat, on_existing_year=append)' : '') + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande i importkortet.'
       });
     }).catch(function(err) {
       el('import').disabled = false;
-      el('import').textContent = 'Importera';
+      el('import').textContent = fileState.importLabel || 'Importera';
       note('Import misslyckades: ' + (err && err.message ? err.message : 'okänt fel'));
     });
   });

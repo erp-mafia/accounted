@@ -40,7 +40,7 @@ export const API_KEY_SCOPES = {
   'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
   'agent:read':         { label: 'Agent: läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
-  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact) och spara egna skills (create_skill)' },
+  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact) och spara, ändra och ta bort egna skills (create_skill)' },
   // Shown to users as "Agentförslag", the name of the review list under
   // Att göra (issue #3408): "stagade operationer" read as developer jargon.
   'pending_operations:read':    { label: 'Agentförslag: läs',     description: 'Lista agentförslag som väntar på ditt godkännande' },

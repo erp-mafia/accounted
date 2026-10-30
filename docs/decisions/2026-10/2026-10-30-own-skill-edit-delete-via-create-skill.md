@@ -1,0 +1,1 @@
+[2026-10-30] An agent edits or deletes an own skill through gnubok_create_skill (company_skill_id, delete: true), not two new tools: the catalog has no headroom to spend. A replaced item goes back to draft, so AI-written text still reaches no agent until a person adds it.

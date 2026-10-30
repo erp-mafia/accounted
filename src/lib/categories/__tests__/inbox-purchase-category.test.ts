@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   InboxPurchaseCategorySchema,
+  personWordsOn,
   readPurchaseCategoryOverride,
   resolveInboxPurchaseCategories,
   resolveInboxPurchaseCategoryChoices,
@@ -40,6 +41,18 @@ function reading(overrides: Record<string, unknown> = {}) {
   }
 }
 
+
+describe('personWordsOn', () => {
+  it('reads the caption, the note and the typed answers the chat kept, nothing else', () => {
+    expect(personWordsOn({ channel: 'whatsapp', caption: ' Sen middag ' })).toBe('Sen middag')
+    expect(personWordsOn({ user_note: 'Till kontoret', context_answer: { raw_answer: 'fika', answered_at: 'x' } })).toBe('Till kontoret\nfika')
+    expect(personWordsOn({ representation: { raw_answer: 'Anna, kund', participants: [] } })).toBe('Anna, kund')
+    expect(personWordsOn({ channel: 'mail_hunt', mail_subject: 'Kvitto', mail_from: 'shop@example.com' })).toBeNull()
+    expect(personWordsOn({ caption: '  ' })).toBeNull()
+    expect(personWordsOn(null)).toBeNull()
+    expect(personWordsOn('caption')).toBeNull()
+  })
+})
 describe('readPurchaseCategoryOverride', () => {
   it('reads a person\'s choice of a known code, and nothing else', () => {
     expect(readPurchaseCategoryOverride({ purchaseCategory: { code: 'expense.equipment.hardware', source: 'person', set_at: 'x' } })).toBe(
@@ -197,6 +210,16 @@ describe('resolveInboxPurchaseCategories', () => {
     expect(InboxPurchaseCategorySchema.parse(out.get('a'))).toEqual(out.get('a'))
     expect(mock.findCall('suppliers', 'select')?.[0]).toBe('id, default_expense_account, default_purchase_category')
     expect(mock.findCalls('suppliers', 'eq')).toContainEqual(['company_id', COMPANY])
+  })
+
+  it('a caption or note the person sent with the item outranks the supplier\'s instruction: no proposal (crm#1533)', async () => {
+    mock.enqueue({ data: [template()] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ id: 'sup-1', default_expense_account: '6212', default_purchase_category: 'expense.telecom.internet' }] })
+    const out = await resolveInboxPurchaseCategories(supabase, COMPANY, [
+      { id: 'a', extracted_data: reading(), matched_supplier_id: 'sup-1', channel_context: { channel: 'whatsapp', caption: 'Till kontoret' } },
+    ])
+    expect(out.get('a')).toBeNull()
   })
 
   it('never lets the instruction override a person\'s choice on a single item, and reads nothing for it', async () => {

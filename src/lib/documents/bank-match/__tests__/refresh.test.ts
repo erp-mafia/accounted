@@ -241,6 +241,19 @@ describe('refreshInboxItemBankMatch', () => {
       return { data: [] }
     }
 
+    /**
+     * The bank: the known-card read (its .or on the card's digits,
+     * ./known-cards.ts) sees `statement`; every other read takes `reads` in
+     * turn, the last one repeating.
+     */
+    const bank = (statement: unknown[], reads: unknown[][]): TableMockResolver => {
+      let read = 0
+      return (calls) => {
+        if (calls.some((c) => c.method === 'or' && String(c.args[0]).includes('ilike'))) return { data: statement }
+        return { data: reads[Math.min(read++, reads.length - 1)] }
+      }
+    }
+
     beforeEach(() => {
       loadDocumentReading.mockResolvedValue(X_READING)
     })
@@ -248,7 +261,7 @@ describe('refreshInboxItemBankMatch', () => {
     it('an invoice borrows the card of the receipt it came with: the row naming that card is stark', async () => {
       const { supabase, findCalls } = createTableMockSupabase({
         invoice_inbox_items: mail(xInvoice, [xInvoice, xReceipt]),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })
       expect(outcome).toEqual({ status: 'updated', decision: { transactionId: 'tx-x', basis: 'rule_amount_date', evidenceLevel: 'stark' } })
@@ -259,7 +272,7 @@ describe('refreshInboxItemBankMatch', () => {
     it('without the receipt the same row is trolig', async () => {
       const { supabase } = createTableMockSupabase({
         invoice_inbox_items: mail(xInvoice, [xInvoice]),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })
       expect(outcome).toMatchObject({ decision: { transactionId: 'tx-x', evidenceLevel: 'trolig' } })
@@ -268,7 +281,7 @@ describe('refreshInboxItemBankMatch', () => {
     it('a receipt from another mail lends no card', async () => {
       const { supabase } = createTableMockSupabase({
         invoice_inbox_items: mail(xInvoice, [xInvoice, { ...xReceipt, resend_email_id: 'another-mail' }]),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })
       expect(outcome).toMatchObject({ decision: { evidenceLevel: 'trolig' } })
@@ -278,7 +291,7 @@ describe('refreshInboxItemBankMatch', () => {
       loadDocumentReading.mockResolvedValue(reading({ document_type: 'receipt', seller_name: 'X Corp.', amount_due_for_payment: 83, invoice_currency_code: 'SEK', invoice_issue_date: '2026-10-03' }))
       const { supabase, findCalls } = createTableMockSupabase({
         invoice_inbox_items: mail(xReceipt, []),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { today: '2026-10-19' })
       expect(outcome).toMatchObject({ decision: { transactionId: 'tx-x', evidenceLevel: 'stark' } })
@@ -302,7 +315,7 @@ describe('refreshInboxItemBankMatch', () => {
       const realReceipt = { ...xReceipt, extracted_data: receiptRead }
       const paired = createTableMockSupabase({
         invoice_inbox_items: mail(realInvoice, [realInvoice, realReceipt]),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       expect(await refreshInboxItemBankMatch(paired.supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })).toEqual({
         status: 'updated',
@@ -311,7 +324,7 @@ describe('refreshInboxItemBankMatch', () => {
       // Without the receipt there is no card, and the name does not agree: nothing.
       const alone = createTableMockSupabase({
         invoice_inbox_items: mail(realInvoice, [realInvoice]),
-        transactions: [{ data: [xRow] }, { data: [] }],
+        transactions: bank([xRow], [[xRow], []]),
       })
       expect(await refreshInboxItemBankMatch(alone.supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })).toMatchObject({ decision: null })
     })
@@ -323,9 +336,59 @@ describe('refreshInboxItemBankMatch', () => {
         if (calls.some((c) => c.method === 'eq' && c.args[0] === 'resend_email_id')) return { data: null, error: { message: 'boom' } }
         return { data: [] }
       }
-      const { supabase } = createTableMockSupabase({ invoice_inbox_items: failing, transactions: [{ data: [xRow] }, { data: [] }] })
+      const { supabase } = createTableMockSupabase({ invoice_inbox_items: failing, transactions: bank([xRow], [[xRow], []]) })
       const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, { today: '2026-10-19' })
       expect(outcome).toMatchObject({ decision: { evidenceLevel: 'trolig' } })
+    })
+
+    describe('a read card number the company does not know (crm#1534)', () => {
+      const receiptReading = reading({ document_type: 'receipt', seller_name: 'X Corp.', amount_due_for_payment: 83, invoice_currency_code: 'SEK', invoice_issue_date: '2026-10-03' })
+      const receiptReadAs = (cardLast4: string) => ({ ...xReceipt, extracted_data: { ...X_RECEIPT_READ, payment: { method: 'card', cardLast4 } } })
+
+      it('a misread number turns away no row its real card paid: no card, so name and amount make it trolig', async () => {
+        loadDocumentReading.mockResolvedValue(receiptReading)
+        const misread = receiptReadAs('5905')
+        // No registered card, no bank row prints 5905 as a card: the number is unknown.
+        const { supabase } = createTableMockSupabase({
+          invoice_inbox_items: mail(misread, []),
+          transactions: bank([], [[xRow], []]),
+        })
+        const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { today: '2026-10-19' })
+        expect(outcome).toMatchObject({ decision: { transactionId: 'tx-x', evidenceLevel: 'trolig' } })
+      })
+
+      it('a number one digit off a known card is not snapped to it: never stark', async () => {
+        loadDocumentReading.mockResolvedValue(receiptReading)
+        const { supabase } = createTableMockSupabase({
+          invoice_inbox_items: mail(receiptReadAs('3664'), []),
+          transactions: bank([xRow], [[xRow], []]),
+        })
+        const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { today: '2026-10-19' })
+        expect(outcome).toMatchObject({ decision: { transactionId: 'tx-x', evidenceLevel: 'trolig' } })
+      })
+
+      it('a registered company card still contradicts a row another card paid', async () => {
+        loadDocumentReading.mockResolvedValue(receiptReading)
+        const { supabase, findCalls } = createTableMockSupabase({
+          invoice_inbox_items: mail(receiptReadAs('1234'), []),
+          cash_accounts: { data: [{ card_last4: ['1234'] }] },
+          transactions: bank([], [[xRow], []]),
+        })
+        const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { today: '2026-10-19' })
+        expect(outcome).toMatchObject({ decision: null })
+        expect(findCalls('cash_accounts', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY], ['kind', 'card']]))
+      })
+
+      it('a card check that cannot be read leaves the card out, never the check', async () => {
+        loadDocumentReading.mockResolvedValue(receiptReading)
+        const { supabase } = createTableMockSupabase({
+          invoice_inbox_items: mail(xReceipt, []),
+          cash_accounts: { data: null, error: { message: 'boom' } },
+          transactions: bank([xRow], [[xRow], []]),
+        })
+        const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { today: '2026-10-19' })
+        expect(outcome).toMatchObject({ decision: { transactionId: 'tx-x', evidenceLevel: 'trolig' } })
+      })
     })
   })
 

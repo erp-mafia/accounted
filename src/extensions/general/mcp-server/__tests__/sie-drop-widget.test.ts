@@ -209,6 +209,69 @@ describe('SIE drop widget: company binding', async () => {
     expect(card.element('report').innerHTML).toContain('Kontrollen kördes för Nuvarande AB')
   })
 
+  // crm#1544: a newer export of a year already imported. The preflight
+  // answers duplicate with the append plan; the card offers only the new
+  // verifikat, and stages the import with on_existing_year=append.
+  const appendReply = (append: Record<string, unknown>) => {
+    const reply = preflightReply(CARD_COMPANY)
+    return { structuredContent: { ...reply.structuredContent, verdict: 'duplicate', duplicate: { kind: 'period', import_id: 'base' }, append } }
+  }
+  const PLAN = {
+    base_import_id: 'base', counts: { total: 12, present: 10, conflicts: 0, possibleDuplicates: 0, new: 2, toAdd: 2 },
+    vouchers: [], series: [], warnings: [], refusal: null,
+  }
+  async function preflightWith(result: unknown) {
+    const card = boot()
+    card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { target_company: CARD_COMPANY } } })
+    await card.dropFile()
+    card.deliver({ jsonrpc: '2.0', id: card.lastCall('gnubok_sie_preflight')!.id, result })
+    await card.flush()
+    return card
+  }
+
+  it('offers to add only the new verifikat of an imported year, and stages an append', async () => {
+    const card = await preflightWith(appendReply(PLAN))
+    expect(card.element('actions').hidden()).toBe(false)
+    expect(card.element('import').textContent).toBe('Lägg till 2 nya verifikat')
+    const report = card.element('report').innerHTML
+    expect(report).toContain('Året är redan importerat: nya verifikat kan läggas till')
+    expect(report).toContain('Redan bokförda</span><span class="v">10')
+    expect(report).toContain('Nya</span><span class="v">2')
+
+    card.element('import').click()
+    await card.flush()
+    expect(card.lastCall('gnubok_import_sie')!.params!.arguments).toMatchObject({ on_existing_year: 'append', company_id: CARD_COMPANY.company_id })
+  })
+
+  it('keeps the button away when the append is refused, and shows why', async () => {
+    const card = await preflightWith(appendReply({ ...PLAN, refusal: { code: 'SIE_IMPORT_APPEND_CONFLICT', message: '1 av filens verifikationer har ändrats: A7.' } }))
+    expect(card.element('actions').hidden()).toBe(true)
+    expect(card.element('report').innerHTML).toContain('Redan importerad')
+    expect(card.element('report').innerHTML).toContain('1 av filens verifikationer har ändrats: A7.')
+  })
+
+  it('keeps the button away when nothing is new, and an identical file stays a duplicate', async () => {
+    for (const append of [{ ...PLAN, counts: { ...PLAN.counts, present: 12, new: 0, toAdd: 0 } }, undefined]) {
+      const card = await preflightWith(appendReply(append as Record<string, unknown>))
+      expect(card.element('actions').hidden()).toBe(true)
+      expect(card.element('report').innerHTML).toContain('Redan importerad')
+    }
+  })
+
+  it('says the possible duplicates are left out and where to include them', async () => {
+    const card = await preflightWith(appendReply({ ...PLAN, counts: { ...PLAN.counts, possibleDuplicates: 3 } }))
+    expect(card.element('report').innerHTML).toContain('3 verifikat liknar redan bokförda och läggs inte till.')
+    expect(card.element('report').innerHTML).toContain('app.accounted.se/import?mode=sie')
+  })
+
+  it('stages an ordinary import of a new year without on_existing_year', async () => {
+    const card = await preflightWith(preflightReply(CARD_COMPANY))
+    expect(card.element('import').textContent).toBe('Importera')
+    card.element('import').click()
+    await card.flush()
+    expect(card.lastCall('gnubok_import_sie')!.params!.arguments).not.toHaveProperty('on_existing_year')
+  })
+
   it('without a tool result it sends no company_id and shows the company the server checked', async () => {
     const card = boot()
     await card.dropFile()

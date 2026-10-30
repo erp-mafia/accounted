@@ -169,3 +169,37 @@ describe('GET /items: an open half whose other half is booked already', () => {
     expect(byId.receipt.pairing).toBeNull()
   })
 })
+
+describe('GET /items: the card number read off a receipt (crm#1534)', () => {
+  const cardRead = (id: string, cardLast4: string) =>
+    makeInvoiceInboxItem({ id, document_id: `doc-${id}`, extracted_data: { ...RECEIPT_READ, payment: { method: 'card', cardLast4 } } as never })
+
+  it('says per row whether the read number is one of the company\'s own cards, never snapping a near one', async () => {
+    const statement: TableMockResolver = (calls) => {
+      const or = calls.find((c) => c.method === 'or')
+      // The company's bank rows print K3667 only.
+      return { data: or && String(or.args[0]).includes('3667') ? [{ merchant_name: null, description: 'X CORP. PAID FEATURES K3667', original_description: null }] : [] }
+    }
+    const { supabase, findCalls } = createTableMockSupabase({
+      invoice_inbox_items: (calls) => (calls.some((c) => c.method === 'range') ? { data: [cardRead('known', '3667'), cardRead('misread', '3664'), makeInvoiceInboxItem({ id: 'none' })] } : { data: [] }),
+      arrival_outputs: { data: [] },
+      cash_accounts: { data: [] },
+      transactions: statement,
+    })
+    const byId = (await read(supabase)) as unknown as Record<string, { payment_card_known: boolean | null }>
+    expect(byId.known.payment_card_known).toBe(true)
+    expect(byId.misread.payment_card_known).toBe(false)
+    expect(byId.none.payment_card_known).toBeNull()
+    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1'], ['kind', 'card']])
+  })
+
+  it('a check that cannot be read shows every number as read, and the list still answers', async () => {
+    const { supabase } = createTableMockSupabase({
+      invoice_inbox_items: (calls) => (calls.some((c) => c.method === 'range') ? { data: [cardRead('known', '3667')] } : { data: [] }),
+      arrival_outputs: { data: [] },
+      cash_accounts: { data: null, error: { message: 'boom' } },
+    })
+    const byId = (await read(supabase)) as unknown as Record<string, { payment_card_known: boolean | null }>
+    expect(byId.known.payment_card_known).toBe(false)
+  })
+})

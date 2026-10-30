@@ -1,0 +1,1 @@
+[2026-10-30] A register a migration job asked for that came back with no records shows "0 hämtade" on the result, read from job.resources against the counts in the client, not by changing provider_migration_counts: a display question needs no migration (crm#1516).

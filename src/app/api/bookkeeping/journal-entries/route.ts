@@ -36,6 +36,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // original and its storno once a posted correction replaced them. A storno
   // with no correction stays visible (#3149). The full chain stays reachable.
   const collapseCorrections = searchParams.get('collapse_corrections') === 'true'
+  // Hide every makulerad pair, not only corrected groups: each reversed
+  // original (Omförd) and each storno, with or without a correction (PH 231).
+  // Opt-in from the list's filter dialog; the default stays gapless (#3149).
+  // The correction itself is posted and stays. Subsumes collapse_corrections.
+  const hideReversed = searchParams.get('hide_reversed') === 'true'
   // Clamp pagination to bound DB work against oversized/pathological inputs
   // (compliance A.8.28 / ASVS V1.2.5). The ceiling is what one PostgREST
   // response can carry: a larger limit came back cut at 1,000 rows under a
@@ -188,7 +193,9 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
-  if (periodId && includeRelated && (sortKeys.length === 0 || soloDateKey) && !search) {
+  // hide_reversed takes the direct path too: the RPC has no such filter, and,
+  // as with search, the hidden-pairs view stays strict to the selected year.
+  if (periodId && includeRelated && (sortKeys.length === 0 || soloDateKey) && !search && !hideReversed) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -325,7 +332,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // that carries its voucher number, so hiding it showed a hole in the series
   // (#3149). Same rule as the RPC's p_collapse_corrections. Pagination/count
   // stay correct because these are query filters.
-  if (collapseCorrections) {
+  if (hideReversed) {
+    // Both halves of every makulerad pair, by their own columns: no prefetch,
+    // and count/pagination stay exact. The correction (posted) stays.
+    query = query.neq('status', 'reversed').neq('source_type', 'storno')
+  } else if (collapseCorrections) {
     const { data: corrections } = await supabase
       .from('journal_entries')
       .select('correction_of_id')

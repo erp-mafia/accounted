@@ -1,0 +1,1 @@
+[2026-10-30] A supplier instruction (varje gång) is a default: when the person put own words on one underlag (caption, note, typed answer) it no longer answers Ditt val; no proposal, instruction first among alternatives. The words' meaning is never read (crm#1533).

@@ -287,8 +287,8 @@ import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
 import ProviderMigrationIssues from './ProviderMigrationIssues'
 import {
-  MIGRATION_RESOURCES, migrationRefusalMessageValues, migrationRefusals, USER_RIGHT_REFUSAL_MESSAGE_KEY,
-  type ProviderMigrationIssue, type ProviderMigrationStatus,
+  MIGRATION_RESOURCES, emptyMigrationRegisters, migrationRefusalMessageValues, migrationRefusals,
+  USER_RIGHT_REFUSAL_MESSAGE_KEY, type MigrationResource, type ProviderMigrationIssue, type ProviderMigrationStatus,
 } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -1775,19 +1775,24 @@ export function OptionsStep({
           <div>
             {/* The toggle covers the new years. With none, there is nothing
                 for it to import: an already imported year is only imported
-                again through its own checkbox below. */}
+                again through its own checkbox below, and the row then says
+                so (on, still locked). Left off with "every year is already
+                imported", a ticked year read as not taken, and people
+                ticked it on and off again. */}
             <OptionRow
               label="Bokföringsdata (SIE)"
               description={
                 fileStatuses.length === 0
                   ? 'Kontoplan, ingående balanser och verifikationer'
                   : newFileCount === 0
-                    ? t('ext_arcim_option_sie_desc_all_kept')
+                    ? yearsToReplace.length > 0
+                      ? t('ext_arcim_option_sie_desc_replacing', { count: yearsToReplace.length })
+                      : t('ext_arcim_option_sie_desc_all_kept')
                     : importedYears.length > 0
                       ? t('ext_arcim_option_sie_desc_new_and_kept', { newCount: newFileCount, keptCount: importedYears.length })
                       : t('ext_arcim_option_sie_desc_new', { count: newFileCount })
               }
-              checked={fileStatuses.length > 0 && newFileCount === 0 ? false : options.importSIEData}
+              checked={fileStatuses.length > 0 && newFileCount === 0 ? yearsToReplace.length > 0 : options.importSIEData}
               disabled={fileStatuses.length > 0 && newFileCount === 0}
               onChange={() => toggleOption('importSIEData')}
             />
@@ -2956,11 +2961,25 @@ export function ResultStep({
   const hasSkippedWithoutReason = MIGRATION_RESOURCES.some(
     (resource) => (results?.[resource]?.skipReasons?.reasonUnknown ?? 0) > 0,
   )
+  // A register the provider answered with no records at all (crm#1516): its
+  // line says so and what to check, instead of the line going missing.
+  const providerName = ARCIM_PROVIDERS.find(p => p.id === provider)?.name ?? provider ?? ''
+  const emptyRegister = (resource: MigrationResource) => ({
+    label: t(`ext_arcim_job_resource_${resource}`),
+    value: t('ext_arcim_register_empty_value'),
+    detail: t('ext_arcim_register_empty_detail', {
+      provider: providerName,
+      what: t(`ext_arcim_job_resource_${resource}`).toLowerCase(),
+    }),
+    failed: false,
+  })
   if (results) {
     if (results.companyInfo?.imported) {
       entityLines.push({ label: 'Företagsinformation', value: 'Importerad', failed: false })
     }
-    if (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) {
+    if (results.customers?.total === 0) {
+      entityLines.push(emptyRegister('customers'))
+    } else if (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) {
       entityLines.push({
         label: 'Kunder',
         value: results.customers.updated
@@ -2972,7 +2991,9 @@ export function ResultStep({
         failed: entityRowStatus(results.customers.imported, results.customers.skipReasons) === 'error',
       })
     }
-    if (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) {
+    if (results.suppliers?.total === 0) {
+      entityLines.push(emptyRegister('suppliers'))
+    } else if (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) {
       entityLines.push({
         label: 'Leverantörer',
         value: `${results.suppliers.imported} importerade`,
@@ -2982,7 +3003,9 @@ export function ResultStep({
         failed: entityRowStatus(results.suppliers.imported, results.suppliers.skipReasons) === 'error',
       })
     }
-    if (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) {
+    if (results.salesInvoices?.total === 0) {
+      entityLines.push(emptyRegister('salesInvoices'))
+    } else if (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) {
       entityLines.push({
         label: 'Kundfakturor',
         value: `${results.salesInvoices.imported} importerade`,
@@ -4530,6 +4553,12 @@ export default function ArcimMigrationWorkspace({
             creditNotesLinked: count.credit_notes_linked ?? 0,
           } : {}),
         }
+      }
+      // A register that came back empty has no counts row: it still gets its
+      // line, so an empty register no longer reads as one never asked for
+      // (crm#1516).
+      for (const resource of emptyMigrationRegisters(status.job, status.counts)) {
+        results[resource] = { total: 0, imported: 0, skipped: 0 }
       }
       // The job, not this session's options, says whether Fortnox's paid
       // supplier invoices were listed too (crm#1114).

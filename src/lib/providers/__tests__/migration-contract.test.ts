@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MIGRATION_RESOURCES, isTransientIssueCode, migrationIssueHref, migrationIssueKind, migrationIssueReason,
-  migrationJobErrorMessageKey, migrationRefusalMessageKey, migrationRefusalMessageValues, migrationRefusals,
-  USER_RIGHT_REFUSAL_MESSAGE_KEY,
+  emptyMigrationRegisters, migrationJobErrorMessageKey, migrationRefusalMessageKey, migrationRefusalMessageValues,
+  migrationRefusals, USER_RIGHT_REFUSAL_MESSAGE_KEY,
 } from '../migration-contract'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
@@ -218,6 +218,37 @@ describe('migrationIssueHref', () => {
       for (const key of ['ext_arcim_review_open_record', 'ext_arcim_review_record_unnamed', 'ext_arcim_review_record_source_id'] as const) {
         expect(messages.extensions[key], key).toEqual(expect.any(String))
       }
+    }
+  })
+})
+
+// crm#1516: a supplier register that came back empty showed no line at all,
+// so it read the same as one never asked for.
+describe('emptyMigrationRegisters', () => {
+  it('names a requested register with no records, and none that was counted', () => {
+    expect(emptyMigrationRegisters(
+      { resources: ['customers', 'suppliers', 'supplierInvoices'] },
+      [{ resource: 'customers' }, { resource: 'supplierInvoices' }],
+    )).toEqual(['suppliers'])
+  })
+
+  it('leaves out a register never asked for', () => {
+    expect(emptyMigrationRegisters({ resources: ['customers'] }, [])).toEqual(['customers'])
+  })
+
+  it('leaves out a refused register: its refusal names it with the remedy', () => {
+    expect(emptyMigrationRegisters(
+      { resources: ['customers', 'suppliers'], refused_resources: { suppliers: 'permission' } },
+      [],
+    )).toEqual(['customers'])
+  })
+
+  it('has its line in both languages, with the provider and the register', () => {
+    for (const messages of [sv, en]) {
+      const ext = messages.extensions as Record<string, string>
+      expect(ext.ext_arcim_register_empty_value).toEqual(expect.any(String))
+      expect(ext.ext_arcim_register_empty_detail).toContain('{provider}')
+      expect(ext.ext_arcim_register_empty_detail).toContain('{what}')
     }
   })
 })
