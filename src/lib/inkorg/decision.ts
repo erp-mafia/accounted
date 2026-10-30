@@ -108,7 +108,13 @@ export type DecisionEvidence =
     }
   | { kind: 'due'; date: string }
   | { kind: 'issued'; date: string }
-  | { kind: 'paid_with'; method: ExtractedPaymentMethod; cardLast4: string | null }
+  | {
+      kind: 'paid_with'
+      method: ExtractedPaymentMethod
+      cardLast4: string | null
+      /** The card number is one of the company's own cards (InkorgItem.payment_card_known); else it shows as read. */
+      cardKnown: boolean
+    }
   | { kind: 'amount'; amount: number; currency: string; date: string | null }
   | { kind: 'linked_purchase' }
   | { kind: 'underlag_status'; status: Exclude<UnderlagStatus, 'anchored'> }
@@ -183,7 +189,7 @@ function firstDecisionEvidence(item: InkorgItem, kind: InboxDocumentKind | null)
     if (data?.invoice?.invoiceDate) return { kind: 'issued', date: data.invoice.invoiceDate }
   }
   const method = data?.payment?.method
-  if (method) return { kind: 'paid_with', method, cardLast4: data?.payment?.cardLast4 ?? null }
+  if (method) return { kind: 'paid_with', method, cardLast4: data?.payment?.cardLast4 ?? null, cardKnown: item.payment_card_known === true }
   if (headline.amount != null) {
     return { kind: 'amount', amount: headline.amount, currency: headline.currency, date: headline.documentDate }
   }
@@ -193,7 +199,9 @@ function firstDecisionEvidence(item: InkorgItem, kind: InboxDocumentKind | null)
 /** The evidence a paid invoice's receipt gives: how it was paid, else the invoice's own amount. */
 function receiptEvidence(item: InkorgItem, companion: InkorgItem | null): DecisionEvidence | null {
   const payment = companion?.extracted_data?.payment
-  if (payment?.method) return { kind: 'paid_with', method: payment.method, cardLast4: payment.cardLast4 ?? null }
+  if (payment?.method) {
+    return { kind: 'paid_with', method: payment.method, cardLast4: payment.cardLast4 ?? null, cardKnown: companion?.payment_card_known === true }
+  }
   const headline = itemHeadline(item)
   return headline.amount != null ? { kind: 'amount', amount: headline.amount, currency: headline.currency, date: headline.documentDate } : null
 }

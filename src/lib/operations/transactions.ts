@@ -599,13 +599,21 @@ export const transactionsMatchBatch = defineOperation({
           return alreadyExplainedRefusal(failure.details as unknown as AlreadyExplainedRefusalDetails, keyScopes)
         }
         if (failure.code === 'BATCH_CASH_METHOD_UNBOOKED_INVOICE') {
-          const unbooked = (failure.details?.invoices as Array<{ id: string; invoice_number?: string | null }> | undefined) ?? []
+          const unbooked = (failure.details?.invoices as Array<{ id: string; kind?: string; invoice_number?: string | null }> | undefined) ?? []
           const numbers = unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
+          // crm#1510: gnubok_match_transaction_to_invoice takes incoming rows
+          // and customer invoices only, so an outgoing payment of a supplier
+          // invoice was routed to a tool that refuses it. No MCP tool books
+          // that payment yet: the person matches it in Accounted.
+          const supplier = unbooked.some((u) => u.kind === 'supplier_invoice')
           return codedRefusal(
             failure.code,
             `${getErrorEntry(failure.code)?.message_sv ?? failure.code}` +
-              ` Obokförda fakturor: ${numbers}. En faktura som ensam motsvarar beloppet: gnubok_match_transaction_to_invoice.` +
-              ' Flera fakturor: markera varje faktura som betald (kundfakturor: gnubok_mark_invoice_as_paid), sedan gnubok_reconcile_match för att koppla transaktionen till verifikaten.',
+              ` Obokförda fakturor: ${numbers}.` +
+              (supplier
+                ? ' Leverantörsfakturor: be användaren matcha betalningen mot fakturan i Accounted (Att göra visar Accounteds förslag, suggested_match i gnubok_list_uncategorized_transactions); inget MCP-verktyg bokför den betalningen än.'
+                : ' En faktura som ensam motsvarar beloppet: gnubok_match_transaction_to_invoice.' +
+                  ' Flera fakturor: markera varje faktura som betald (gnubok_mark_invoice_as_paid), sedan gnubok_reconcile_match för att koppla transaktionen till verifikaten.'),
           )
         }
         return undefined

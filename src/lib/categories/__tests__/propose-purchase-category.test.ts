@@ -77,6 +77,31 @@ describe('proposePurchaseCategory: item override > supplier instruction > learne
   it('ignores an instruction that is not a code of the taxonomy', () => {
     expect(proposePurchaseCategory({ ...learned, supplierInstruction: 'tools' })).toMatchObject({ source: 'counterparty' })
   })
+
+  it('a person\'s own words on this underlag outrank the supplier\'s standing instruction: no proposal, theirs to decide (crm#1533)', () => {
+    const meal: PurchaseCategoryInput = {
+      supplierInstruction: 'expense.representation.staff',
+      extraction: receipt([{ description: 'Middag', lineTotal: 449 }], { merchantCategory: 'restaurant' }),
+      personNote: 'Sen middag på kontoret',
+    }
+    // Never read for what it says: any words at all, whatever they are.
+    expect(proposePurchaseCategory(meal)).toBeNull()
+    expect(proposePurchaseCategory({ ...meal, personNote: 'Lunch' })).toBeNull()
+    // The instruction is still the first thing offered.
+    expect(purchaseCategoryAlternatives(meal)[0]).toEqual({ code: 'expense.representation.staff', source: 'instruction' })
+    // Blank words are no words: the instruction answers as before.
+    expect(proposePurchaseCategory({ ...meal, personNote: '  ' })).toEqual({ code: 'expense.representation.staff', source: 'instruction', level: 'Ditt val' })
+    // A choice made on this underlag is still the person's, words or not.
+    expect(proposePurchaseCategory({ ...meal, override: 'expense.representation.client' })).toEqual({
+      code: 'expense.representation.client',
+      source: 'person',
+      level: 'Ditt val',
+    })
+  })
+
+  it('words on an underlag with no instruction leave the learned proposal as it was', () => {
+    expect(proposePurchaseCategory({ ...learned, personNote: 'Tankning' })).toEqual({ code: 'expense.vehicle.fuel', source: 'counterparty', level: 'Stark' })
+  })
 })
 
 describe('proposePurchaseCategory: no purchase, no proposal', () => {

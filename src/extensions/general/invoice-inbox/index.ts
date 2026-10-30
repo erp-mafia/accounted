@@ -28,6 +28,7 @@ import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
 import { readingRetryOf } from './lib/provider-retry'
 import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
 import { readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
+import { readCardKnown, readCardOf, readKnownCards } from '@/lib/documents/bank-match/known-cards'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
 import type { DocumentReading } from '@/lib/documents/reading/types'
 import {
@@ -708,7 +709,23 @@ export const invoiceInboxExtension: Extension = {
           extensionLog.warn('inbox list pairing read failed', { err: err instanceof Error ? err.message : String(err) })
         }
 
-        const withLogos = items.map((i) => ({ ...i, logo_url: logos.get(i.id) ?? null, pairing: pairings.get(i.id) ?? null }))
+        // A card number read off a receipt is a reading, not a fact (crm#1534):
+        // each row says whether it is one of the company's own cards, after
+        // the documents' readings stand in. A check that cannot be read is
+        // none known: the number shows as read.
+        let knownCards = new Set<string>()
+        try {
+          knownCards = await readKnownCards(ctx.supabase, ctx.companyId, items.map((i) => readCardOf(i.extracted_data)))
+        } catch (err) {
+          extensionLog.warn('inbox list known cards read failed', { err: err instanceof Error ? err.message : String(err) })
+        }
+
+        const withLogos = items.map((i) => ({
+          ...i,
+          logo_url: logos.get(i.id) ?? null,
+          pairing: pairings.get(i.id) ?? null,
+          payment_card_known: readCardKnown(i.extracted_data, knownCards),
+        }))
 
         // arkiv_section: whether the Dokument section is open for this company, so the
         // "routed to the archive" line links there only when the link leads somewhere.
@@ -844,9 +861,21 @@ export const invoiceInboxExtension: Extension = {
         // and what else the evidence points to for the picker.
         const purchaseCategory = await resolveInboxPurchaseCategoryChoices(ctx.supabase, ctx.companyId, row)
 
+        // As the list: whether the card number read off it is one of the company's own cards (crm#1534).
+        let paymentCardKnown: boolean | null = null
+        if (readCardOf(row.extracted_data)) {
+          try {
+            paymentCardKnown = readCardKnown(row.extracted_data, await readKnownCards(ctx.supabase, ctx.companyId, [readCardOf(row.extracted_data)]))
+          } catch (err) {
+            paymentCardKnown = false
+            extensionLog.warn('inbox item known cards read failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
+          }
+        }
+
         return NextResponse.json({
           data: {
             ...row,
+            payment_card_known: paymentCardKnown,
             matched_transaction_journal_entry_id: matchedTransactionJournalEntryId,
             underlag_status: underlagStatus,
             purchase_category: purchaseCategory.proposal,

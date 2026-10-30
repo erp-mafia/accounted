@@ -1,0 +1,1 @@
+[2026-10-30] Agents read Accounted's own match (suggested_match) on unbooked bank rows; no staged MCP tool books a kontantmetoden supplier payment yet: it needs a new pending_operations type and CHECK migration, and the run had none; refusals route to Att göra (crm#1510).

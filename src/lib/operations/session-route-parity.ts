@@ -836,8 +836,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/community/submissions/:id/approve': uiOnly('staff review of a community submission: reviewers only'),
   'POST /api/community/submissions/:id/send-back': uiOnly('staff review of a community submission: reviewers only'),
   'POST /api/skills': covered(['gnubok_create_skill']),
-  'PATCH /api/skills/:id': gap('P3'),
-  'DELETE /api/skills/:id': gap('P3'),
+  'PATCH /api/skills/:id': covered(['gnubok_create_skill'], 'edit via company_skill_id, back to draft; sharing and adding a draft stay in the app: adding is the person\'s own check'),
+  'DELETE /api/skills/:id': covered(['gnubok_create_skill'], 'delete: true, the company\'s own private items only'),
 
   // ── Machine endpoints: crons, webhooks, connector proxies ──────────
   'POST /api/peppol/daily-report/cron': machine(CRON),
@@ -1060,5 +1060,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * BOLAGET_COMPANY_IDS.
  * 168 -> 169 (2026-10-29, merge with the year-end stock count): deleting a
  * draft stock count, dashboard only; a signed count is kept.
+ * 169 -> 167 (2026-10-30, crm#1506): editing and deleting an own skill,
+ * through gnubok_create_skill (company_skill_id, delete: true).
  */
-export const GAP_CEILING = 169
+export const GAP_CEILING = 167

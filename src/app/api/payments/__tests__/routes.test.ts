@@ -406,6 +406,33 @@ describe('cancelling an order the bank may hold', () => {
     expect(findCall('payment_orders', 'update')).toBeUndefined()
   })
 
+  it('releases an unsigned payment the bank will not cancel only on release_unsigned (crm#1282)', async () => {
+    const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'too_late', providerStatus: 'RCVD', unsigned: true })
+    registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment } as unknown as PaymentInitiationProvider)
+    enqueue({ data: [atBank({ status: 'submitted', submitted_at: '2026-10-19T07:15:48Z' })] })
+    enqueue({ data: { org_number: '5566778899' } })
+    enqueue({ data: null }) // bankid_identities
+    enqueue({ data: null }) // payment_signers
+    enqueue({ data: null }) // cancel_requested
+    enqueue({ data: null }) // the refusal's error event
+    enqueue({ data: [{ id: ORDER }] })
+
+    const { status, body } = await parseJsonResponse<{ data: { cancelled: boolean; status: string; released_unsigned: boolean } }>(
+      await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, { release_unsigned: true }), params(ORDER)),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ cancelled: true, status: 'cancelled', released_unsigned: true })
+    expect(findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', cancelled_by: 'user-1', provider_status: 'RCVD' })
+  })
+
+  it('answers 400 for a release_unsigned that is not a boolean', async () => {
+    const response = await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, { release_unsigned: 'yes' }), params(ORDER))
+
+    expect(response.status).toBe(400)
+    expect(findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
   it('cancels it once the bank confirms', async () => {
     const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' })
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment } as unknown as PaymentInitiationProvider)

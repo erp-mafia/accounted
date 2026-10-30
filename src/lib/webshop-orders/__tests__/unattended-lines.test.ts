@@ -98,4 +98,43 @@ describe('deriveUnattendedOrderLines', () => {
     })
     expect(outcome).toMatchObject({ ok: false, code: 'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH', details: { customer_country: 'DE' } })
   })
+
+  // Swedish VAT on EU sales on an account of their own, and a Sverige row on
+  // another (crm#1449). The bulk sweep and the day booking both derive here,
+  // so this pins both doors: an order to Sweden never takes the EU row's
+  // account, and one to another EU country never takes the Sverige row's.
+  describe('a store that books Sweden and the EU on accounts of their own', () => {
+    const rules = [
+      { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3012' },
+      { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+      { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+    ] as WebshopStoreSettings['country_account_rules']
+    const accounts = (outcome: Awaited<ReturnType<typeof derive>>) =>
+      outcome.ok ? outcome.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount]) : outcome
+
+    it('books an order to Sweden on the Sverige row, not the EU row', async () => {
+      expect(accounts(await derive(order(), { country_account_rules: rules }))).toEqual([
+        ['1686', 125, 0],
+        ['3011', 0, 100],
+        ['2611', 0, 25],
+      ])
+    })
+
+    it('books an order to another EU country on the EU row with Swedish output VAT', async () => {
+      expect(accounts(await derive(order({ customer_country: 'DK' }), { country_account_rules: rules }))).toEqual([
+        ['1686', 125, 0],
+        ['3012', 0, 100],
+        ['2611', 0, 25],
+      ])
+    })
+
+    it('keeps an order to Sweden on the default account when the store has no Sverige row', async () => {
+      const euOnly = rules.filter((rule) => rule.country !== 'SE')
+      expect(accounts(await derive(order(), { country_account_rules: euOnly }))).toEqual([
+        ['1686', 125, 0],
+        ['3001', 0, 100],
+        ['2611', 0, 25],
+      ])
+    })
+  })
 })

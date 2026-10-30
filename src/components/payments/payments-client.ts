@@ -639,11 +639,24 @@ export function unapprovePaymentOrders(orderIds: string[]): Promise<{ unapproved
   })
 }
 
-export function cancelPaymentOrder(orderId: string): Promise<{ cancelled: boolean; status: string }> {
-  return send<{ cancelled: boolean; status: string }>(`/api/payments/orders/${orderId}/cancel`, {
+export function cancelPaymentOrder(
+  orderId: string,
+  options: { releaseUnsigned?: boolean } = {},
+): Promise<{ cancelled: boolean; status: string; released_unsigned?: boolean }> {
+  return send<{ cancelled: boolean; status: string; released_unsigned?: boolean }>(`/api/payments/orders/${orderId}/cancel`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(options.releaseUnsigned ? { release_unsigned: true } : {}),
   })
+}
+
+/**
+ * The bank refused to cancel a payment it holds unsigned, and the order may be
+ * released here instead (lib/payments/orders/lifecycle isReleasableUnsigned).
+ */
+export function isReleasableUnsignedRefusal(error: unknown): boolean {
+  if (!(error instanceof PaymentsClientError) || error.code !== 'PAYMENT_CANCEL_UNSIGNED_REFUSED') return false
+  const details = (error.body as { error?: { details?: { releasable?: unknown } } } | null)?.error?.details
+  return details?.releasable === true
 }
 
 export type PaymentOrderResolution = { resolution: 'not_at_bank' } | { resolution: 'paid'; supplier_invoice_payment_id: string }

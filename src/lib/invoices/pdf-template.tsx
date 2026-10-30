@@ -25,7 +25,7 @@ import {
   PAYMENT_AREA_HEIGHT_PT,
   PAYMENT_QR_PT,
 } from '@/lib/invoices/pdf/geometry'
-import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, type PdfLang } from '@/lib/invoices/pdf/format'
+import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, formatPdfQuantity, type PdfLang } from '@/lib/invoices/pdf/format'
 import {
   DEDUCTION_LABOR_ONLY_NOTICE,
   GRON_TEKNIK_BASE_NOTICE,
@@ -773,7 +773,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     <Text style={styles.rowSubline} hyphenationCallback={wrapDescriptionWords}>{L.discountLine(item.discount_percent ?? 0)}</Text>
                   )}
                 </View>
-                <Text style={styles.colQty}>{item.quantity} {unitLabel(item.unit, lang, item.quantity)}</Text>
+                <Text style={styles.colQty}>{formatPdfQuantity(item.quantity, lang)} {unitLabel(item.unit, lang, item.quantity)}</Text>
                 {!isDeliveryNote && (
                   <Text style={styles.colPrice}>{formatPdfAmount(item.unit_price, lang)}</Text>
                 )}

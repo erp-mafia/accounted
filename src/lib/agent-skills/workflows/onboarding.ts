@@ -189,6 +189,15 @@ reaches far enough back anyway.
    upload path works; Fortnox users can also run the full API migration
    (invoices, customers, documents) at
    \`/import?mode=migration&provider=fortnox\`.
+5. Still booking in the old system for a while: import the current year
+   now and a newer SIE export of the SAME year later. Nothing is booked
+   twice: the preflight answers \`duplicate\` with \`append\` (already
+   booked vs new verifikat, matched by the old system's series and number),
+   and the card's button or \`gnubok_import_sie\` with
+   \`on_existing_year='append'\` adds only the new ones as their own batch.
+   A verifikat changed in the old system since, or another IB, refuses the
+   whole top-up: replacing the year is then the user's call. Never undo the
+   first import to re-import the year.
 
 ## Step 4: connect bank and Skatteverket (together, no pause)
 

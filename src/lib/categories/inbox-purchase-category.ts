@@ -10,7 +10,8 @@
  * in at most three queries:
  *   - the matched supplier's instruction (suppliers.default_purchase_category,
  *     set when a person ticks "varje gång"): Ditt val, under a person's own
- *     choice on the item and over everything learned;
+ *     choice on the item and over everything learned, unless the person put
+ *     their own words on the item (channel_context, personWordsOn);
  *   - the counterparty's learned template (categorization_templates), matched
  *     on the supplier name exactly (alias or normalized key, never fuzzy):
  *     its dominant cost account and clean hits;
@@ -69,6 +70,24 @@ export interface InboxPurchaseCategoryRow {
   id: string
   extracted_data: Record<string, unknown> | null
   matched_supplier_id?: string | null
+  /** The delivering chat's context (InboxChannelContext): the person's own words on it. Absent reads as none. */
+  channel_context?: unknown
+}
+
+/**
+ * A person's own words about this one underlag, as the chat that delivered
+ * it kept them: the photo's caption, a note, the typed answer to a context
+ * or representation question. Null for none. Only their presence is read
+ * (proposePurchaseCategory): what they say is the person's to weigh.
+ */
+export function personWordsOn(channelContext: unknown): string | null {
+  if (!channelContext || typeof channelContext !== 'object') return null
+  const context = channelContext as Record<string, unknown>
+  const answer = (value: unknown) => (value && typeof value === 'object' ? (value as Record<string, unknown>).raw_answer : null)
+  const words = [context.caption, context.user_note, answer(context.context_answer), answer(context.representation)]
+    .filter((w): w is string => typeof w === 'string' && w.trim() !== '')
+    .map((w) => w.trim())
+  return words.length > 0 ? words.join('\n') : null
 }
 
 // The stored shape and its reader live with the carry-over rule every
@@ -279,8 +298,9 @@ async function readPurchaseCategoryInputs(
 
   for (const { row, reading, key, override } of pending) {
     const supplierInstruction = row.matched_supplier_id ? supplierInstructions.get(row.matched_supplier_id) ?? null : null
+    const personNote = personWordsOn(row.channel_context)
     if (!reading) {
-      out.set(row.id, { supplierInstruction })
+      out.set(row.id, { supplierInstruction, personNote })
       continue
     }
     const raw = reading.supplierName?.toLowerCase() ?? null
@@ -288,6 +308,7 @@ async function readPurchaseCategoryInputs(
     out.set(row.id, {
       override,
       supplierInstruction,
+      personNote,
       counterparty: template ? counterpartyEvidence(template) : null,
       extraction: reading.extraction,
       suggestedAccount:

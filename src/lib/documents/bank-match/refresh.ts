@@ -42,6 +42,7 @@ import type { InvoiceExtractionResult } from '@/types'
 import { pairInboxItems } from '@/lib/inkorg/pairs'
 import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
 import { normaliseCardLast4 } from './card-token'
+import { readKnownCards } from './known-cards'
 import { bankRowClaims, decideBankMatch, NAME_AGREEMENT, type BankMatchDecision, type BankMatchRival, type BankMatchRules } from './decide'
 import { bankMatchFacts, searchRange, type BankMatchFacts, type SupplierCardForMatch } from './facts'
 
@@ -110,12 +111,12 @@ function cardOf(extracted: unknown): string | null {
 }
 
 /**
- * The card the purchase was paid with: the item's own reading says so (a
- * receipt), or the receipt it came with as one purchase does (an invoice
- * whose mail carried its receipt, lib/inkorg/pairs.ts). Best effort: a
- * pairing that cannot be read is no card.
+ * The card number the purchase was read as paid with: the item's own reading
+ * says so (a receipt), or the receipt it came with as one purchase does (an
+ * invoice whose mail carried its receipt, lib/inkorg/pairs.ts). Best effort:
+ * a pairing that cannot be read is no card.
  */
-async function paymentCard(supabase: SupabaseClient, companyId: string, item: OpenInboxItemRow, kind: string): Promise<string | null> {
+async function readPaymentCard(supabase: SupabaseClient, companyId: string, item: OpenInboxItemRow, kind: string): Promise<string | null> {
   const own = cardOf(item.extracted_data)
   if (own || kind !== 'supplier_invoice') return own
   try {
@@ -125,6 +126,24 @@ async function paymentCard(supabase: SupabaseClient, companyId: string, item: Op
     if (pairing?.role !== 'invoice') return null
     return cardOf(items.find((other) => other.id === pairing.receipt_item_id)?.extracted_data)
   } catch {
+    return null
+  }
+}
+
+/**
+ * The card that paid the purchase, as far as matching may lean on it: the
+ * read number only when it is one of the company's own cards (./known-cards.ts).
+ * A misread number (crm#1534) would otherwise contradict, and so turn away,
+ * the very row its real card paid. Best effort: a check that cannot be read
+ * is no card.
+ */
+async function paymentCard(supabase: SupabaseClient, companyId: string, item: OpenInboxItemRow, kind: string): Promise<string | null> {
+  const card = await readPaymentCard(supabase, companyId, item, kind)
+  if (!card) return null
+  try {
+    return (await readKnownCards(supabase, companyId, [card])).has(card) ? card : null
+  } catch {
+    // Safe to ignore: an unchecked card counts as unknown, which only leaves the card out of the match, never makes a wrong one.
     return null
   }
 }

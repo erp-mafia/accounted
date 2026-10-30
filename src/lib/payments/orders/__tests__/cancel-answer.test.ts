@@ -9,7 +9,7 @@ const mock = vi.hoisted(() => ({ supabase: null as unknown }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.supabase }))
 vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchPsu: vi.fn().mockResolvedValue('198001019879') }))
 
-import { cancelPaymentOrder } from '../lifecycle'
+import { cancelPaymentOrder, isReleasableUnsigned, RELEASE_UNSIGNED_AFTER_MINUTES, type CancelSigning } from '../lifecycle'
 
 let db: ReturnType<typeof createTableMockSupabase>
 let ctx: OperationContext
@@ -26,12 +26,19 @@ beforeEach(() => {
   ctx = { supabase: db.supabase as never, companyId: COMPANY, userId: USER, log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never }
 })
 
-async function cancelAnswered(order: PaymentOrderRow, answer: PaymentCancelResult, signingStatus?: string) {
+async function cancelAnswered(
+  order: PaymentOrderRow,
+  answer: PaymentCancelResult,
+  signing?: string | Partial<CancelSigning>,
+  options: { releaseUnsigned?: boolean } = {},
+) {
   registerPaymentInitiationProvider(fakeProvider({ cancelPayment: vi.fn().mockResolvedValue(answer) }))
   db.setTable('payment_orders', { data: [order] })
-  if (signingStatus) db.setTable('payment_order_batches', { data: { status: signingStatus } })
-  return cancelPaymentOrder(ctx, { orderId: order.id })
+  if (signing) db.setTable('payment_order_batches', { data: typeof signing === 'string' ? { status: signing } : signing })
+  return cancelPaymentOrder(ctx, { orderId: order.id, ...options })
 }
+
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
 describe('a cancel the bank refuses as too late', () => {
   it('says the payment is unsigned, not executed, when the bank refused it during an open signing (crm#1282)', async () => {
@@ -50,8 +57,8 @@ describe('a cancel the bank refuses as too late', () => {
     const order = waitingOrder('o1', 1, { status: 'submitted' })
     const outcome = await cancelAnswered(order, { outcome: 'too_late', providerStatus: 'RCVD', unsigned: true })
 
-    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED' })
-    expect(db.tables()).not.toContain('payment_order_batches')
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED', details: { releasable: false } })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
   })
 
   it('keeps too late for a payment whose BankID finished while the bank still answers RCVD', async () => {
@@ -89,5 +96,119 @@ describe('a cancel the bank refuses as too late', () => {
       ok: false,
       code: 'PAYMENT_CANCEL_NOT_CONFIRMED',
     })
+  })
+})
+
+// Danske Bank takes neither a cancel nor a new signing of a started payment
+// through its API: an unsigned payment it holds stays RCVD for good, and the
+// order with it, until a person releases it here (crm#1282).
+describe('an unsigned payment the bank will not cancel (crm#1282)', () => {
+  const RCVD: PaymentCancelResult = { outcome: 'too_late', providerStatus: 'RCVD', unsigned: true }
+  const abandoned = (minutes: number): Partial<CancelSigning> => ({ status: 'failed', signing_started_at: minutesAgo(minutes), signed_at: null })
+
+  it('says the order may be released once its signing is long over, and changes nothing yet', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, RCVD, abandoned(60 * 24 * 10))
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED', details: { payment_order_id: 'o1', releasable: true } })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it('releases it on request: cancelled here with the bank\'s word, its payment id kept, and says why', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, RCVD, abandoned(60 * 24 * 10), { releaseUnsigned: true })
+
+    expect(outcome).toEqual({ ok: true, data: { cancelled: true, status: 'cancelled', released_unsigned: true } })
+    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', cancelled_by: USER, provider_status: 'RCVD' })
+    // Only while the order is still that payment, and never clearing its id.
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'submitted'])
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['provider_payment_id', 'pay-1'])
+    expect(db.findCall('payment_orders', 'update')?.[0]).not.toHaveProperty('provider_payment_id')
+    const events = db.findCalls('payment_order_events', 'insert').flatMap((args) => args[0] as Array<Record<string, unknown>>)
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event_type: 'cancelled',
+        from_status: 'submitted',
+        to_status: 'cancelled',
+        actor_user_id: USER,
+        detail: { provider_payment_id: 'pay-1', reason: 'UNSIGNED_AT_BANK_NOT_CANCELLABLE', released_unsigned: true },
+      }),
+    )
+  })
+
+  it('asks the bank again first and cancels as usual when it confirms this time', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, { outcome: 'cancelled', providerStatus: 'CANC' }, abandoned(120), { releaseUnsigned: true })
+
+    expect(outcome).toEqual({ ok: true, data: { cancelled: true, status: 'cancelled' } })
+    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', provider_status: 'CANC' })
+  })
+
+  it.each([
+    ['a signing started minutes ago', waitingOrder('o1', 1, { status: 'submitted' }), RCVD, abandoned(5)],
+    ['a signing still open', waitingOrder('o1', 1, { status: 'awaiting_signature' }), RCVD, { status: 'awaiting_signature', signing_started_at: minutesAgo(120), signed_at: null }],
+    ['a signed payment the bank still reports received', waitingOrder('o1', 1, { status: 'awaiting_signature' }), RCVD, { status: 'signed', signing_started_at: minutesAgo(120), signed_at: minutesAgo(119) }],
+    ['an accepted payment', waitingOrder('o1', 1, { status: 'accepted' }), RCVD, abandoned(120)],
+    ['a payment the bank no longer reports unsigned', waitingOrder('o1', 1, { status: 'submitted' }), { outcome: 'too_late', providerStatus: 'ACSC', unsigned: false }, abandoned(120)],
+    ['a signing that cannot be read', waitingOrder('o1', 1, { status: 'submitted' }), RCVD, undefined],
+  ] as const)('never releases %s', async (_name, order, answer, signing) => {
+    const outcome = await cancelAnswered(order, answer, signing as Partial<CancelSigning> | string | undefined, { releaseUnsigned: true })
+
+    expect(outcome.ok).toBe(false)
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+})
+
+describe('isReleasableUnsigned', () => {
+  const NOW = Date.parse('2026-10-30T12:00:00Z')
+  const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString()
+  const RCVD: PaymentCancelResult = { outcome: 'too_late', providerStatus: 'RCVD', unsigned: true }
+  const order = (overrides: Partial<PaymentOrderRow> = {}) => waitingOrder('o1', 1, { status: 'submitted', submitted_at: ago(60 * 24), ...overrides })
+  const signing = (overrides: Partial<CancelSigning> = {}): CancelSigning => ({ status: 'failed', signing_started_at: ago(60 * 24), signed_at: null, ...overrides })
+
+  it('allows an unsigned payment whose signing ended long ago, in an abandoned or a stopped signing', () => {
+    expect(isReleasableUnsigned(order(), signing(), RCVD, NOW)).toBe(true)
+    expect(isReleasableUnsigned(order(), signing({ status: 'created' }), RCVD, NOW)).toBe(true)
+    expect(isReleasableUnsigned(order(), signing(), { outcome: 'too_late', providerStatus: 'PDNG', unsigned: true }, NOW)).toBe(true)
+  })
+
+  it('counts from the last BankID start, a restart included', () => {
+    const at = (minutes: number) => isReleasableUnsigned(order(), signing({ signing_started_at: ago(minutes) }), RCVD, NOW)
+    expect(at(RELEASE_UNSIGNED_AFTER_MINUTES)).toBe(true)
+    expect(at(RELEASE_UNSIGNED_AFTER_MINUTES - 1)).toBe(false)
+    expect(isReleasableUnsigned(order({ submitted_at: ago(5) }), signing(), RCVD, NOW)).toBe(false)
+  })
+
+  it.each([
+    ['awaiting a signature', { status: 'awaiting_signature' }],
+    ['accepted', { status: 'accepted' }],
+    ['executed', { status: 'executed' }],
+    ['signed', { signed_at: ago(60) }],
+    ['without a payment id', { provider_payment_id: null }],
+    ['with a create in doubt', { outcome_unknown_at: ago(60) }],
+  ] as const)('refuses an order %s', (_name, overrides) => {
+    expect(isReleasableUnsigned(order(overrides as Partial<PaymentOrderRow>), signing(), RCVD, NOW)).toBe(false)
+  })
+
+  it.each([
+    ['open', signing({ status: 'awaiting_signature' })],
+    ['signed', signing({ status: 'signed' })],
+    ['waiting for a second signer', signing({ status: 'awaiting_second_signer' })],
+    ['with a signature on it', signing({ signed_at: ago(60) })],
+    ['unread', null],
+  ] as const)('refuses an order whose signing is %s', (_name, s) => {
+    expect(isReleasableUnsigned(order(), s, RCVD, NOW)).toBe(false)
+  })
+
+  it('refuses any other bank answer', () => {
+    expect(isReleasableUnsigned(order(), signing(), { outcome: 'too_late', providerStatus: 'ACSC', unsigned: false }, NOW)).toBe(false)
+    expect(isReleasableUnsigned(order(), signing(), { outcome: 'not_cancelled', providerStatus: 'RCVD', unsigned: true }, NOW)).toBe(false)
+    expect(isReleasableUnsigned(order(), signing(), { outcome: 'needs_authorisation', providerStatus: 'RCVD', unsigned: true }, NOW)).toBe(false)
+    expect(isReleasableUnsigned(order(), signing(), { outcome: 'too_late', providerStatus: null }, NOW)).toBe(false)
+  })
+
+  it('allows an order without a signing on its claim time alone', () => {
+    expect(isReleasableUnsigned(order({ batch_id: null }), null, RCVD, NOW)).toBe(true)
+    expect(isReleasableUnsigned(order({ batch_id: null, submitted_at: ago(5) }), null, RCVD, NOW)).toBe(false)
   })
 })

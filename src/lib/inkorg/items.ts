@@ -60,6 +60,13 @@ export interface InkorgItem {
   pairing?: InboxPairing | null
   /** The provider retry of an empty reading, derived when the list was read; null for none. */
   reading_retry?: ReadingRetry | null
+  /**
+   * Whether the card number read off it (extracted_data.payment.cardLast4) is
+   * one of the company's own cards (lib/documents/bank-match/known-cards.ts),
+   * derived when the list was read; null when none was read. A reading can
+   * misread a digit (crm#1534): only true shows it as the card that paid.
+   */
+  payment_card_known?: boolean | null
 }
 
 /**

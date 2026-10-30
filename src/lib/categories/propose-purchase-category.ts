@@ -9,7 +9,11 @@
  *   1b. A person's instruction for the supplier ("varje gång", the
  *      supplier's default_purchase_category): 'Ditt val', source
  *      'instruction'. It never outranks a choice on a single underlag, and
- *      it outranks everything learned below.
+ *      it outranks everything learned below. It is a standing default: when
+ *      the person put their own words on this one underlag (a caption, a
+ *      note), those are more specific and may say otherwise, so it answers
+ *      nothing and the person decides, the instruction first among the
+ *      alternatives (crm#1533). What the words say is never read here.
  *   2. Not a purchase (a letter from a myndighet, a contract): no proposal.
  *   3. The counterparty's booked history, when its dominant account maps to
  *      exactly one category: 'Stark' with enough clean hits, 'Trolig' with
@@ -74,6 +78,12 @@ export interface PurchaseCategoryInput {
    * ("varje gång"), if any. Unknown codes are ignored.
    */
   supplierInstruction?: string | null
+  /**
+   * A person's own words about this one underlag (a chat caption, a note, an
+   * answer to a question about it), if any. Only whether there are any
+   * counts: a supplier instruction does not answer over them.
+   */
+  personNote?: string | null
   /**
    * The counterparty's dominant booked account and its clean hits (bookings
    * that followed the learned pattern: occurrences minus corrections).
@@ -251,7 +261,11 @@ export function proposePurchaseCategory(
   pack: PurchaseCategoryAccountPack = SE_PURCHASE_CATEGORY_PACK,
 ): PurchaseCategoryProposal | null {
   if (isPurchaseCategoryCode(input.override)) return propose(input.override, 'person', 'Ditt val')
-  if (isPurchaseCategoryCode(input.supplierInstruction)) return propose(input.supplierInstruction, 'instruction', 'Ditt val')
+  if (isPurchaseCategoryCode(input.supplierInstruction)) {
+    // The supplier's default against the person's words on this underlag: theirs to decide.
+    if (input.personNote?.trim()) return null
+    return propose(input.supplierInstruction, 'instruction', 'Ditt val')
+  }
 
   const extraction = input.extraction ?? null
   if (extraction?.documentKind && NOT_PURCHASES.has(extraction.documentKind)) return null

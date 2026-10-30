@@ -115,6 +115,13 @@ function render(fileStatuses: FileStatus[], options: Options, locale: 'sv' | 'en
   )
 }
 
+/** The aria-checked of the first switch after the "Bokföringsdata (SIE)" label. */
+function sieSwitchChecked(html: string): boolean {
+  const row = html.slice(html.indexOf('Bokföringsdata (SIE)'))
+  const button = row.match(/<button[^>]*role="switch"[^>]*>/)?.[0] ?? ''
+  return /aria-checked="true"/.test(button)
+}
+
 const tSv = createTranslator({ locale: 'sv', messages: sv, namespace: 'extensions' })
 const tEn = createTranslator({ locale: 'en', messages: en, namespace: 'extensions' })
 
@@ -191,6 +198,23 @@ describe('OptionsStep, a re-run over already imported years', () => {
     expect(html).toContain(tSv('ext_arcim_option_sie_desc_all_kept'))
     // Nothing new to import: no voucher series to choose.
     expect(html).not.toContain('Verifikationsserie')
+  })
+
+  // Rage clicks on the replace box (I07): with every year already imported,
+  // the ledger row above it stayed off with "every year is already imported"
+  // after a year was ticked, so the tick read as not taken.
+  it('turns the ledger row on and says a year is imported again once one is ticked', () => {
+    const kept = render(AFTER_SIE_UPLOAD, optionsAfterSieData(BASE_OPTIONS, AFTER_SIE_UPLOAD))
+    expect(sieSwitchChecked(kept)).toBe(false)
+
+    const html = render(AFTER_SIE_UPLOAD, { ...optionsAfterSieData(BASE_OPTIONS, AFTER_SIE_UPLOAD), replaceImportedYears: [2026] })
+    expect(sieSwitchChecked(html)).toBe(true)
+    expect(html).toContain(tSv('ext_arcim_option_sie_desc_replacing', { count: 1 }))
+    expect(html).not.toContain(tSv('ext_arcim_option_sie_desc_all_kept'))
+    expect(html).toContain(tSv('ext_arcim_option_sie_year_replacing', { year: 2026 }))
+
+    const en = render(AFTER_SIE_UPLOAD, { ...optionsAfterSieData(BASE_OPTIONS, AFTER_SIE_UPLOAD), replaceImportedYears: [2025, 2026] }, 'en')
+    expect(en).toContain(tEn('ext_arcim_option_sie_desc_replacing', { count: 2 }))
   })
 
   it('names a year ticked for replacement as replacing the earlier import', () => {

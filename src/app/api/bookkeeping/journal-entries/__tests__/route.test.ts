@@ -212,6 +212,45 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(findCalls('journal_entries', 'not').filter((c) => c[0] === 'id')).toEqual([])
   })
 
+  it('hides every storno and reversed original under hide_reversed, pure pairs included (PH 231)', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      // The list's default shape (year selected, date sort) plus the option.
+      searchParams: { period_id: 'period-1', sort_by: 'date_desc', exclude_draft: 'true', hide_reversed: 'true' },
+    })
+    const response = await GET(request, {} as never)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // The include_related RPC has no such filter: the direct query serves it.
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    const neq = findCalls('journal_entries', 'neq')
+    expect(neq).toContainEqual(['status', 'reversed'])
+    expect(neq).toContainEqual(['source_type', 'storno'])
+    expect(neq).toContainEqual(['status', 'cancelled'])
+    expect(neq).toContainEqual(['status', 'draft'])
+    // Column filters only: no corrections prefetch, no collapse or-filter.
+    expect(findCalls('journal_entries', 'select').map((c) => c[0])).not.toContain('correction_of_id')
+    expect(findCalls('journal_entries', 'or')).toEqual([])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['fiscal_period_id', 'period-1'])
+  })
+
+  it('does not hide a pure storno pair without hide_reversed, so the default series stays gapless (#3149)', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', include_related: 'false', collapse_corrections: 'true' },
+    })
+    const response = await GET(request, {} as never)
+    await parseJsonResponse(response)
+
+    const neq = findCalls('journal_entries', 'neq')
+    expect(neq).not.toContainEqual(['status', 'reversed'])
+    expect(neq).not.toContainEqual(['source_type', 'storno'])
+  })
+
   it('matches a voucher label like "A209" on series+number as well as description', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

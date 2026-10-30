@@ -32,6 +32,26 @@ const CANCEL_ANSWER_CODES: Record<Exclude<PaymentCancelOutcome, 'cancelled'>, st
   not_cancelled: 'PAYMENT_CANCEL_NOT_CONFIRMED',
 }
 
+/** The signing an order's payment was last offered in, as a refused cancel reads it. */
+export interface CancelSigning {
+  status: string
+  signing_started_at: string | null
+  signed_at: string | null
+}
+
+/** The order's signing; null without one, or when it cannot be read. */
+async function readSigning(ctx: OperationContext, order: PaymentOrderRow): Promise<CancelSigning | null> {
+  if (!order.batch_id) return null
+  const { data, error } = await ctx.supabase
+    .from('payment_order_batches')
+    .select('status, signing_started_at, signed_at')
+    .eq('company_id', ctx.companyId)
+    .eq('id', order.batch_id)
+    .maybeSingle()
+  if (error || !data) return null
+  return data as CancelSigning
+}
+
 /**
  * A cancel the bank refused as too late for a payment nobody signed: the bank
  * reports it unsigned (PaymentCancelResult.unsigned) and no signing of it has
@@ -42,18 +62,54 @@ const CANCEL_ANSWER_CODES: Record<Exclude<PaymentCancelOutcome, 'cancelled'>, st
  * while the bank still answers RCVD is signed (isBankConfirming), and a
  * refusal then stays too late, as it does when the signing cannot be read.
  */
-async function refusedWhileUnsigned(ctx: OperationContext, order: PaymentOrderRow, answer: PaymentCancelResult): Promise<boolean> {
+function refusedWhileUnsigned(order: PaymentOrderRow, answer: PaymentCancelResult, signing: CancelSigning | null): boolean {
   if (answer.outcome !== 'too_late' || answer.unsigned !== true) return false
   if (order.status === 'submitted') return true
-  if (order.status !== 'awaiting_signature' || !order.batch_id) return false
-  const { data, error } = await ctx.supabase
-    .from('payment_order_batches')
-    .select('status')
-    .eq('company_id', ctx.companyId)
-    .eq('id', order.batch_id)
-    .maybeSingle()
-  if (error || !data) return false
-  return !SIGNING_FINISHED_BATCH_STATUSES.has((data as { status: string }).status)
+  if (order.status !== 'awaiting_signature' || !order.batch_id || !signing) return false
+  return !SIGNING_FINISHED_BATCH_STATUSES.has(signing.status)
+}
+
+/**
+ * How long after the last BankID start an unsigned payment the bank will not
+ * cancel may be released here: twice the life of the bank's own signing link
+ * (15 minutes) and past the status sync giving up on the signing
+ * (ABANDONED_SIGNING_MINUTES), so no BankID of it can still finish.
+ */
+export const RELEASE_UNSIGNED_AFTER_MINUTES = 30
+
+/**
+ * Whether a person may let go here of an order whose payment the bank holds
+ * unsigned and refuses to cancel (crm#1282: Danske Bank takes neither a
+ * cancel nor a new signing of a started payment through its API, so the
+ * payment stays RCVD for good). The bank said so in this very answer (too
+ * late, unsigned); the order never got past 'submitted' (an accepted order
+ * never comes back to it), has no signature and no create in doubt; its
+ * signing is neither open nor finished; and its last BankID started at least
+ * RELEASE_UNSIGNED_AFTER_MINUTES ago. No signature, no money: the bank
+ * executes nothing unsigned. Never an order that was signed or accepted.
+ */
+export function isReleasableUnsigned(
+  order: Pick<
+    PaymentOrderRow,
+    'status' | 'provider_payment_id' | 'outcome_unknown_at' | 'create_started_at' | 'signed_at' | 'executed_at' | 'submitted_at' | 'batch_id'
+  >,
+  signing: CancelSigning | null,
+  answer: PaymentCancelResult,
+  now: number,
+): boolean {
+  if (answer.outcome !== 'too_late' || answer.unsigned !== true) return false
+  if (order.status !== 'submitted' || !order.provider_payment_id) return false
+  if (order.outcome_unknown_at || order.create_started_at || order.signed_at || order.executed_at) return false
+  if (order.batch_id) {
+    if (!signing || signing.signed_at) return false
+    if (signing.status === 'awaiting_signature' || SIGNING_FINISHED_BATCH_STATUSES.has(signing.status)) return false
+  }
+  const starts = [signing?.signing_started_at, order.submitted_at]
+    .filter((at): at is string => Boolean(at))
+    .map((at) => Date.parse(at))
+    .filter((at) => Number.isFinite(at))
+  if (starts.length === 0) return false
+  return now - Math.max(...starts) >= RELEASE_UNSIGNED_AFTER_MINUTES * 60_000
 }
 
 const RESOLVE_CODES: Record<string, string> = {
@@ -226,6 +282,13 @@ export async function unapprovePaymentOrders(
  * on its way to the bank (it ends by itself, PAYMENT_ORDER_CREATE_IN_PROGRESS),
  * or its outcome is unknown, which only a person resolves
  * (resolvePaymentOrder) after checking the online bank.
+ *
+ * A payment the bank holds unsigned and refuses to cancel is refused with
+ * PAYMENT_CANCEL_UNSIGNED_REFUSED and details.releasable (isReleasableUnsigned).
+ * When releasable, the person may ask again with releaseUnsigned: the bank is
+ * asked once more, and on the same answer the order is cancelled here (crm#1282).
+ * The bank keeps an unsigned payment it never executes; the invoice is free
+ * for a new payment.
  */
 export async function cancelPaymentOrder(
   ctx: OperationContext,
@@ -234,35 +297,45 @@ export async function cancelPaymentOrder(
     signer?: { ipAddress: string | null; userAgent: string | null }
     /** Run the checks and say what a cancel would do (and whether the bank is asked) without writing or asking. */
     dryRun?: boolean
+    /** Release here a payment the bank holds unsigned and will not cancel, when isReleasableUnsigned allows it. */
+    releaseUnsigned?: boolean
   },
-): Promise<OperationOutcome<{ cancelled: boolean; status: string }>> {
+): Promise<OperationOutcome<{ cancelled: boolean; status: string; released_unsigned?: boolean }>> {
   const [order] = await loadOrders(ctx, [input.orderId])
   if (!order) return { ok: false, code: 'PAYMENT_ORDER_NOT_FOUND' }
   const writer = createServiceClient()
   const now = new Date().toISOString()
 
-  const markCancelled = async (from: string, bank: { providerStatus: string | null } | null) => {
+  // release: the detail of an unsigned payment let go here although the bank
+  // refused the cancel (isReleasableUnsigned); only while the order is still
+  // that payment.
+  const markCancelled = async (
+    from: string,
+    bank: { providerStatus: string | null } | null,
+    release?: Record<string, unknown>,
+  ) => {
     const providerStatus = bank?.providerStatus ?? null
-    const attempt = () =>
-      writer
+    const attempt = () => {
+      const update = writer
         .from('payment_orders')
         .update({
           status: 'cancelled',
           cancelled_by: ctx.userId,
           cancelled_at: now,
-          // Only what the bank confirmed; undefined keys are left out of the request.
+          // Only what the bank said; undefined keys are left out of the request.
           provider_status: providerStatus ?? undefined,
           provider_status_at: providerStatus ? now : undefined,
         })
         .eq('id', order.id)
         .eq('company_id', ctx.companyId)
         .eq('status', from)
-        .select('id')
+      return (release ? update.eq('provider_payment_id', order.provider_payment_id as string) : update).select('id')
+    }
     let { data, error } = await attempt()
     // After the bank confirmed the cancel the order must follow: one more try.
-    if (error && bank) ({ data, error } = await attempt())
+    if (error && bank && !release) ({ data, error } = await attempt())
     if (error) {
-      if (bank) {
+      if (bank && !release) {
         ctx.log.error('bank cancelled a payment but its order could not be cancelled', error, {
           orderId: order.id,
           providerPaymentId: order.provider_payment_id,
@@ -281,7 +354,7 @@ export async function cancelPaymentOrder(
           to_status: 'cancelled',
           provider_status: providerStatus,
           actor_user_id: ctx.userId,
-          detail: bank ? { provider_payment_id: order.provider_payment_id } : {},
+          detail: bank ? { provider_payment_id: order.provider_payment_id, ...release } : {},
         },
       ], ctx.log)
     }
@@ -336,8 +409,25 @@ export async function cancelPaymentOrder(
         detail: { code: 'BANK_CANCEL_NOT_CONFIRMED', answer: answer.outcome, provider_payment_id: order.provider_payment_id },
       },
     ], ctx.log)
-    const code = (await refusedWhileUnsigned(ctx, order, answer)) ? 'PAYMENT_CANCEL_UNSIGNED_REFUSED' : CANCEL_ANSWER_CODES[answer.outcome]
-    return { ok: false, code, details: { payment_order_id: order.id, provider_status: answer.providerStatus } }
+    // Read after the bank answered, so a signing started meanwhile counts.
+    const signing = answer.outcome === 'too_late' && answer.unsigned === true ? await readSigning(ctx, order) : null
+    if (!refusedWhileUnsigned(order, answer, signing)) {
+      return { ok: false, code: CANCEL_ANSWER_CODES[answer.outcome], details: { payment_order_id: order.id, provider_status: answer.providerStatus } }
+    }
+    const releasable = isReleasableUnsigned(order, signing, answer, Date.now())
+    if (releasable && input.releaseUnsigned) {
+      const done = await markCancelled(order.status, { providerStatus: answer.providerStatus }, {
+        reason: 'UNSIGNED_AT_BANK_NOT_CANCELLABLE',
+        released_unsigned: true,
+      })
+      if (done) ctx.log.info('unsigned bank payment released here after the bank refused its cancel', { orderId: order.id })
+      return { ok: true, data: { cancelled: done, status: done ? 'cancelled' : order.status, released_unsigned: done } }
+    }
+    return {
+      ok: false,
+      code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED',
+      details: { payment_order_id: order.id, provider_status: answer.providerStatus, releasable },
+    }
   }
   const done = await markCancelled(order.status, { providerStatus: answer.providerStatus })
   if (!done) {

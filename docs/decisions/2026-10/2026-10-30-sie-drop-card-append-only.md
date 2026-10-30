@@ -1,0 +1,1 @@
+[2026-10-30] The SIE drop card offers an imported year only the plain append (new verifikat as their own batch). Possible duplicates and series maps stay in the import wizard, and no replace door is added to chat: undoing a year stays a separate, deliberate step (crm#1544).

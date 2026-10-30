@@ -279,6 +279,29 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
+  it('routes an unbooked kontantmetoden supplier invoice to the person, not to the customer-invoice tool (crm#1510)', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'supplier_invoice', id: INV_A, invoice_number: '74' }],
+    })
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: INV_A, document_type: 'invoice' }], error: null })
+
+    const refusal = allocate.execute(
+      { transaction_id: TX_ID, allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: INV_A, amount: 2494 }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' } as never,
+    )
+    await expect(refusal).rejects.toMatchObject({
+      code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+      message: expect.stringMatching(/Obokförda fakturor: 74\..*suggested_match/),
+    })
+    await expect(refusal).rejects.not.toMatchObject({ message: expect.stringContaining('gnubok_match_transaction_to_invoice') })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
   it('keeps the tool description inside the catalog budget', () => {
     expect(allocate.description).toContain('expected_lines')
     expect(allocate.description.length).toBeLessThanOrEqual(280)

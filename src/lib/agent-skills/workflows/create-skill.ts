@@ -52,6 +52,12 @@ It is saved as a **draft**: it shows under Egna on the Instruktioner page in Acc
 
 Saving the draft is the end of this workflow. Do not try to load or run it: it is not loadable until the user adds it.
 
+## Changing or removing a saved item
+
+To change an item saved earlier, show the new version as in Step 3 and, after the user says yes, call \`gnubok_create_skill\` with its \`company_skill_id\` (the id, or the \`own/<id>\` slug) and the whole new content. It replaces the item under the same slug and returns it to draft, so the user adds it again in Accounted. Never save a second copy and ask the user to delete the first.
+
+To remove one, ask the user first, then call \`gnubok_create_skill\` with \`company_skill_id\` and \`delete: true\`. Only the company's own private items change this way: an item shared with the community is frozen until the user withdraws it in Accounted, and Accounted's own skills never change.
+
 ## Rules
 
 - An instruction holds steps and rules, not data. Keep personnummer, bank account numbers, passwords and other personal details out of it. If the user gives some, leave them out and say why in one line.
@@ -63,7 +69,7 @@ Saving the draft is the end of this workflow. Do not try to load or run it: it i
 ## Tools
 
 - \`gnubok_list_companies\` (read)
-- \`gnubok_create_skill\` (saves a draft after the user said yes; the user adds it in Accounted)`
+- \`gnubok_create_skill\` (saves a draft after the user said yes, or replaces or deletes one by \`company_skill_id\`; the user adds drafts in Accounted)`
 
 export const createSkillSkill: Skill = {
   slug: 'create-skill',

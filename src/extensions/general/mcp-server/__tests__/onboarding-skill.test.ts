@@ -31,3 +31,14 @@ describe('onboarding skill: supported forms sentence', () => {
     expect(onboardingSkill.body).toMatch(/never register it as another form/)
   })
 })
+
+// crm#1544: a user still on the old system asked whether a later export of
+// the same year double-books. The skill says how the top-up works.
+describe('onboarding skill: a later export of an imported year', () => {
+  it('sends the agent to the append, never to an undo', () => {
+    const body = onboardingSkill.body
+    expect(body).toContain("`on_existing_year='append'`")
+    expect(body).toMatch(/adds only the new ones as their own batch/)
+    expect(body).toMatch(/Never undo the\s+first import to re-import the year/)
+  })
+})

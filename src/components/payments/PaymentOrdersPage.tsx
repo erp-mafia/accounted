@@ -45,6 +45,7 @@ import {
   cancelPaymentOrder,
   fetchCompanyVerification,
   fetchPaymentsAvailability,
+  isReleasableUnsignedRefusal,
   listPaymentOrders,
   orderInvoiceLabel,
   payeeLabel,
@@ -81,6 +82,8 @@ export function PaymentOrdersPage() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm } = useDestructiveConfirm()
+  // Its own dialog: it opens while the cancel dialog is still closing.
+  const { dialogProps: releaseDialogProps, confirm: confirmRelease } = useDestructiveConfirm()
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   /** Where the company's verification at the provider stands; null until read, or when payments are not available. */
@@ -266,6 +269,7 @@ export function PaymentOrdersPage() {
 
   async function cancel(order: PaymentOrder) {
     const atBank = order.status !== 'draft' && order.status !== 'approved'
+    let releasable = false
     const label = orderInvoiceLabel(order)
     // Signed, the bank confirming it: a cancel is a recall the bank may want a login for, said as such.
     const confirming = order.bank_confirming === true
@@ -286,6 +290,12 @@ export function PaymentOrdersPage() {
           const result = await cancelPaymentOrder(order.id)
           if (!result.cancelled) toast({ title: t('cancel_not_confirmed_title'), description: t('cancel_not_confirmed'), variant: 'destructive' })
         } catch (error) {
+          // The bank holds the payment unsigned and will not cancel it: offered
+          // as a release here once this dialog has closed (crm#1282).
+          if (isReleasableUnsignedRefusal(error)) {
+            releasable = true
+            return
+          }
           fail(t('action_failed_title'), error)
           throw error
         }
@@ -293,6 +303,33 @@ export function PaymentOrdersPage() {
     )
     // A refused cancel may still have moved the order (an error event, a
     // status the bank reported): reload either way once the dialog closed.
+    refresh()
+    if (releasable) await releaseUnsigned(order)
+  }
+
+  // Släpp betalningen: the bank refused to cancel a payment nobody signed.
+  // Nothing is paid without a signature, so the order is let go here and the
+  // invoice can be paid again; the bank is asked once more first.
+  async function releaseUnsigned(order: PaymentOrder) {
+    await confirmRelease(
+      {
+        title: t('release_unsigned_title'),
+        description: t('release_unsigned_description', { label: orderInvoiceLabel(order) }),
+        confirmLabel: t('release_unsigned_confirm'),
+        cancelLabel: t('cancel_keep'),
+        variant: 'warning',
+      },
+      async () => {
+        try {
+          const result = await cancelPaymentOrder(order.id, { releaseUnsigned: true })
+          if (result.cancelled) toast({ title: t('release_unsigned_done_title'), description: t('release_unsigned_done') })
+          else toast({ title: t('cancel_not_confirmed_title'), description: t('cancel_not_confirmed'), variant: 'destructive' })
+        } catch (error) {
+          fail(t('action_failed_title'), error)
+          throw error
+        }
+      },
+    )
     refresh()
   }
 
@@ -614,6 +651,7 @@ export function PaymentOrdersPage() {
       {(available || hasOrders) && filesSection}
 
       <DestructiveConfirmDialog {...dialogProps} />
+      <DestructiveConfirmDialog {...releaseDialogProps} />
       {approving && (
         <ApprovePaymentOrdersDialog
           orders={approving}

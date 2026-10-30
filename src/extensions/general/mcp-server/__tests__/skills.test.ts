@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { workflowSkills, findSkill, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -696,6 +697,89 @@ describe('gnubok_create_skill tool', () => {
     const body = (await findSkill('create-skill'))?.body
     expect(body).toContain('gnubok_create_skill')
     expect(body).toContain('`kind`')
+  })
+
+  // crm#1506: an agent could save an own item but never change or remove it.
+  describe('replace and delete an own item', () => {
+    const ID = '7c5314a6-ec58-4439-8dea-da98fc3ca4dd'
+    const ownRow = { id: ID, atom_id: null, share_status: 'private' }
+    const run = (input: Record<string, unknown>, supabase: unknown) =>
+      tool().execute(input, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+
+    it('declares the id and delete flag, and that it can delete', () => {
+      const properties = tool().inputSchema.properties as Record<string, unknown>
+      expect(properties.company_skill_id).toEqual({ type: 'string' })
+      expect(properties.delete).toEqual({ type: 'boolean' })
+      expect(tool().annotations.destructiveHint).toBe(true)
+      expect(tool().keywords).toEqual(expect.arrayContaining(['update', 'delete']))
+    })
+
+    it('replaces the content under the same id and returns it to draft', async () => {
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      enqueueMany([{ data: ownRow }, { data: { id: ID } }])
+      const result = await run({ ...args, company_skill_id: `own/${ID}`, steps: ['Hämta fakturorna.', 'Kolla momsen.', 'Kolla förfallodatum.'] }, supabase)
+      expect(result).toEqual({ company_skill_id: ID, slug: `own/${ID}` })
+      const row = findCall('company_skills', 'update')![0] as Record<string, unknown>
+      expect(row).toMatchObject({ kind: 'workflow', name: 'Månadens fakturor', draft: true })
+      expect(row.body).toContain('3. Kolla förfallodatum.')
+      // Never an insert, and only this company's own private row.
+      expect(findCall('company_skills', 'insert')).toBeUndefined()
+      expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', ID], ['company_id', 'company-1'], ['share_status', 'private']]))
+      expect(findCall('company_skills', 'is')).toEqual(['atom_id', null])
+    })
+
+    it('deletes an own item and the knowledge chosen for it', async () => {
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      enqueueMany([{ data: ownRow }, { data: { id: ID } }, { data: null }])
+      const result = await run({ company_skill_id: ID, delete: true }, supabase)
+      expect(result).toEqual({ company_skill_id: ID, slug: `own/${ID}`, deleted: true })
+      expect(findCall('company_skills', 'delete')).toEqual([])
+      expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', ID], ['company_id', 'company-1'], ['share_status', 'private']]))
+      expect(findCall('company_skills', 'is')).toEqual(['atom_id', null])
+      expect(findCalls('company_agent_knowledge', 'eq')).toEqual([['company_id', 'company-1'], ['agent_id', `own/${ID}`]])
+    })
+
+    it('refuses a catalog row, another company\'s item and a missing one as NOT_FOUND, and writes nothing', async () => {
+      for (const found of [{ ...ownRow, atom_id: 'workflow/month-end-close' }, null]) {
+        for (const input of [{ ...args, company_skill_id: ID }, { company_skill_id: ID, delete: true }]) {
+          const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+          enqueue({ data: found })
+          await expect(run(input, supabase)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+          expect(findCall('company_skills', 'update')).toBeUndefined()
+          expect(findCall('company_skills', 'delete')).toBeUndefined()
+        }
+      }
+    })
+
+    it('refuses an item shared with the community as CONFLICT, and writes nothing', async () => {
+      for (const input of [{ ...args, company_skill_id: ID }, { company_skill_id: ID, delete: true }]) {
+        const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+        enqueue({ data: { ...ownRow, share_status: 'submitted' } })
+        await expect(run(input, supabase)).rejects.toMatchObject({ code: 'CONFLICT' })
+        expect(findCall('company_skills', 'update')).toBeUndefined()
+        expect(findCall('company_skills', 'delete')).toBeUndefined()
+      }
+    })
+
+    it('refuses a delete with content or without an id, and a malformed id, before any read', async () => {
+      for (const input of [{ ...args, company_skill_id: ID, delete: true }, { delete: true }, { ...args, company_skill_id: 'own/not-a-uuid' }]) {
+        const { supabase } = createQueuedMockSupabase()
+        await expect(run(input, supabase)).rejects.toThrow()
+        expect(supabase.from).not.toHaveBeenCalled()
+      }
+    })
+
+    it('treats delete: false as an ordinary save', async () => {
+      const { supabase, insert } = insertMock()
+      await run({ ...args, delete: false }, supabase)
+      expect(insert).toHaveBeenCalledTimes(1)
+    })
+
+    it('tells the agent in the workflow how to change and remove a saved item', async () => {
+      const body = (await findSkill('create-skill'))?.body ?? ''
+      expect(body).toContain('`company_skill_id`')
+      expect(body).toContain('`delete: true`')
+    })
   })
 })
 

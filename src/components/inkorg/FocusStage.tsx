@@ -414,7 +414,7 @@ function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem;
   const payment = receipt.extracted_data?.payment
   const paid = payment?.method
     ? payment.method === 'card' && payment.cardLast4
-      ? t('ev_paid_card_last4', { last4: payment.cardLast4 })
+      ? t(receipt.payment_card_known === true ? 'ev_paid_card_last4' : 'ev_paid_card_last4_unknown', { last4: payment.cardLast4 })
       : t(`ev_paid_${payment.method}`)
     : null
   return (

@@ -1,0 +1,1 @@
+[2026-10-30] SettingsInput opens a date field's calendar on any click (openNativePicker from ui/input), like the shared Input since 2026-10-28; the settings date fields render a plain input and had missed that fix.

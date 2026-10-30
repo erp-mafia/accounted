@@ -10863,14 +10863,15 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The payment has already been made or is too close to its payment date to cancel.',
   },
   // The bank refused the cancel of a payment it holds unsigned (crm#1282):
-  // nothing was paid, so "too late" would be wrong.
+  // nothing was paid, so "too late" would be wrong. Some banks (Danske) never
+  // take the cancel: details.releasable says a person may release it here.
   PAYMENT_CANCEL_UNSIGNED_REFUSED: {
     httpStatus: 409,
-    message_sv: 'Betalningen är inte signerad hos banken och betalas inte utan signering. Banken nekade ändå makuleringen, oftast för att en signering med BankID har startats och inte löpt ut än. Försök igen om några minuter.',
-    message_en: 'The payment is not signed at the bank and will not be paid without a signature. The bank still refused the cancellation, usually because a BankID signing was started and has not expired yet. Try again in a few minutes.',
+    message_sv: 'Betalningen är inte signerad hos banken och betalas inte utan signering. Banken nekade ändå makuleringen, oftast för att en signering med BankID har startats och inte löpt ut än. Försök igen om en halvtimme: nekar banken då också kan du släppa betalningen här.',
+    message_en: 'The payment is not signed at the bank and will not be paid without a signature. The bank still refused the cancellation, usually because a BankID signing was started and has not expired yet. Try again in half an hour: if the bank still refuses, you can release the payment here.',
     remediation: {
       description:
-        'Nothing was paid: the bank holds the payment unsigned (provider_status RCVD or PDNG) and refused the cancel, typically while a signing of it is still open. The order is unchanged. Retry the cancel in a few minutes; the payment is not executed unless someone signs it.',
+        'Nothing was paid: the bank holds the payment unsigned (provider_status RCVD or PDNG) and refused the cancel. The order is unchanged. With details.releasable false, retry the cancel in half an hour. With details.releasable true, a person can release it in Accounted (Betalningar, Släpp betalningen): the order is cancelled there, and the bank keeps an unsigned payment it never executes.',
     },
   },
   PAYMENT_CANCEL_NOT_CONFIRMED: {

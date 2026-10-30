@@ -292,10 +292,11 @@ export default function JournalEntryList({
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
   // committed list server-side and surfaced here behind a count badge.
   const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
-  // Collapse correction groups to the live correction (hide the storno and
-  // reversed original a correction replaced; a pure storno stays visible).
-  // Toggled off via the filter dialog to reveal the full chain.
-  const [collapseCorrections, setCollapseCorrections] = useState(true)
+  // Storno and reversed (Omförd) rows, chosen in the filter dialog:
+  // 'collapse' (default) folds a correction group to the live correction and
+  // keeps a pure storno pair, so the series stays gapless (#3149); 'hide'
+  // drops every storno and reversed original (PH 231); 'all' shows the chain.
+  const [correctionView, setCorrectionView] = useState<'all' | 'collapse' | 'hide'>('collapse')
   const [draftCount, setDraftCount] = useState(0)
   // All-years emptiness, resolved only when the scoped list comes back empty:
   // the pristine start card must key on "this ledger has never had an entry",
@@ -605,7 +606,8 @@ export default function JournalEntryList({
       params.set('status', 'draft')
     } else {
       params.set('exclude_draft', 'true')
-      if (collapseCorrections) params.set('collapse_corrections', 'true')
+      if (correctionView === 'hide') params.set('hide_reversed', 'true')
+      else if (correctionView === 'collapse') params.set('collapse_corrections', 'true')
       if (periodId) params.set('period_id', periodId)
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
@@ -664,8 +666,11 @@ export default function JournalEntryList({
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
         // The all-years probe runs only when its answer can change what
-        // renders (lib/bookkeeping/ledger-probe.ts, crm#1390).
-        const probePlan = planLedgerProbe({ periodId, search, seriesFilter, dateFrom, dateTo, showMissingOnly })
+        // renders (lib/bookkeeping/ledger-probe.ts, crm#1390). A total with
+        // the makulerade pairs hidden says nothing about whether the ledger
+        // has entries, so that view probes instead of trusting the total.
+        const basePlan = planLedgerProbe({ periodId, search, seriesFilter, dateFrom, dateTo, showMissingOnly })
+        const probePlan = basePlan === 'from_total' && correctionView === 'hide' ? 'probe' : basePlan
         await Promise.all([
           fetchDraftCount(),
           probePlan === 'from_total'
@@ -746,7 +751,7 @@ export default function JournalEntryList({
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, correctionView, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
 
   // Parent-driven in-place refresh (see the refreshToken prop). Skips the
   // mount value: the main effect above owns the initial fetch, and a token
@@ -1030,7 +1035,10 @@ export default function JournalEntryList({
   const dialogFilterCount =
     (seriesFilter !== 'all' ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
-    (showMissingOnly ? 1 : 0)
+    (showMissingOnly ? 1 : 0) +
+    // Hidden makulerade pairs count: the badge is the hint that rows are
+    // hidden, which the list lacked when stornos vanished silently (#3149).
+    (correctionView === 'hide' ? 1 : 0)
   // Year scope included: drives empty-state messaging + keeping the bar mounted.
   const activeFilterCount = (periodId ? 1 : 0) + dialogFilterCount
 
@@ -1122,6 +1130,7 @@ export default function JournalEntryList({
     }
     setSeriesFilter('all')
     setShowMissingOnly(false)
+    setCorrectionView((v) => (v === 'hide' ? 'collapse' : v))
     setDateFrom('')
     setDateTo('')
     setDateFromInput('')
@@ -1365,18 +1374,34 @@ export default function JournalEntryList({
                 )}
               </div>
 
-              {/* Reveal the storno + reversed-original rows the default view folds
-                  into the surviving correction (3 rows → 1). A storno that no
-                  correction replaced is always shown. */}
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="show-correction-chain"
-                  checked={!collapseCorrections}
-                  onCheckedChange={(on) => { setCollapseCorrections(!on); setPage(0) }}
-                />
-                <Label htmlFor="show-correction-chain" className="text-sm cursor-pointer">
-                  {t('show_correction_chain')}
-                </Label>
+              {/* Storno and Omförd rows. The old switch ("Visa storno- och
+                  rättade poster") only folded correction groups, so with it
+                  off a pure storno pair still showed (PH 231). Three named
+                  states instead: every option says what it hides. */}
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">{t('filter_section_corrections')}</Label>
+                <Select
+                  value={correctionView}
+                  disabled={listMode === 'drafts'}
+                  onValueChange={(v) => {
+                    if (v === 'all' || v === 'collapse' || v === 'hide') {
+                      setCorrectionView(v)
+                      setPage(0)
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full text-sm" aria-label={t('filter_section_corrections')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="collapse">{t('corrections_collapse')}</SelectItem>
+                    <SelectItem value="hide">{t('corrections_hide')}</SelectItem>
+                    <SelectItem value="all">{t('corrections_all')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {correctionView === 'hide' && (
+                  <p className="text-xs text-muted-foreground">{t('corrections_hide_hint')}</p>
+                )}
               </div>
             </div>
 

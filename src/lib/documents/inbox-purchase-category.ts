@@ -110,7 +110,7 @@ export async function setInboxItemPurchaseCategory(
   if (!UUID_RE.test(inboxItemId)) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, extracted_data, matched_supplier_id, created_supplier_invoice_id, updated_at')
+    .select('id, extracted_data, matched_supplier_id, channel_context, created_supplier_invoice_id, updated_at')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -120,6 +120,7 @@ export async function setInboxItemPurchaseCategory(
     id: string
     extracted_data: Record<string, unknown> | null
     matched_supplier_id: string | null
+    channel_context?: unknown
     created_supplier_invoice_id: string | null
     updated_at: string
   }
@@ -197,7 +198,7 @@ export async function setInboxItemPurchaseCategory(
   if (!updated) return { ok: false, code: 'INBOX_ITEM_EDIT_CONFLICT' }
 
   const read = await resolveInboxPurchaseCategories(ctx.supabase, ctx.companyId, [
-    { id: row.id, extracted_data: next, matched_supplier_id: row.matched_supplier_id },
+    { id: row.id, extracted_data: next, matched_supplier_id: row.matched_supplier_id, channel_context: row.channel_context },
   ])
   return { ok: true, data: { id: row.id, purchase_category: read.get(row.id) ?? null } }
 }

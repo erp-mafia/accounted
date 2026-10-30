@@ -207,7 +207,7 @@ export async function readOneClickInput(
       log,
       'the purchase category',
       async () =>
-        (await resolveInboxPurchaseCategories(supabase, companyId, [{ id: row.id, extracted_data: reading as Record<string, unknown> | null, matched_supplier_id: supplier?.id ?? row.matched_supplier_id }])).get(row.id)?.code ?? null,
+        (await resolveInboxPurchaseCategories(supabase, companyId, [{ id: row.id, extracted_data: reading as Record<string, unknown> | null, matched_supplier_id: supplier?.id ?? row.matched_supplier_id, channel_context: row.channel_context }])).get(row.id)?.code ?? null,
       null,
     ))
 
