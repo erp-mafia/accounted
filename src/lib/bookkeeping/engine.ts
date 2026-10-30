@@ -60,6 +60,7 @@ import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { assertLinesWithinUnattendedCeiling, entryUnattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
+import { commitAsReviewed, isBookingReviewRefusal } from '@/lib/bookkeeping/booking-review-commit'
 import { linkBusinessEventToDraft, type BusinessEventLink, type SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { callWithBusinessEvents } from '@/lib/bookkeeping/business-event-rpc'
 import type { PayoutFeeLine } from '@/lib/bookkeeping/payout-fee-lines'
@@ -996,7 +997,7 @@ export async function commitEntry(
 
   // Atomic: increment voucher sequence + update status in one transaction.
   // Rolls back the sequence if the balance trigger or any constraint fails.
-  const { data: rpcResult, error: commitError } = await supabase.rpc('commit_journal_entry', {
+  let { error: commitError } = await supabase.rpc('commit_journal_entry', {
     p_company_id: companyId,
     p_entry_id: entryId,
     p_commit_method: method,
@@ -1004,6 +1005,19 @@ export async function commitEntry(
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
   })
+  // A booking review rule matches the draft (accounted#130 step 2): only a
+  // person's reviewed commit posts it (./booking-review-commit.ts); any
+  // other commit throws BookingReviewRequiredError, with nothing posted.
+  if (isBookingReviewRefusal(commitError)) {
+    ;({ error: commitError } = await commitAsReviewed(supabase, {
+      companyId,
+      entryId,
+      userId,
+      actor,
+      commitMethod: method,
+      rubricVersion: rubricVersion ?? null,
+    }))
+  }
 
   if (commitError) {
     logWriteFailure('commit_journal_entry RPC failed', commitError, {

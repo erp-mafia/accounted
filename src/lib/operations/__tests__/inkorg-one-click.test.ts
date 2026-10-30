@@ -625,6 +625,31 @@ describe('planOneClick: the company and the rule ask for a review (accounted#130
   it('keeps a more specific question: the category is asked before the review', () => {
     expect(planOneClick(input({ ...wispr, category: null, directBooking: { enabled: false } }))).toMatchObject({ ask: 'category', reason: 'no_category' })
   })
+
+  // Step 2: a booking review rule that matches the plan's lines and its bank
+  // row (or the supplier) opens the editor; one that does not leaves it.
+  const blockRule = (overrides: Record<string, unknown>) => ({
+    id: 'r-1', rule_id: 'r-1', version: 1, accounts: null, counterparty_key: null, counterparty_label: null,
+    amount_from_sek: null, vat_treatment: null, note: null, valid_from: '2026-10-29T00:00:00Z', created_by: 'u-1',
+    created_at: '2026-10-29T00:00:00Z', revoked_at: null, revoked_by: null, revoked_reason: null,
+    ...overrides,
+  })
+
+  it('opens the editor when a booking review rule matches the plan', () => {
+    const review = (rules: ReturnType<typeof blockRule>[]) => ({ rules, counterpartyKey: 'wispr', amountSek: -150 }) as never
+    expect(planOneClick(input({ ...wispr, bookingReview: review([blockRule({ vat_treatment: 'reverse_charge' })]) }))).toMatchObject({
+      ask: 'editor',
+      reason: 'review_required',
+    })
+    expect(planOneClick(input({ ...wispr, bookingReview: review([blockRule({ counterparty_key: 'wispr', amount_from_sek: 100 })]) })).ask).toBe('editor')
+    expect(planOneClick(input({ ...wispr, bookingReview: review([blockRule({ counterparty_key: 'wispr', amount_from_sek: 1000 })]) })).ask).toBeNull()
+    expect(planOneClick(input({ ...wispr, bookingReview: review([blockRule({ vat_treatment: 'reduced_6' })]) })).ask).toBeNull()
+  })
+
+  it('reads an unknown bank amount as meeting an amount criterion', () => {
+    const review = { rules: [blockRule({ amount_from_sek: 1_000_000 })], counterpartyKey: 'wispr', amountSek: null } as never
+    expect(planOneClick(input({ ...wispr, bookingReview: review })).ask).toBe('editor')
+  })
 })
 
 describe('oneClickOutcome', () => {

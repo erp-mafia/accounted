@@ -117,6 +117,8 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
     'never refuses: it subtracts the deleted verifikat\'s lines from ledger_account_days and returns OLD; its shared lock waits only for a summary build',
   company_grants_immutable:
     'refuses a DELETE only while the company row exists; the teardown removes grants through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
+  booking_review_rules_immutable:
+    'refuses a DELETE only while the company row exists; the teardown removes the rules through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
 }
 
 type Statement = { kind: 'delete' | 'update'; table: string; cols: string[]; pos: number }

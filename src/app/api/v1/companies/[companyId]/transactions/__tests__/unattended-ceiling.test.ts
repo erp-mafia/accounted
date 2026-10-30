@@ -316,3 +316,126 @@ describe('POST /transactions/bulk-book', () => {
     expect(booked(c.supabase.rpc)).toBe(true)
   })
 })
+
+/**
+ * Hard blocks on the same doors (accounted#130 step 2): a booking a booking
+ * review rule matches is never booked from a key. The single door stages it
+ * for a person (202), the batch door skips it, and when only the database
+ * sees the match (commit_journal_entry's refusal) the single door still
+ * stages it and nothing is posted.
+ */
+describe('booking review rules on the key doors', () => {
+  const FROM_1000 = {
+    id: 'r-1', rule_id: 'r-1', version: 1, accounts: null, counterparty_key: null, counterparty_label: null,
+    amount_from_sek: 1000, vat_treatment: null, note: null, valid_from: '2026-10-29T00:00:00Z', created_by: 'u-1',
+    created_at: '2026-10-29T00:00:00Z', revoked_at: null, revoked_by: null, revoked_reason: null,
+  }
+  const STAGED_ROW = {
+    id: 'op-1', company_id: COMPANY_ID, operation_type: 'categorize_transaction', title: 'Kategorisera', status: 'pending',
+    risk_level: 'medium', preview_data: {}, result_data: null, actor_type: 'api_key', actor_id: 'ak_1', actor_label: 'Bokföringsrobot',
+    created_at: '2026-10-29T10:00:00Z', resolved_at: null,
+  }
+  const send = (txId: string) =>
+    categorize(post(`${BASE}/${txId}/categorize`, { is_business: true, category: 'expense_office' }), {
+      params: Promise.resolve({ companyId: COMPANY_ID, id: txId }),
+    })
+
+  it('stages a matched booking for a person instead of booking it, and answers 202', async () => {
+    auth(null)
+    const client = bankRowsClient()
+    client.setTable('booking_review_rules', { data: [FROM_1000], error: null })
+    client.setTable('pending_operations', { data: STAGED_ROW, error: null })
+    mockServiceClient.mockReturnValue(client.supabase)
+
+    const res = await send(TX_BIG)
+    const body = await res.json()
+
+    expect(res.status, JSON.stringify(body)).toBe(202)
+    expect(body.data).toMatchObject({ pending_operation_id: 'op-1', status: 'pending', staged_because: 'BOOKING_REVIEW_REQUIRED' })
+    const staged = client.payloads('pending_operations', 'insert')[0] as { operation_type: string; params: Record<string, unknown>; preview_data: { lines: unknown[] } }
+    expect(staged.operation_type).toBe('categorize_transaction')
+    expect(staged.params).toMatchObject({ transaction_id: TX_BIG, category: 'expense_office' })
+    expect(staged.preview_data.lines.length).toBeGreaterThan(0)
+    expect(committed(client.supabase.rpc)).toEqual([])
+    expect(client.payloads('transactions', 'update')).toEqual([])
+  })
+
+  it('books a row the rule does not match on the same key', async () => {
+    auth(null)
+    const client = bankRowsClient()
+    client.setTable('booking_review_rules', { data: [FROM_1000], error: null })
+    mockServiceClient.mockReturnValue(client.supabase)
+
+    expect((await send(TX_SMALL)).status).toBe(200)
+    expect(committed(client.supabase.rpc)).toEqual([`je-${TX_SMALL}`])
+  })
+
+  it('skips the matched item of a batch and books the rest', async () => {
+    auth(null)
+    const client = bankRowsClient()
+    client.setTable('booking_review_rules', { data: [FROM_1000], error: null })
+    mockServiceClient.mockReturnValue(client.supabase)
+    const categorization = { is_business: true, category: 'expense_office' }
+
+    const res = await batchCategorize(
+      post(`${BASE}/batch-categorize`, {
+        items: [
+          { transaction_id: TX_BIG, categorization },
+          { transaction_id: TX_SMALL, categorization },
+        ],
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    const body = await res.json()
+
+    expect(body.data.results[0]).toMatchObject({ ok: false, transaction_id: TX_BIG, error: { code: 'BOOKING_REVIEW_REQUIRED' } })
+    expect(body.data.results[1]).toMatchObject({ ok: true, transaction_id: TX_SMALL })
+    expect(committed(client.supabase.rpc)).toEqual([`je-${TX_SMALL}`])
+  })
+
+  it('stages it when only commit_journal_entry sees the match: the key never gets the reviewed commit', async () => {
+    auth(null)
+    const client = bankRowsClient()
+    client.setTable('rpc:commit_journal_entry', {
+      data: null,
+      error: { message: 'BOOKING_REVIEW_REQUIRED: a booking review rule matches this booking', code: 'P0001' } as never,
+    })
+    client.setTable('pending_operations', { data: STAGED_ROW, error: null })
+    mockServiceClient.mockReturnValue(client.supabase)
+
+    const res = await send(TX_BIG)
+
+    expect(res.status).toBe(202)
+    expect(client.supabase.rpc.mock.calls.some(([name]) => name === 'commit_reviewed_journal_entry')).toBe(false)
+    expect(client.payloads('transactions', 'update')).toEqual([])
+  })
+
+  it('refuses to link a matched row to a verifikat posted first: a key may not book it in two steps', async () => {
+    auth(null)
+    const c = createTableMockSupabase({
+      company_members: OWNER,
+      transactions: {
+        data: [{ id: TX_BIG, amount: -1250, currency: 'SEK', description: 'Acme', merchant_name: 'Acme AB', date: '2026-06-05', amount_sek: null, exchange_rate: null, cash_account_id: null }],
+        error: null,
+      },
+      booking_review_rules: { data: [{ ...FROM_1000, amount_from_sek: null, accounts: ['5410'] }], error: null },
+      journal_entry_lines: {
+        data: [
+          { account_number: '5410', debit_amount: 1250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(c.supabase)
+
+    const res = await bulkBook(post(`${BASE}/bulk-book`, { tx_ids: [TX_BIG], existing_journal_entry_id: JE_ID }), {
+      params: Promise.resolve({ companyId: COMPANY_ID }),
+    })
+    const body = await res.json()
+
+    expect(res.status, JSON.stringify(body)).toBe(409)
+    expect(body.error.code).toBe('BOOKING_REVIEW_BULK_REFUSED')
+    expect(c.supabase.rpc.mock.calls.some(([name]) => name === 'bulk_book_transactions')).toBe(false)
+  })
+})

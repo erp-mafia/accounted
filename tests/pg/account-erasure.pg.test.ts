@@ -111,6 +111,9 @@ const RETAINED = new Set([
   'company_grants.revoked_by', // Who revoked or superseded that rule; the company keeps the record.
   'company_grant_uses.reviewed_by', // Who reviewed a posting a rule let through; the company keeps the record.
   'company_grant_settings.decided_by', // Who paused or resumed the company's rules; the company keeps the record.
+  'booking_review_rules.created_by', // Who set a booking review rule (a dated processing rule); the company keeps the record.
+  'booking_review_rules.revoked_by', // Who archived or superseded that rule; the company keeps the record.
+  'booking_review_stamps.reviewed_by', // Who reviewed and booked a verifikat a booking review rule matched; the company keeps the record.
   'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
   'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.

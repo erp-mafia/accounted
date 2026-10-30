@@ -2703,6 +2703,12 @@ export const CategorizeTransactionSchema = z
  */
 export const DashboardCategorizeSchema = CategorizeTransactionSchema.safeExtend({
   review_shown: z.boolean().optional(),
+  /**
+   * The transactions page's Bokför valda: one category for a selection, no
+   * booking's review seen. A booking a booking review rule matches is then
+   * refused, never stamped as reviewed (accounted#130 step 2).
+   */
+  in_bulk: z.boolean().optional(),
 })
 
 /**

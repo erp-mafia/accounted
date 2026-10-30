@@ -19,7 +19,7 @@ const OFF = { enabled: false }
 
 describe('DIRECT_BOOKING_POLICY_VERSION', () => {
   it('spells the thresholds into the recorded policy version', () => {
-    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.2;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
+    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.3;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
   })
 
   /**
@@ -34,7 +34,17 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 2, sha256: 'c79b45131460a5ea0f6143c5fd0e2fd430cac7e9988e87ea649b3b71e563ee06' })
+    }).toEqual({ revision: 3, sha256: '1085600c23d5936375694ebcf2a4d48d6b5a3f9501d03e9322adfabb208e8894' })
+  })
+
+  it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
+    const settled = { source: 'rule' as const, confidence: 0.9, rule_own: true }
+    expect(reviewReason(settled, DIRECT_BOOKING_ON)).toBeNull()
+    expect(reviewReason({ ...settled, review_blocked: true }, DIRECT_BOOKING_ON)).toBe('booking_blocked')
+    expect(reviewReason({ ...settled, review_blocked: true }, OFF)).toBe('booking_blocked')
+    expect(reviewReason({ ...settled, review_blocked: true, rule_always_review: true }, DIRECT_BOOKING_ON)).toBe('booking_blocked')
+    expect(askedForReview({ review_blocked: true }, DIRECT_BOOKING_ON)).toBe('booking_blocked')
+    expect(confidenceBand({ ...settled, review_blocked: true }, DIRECT_BOOKING_ON)).toBe('review')
   })
 
   it('bands a proposal by whether the row books it without a review, under the company switch', () => {

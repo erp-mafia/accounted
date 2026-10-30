@@ -1493,6 +1493,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // The attesters' limits under that policy (20261030140000): how much one
   // approval covered. The trail keeps each approval's own snapshot too.
   { name: 'company_attest_limits', file: 'company_attest_limits.json', orderBy: 'created_at' },
+  // Hard blocks (20261031150000): every dated version of what was never
+  // booked without a person's review, and the review stamps that let such a
+  // booking through (who reviewed which verifikat, on what amount and limit).
+  { name: 'booking_review_rules', file: 'booking_review_rules.json', orderBy: 'created_at' },
+  { name: 'booking_review_stamps', file: 'booking_review_stamps.json', orderBy: 'reviewed_at', pageKey: 'journal_entry_id' },
 ]
 
 /**

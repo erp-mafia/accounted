@@ -13,6 +13,12 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
   snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),

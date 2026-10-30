@@ -9,6 +9,12 @@ import {
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
+// Booking review rules (accounted#130): none unless a test sets them.
+const blockRules = vi.hoisted(() => ({ list: [] as unknown[] }))
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => blockRules.list),
+}))
 vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
   snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
@@ -101,8 +107,52 @@ describe('POST /api/transactions/bulk-book', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    blockRules.list = []
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  // accounted#130 step 2: a row a booking review rule matches is booked on
+  // its own from its review, never in a samlingsverifikat.
+  it('refuses a samlingsverifikat with a row a booking review rule matches, before the RPC', async () => {
+    const rule = {
+      id: 'r-1', rule_id: 'r-1', version: 1, accounts: ['3001'], counterparty_key: 'kund', counterparty_label: 'Kund AB',
+      amount_from_sek: 150, vat_treatment: null, note: null, valid_from: '2026-10-29T00:00:00Z', created_by: 'u-1',
+      created_at: '2026-10-29T00:00:00Z', revoked_at: null, revoked_by: null, revoked_reason: null,
+    }
+    blockRules.list = [rule]
+    try {
+      enqueue({
+        data: [
+          { id: TX1, amount: 100, currency: 'SEK', description: 'Insättning', merchant_name: 'Kund AB', date: '2026-06-05' },
+          { id: TX2, amount: 200, currency: 'SEK', description: 'Insättning', merchant_name: 'Kund AB', date: '2026-06-05' },
+        ],
+        error: null,
+      })
+      enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+      enqueue({ data: [], error: null })
+      const response = await POST(
+        createMockRequest('/api/transactions/bulk-book', {
+          method: 'POST',
+          body: {
+            tx_ids: [TX1, TX2],
+            entry_description: 'Samlingsverifikation',
+            manual_lines: [
+              { account_number: '1930', debit_amount: 300, credit_amount: 0, currency: 'SEK' },
+              { account_number: '3001', debit_amount: 0, credit_amount: 300, currency: 'SEK' },
+            ],
+          },
+        }),
+        createMockRouteParams({}),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { transaction_ids: string[] } } }>(response)
+      expect(status, JSON.stringify(body)).toBe(409)
+      expect(body.error.code).toBe('BOOKING_REVIEW_BULK_REFUSED')
+      expect(body.error.details.transaction_ids).toEqual([TX2])
+      expect(mockSupabase.rpc).not.toHaveBeenCalledWith('bulk_book_transactions', expect.anything())
+    } finally {
+      blockRules.list = []
+    }
   })
 
   it('returns 401 when unauthenticated', async () => {

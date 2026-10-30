@@ -115,6 +115,12 @@ export interface BookingProposal {
    * (lib/transactions/direct-booking.ts ruleReviewFlags).
    */
   rule_import_unconfirmed?: boolean
+  /**
+   * A booking review rule of the company matches this booking of the row
+   * (lib/booking-review, accounted#130 step 2): it is never booked without
+   * a person's review, on any path. Set by proposeForTransactions.
+   */
+  review_blocked?: boolean
   has_underlag?: boolean
   /**
    * A weak learned-counterpart match that the assistant's stored read had on

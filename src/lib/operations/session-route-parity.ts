@@ -196,6 +196,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
+  // Hard blocks (accounted#130): what no key, agent, grant or bulk path may
+  // book without a person's review. A key that could lift one would lift its
+  // own limit, so an owner or admin sets and archives them in the browser.
+  'POST /api/rules/blocks': uiOnly('a hard block decides what agents may never book without a person; an owner or admin sets it in the browser'),
+  'DELETE /api/rules/blocks/:ruleId': uiOnly('archiving a hard block widens what agents may book; an owner or admin lifts it in the browser'),
 
   // ── Chart of accounts ──────────────────────────────────────────────
   'POST /api/bookkeeping/accounts': covered([`POST ${V}/accounts`, 'gnubok_create_account']),

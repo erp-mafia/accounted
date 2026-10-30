@@ -21,6 +21,11 @@ import type { CategorizationTemplate } from '@/types'
  * page, MCP's books_without_review, the decision log's band and the
  * categorize route's refusal all read it, and the Inkorg's one-click plan
  * reads its company and rule half (askedForReview).
+ *
+ * A booking review rule (accounted#130 step 2, lib/booking-review) is the
+ * hardest say of all: a suggestion one matches asks whatever the company's
+ * switch, the rule or the evidence say ('booking_blocked'), and no path
+ * books it without a person's review (commit_journal_entry refuses it).
  */
 export const COUNTERPART_SEEN_FOR_DIRECT = 3
 /** Sure enough, with a receipt behind it, to book from the row without a review. */
@@ -34,7 +39,7 @@ export const ASSISTANT_LIKELY = 0.5
  * revision). The thresholds are spelled into the version, so changing one
  * changes the version on its own.
  */
-export const DIRECT_BOOKING_POLICY_REVISION = 2
+export const DIRECT_BOOKING_POLICY_REVISION = 3
 
 /**
  * The approval policy a decision's confidence band is evaluated under,
@@ -57,8 +62,12 @@ export interface DirectBookingSettings {
 /** What the column defaults to, and what a company that never touched it has. */
 export const DIRECT_BOOKING_ON: DirectBookingSettings = Object.freeze({ enabled: true })
 
-/** What the rule behind a proposal says about booking it without a review. */
-export type RuleReviewFlags = Pick<SuggestedTemplate, 'rule_always_review' | 'rule_import_unconfirmed'>
+/**
+ * What the rule behind a proposal says about booking it without a review,
+ * and whether a booking review rule matches it (review_blocked, set where
+ * the proposals are made: lib/transactions/propose.ts).
+ */
+export type RuleReviewFlags = Pick<SuggestedTemplate, 'rule_always_review' | 'rule_import_unconfirmed' | 'review_blocked'>
 
 /**
  * The flags of a learned counterpart rule. An imported rule is unconfirmed
@@ -68,7 +77,9 @@ export type RuleReviewFlags = Pick<SuggestedTemplate, 'rule_always_review' | 'ru
  * imported rule is covered, the ones learned before this policy too, and
  * nothing extra is stored.
  */
-export function ruleReviewFlags(template: Pick<CategorizationTemplate, 'source'> & { always_review?: boolean | null }): Required<RuleReviewFlags> {
+export function ruleReviewFlags(
+  template: Pick<CategorizationTemplate, 'source'> & { always_review?: boolean | null },
+): Required<Omit<RuleReviewFlags, 'review_blocked'>> {
   return {
     rule_always_review: template.always_review === true,
     rule_import_unconfirmed: template.source === 'sie_import',
@@ -77,6 +88,8 @@ export function ruleReviewFlags(template: Pick<CategorizationTemplate, 'source'>
 
 /** Why a proposal opens a review; null when one click may book it. */
 export type ReviewReason =
+  /** A booking review rule matches it (booking_review_rules): a person reviews it on every path. */
+  | 'booking_blocked'
   /** The company switched one click off (company_settings.direct_booking_enabled). */
   | 'company_off'
   /** A person set the rule to always ask (categorization_templates.always_review). */
@@ -88,6 +101,7 @@ export type ReviewReason =
 
 /** The company's and the rule's say, before any evidence is read. */
 export function askedForReview(rule: RuleReviewFlags, settings: DirectBookingSettings): ReviewReason | null {
+  if (rule.review_blocked) return 'booking_blocked'
   if (!settings.enabled) return 'company_off'
   if (rule.rule_always_review) return 'rule_always_review'
   if (rule.rule_import_unconfirmed) return 'rule_import_unconfirmed'

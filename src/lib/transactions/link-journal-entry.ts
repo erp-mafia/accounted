@@ -47,6 +47,9 @@ import {
 import { createLogger } from '@/lib/logger'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
+import { getActor } from '@/lib/bookkeeping/actor-context'
+import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
+import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { EntryPreview } from '@/lib/bookkeeping/entry-preview'
 import {
@@ -69,6 +72,7 @@ const log = createLogger('transactions/link-journal-entry')
 // canonical "bank tx not found in this company" envelope.
 export type LinkTransactionJournalEntryErrorCode =
   | ReturnType<typeof conflictCode>
+  | 'BOOKING_REVIEW_REQUIRED'
   | 'TX_CATEGORIZE_TX_NOT_FOUND'
   | 'LINK_TX_TX_ALREADY_LINKED'
   | 'LINK_TX_TX_IGNORED'
@@ -185,7 +189,7 @@ function linkRefusal(
 // checks, the optimistic-lock invoice update, the invoice_payments insert,
 // and the compensating-rollback path. No select('*').
 const LINK_TX_COLUMNS =
-  'id, date, amount, currency, exchange_rate, description, merchant_name, cash_account_id, journal_entry_id, reconciliation_method, invoice_id, is_business, is_ignored, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id'
+  'id, date, amount, amount_sek, currency, exchange_rate, description, merchant_name, original_description, cash_account_id, journal_entry_id, reconciliation_method, invoice_id, is_business, is_ignored, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id'
 
 export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
@@ -212,6 +216,31 @@ export async function linkTransactionToJournalEntry(
     exchange_rate: number | null
   }
   const journalEntry = prepared.entry
+
+  // Hard blocks (accounted#130 step 2): linking the row books it on the
+  // verifikat's lines. A key, an agent or cron may not book a row a booking
+  // review rule matches that way either (a verifikat posted first, then
+  // linked); a person linking it in the app has the verifikat in front of them.
+  const linkActor = getActor()
+  if (linkActor && !isPersonReview(linkActor)) {
+    const rules = await loadActiveBookingReviewRules(supabase, companyId)
+    if (rules.length > 0) {
+      const { data: entryLines } = await supabase
+        .from('journal_entry_lines')
+        .select('account_number, debit_amount, credit_amount')
+        .eq('journal_entry_id', journalEntryId)
+      const matched = await matchBookingOfRows(
+        supabase,
+        companyId,
+        [transaction as unknown as Parameters<typeof matchBookingOfRows>[2][number]],
+        Array.isArray(entryLines) ? (entryLines as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) : [],
+        rules,
+      )
+      if (matched.length > 0) {
+        return { ok: false, code: 'BOOKING_REVIEW_REQUIRED', details: { transaction_id: transactionId, matched_rules: matched } }
+      }
+    }
+  }
 
   type FetchedInvoice = Pick<
     Invoice,

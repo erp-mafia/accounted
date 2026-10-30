@@ -21,6 +21,8 @@ import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { readDirectBookingSettings } from '@/lib/transactions/direct-booking-settings'
+import { grantCounterpartyKey } from '@/lib/booking-review/match'
+import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { resolveInboxPurchaseCategories, templatePurchaseAccount } from '@/lib/categories/inbox-purchase-category'
 import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
@@ -59,7 +61,7 @@ type ItemRow = PairableRow &
     extracted_data: InvoiceExtractionResult | null
   }
 
-type TransactionRow = Pick<Transaction, 'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'exchange_rate' | 'cash_account_id' | 'journal_entry_id' | 'description' | 'merchant_name'>
+type TransactionRow = Pick<Transaction, 'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'exchange_rate' | 'cash_account_id' | 'journal_entry_id' | 'description' | 'merchant_name' | 'original_description'>
 
 function isoDate(value: unknown): string | null {
   return typeof value === 'string' && ISO_DATE_RE.test(value.slice(0, 10)) ? value.slice(0, 10) : null
@@ -68,7 +70,7 @@ function isoDate(value: unknown): string | null {
 async function readTransaction(supabase: SupabaseClient, companyId: string, id: string): Promise<TransactionRow | null> {
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, date, amount, currency, amount_sek, exchange_rate, cash_account_id, journal_entry_id, description, merchant_name')
+    .select('id, date, amount, currency, amount_sek, exchange_rate, cash_account_id, journal_entry_id, description, merchant_name, original_description')
     .eq('id', id)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -184,10 +186,11 @@ export async function readOneClickInput(
     receiptDate = isoDate(receiptReading?.invoice?.invoiceDate)
   }
 
-  const [settingsRes, capabilities, directBooking] = await Promise.all([
+  const [settingsRes, capabilities, directBooking, bookingReviewRules] = await Promise.all([
     supabase.from('company_settings').select('vat_registered, accounting_method, entity_type').eq('company_id', companyId).maybeSingle(),
     hint(log, 'the package switches', () => loadCompanyCapabilities(supabase, companyId, { obligations: false }), null),
     readDirectBookingSettings(supabase, companyId),
+    loadActiveBookingReviewRules(supabase, companyId),
   ])
   if (settingsRes.error) throw settingsRes.error
   const settings = settingsRes.data as { vat_registered: boolean | null; accounting_method: string | null; entity_type: string | null } | null
@@ -257,6 +260,13 @@ export async function readOneClickInput(
       counterpartyAccount: counterpart?.account ?? null,
       counterpartyAlwaysReview: counterpart?.alwaysReview ?? false,
       directBooking,
+      bookingReview: {
+        rules: bookingReviewRules,
+        counterpartyKey:
+          (transaction ? grantCounterpartyKey(transaction.merchant_name, transaction.original_description, transaction.description) : '') ||
+          grantCounterpartyKey(supplierName, null, null),
+        amountSek: bank?.amountSek ?? null,
+      },
       sellerRegionAnswer: answers.sellerRegion ?? null,
       invoiceRate: null,
     },

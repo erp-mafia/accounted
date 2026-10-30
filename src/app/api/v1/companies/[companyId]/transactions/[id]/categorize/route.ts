@@ -18,6 +18,13 @@
  * in the unbooked queue. journal_entry_error in the 200 body is therefore
  * always null and kept only for response-shape compatibility.
  *
+ * Hard blocks (accounted#130 step 2): a booking a booking review rule matches
+ * is never booked from a key. It is staged as a categorize_transaction
+ * pending operation for a person to approve in the app, answered 202 with
+ * the pending operation (staged_because BOOKING_REVIEW_REQUIRED); a booking
+ * named by a template id, which a staged operation cannot carry, is refused
+ * with 409 BOOKING_REVIEW_REQUIRED instead.
+ *
  * Dry-runnable: the service's dry run runs every read-only check the booking
  * runs and returns the resolved mapping without inserting the journal entry or
  * mutating the transaction; an honoured force writes its behandlingshistorik
@@ -33,6 +40,9 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { categorizeTransaction } from '@/lib/transactions/categorize-core'
+import { stageBlockedCategorization } from '@/lib/booking-review/stage-categorization'
+import { addHandles, STAGED_PENDING_OPERATION_HANDLES } from '@/lib/api/v1/handles'
+import { toPendingOperationView } from '@/lib/pending-operations/view'
 
 const CategorizeResponse = z.object({
   success: z.boolean(),
@@ -67,6 +77,7 @@ registerEndpoint({
     'account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.',
     'vat_amount replaces the rate-based VAT line with the underlag\'s actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.',
     'vat_treatment reverse_charge without reverse_charge_kind takes the box (20, 21 or 22) from the seller country on the row\'s underlag and the category; when they cannot tell it, 400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN (details.reason): send reverse_charge_kind. Never ruta 21 by default.',
+    'A booking one of the company\'s blocks (booking review rules, Regler > Spärrar in the app) matches is never booked from a key: it is staged for a person and answered 202 with the pending operation (staged_because BOOKING_REVIEW_REQUIRED). Approving it is web-only. With template_id or counterparty_template_id it cannot be staged and is refused with 409 BOOKING_REVIEW_REQUIRED.',
   ],
   example: {
     request: { is_business: true, category: 'expense_office' },
@@ -123,6 +134,32 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           txLog,
           { requestId: ctx.requestId },
         )
+      }
+      // A booking review rule matches (accounted#130 step 2): a key's
+      // booking is staged for a person, never booked, and answered 202 with
+      // the pending operation as ?stage=true answers elsewhere.
+      if (outcome.code === 'BOOKING_REVIEW_REQUIRED') {
+        const staged = await stageBlockedCategorization(ctx.supabase, {
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          transactionId: txId,
+          booking: parsed.data,
+          actor: ctx.serviceAccount
+            ? { type: 'service_account', id: ctx.apiKeyId ?? null, label: ctx.serviceAccount.name }
+            : { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
+          log: txLog,
+        })
+        if (staged) {
+          const view = addHandles(
+            {
+              ...toPendingOperationView(staged.row),
+              ...(staged.periodStatus ? { period_status: staged.periodStatus } : {}),
+              staged_because: 'BOOKING_REVIEW_REQUIRED',
+            },
+            STAGED_PENDING_OPERATION_HANDLES,
+          ).value
+          return ok(view, { requestId: ctx.requestId, status: 202 })
+        }
       }
       return v1ErrorResponseFromCode(outcome.code, txLog, {
         requestId: ctx.requestId,

@@ -633,6 +633,11 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/deadlines': BOOK_HOUSE,
     '/api/tax-deadlines': BOOK_HOUSE,
     '/api/rules': BOOK_RECORD,
+    // Hard blocks (accounted#130): which bookings no key, rule for automatic
+    // booking, bulk path or one click may post. Owner or admin, like the
+    // grants' kill switch; every member reads them.
+    'POST /api/rules/blocks': AUTONOMY,
+    'DELETE /api/rules/blocks/:ruleId': AUTONOMY,
     'PATCH /api/pending-operations/:id/items': SETTINGS_LEDGER,
 
     // ── Bookkeeping ────────────────────────────────────────────────────
