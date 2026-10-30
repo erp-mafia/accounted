@@ -560,6 +560,16 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_dimension_rule:           'bookkeeping:write',
   gnubok_update_dimension_rule:           'bookkeeping:write',
   gnubok_delete_dimension_rule:           'bookkeeping:write',
+  // Budgets (operations budgets.* and reports.budget-vs-actual, accounted#134).
+  gnubok_list_budgets:                    'reports:read',
+  gnubok_get_budget:                      'reports:read',
+  gnubok_budget_vs_actual:                'reports:read',
+  gnubok_create_budget:                   'bookkeeping:write',
+  gnubok_update_budget:                   'bookkeeping:write',
+  gnubok_delete_budget:                   'bookkeeping:write',
+  gnubok_upsert_budget_lines:             'bookkeeping:write',
+  gnubok_copy_actuals_to_budget:          'bookkeeping:write',
+  gnubok_spread_budget:                   'bookkeeping:write',
   // Retag history of posted lines (operation dimensions.retag-log).
   gnubok_list_dimension_retag_log:        'reports:read',
   gnubok_get_dimension_pnl:               'reports:read',

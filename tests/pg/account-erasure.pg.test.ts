@@ -74,6 +74,7 @@ const RETAINED = new Set([
   'accrual_schedules.user_id',
   'assets.user_id',
   'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.
+  'budgets.user_id', // Who created a budget version; company planning data, the company keeps it.
   'agreements.created_by', // Who registered an agreement by hand (Avtal och åtaganden); the company keeps the record.
   'securities_and_contingencies.user_id', // Who registered a ställd säkerhet or eventualförpliktelse; underlag for the årsredovisning notes, the company keeps it.
   'company_group_links.user_id', // Who registered a group link; underlag for the koncernförhållanden note, the company keeps it.

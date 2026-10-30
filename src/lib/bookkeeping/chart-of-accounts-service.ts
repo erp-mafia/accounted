@@ -481,6 +481,27 @@ export async function deleteAccount(
     return { ok: false, code: 'ACCOUNT_IN_USE', details: { account_number: accountNumber, usage_count: usageCount } }
   }
 
+  // A budget's amounts on the account would go with it (ON DELETE CASCADE):
+  // an account a budget uses is not unused (accounted#134).
+  const { data: budgetLines, error: budgetError } = await supabase
+    .from('budget_lines')
+    .select('budget_id')
+    .eq('company_id', companyId)
+    .eq('account_number', accountNumber)
+    .limit(1)
+  if (budgetError) {
+    log.error('account budget usage failed', budgetError)
+    return { ok: false, code: 'UNKNOWN_ERROR', error: budgetError }
+  }
+  if ((budgetLines ?? []).length > 0) {
+    return {
+      ok: false,
+      code: 'ACCOUNT_IN_USE',
+      messageSv: `Konto ${accountNumber} har belopp i en budget och kan inte tas bort. Ta bort beloppen ur budgeten först, eller inaktivera kontot.`,
+      details: { account_number: accountNumber, usage_count: 0, budget_id: (budgetLines as { budget_id: string }[])[0]!.budget_id },
+    }
+  }
+
   if (options.dryRun) {
     return {
       ok: true,

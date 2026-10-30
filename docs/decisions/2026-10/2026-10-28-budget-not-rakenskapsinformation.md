@@ -1,0 +1,1 @@
+[2026-10-28] A budget is planning data, not räkenskapsinformation (BFL 7 kap.): it records no affärshändelse and explains no booked post, so a budget is deleted freely, never kept for seven years; the audit log still names who changed it (accounted#134).

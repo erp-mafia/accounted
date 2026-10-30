@@ -253,6 +253,16 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'dimension-rules.create': BOOK_RECORD,
   'dimension-rules.update': BOOK_RECORD,
   'dimension-rules.delete': BOOK_RECORD,
+  // Budgets (accounted#134): planning data beside the books, never a
+  // verifikat, so a register write; staged at low risk over MCP. Their reads
+  // (budgets.list, budgets.get, reports.budget-vs-actual) keep the
+  // reports:read default.
+  'budgets.create': BOOK_RECORD,
+  'budgets.update': BOOK_RECORD,
+  'budgets.delete': BOOK_RECORD,
+  'budgets.lines.upsert': BOOK_RECORD,
+  'budgets.copy-actuals': BOOK_RECORD,
+  'budgets.spread': BOOK_RECORD,
   'suppliers.create': BOOK_RECORD,
   'suppliers.update': BOOK_RECORD,
   // companies:write operations a member does in the app today (requireWrite

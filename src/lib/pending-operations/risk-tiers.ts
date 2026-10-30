@@ -47,6 +47,14 @@ const RISK_TIERS = {
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
   create_dimension: 'low',
+  // Budgets (accounted#134) are planning data, not räkenskapsinformation: no
+  // booking, no external side-effect, deleted freely.
+  create_budget: 'low',
+  update_budget: 'low',
+  delete_budget: 'low',
+  upsert_budget_lines: 'low',
+  copy_budget_actuals: 'low',
+  spread_budget: 'low',
   // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
   send_invoice_peppol: 'high',
   register_peppol_participant: 'high',

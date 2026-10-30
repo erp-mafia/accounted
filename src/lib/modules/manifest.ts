@@ -218,6 +218,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // ledger adapter in front of the engine. Kernel, beside the engine it
       // fronts; blocks post through it.
       'posting',
+      // Budgets per resultatkonto, month and dimension, compared with the
+      // books (accounted#134): read beside the resultatrapport.
+      'budgets',
     ],
     operationPrefixes: [
       'journal-entries',
@@ -239,6 +242,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'unexplained',
       // Periodiseringar (lib/bookkeeping/accruals): re-planning a schedule.
       'accrual-schedules',
+      'budgets',
     ],
     v1Segments: [
       'journal-entries',
@@ -256,6 +260,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'measures',
       'unexplained',
       'accrual-schedules',
+      'budgets',
     ],
     jurisdictions: SE,
   },

@@ -1,3 +1,5 @@
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
+
 /**
  * BAS 8990-8999, årets resultat: 8990 Resultat and 8999 Årets resultat, both
  * SRU 7450. A previous system or an owner moves the year's result to equity
@@ -22,3 +24,18 @@ export function isAretsResultatAccount(account: string): boolean {
 export function isYearEndAccount(account: string, resultAccount: string): boolean {
   return account.startsWith('88') || account.startsWith('89') || account === resultAccount
 }
+
+/**
+ * The resultatkonton, BAS classes 3-8: every account of the resultaträkning.
+ * What a budget covers (accounted#134, P&L only) and what budget against
+ * actual compares.
+ */
+export const RESULTATKONTO_FIRST = '3000'
+export const RESULTATKONTO_LAST = '8999'
+
+export function isResultatkonto(account: string): boolean {
+  return ACCOUNT_NUMBER_RE.test(account) && account >= RESULTATKONTO_FIRST && account <= RESULTATKONTO_LAST
+}
+
+/** The resultatkonton the budget API's examples show: sales of services and rent. */
+export const BUDGET_EXAMPLE_ACCOUNTS = { sales: '3010', rent: '5010' } as const

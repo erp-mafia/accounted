@@ -2,7 +2,7 @@
 
 # Reports endpoints
 
-Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Only income-statement, general-ledger, monthly-breakdown and kpi take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
+Read-only statutory and management reports: trial balance, balance sheet, income statement, general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export. Budgets (GET/POST /budgets, amounts per resultatkonto, month and dimension in the SIE sign, revenue negative) are compared with the books by GET /reports/budget-vs-actual. Only income-statement, general-ledger, monthly-breakdown, kpi and budget-vs-actual take the dim_no + dim_code filter; every other report answers a dimension filter with 400 VALIDATION_ERROR, never an unfiltered report. Any other query parameter a report does not list is not applied and is named in the X-Ignored-Query-Params response header. Defined measures (GET /measures/{id}) answer one figure equal to its report (moms att betala, kundfordringar, banksaldo, resultat ...) with its definition, caveats and an explain call down to every journal line; they refuse unknown parameters. The unexplained queue (GET /unexplained) runs the checks of differences that should be zero (reskontra against the ledger, bank and skattekonto against the outside balance, declared moms not settled, overdue unbooked bank rows) and explains each down to the records behind it.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -74,6 +74,617 @@ Example response `200`:
       }
     ],
     "next_cursor": "eyJ0cyI6…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/budgets`
+
+**List the budgets (named versions per fiscal year).**
+`scope:reports:read · risk:low · idempotent`
+
+Returns the company's budgets, oldest first: each is one named version of a fiscal year's budget, and at most one per year is the default that reports read when no budget is named. Archived budgets are left out unless include_archived is true.
+
+**Use when:** Before reading or changing a budget, to find its budget_id, or to see which version of a year is the default.
+**Do not use for:** The amounts themselves (GET /budgets/{id}) or the comparison with the books (GET /reports/budget-vs-actual).
+
+**Pitfalls:**
+- A company without budgets gets an empty list.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `fiscal_period_id` | query | `string` | no | The fiscal year (fiscal_period_id). |
+| `include_archived` | query | `boolean \| "true" \| "false"` | no | Also list archived budgets. Default false. |
+
+Response `200`:
+```ts
+{
+  data: {
+    budgets: { budget_id: string, fiscal_period_id: string, name: string, is_default: boolean, archived: boolean, archived_at: string | null, created_at: string, updated_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budgets": [
+      {
+        "budget_id": "7c1d…",
+        "fiscal_period_id": "a8f1…",
+        "name": "Budget 2027",
+        "is_default": true,
+        "archived": false,
+        "archived_at": null,
+        "created_at": "2026-11-02T09:00:00Z",
+        "updated_at": "2026-11-02T09:00:00Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/budgets`
+
+**Create a budget for a fiscal year.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Creates an empty, named budget version for one fiscal year. The name is unique within the year. The first budget of a year becomes its default unless is_default is false; is_default true on a later one moves the default to it. Fill it with POST /budgets/{id}/lines, /copy-actuals or /spread. Dry-runnable.
+
+**Use when:** Starting a year's budget, or a second version of it (a forecast, a scenario).
+**Do not use for:** Changing an existing budget (PATCH /budgets/{id}).
+
+**Pitfalls:**
+- A name the year already has (case ignored) answers 409 BUDGET_NAME_TAKEN.
+- fiscal_period_id must be one of the company's fiscal years: 404 PERIOD_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ fiscal_period_id: string, name: string, is_default?: boolean }
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "a8f1…",
+  "name": "Budget 2027"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    budget: { budget_id: string, fiscal_period_id: string, name: string, is_default: boolean, archived: boolean, archived_at: string | null, created_at: string, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget": {
+      "budget_id": "7c1d…",
+      "fiscal_period_id": "a8f1…",
+      "name": "Budget 2027",
+      "is_default": true,
+      "archived": false,
+      "archived_at": null,
+      "created_at": "2026-11-02T09:00:00Z",
+      "updated_at": "2026-11-02T09:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/budgets/{id}`
+
+**Read one budget and its amounts per account, month and dimension.**
+`scope:reports:read · risk:low · idempotent`
+
+Returns the budget and its lines, ordered by account and month, paged (limit, offset; has_more and total_lines say whether more follow). A line is one amount for one resultatkonto, one month and one dimension tag ({} untagged).
+
+**Use when:** To read or check the amounts of a budget, e.g. before changing them.
+**Do not use for:** Budget against booked result (GET /reports/budget-vs-actual).
+
+**Pitfalls:**
+- Amounts are in the SIE sign, debit positive: a revenue budget on class 3 is NEGATIVE (-1200000 for 1,2 Mkr sales), a cost budget positive.
+- A month with no line has no budget (0).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `account_number` | query | `string` | no | A resultatkonto, 3000-8999, as a STRING of 4 digits, never a number. |
+| `limit` | query | `number` | no | Lines per page, 1-1000 (default 1000). |
+| `offset` | query | `number` | no | Lines to skip (default 0). |
+
+Response `200`:
+```ts
+{
+  data: {
+    budget: { budget_id: string, fiscal_period_id: string, name: string, is_default: boolean, archived: boolean, archived_at: string | null, created_at: string, updated_at: string },
+    lines: { budget_line_id: string, account_number: string, month: string, dimensions: Record<string, string>, amount: number }[],
+    total_lines: number,
+    has_more: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget": {
+      "budget_id": "7c1d…",
+      "fiscal_period_id": "a8f1…",
+      "name": "Budget 2027",
+      "is_default": true,
+      "archived": false,
+      "archived_at": null,
+      "created_at": "2026-11-02T09:00:00Z",
+      "updated_at": "2026-11-02T09:00:00Z"
+    },
+    "lines": [
+      {
+        "budget_line_id": "0b3e…",
+        "account_number": "3010",
+        "month": "2027-01",
+        "dimensions": {},
+        "amount": -100000
+      }
+    ],
+    "total_lines": 1,
+    "has_more": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/budgets/{id}`
+
+**Rename a budget, make it the default, or archive or restore it.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update: name, is_default (true moves the year's default to this budget), archived (true makes it read-only and never the default; false restores it). The fiscal year of a budget never changes. Dry-runnable.
+
+**Use when:** Choosing which version a year's reports read, renaming one, or putting an old version aside.
+**Do not use for:** Changing amounts (POST /budgets/{id}/lines).
+
+**Pitfalls:**
+- Send at least one of name, is_default, archived.
+- An archived budget cannot be the default: 409 BUDGET_ARCHIVED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ name?: string, is_default?: boolean, archived?: boolean }
+```
+
+Example request:
+```json
+{
+  "is_default": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    budget: { budget_id: string, fiscal_period_id: string, name: string, is_default: boolean, archived: boolean, archived_at: string | null, created_at: string, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget": {
+      "budget_id": "7c1d…",
+      "fiscal_period_id": "a8f1…",
+      "name": "Budget 2027",
+      "is_default": true,
+      "archived": false,
+      "archived_at": null,
+      "created_at": "2026-11-02T09:00:00Z",
+      "updated_at": "2026-11-02T09:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/budgets/{id}`
+
+**Delete a budget and its amounts.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run`
+
+Removes the budget and every amount in it. A budget is planning data, not räkenskapsinformation (BFL 7 kap.), so it can be deleted at any time; the audit log keeps who did it. Archiving keeps it instead (PATCH archived=true). Dry-runnable: the preview counts the lines.
+
+**Use when:** A budget version is no longer wanted.
+**Do not use for:** Putting a version aside but keeping it (PATCH archived=true).
+
+**Pitfalls:**
+- A budget of another company, or one already deleted, answers 404 BUDGET_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, budget_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "budget_id": "7c1d…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/budgets/{id}/copy-actuals`
+
+**Fill a budget with last year's booked result, optionally scaled.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Reads the booked result per resultatkonto and month of the source year (default: the year before the budget's year), with the resultatrapport's exclusions (no bokslut entries), and writes it into the budget month by month: March to March, scaled by percent_change. Each copied account gets every month of the year, so copying again replaces the earlier copy; accounts without actuals are left alone. With dimensions, only the tagged actuals are copied, into lines with the same tag. Dry-runnable.
+
+**Use when:** Starting a budget from last year's figures, e.g. "last year plus 5 %".
+**Do not use for:** A yearly amount for one account (POST /spread).
+
+**Pitfalls:**
+- Without a previous fiscal year, name one with source_fiscal_period_id: 404 BUDGET_SOURCE_YEAR_NOT_FOUND.
+- Months are matched by calendar month; a source year that holds a month twice (18 months) gives its later one.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  source_fiscal_period_id?: string,
+  percent_change?: number,
+  dimensions?: Record<string, string>,
+  account_numbers?: string[]
+}
+```
+
+Example request:
+```json
+{
+  "percent_change": 5
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    budget_id: string,
+    inserted: number,
+    updated: number,
+    deleted: number,
+    unchanged: number,
+    source_fiscal_period_id: string,
+    accounts: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget_id": "7c1d…",
+    "inserted": 24,
+    "updated": 0,
+    "deleted": 0,
+    "unchanged": 0,
+    "source_fiscal_period_id": "5c2e…",
+    "accounts": [
+      "3010",
+      "5010"
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/budgets/{id}/lines`
+
+**Save amounts in a budget (account, month, dimension cells).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Writes each cell: one resultatkonto (3000-8999), one month (YYYY-MM) and one dimension tag ({} or omitted for untagged). A cell that exists gets the new amount, a new one is added, and amount 0 removes the cell. Every cell is saved or none is. The answer counts inserted, updated, deleted and unchanged cells. Dry-runnable.
+
+**Use when:** Entering or adjusting budget amounts by hand, or loading a budget prepared elsewhere.
+**Do not use for:** Last year's figures (POST /copy-actuals) or a yearly amount spread over the months (POST /spread).
+
+**Pitfalls:**
+- Amounts are in the SIE sign, debit positive: a revenue budget on class 3 is NEGATIVE (-1200000 for 1,2 Mkr sales), a cost budget positive.
+- The account must be in the chart of accounts: 404 BUDGET_ACCOUNT_NOT_FOUND lists the missing ones.
+- Months must lie in the budget's fiscal year: 400 BUDGET_MONTH_OUTSIDE_YEAR.
+- One cell once per call: 400 BUDGET_LINES_DUPLICATE.
+- An archived budget is read-only: 409 BUDGET_ARCHIVED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, month: string, dimensions?: Record<string, string>, amount: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "3010",
+      "month": "2027-01",
+      "amount": -100000
+    },
+    {
+      "account_number": "5010",
+      "month": "2027-01",
+      "dimensions": {
+        "6": "P001"
+      },
+      "amount": 12000
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { budget_id: string, inserted: number, updated: number, deleted: number, unchanged: number },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget_id": "7c1d…",
+    "inserted": 2,
+    "updated": 0,
+    "deleted": 0,
+    "unchanged": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/budgets/{id}/spread`
+
+**Spread a yearly amount over the months of a budget.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Writes one account's yearly amount into every month of the budget's fiscal year: evenly (method even), or in proportion to the account's booked months last year (method last_year, so a seasonal account keeps its season). Each month is whole öre and the last month takes the remainder, so the months add up to the amount exactly. A last year that sums to zero falls back to even (fell_back_to_even). Dry-runnable: the preview shows the months.
+
+**Use when:** The budget for an account is known per year ("3010: 1,2 Mkr").
+**Do not use for:** Different amounts per month (POST /lines).
+
+**Pitfalls:**
+- Amounts are in the SIE sign, debit positive: a revenue budget on class 3 is NEGATIVE (-1200000 for 1,2 Mkr sales), a cost budget positive.
+- The account's earlier months in the budget (same tag) are replaced.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  account_number: string,
+  amount: number,
+  method?: "even" | "last_year",
+  dimensions?: Record<string, string>,
+  source_fiscal_period_id?: string
+}
+```
+
+Example request:
+```json
+{
+  "account_number": "3010",
+  "amount": -1200000,
+  "method": "last_year"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    budget_id: string,
+    inserted: number,
+    updated: number,
+    deleted: number,
+    unchanged: number,
+    account_number: string,
+    method: "even" | "last_year",
+    fell_back_to_even: boolean,
+    months: { month: string, amount: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget_id": "7c1d…",
+    "inserted": 12,
+    "updated": 0,
+    "deleted": 0,
+    "unchanged": 0,
+    "account_number": "3010",
+    "method": "last_year",
+    "fell_back_to_even": false,
+    "months": [
+      {
+        "month": "2027-01",
+        "amount": -80000
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",
@@ -731,6 +1342,105 @@ Example response `200`:
       "signed_other_date": 0,
       "unsigned": 2,
       "attachments": 9
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/budget-vs-actual`
+
+**Budget against booked result per account and month.**
+`scope:reports:read · risk:low · idempotent`
+
+For every resultatkonto with a budget or a booked amount in the window: budget, actual, deviation (actual minus budget) and deviation_percent per month and in total, plus the result over all accounts. Figures are in the resultatrapport's sign (revenue positive, costs negative), so a positive deviation is always a better result than budgeted. Actuals leave out the bokslut entries, as the resultatrapport does. The window is whole months (from_month..to_month, default the whole year). dim_no + dim_code compare one dimension value: actuals and budget lines tagged with it.
+
+**Use when:** Following up a budget: year to date, one month, or one project or cost centre.
+**Do not use for:** The budget's raw amounts (GET /budgets/{id}).
+
+**Pitfalls:**
+- Without budget_id the year's default budget is read: 404 BUDGET_NONE_FOR_YEAR when there is none.
+- Months outside the budget's fiscal year answer 400 BUDGET_MONTH_OUTSIDE_YEAR.
+- Without a dimension filter every budget line counts, tagged or not.
+- deviation_percent is null where nothing is budgeted.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `budget_id` | query | `string` | no | The budget (budget_id from the budget list). |
+| `fiscal_period_id` | query | `string` | no | The fiscal year (fiscal_period_id). |
+| `from_month` | query | `string` | no | A month as YYYY-MM, inside the budget's fiscal year. |
+| `to_month` | query | `string` | no | A month as YYYY-MM, inside the budget's fiscal year. |
+| `dim_no` | query | `string` | no | SIE dimension number to filter on (with dim_code). |
+| `dim_code` | query | `string` | no | The dimension value code to filter on (with dim_no). |
+
+Response `200`:
+```ts
+{
+  data: {
+    budget: { budget_id: string, fiscal_period_id: string, name: string, is_default: boolean, archived: boolean, archived_at: string | null, created_at: string, updated_at: string },
+    fiscal_period: { fiscal_period_id: string, name: string, period_start: string, period_end: string },
+    from_month: string,
+    to_month: string,
+    dimension_filter: Record<string, string> | null,
+    months: string[],
+    rows: { account_number: string, account_name: string | null, months: { budget: number, actual: number, deviation: number, deviation_percent: number | null, month: string }[], total: { budget: number, actual: number, deviation: number, deviation_percent: number | null } }[],
+    totals: { months: { budget: number, actual: number, deviation: number, deviation_percent: number | null, month: string }[], total: { budget: number, actual: number, deviation: number, deviation_percent: number | null } }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "budget": {
+      "budget_id": "7c1d…",
+      "fiscal_period_id": "a8f1…",
+      "name": "Budget 2027",
+      "is_default": true,
+      "archived": false,
+      "archived_at": null,
+      "created_at": "2026-11-02T09:00:00Z",
+      "updated_at": "2026-11-02T09:00:00Z"
+    },
+    "fiscal_period": {
+      "fiscal_period_id": "a8f1…",
+      "name": "Räkenskapsår 2027",
+      "period_start": "2027-01-01",
+      "period_end": "2027-12-31"
+    },
+    "from_month": "2027-01",
+    "to_month": "2027-03",
+    "dimension_filter": null,
+    "months": [
+      "2027-01",
+      "2027-02",
+      "2027-03"
+    ],
+    "rows": [],
+    "totals": {
+      "months": [],
+      "total": {
+        "budget": 0,
+        "actual": 0,
+        "deviation": 0,
+        "deviation_percent": null
+      }
     }
   },
   "meta": {

@@ -1375,6 +1375,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'dimensions', file: 'dimensions.json', orderBy: 'created_at' },
   { name: 'dimension_values', file: 'dimension_values.json', orderBy: 'created_at' },
   { name: 'account_dimension_rules', file: 'account_dimension_rules.json' },
+  // Budgets (accounted#134): planning data, not räkenskapsinformation, kept
+  // in the backup because it is the company's own data.
+  { name: 'budgets', file: 'budgets.json', orderBy: 'created_at' },
+  { name: 'budget_lines', file: 'budget_lines.json', orderBy: 'created_at' },
   // Compliance records
   { name: 'voucher_gap_explanations', file: 'voucher_gap_explanations.json', orderBy: 'created_at' },
   // Inline rättelse trail (BFL 5 kap 5 § / 9 §): holds the struck original

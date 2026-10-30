@@ -258,6 +258,13 @@ import '@/app/api/v1/companies/[companyId]/dimensions/rules/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/rules/[id]/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/retag/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/retag-log/route'
+// Budgets (accounted#134): versions per fiscal year, amounts, copy, spread, comparison.
+import '@/app/api/v1/companies/[companyId]/budgets/route'
+import '@/app/api/v1/companies/[companyId]/budgets/[id]/route'
+import '@/app/api/v1/companies/[companyId]/budgets/[id]/lines/route'
+import '@/app/api/v1/companies/[companyId]/budgets/[id]/copy-actuals/route'
+import '@/app/api/v1/companies/[companyId]/budgets/[id]/spread/route'
+import '@/app/api/v1/companies/[companyId]/reports/budget-vs-actual/route'
 // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/peppol/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/peppol/deliveries/route'

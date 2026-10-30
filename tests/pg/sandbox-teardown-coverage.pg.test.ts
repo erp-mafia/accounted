@@ -108,8 +108,6 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
     'only for a document on a posted voucher; the teardown unlinks documents before deleting them',
   block_sent_invoice_document_deletion:
     'only while a sent invoice_deliveries row points at the PDF; the teardown deletes deliveries first',
-  enforce_dimension_value_retention:
-    'only while a posted line uses the value; journal entries are gone before dimensions',
   remove_team_member_from_companies: 'never raises',
   arrivals_append_only:
     'refuses only while the company row exists; the teardown reaches arrivals through the companies cascade, after that row is gone',

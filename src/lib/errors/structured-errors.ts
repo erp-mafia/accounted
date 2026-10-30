@@ -3718,7 +3718,7 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
       'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed.',
     remediation: {
       description:
-        'details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. Send only name to rename.',
+        'details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, budget_months_outside (a budget holds amounts for months the new dates leave out; message_sv names it), opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. Send only name to rename.',
     },
   },
   // crm#1450: only the company's first räkenskapsår, and only while it holds
@@ -9608,6 +9608,61 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Budgets (accounted#134): planning data per resultatkonto, month and
+// dimension. The database answers these codes from upsert_budget_lines.
+const BUDGET: Record<string, StructuredErrorEntry> = {
+  BUDGET_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Budgeten hittades inte.',
+    message_en: 'Budget not found.',
+    remediation: { description: 'List the budgets (GET /budgets) and use a budget_id from the answer.' },
+  },
+  BUDGET_NAME_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan en budget med det namnet för räkenskapsåret.',
+    message_en: 'The fiscal year already has a budget with that name.',
+  },
+  BUDGET_ARCHIVED: {
+    httpStatus: 409,
+    message_sv: 'Budgeten är arkiverad och kan inte ändras. Återställ den först.',
+    message_en: 'The budget is archived and cannot be changed. Restore it first.',
+    remediation: { description: 'PATCH the budget with archived=false, then retry.' },
+  },
+  BUDGET_ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kontot finns inte i kontoplanen. Lägg till det i kontoplanen innan du budgeterar på det.',
+    message_en: 'The account is not in the chart of accounts. Add it before budgeting on it.',
+    remediation: {
+      description: 'details.account_numbers lists the accounts missing from the chart; create them (POST /accounts) or leave them out.',
+    },
+  },
+  BUDGET_MONTH_OUTSIDE_YEAR: {
+    httpStatus: 400,
+    message_sv: 'Budgeten har en månad utanför räkenskapsåret.',
+    message_en: 'A budget month lies outside the fiscal year.',
+    remediation: {
+      description: 'details.months lists the months outside details.period_start..period_end; use months of the fiscal year the budget belongs to (YYYY-MM).',
+    },
+  },
+  BUDGET_LINES_DUPLICATE: {
+    httpStatus: 400,
+    message_sv: 'Samma konto, månad och dimension förekommer flera gånger i samma sparning.',
+    message_en: 'The same account, month and dimension tag appear more than once in one save.',
+  },
+  BUDGET_SOURCE_YEAR_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Det finns inget föregående räkenskapsår att hämta utfall från.',
+    message_en: 'There is no previous fiscal year to read actuals from.',
+    remediation: { description: 'Name the year to read with source_fiscal_period_id, or spread evenly (method even).' },
+  },
+  BUDGET_NONE_FOR_YEAR: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret har ingen standardbudget. Välj en budget eller markera en som standard.',
+    message_en: 'The fiscal year has no default budget. Name a budget or make one the default.',
+    remediation: { description: 'Send budget_id, or PATCH a budget of the year with is_default true.' },
+  },
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Node.js / undici network system codes. These surface when an outbound call
 // (email provider, Riksbanken, Skatteverket, a DB socket) fails at the
@@ -12297,6 +12352,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...BUDGET,
   ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
   ...POS_SALES,

@@ -93,7 +93,7 @@ const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: strin
   },
   ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS: {
     status: 409,
-    message: 'Företagsformen kan bara ändras innan konteringsregler eller dimensionsregler har skapats: ta bort dem först.',
+    message: 'Företagsformen kan bara ändras innan konteringsregler, dimensionsregler eller budgetbelopp har skapats: ta bort dem först.',
   },
   ENTITY_TYPE_CHANGE_CUSTOM_ACCOUNTS: {
     status: 409,

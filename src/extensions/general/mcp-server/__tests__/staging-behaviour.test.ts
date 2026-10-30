@@ -250,6 +250,12 @@ const READ_ONLY_RPCS = new Set([
   // the gnubok_delete_fiscal_period preview reads it; the delete itself runs
   // at approval.
   'delete_empty_fiscal_period_preview',
+  // The budget grid save's refusals and counts (accounted#134): STABLE, the
+  // dry run of every budget amount write; upsert_budget_lines runs at approval.
+  'upsert_budget_lines_preview',
+  // Booked result per resultatkonto and month: STABLE, read by the
+  // copy-actuals and spread previews.
+  'get_account_month_actuals',
 ])
 
 /**
@@ -1090,6 +1096,35 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Account dimension rules: the account has no rule for the dimension yet;
   // the update pauses a required rule, which carries no value.
   gnubok_create_dimension_rule: { empty: ['account_dimension_rules'] },
+  // An account a budget uses is not deleted as unused (accounted#134).
+  gnubok_delete_account: { empty: ['budget_lines'] },
+  // Budgets (accounted#134): the amounts' dry run is the STABLE
+  // upsert_budget_lines_preview, which answers a jsonb object.
+  gnubok_create_budget: { args: { name: 'Budget 2027' }, rows: { budgets: { name: 'Prognos 1' } } },
+  gnubok_update_budget: { args: { name: 'Prognos 2' }, rows: { budgets: { name: 'Budget 2027', archived_at: null } } },
+  gnubok_upsert_budget_lines: {
+    args: { lines: [{ account_number: '3010', month: '2026-01', amount: -100 }] },
+    rows: {
+      budgets: { archived_at: null },
+      'rpc:upsert_budget_lines_preview': { ok: true, inserted: 1, updated: 0, deleted: 0, unchanged: 0 },
+    },
+  },
+  gnubok_copy_actuals_to_budget: {
+    rows: {
+      budgets: { archived_at: null },
+      fiscal_periods: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      'rpc:get_account_month_actuals': { account_number: '3010', month: '2025-01-01', amount: -100 },
+      'rpc:upsert_budget_lines_preview': { ok: true, inserted: 12, updated: 0, deleted: 0, unchanged: 0 },
+    },
+  },
+  gnubok_spread_budget: {
+    args: { account_number: '3010', amount: -1200 },
+    rows: {
+      budgets: { archived_at: null },
+      fiscal_periods: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      'rpc:upsert_budget_lines_preview': { ok: true, inserted: 12, updated: 0, deleted: 0, unchanged: 0 },
+    },
+  },
   gnubok_update_dimension_rule: {
     args: { is_active: false },
     rows: { account_dimension_rules: { rule_type: 'required', value_id: null } },

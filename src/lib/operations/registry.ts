@@ -245,6 +245,7 @@ import {
 import { webshopOrdersBook, webshopOrdersBookDay, webshopOrdersGet, webshopOrdersList, webshopOrdersOssUnderlag } from './webshop-orders'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
+import { BUDGET_OPERATIONS } from './budgets'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
 import { SIGNING_REQUEST_OPERATIONS } from './signing-requests'
@@ -516,6 +517,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   ...SUPPLIER_INVOICE_ATTEST_OPERATIONS,
   // Packages: read their status (winding down included) and stage a switch on or off; approval by an owner or admin.
   ...PACKAGE_OPERATIONS,
+  // Budgets (accounted#134): named versions per fiscal year, their amounts, copy and spread, and budget against actual.
+  ...BUDGET_OPERATIONS,
 ]
 
 /**
