@@ -1,0 +1,1 @@
+[2026-10-26] K3 deferred tax posts under a new disposition kind, uppskjuten_skatt_kap29, on temporary differences and a recognised loss only; the kind removed 2026-08-05 (tax on obeskattade reserver) stays refused, since K3 29.37 keeps the reserves gross.

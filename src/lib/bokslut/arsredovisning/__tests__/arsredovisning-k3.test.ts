@@ -770,6 +770,219 @@ describe('buildArsredovisningData: K3', () => {
   })
 })
 
+// R2: write-downs are offered to K2 and K3 alike, and ÅRL 5 kap. 8 § p. 5
+// asks for årets nedskrivningar in the note. A note that leaves them out
+// neither says so nor ties to the balansräkning.
+describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5:8 § p. 5)', () => {
+  const PERIODS = [{ id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }]
+  const adjustment = (id: string, kind: 'impairment' | 'reversal', date: string, amount: number) => ({
+    id,
+    asset_id: 'mark-1',
+    component_id: null,
+    kind,
+    adjustment_date: date,
+    fiscal_period_id: 'fp1',
+    amount,
+    recoverable_amount: null,
+    reason: 'Värdenedgång',
+    expense_account: '7720',
+    accumulated_account: '1118',
+    journal_entry_id: `je-${id}`,
+    created_at: '2025-06-30T00:00:00Z',
+    journal_entry: { status: 'posted' },
+  })
+  // Mark for 900 000: 100 000 written down in 2024, 50 000 more in 2025 and
+  // 20 000 of it reversed. Utgående nedskrivningar 130 000, redovisat värde 770 000.
+  const mark = {
+    id: 'mark-1',
+    name: 'Tomt',
+    category: 'land',
+    acquisition_date: '2020-01-01',
+    acquisition_cost: 900_000,
+    salvage_value: 0,
+    useful_life_months: 0,
+    depreciation_method: 'linear',
+    bas_asset_account: '1130',
+    bas_accumulated_account: '1118',
+    bas_expense_account: '7820',
+    disposed_at: null,
+    k3_components: null,
+    components: [],
+    value_adjustments: [
+      adjustment('w1', 'impairment', '2024-12-31', 100_000),
+      adjustment('w2', 'impairment', '2025-06-30', 50_000),
+      adjustment('r1', 'reversal', '2025-12-31', 20_000),
+    ],
+  }
+  const tbRow = (account: string, debit: number, credit: number) => ({
+    account_number: account,
+    account_name: account,
+    account_class: 1,
+    opening_debit: 0,
+    opening_credit: 0,
+    period_debit: 0,
+    period_credit: 0,
+    closing_debit: debit,
+    closing_credit: credit,
+  })
+  function plantMark(writtenDownOnBooks: number) {
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([mark] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [tbRow('1130', 900_000, 0), tbRow('1118', 0, writtenDownOnBooks)],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+  }
+
+  for (const framework of ['k2', 'k3'] as const) {
+    it(`${framework.toUpperCase()}: shows the year's write-down and reversal and ties to the books`, async () => {
+      plantMark(130_000)
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toContain('Mark')
+      expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: -100\s000 kr/)
+      expect(note?.body).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(note?.body).toMatch(/Årets återförda nedskrivningar: 20\s000 kr/)
+      expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(note?.body).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(data.errors).toBeUndefined()
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+    })
+
+    it(`${framework.toUpperCase()}: blocks a note that does not tie while the register holds write-downs`, async () => {
+      // The reversal never reached 1118: the books say 150 000.
+      plantMark(150_000)
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      expect(data.errors).toEqual([expect.stringMatching(/^Anläggningsnotens .*innan årsredovisningen kan låsas/)])
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+    })
+  }
+})
+
+// The merge of Phases 1 and 2: each nedskrivning has one source. Posted
+// through the register, it is in the roll-forward; the ledger's write-down
+// accounts beyond that (booked by hand, or before Accounted) are in the
+// ledger note. Never both, and the tie-out counts each once.
+describe('buildArsredovisningData: one source per nedskrivning', () => {
+  const PERIODS = [{ id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }]
+  const IMPAIRMENT_ACCOUNT = 'Ackumulerade nedskrivningar på byggnader och mark'
+  const adjustment = (id: string, kind: 'impairment' | 'reversal', date: string, amount: number) => ({
+    id,
+    asset_id: 'mark-1',
+    component_id: null,
+    kind,
+    adjustment_date: date,
+    fiscal_period_id: 'fp1',
+    amount,
+    recoverable_amount: null,
+    reason: 'Värdenedgång',
+    expense_account: '7720',
+    accumulated_account: '1118',
+    journal_entry_id: `je-${id}`,
+    created_at: '2025-06-30T00:00:00Z',
+    journal_entry: { status: 'posted' },
+  })
+  const mark = (valueAdjustments: unknown[]) => ({
+    id: 'mark-1',
+    name: 'Tomt',
+    category: 'land',
+    acquisition_date: '2020-01-01',
+    acquisition_cost: 900_000,
+    salvage_value: 0,
+    useful_life_months: 0,
+    depreciation_method: 'linear',
+    bas_asset_account: '1130',
+    bas_accumulated_account: '1118',
+    bas_expense_account: '7820',
+    disposed_at: null,
+    k3_components: null,
+    components: [],
+    value_adjustments: valueAdjustments,
+  })
+  // Through the register: 100 000 in 2024; in 2025 50 000 more and 20 000 reversed.
+  const REGISTER = [
+    adjustment('w1', 'impairment', '2024-12-31', 100_000),
+    adjustment('w2', 'impairment', '2025-06-30', 50_000),
+    adjustment('r1', 'reversal', '2025-12-31', 20_000),
+  ]
+  function plant(adjustments: unknown[], ledger: { opening: number; written: number; released: number }) {
+    const closing = ledger.opening + ledger.written - ledger.released
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([mark(adjustments)] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        {
+          account_number: '1130', account_name: 'Mark', account_class: 1,
+          opening_debit: 900_000, opening_credit: 0, period_debit: 0, period_credit: 0,
+          closing_debit: 900_000, closing_credit: 0,
+        },
+        {
+          account_number: '1118', account_name: IMPAIRMENT_ACCOUNT, account_class: 1,
+          opening_debit: 0, opening_credit: ledger.opening, period_debit: ledger.released, period_credit: ledger.written,
+          closing_debit: 0, closing_credit: closing,
+        },
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+  }
+  async function build(framework: 'k2' | 'k3') {
+    const supabase = makeSupabase({ accountingFramework: framework })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    return {
+      data,
+      rollforward: data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? '',
+      ledger: data.noter.find((n) => n.title === 'Nedskrivningar av anläggningstillgångar')?.body,
+    }
+  }
+  const tiesOut = (data: { errors?: string[]; warnings: string[] }) => {
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+  }
+
+  for (const framework of ['k3', 'k2'] as const) {
+    it(`${framework.toUpperCase()}: a write-down posted through the register is shown once, in the roll-forward`, async () => {
+      plant(REGISTER, { opening: 100_000, written: 50_000, released: 20_000 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(rollforward).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(ledger).toBeUndefined()
+      tiesOut(data)
+    })
+
+    it(`${framework.toUpperCase()}: a write-down booked by hand is shown from the ledger`, async () => {
+      plant([], { opening: 0, written: 40_000, released: 0 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).not.toContain('nedskrivningar')
+      expect(ledger).toContain(IMPAIRMENT_ACCOUNT)
+      expect(ledger).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+      expect(ledger).not.toContain('utanför anläggningsregistret')
+      tiesOut(data)
+    })
+
+    it(`${framework.toUpperCase()}: with both, the ledger note shows only what the register did not book`, async () => {
+      // 30 000 more booked by hand on 1118 in 2025, beside the register's.
+      plant(REGISTER, { opening: 100_000, written: 80_000, released: 20_000 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(ledger).toContain('utanför anläggningsregistret')
+      expect(ledger).toMatch(/Ingående nedskrivningar: 0 kr/)
+      expect(ledger).toMatch(/Årets nedskrivningar: -30\s000 kr/)
+      expect(ledger).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+      tiesOut(data)
+    })
+  }
+})
+
 describe('buildArsredovisningData: note overrides', () => {
   it('K3: replaces note 1 with the user text and keeps the generated text for reset', async () => {
     const supabase = makeSupabase({

@@ -86,6 +86,16 @@ export const MAPPING_SOURCES = {
   taxAccountTransfer: 'se.skattekonto-account-transfer',
   assetDepreciation: 'se.asset-depreciation',
   assetDisposal: 'se.asset-disposal',
+  // A K3 component replacement's verifikat (lib/bokslut/assets/
+  // component-service.ts): the replaced component's depreciation to date,
+  // its cost and accumulated depreciation off, the carrying amount as a loss.
+  assetComponentReplacement: 'se.asset-component-replacement',
+  // A nedskrivning or its reversal (lib/bokslut/assets/
+  // value-adjustment-service.ts, ÅRL 4:5, K3 27): 77xx against 12x8.
+  assetValueAdjustment: 'se.asset-value-adjustment',
+  // The transition to K3 (lib/bokslut/k3-transition, BFNAR 2012:1 35.11):
+  // balance sheet adjustments and the opening deferred tax against equity.
+  k3Transition: 'se.k3-transition',
   salaryRun: 'se.salary-run',
   vacationYearClose: 'se.vacation-year-close',
   // The semesterlöneskuld remeasurement on a date without a salary run

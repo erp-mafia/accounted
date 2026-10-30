@@ -11,9 +11,19 @@ import {
   ensureAssetAccountsInChart,
   unusableAssetAccounts,
 } from '../asset-chart-accounts'
-import { createAsset, DEFAULT_ACCOUNTS_BY_CATEGORY } from '../asset-service'
+import { createAsset, DEFAULT_ACCOUNTS_BY_CATEGORY, updateAsset } from '../asset-service'
 import { checkCreateAssetGates } from '../asset-api'
 
+// The year's framework (frameworkOnDate): K2 for these cases.
+const frameworkOnDateMock = vi.hoisted(() => vi.fn(async () => 'k2'))
+vi.mock('@/lib/bokslut/framework-for-year', () => ({
+  frameworkOnDate: frameworkOnDateMock,
+  frameworkForYear: vi.fn(async () => 'k2'),
+}))
+vi.mock('@/lib/company/accounting-framework', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/accounting-framework')>()),
+  frameworkOnDate: frameworkOnDateMock,
+}))
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
@@ -148,6 +158,68 @@ describe('createAsset against the company chart (crm#1452)', () => {
     ).rejects.toBeInstanceOf(AccountsNotInChartError)
     expect(mock.findCalls('assets', 'insert')).toHaveLength(0)
   })
+
+  it('holds a K3 component asset to the same chart, before its row is written', async () => {
+    const components = [
+      { name: 'Chassi', cost: 15000, useful_life_months: 60, salvage_value: 0 },
+      { name: 'Skärm', cost: 5000, useful_life_months: 24, salvage_value: 0 },
+    ]
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: chartRows(['1224', '1229', '7832']) })
+    mock.enqueue({ data: chartRows(['1250', '1259']) }) // ensure: 7833 missing, not BAS
+    await expect(
+      createAsset(supabase, COMPANY, USER, {
+        ...input,
+        k3_components: components,
+        bas_asset_account: '1250',
+        bas_accumulated_account: '1259',
+        bas_expense_account: '7833',
+      }),
+    ).rejects.toBeInstanceOf(AccountsNotInChartError)
+    expect(mock.findCalls('assets', 'insert')).toHaveLength(0)
+    expect(mock.findCalls('asset_components', 'insert')).toHaveLength(0)
+  })
+})
+
+describe('updateAsset against the company chart (crm#1452)', () => {
+  const equipment = {
+    id: 'asset-1',
+    company_id: COMPANY,
+    user_id: USER,
+    name: 'Kassaregister',
+    category: 'equipment',
+    acquisition_date: '2026-01-01',
+    acquisition_cost: 30000,
+    salvage_value: 0,
+    useful_life_months: 60,
+    bas_asset_account: '1220',
+    bas_accumulated_account: '1229',
+    bas_expense_account: '7832',
+    k3_components: null,
+    components: [],
+    disposed_at: null,
+  }
+
+  it('refuses moving the row onto an account the chart has deactivated, before the update', async () => {
+    mock.enqueue({ data: equipment }) // getAsset
+    mock.enqueue({ data: chartRows([], ['1221']) }) // ensure: 1221 inactive
+    await expect(updateAsset(supabase, COMPANY, 'asset-1', { bas_asset_account: '1221' })).rejects.toBeInstanceOf(
+      AccountsNotInChartError,
+    )
+    expect(mock.findCalls('assets', 'update')).toHaveLength(0)
+  })
+
+  it('adds a missing standard BAS account the row moves onto', async () => {
+    mock.enqueue({ data: equipment }) // getAsset
+    mock.enqueue({ data: [] }) // ensure: 1221 missing
+    mock.enqueue({ data: [] }) // backfill existing check
+    mock.enqueue({ data: null }) // backfill insert
+    mock.enqueue({ data: { ...equipment, bas_asset_account: '1221' } }) // update
+    await updateAsset(supabase, COMPANY, 'asset-1', { bas_asset_account: '1221' })
+    const [seeded] = mock.findCall('chart_of_accounts', 'insert') as [Array<{ account_number: string }>]
+    expect(seeded.map((row) => row.account_number)).toEqual(['1221'])
+    expect(mock.findCalls('assets', 'update')).toHaveLength(1)
+  })
 })
 
 describe('checkCreateAssetGates: ACCOUNTS_NOT_IN_CHART', () => {
@@ -167,6 +239,19 @@ describe('checkCreateAssetGates: ACCOUNTS_NOT_IN_CHART', () => {
     mock.enqueue({ data: chartRows(['1224', '1229'], ['7832']) }) // unusable check
     const gate = await checkCreateAssetGates(supabase, COMPANY, body)
     expect(gate).toMatchObject({ code: 'ACCOUNTS_NOT_IN_CHART', status: 422, details: { account_numbers: ['7832'] } })
+  })
+
+  // F1: the v1 and MCP gates judge the year the asset is acquired in. A
+  // company whose next year is K3 still refuses components in its K2 year.
+  it('judges the framework of the year the asset is acquired in', async () => {
+    const { frameworkOnDate } = await import('@/lib/company/accounting-framework')
+    mock.enqueue({ data: { entity_type: 'aktiebolag' } })
+    const gate = await checkCreateAssetGates(supabase, COMPANY, {
+      ...body,
+      k3_components: [{ name: 'Skärm', cost: 20000, useful_life_months: 36 }],
+    } as never)
+    expect(gate).toMatchObject({ code: 'K3_REQUIRED_FOR_COMPONENTS' })
+    expect(frameworkOnDate).toHaveBeenCalledWith(supabase, COMPANY, body.acquisition_date)
   })
 
   it('passes when the missing default is a BAS account the create will add', async () => {

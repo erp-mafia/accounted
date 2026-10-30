@@ -420,3 +420,40 @@ describe('proposeAnnualPostings hands the engine the posted history', () => {
     )
   })
 })
+
+// N2: the unit engine (K3 components, mark, a later start, a write-down)
+// read every posted year but this one as history, a later year included.
+describe('proposeAnnualPostings: the unit engine counts only earlier years as history', () => {
+  it('ignores a later year\'s posting when it proposes an earlier year', async () => {
+    // Starts 1 July 2023 (K3 17.18), so the unit engine plans it.
+    listAssets.mockResolvedValue([
+      makeAsset({ id: 'a-1', acquisition_date: '2023-01-01', depreciation_start_date: '2023-07-01', acquisition_cost: 120_000 }),
+    ])
+    const schedule = (y: number, amount: string) => ({
+      id: `s-${y}`,
+      asset_id: 'a-1',
+      planned_depreciation: amount,
+      journal_entry_id: `je-${y}`,
+      fiscal_period_id: `p-${y}`,
+      fiscal_period: year(y),
+    })
+    const { supabase } = createPagedMockSupabase({
+      // The proposal's own year first: the period lookup reads the first row.
+      fiscal_periods: [
+        { id: 'p-2024', name: '2024', ...year(2024) },
+        { id: 'p-2023', name: '2023', ...year(2023) },
+        { id: 'p-2025', name: '2025', ...year(2025) },
+      ],
+      depreciation_schedules: [schedule(2023, '6000.00'), schedule(2025, '12000.00')],
+    })
+
+    const proposal = await proposeAnnualPostings(supabase as never, 'co', 'p-2024')
+
+    // 120 000 over 120 months: 6 000 posted for 2023, so 2024 is a full
+    // 12 000 and the book value after it 102 000. Counting 2025's 12 000 as
+    // "before" would leave 90 000 after 2024.
+    expect(proposal.items).toHaveLength(1)
+    expect(proposal.items[0].amount).toBe(12_000)
+    expect(proposal.items[0].netBookValueAfter).toBe(102_000)
+  })
+})

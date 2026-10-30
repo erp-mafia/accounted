@@ -4,6 +4,7 @@ import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
+import { registerWriteDownsByAccount, writeDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
 import { roundOre } from '@/lib/money'
@@ -33,6 +34,8 @@ import {
 import {
   buildAnlaggningstillgangarNote,
   computeRollforwardTotals,
+  depreciationPrincipleLines,
+  holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
 import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
@@ -405,6 +408,8 @@ export async function buildArsredovisningReport(
   // noter warnings so the warnings array order is unchanged.
   let noter: NoteEntry[]
   let noterWarnings: string[]
+  // Faults that make the document wrong as filed: completeness blocks on them.
+  let noterErrors: string[] = []
   let shareCapital: ShareCapital | null = null
   let k3Assets: Asset[] = []
   let k3FixedAssetNoteFromRegister = false
@@ -432,6 +437,7 @@ export async function buildArsredovisningReport(
     // which this override path does not cover).
     noter = applyNoteOverrides(noterResult.notes, normalizeNoteOverrides(narrative?.note_overrides))
     noterWarnings = noterResult.warnings
+    noterErrors = noterResult.errors
     k3Assets = noterResult.assets
     k3FixedAssetNoteFromRegister = noterResult.fixedAssetNoteFromRegister
     if (cashFlowSettled.ok) {
@@ -472,6 +478,7 @@ export async function buildArsredovisningReport(
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
+    noterErrors = k2Noter.errors
     shareCapital = k2Noter.shareCapital
   }
 
@@ -632,6 +639,9 @@ export async function buildArsredovisningReport(
     },
     resultatrakning,
     warnings,
+    // Present only when there is one: an absent key keeps the content hash of
+    // every report without a fault unchanged.
+    ...(noterErrors.length > 0 ? { errors: noterErrors } : {}),
     balansrakning,
     noter,
     kassaflodesanalys,
@@ -914,6 +924,7 @@ async function buildRollforwardAssets(
     fiscalPeriods: allPeriods,
     currentPeriodId: fiscalPeriodId,
   })
+  const period = allPeriods.find((row) => row.id === fiscalPeriodId)
   return assets.map((a) => ({
     category: a.category,
     acquisition_date: a.acquisition_date,
@@ -922,6 +933,8 @@ async function buildRollforwardAssets(
     useful_life_months: a.useful_life_months,
     disposed_at: a.disposed_at,
     figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
+    // ÅRL 5 kap. 8 § p. 5: the year's nedskrivningar, from posted vouchers.
+    ...(period ? { writeDowns: writeDownMovement(a, period.period_start, period.period_end) } : {}),
   }))
 }
 
@@ -929,24 +942,37 @@ async function buildRollforwardAssets(
  * Cross-check the roll-forward note's closing book value against the
  * balansräkning (full TB net of accounts 1000-1299: immateriella +
  * materiella anläggningstillgångar; 13xx financial assets are outside the
- * note). Returns a user-facing warning when they diverge by more than 1 kr,
- * which is the exact inconsistency ÅRL 5:8 § forbids in a filed document.
+ * note). Returns the user-facing message when they diverge by more than
+ * 1 kr, which is the exact inconsistency ÅRL 5:8 § forbids in a filed
+ * document. Blocking when the register holds write-downs: the note then
+ * reports nedskrivningar that do not tie to the books, so the document may
+ * not be locked as it stands; otherwise a warning (a register approximated
+ * before onboarding can differ by design).
  */
-function rollforwardTieOutWarning(
+function rollforwardTieOut(
   rollforwardAssets: AnlaggningAsset[],
   tbFullRows: TrialBalanceRow[],
   periodStart: string,
   periodEnd: string,
-  /** Accumulated nedskrivningar the note discloses from the ledger (K3); 0 leaves the K2 comparison as it was. */
+  /**
+   * Accumulated nedskrivningar booked outside the register, net debit: the
+   * ledger note discloses them, so the comparison counts them once
+   * (tangibleImpairmentBalance). The register's own are in the roll-forward.
+   */
   impairments = 0,
-): string | null {
+): { message: string; blocking: boolean } | null {
   const totals = computeRollforwardTotals(rollforwardAssets, periodStart, periodEnd)
   const tbNet = tbFullRows
     .filter((r) => r.account_number >= '1000' && r.account_number < '1300')
     .reduce((sum, r) => sum + (r.closing_debit || 0) - (r.closing_credit || 0), 0)
   if (Math.abs(totals.ubRedovisat + impairments - tbNet) <= 1) return null
   const fmtKr = (n: number) => Math.round(n).toLocaleString('sv-SE')
-  return `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+  const message = `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat + impairments)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+  if (!holdsWriteDowns(rollforwardAssets)) return { message, blocking: false }
+  return {
+    message: `${message} Anläggningsregistret har nedskrivningar (ÅRL 4 kap. 5 §): noten måste stämma mot balansräkningen innan årsredovisningen kan låsas. Kontrollera att nedskrivningarna och deras återföringar är bokförda på tillgångarnas konton.`,
+    blocking: true,
+  }
 }
 
 async function buildK2Noter(
@@ -962,9 +988,10 @@ async function buildK2Noter(
   /** BFNAR 2012:4 punkt 3: the stated reasons when the year switched from K3 to K2. */
   frameworkSwitchReason: string | null = null,
   registerTexts: RegisterDisclosureTexts | null = null,
-): Promise<{ notes: NoteEntry[]; warnings: string[]; shareCapital: ShareCapital | null }> {
+): Promise<{ notes: NoteEntry[]; warnings: string[]; errors: string[]; shareCapital: ShareCapital | null }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+  const errors: string[] = []
   let shareCapital: ShareCapital | null = null
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2: otherwise emit a generic principles note so the
@@ -1053,37 +1080,13 @@ async function buildK2Noter(
 
   // Avskrivningstider: derive from asset register (supplementary
   // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  if (assets.length > 0) {
-    const byCategory = new Map<string, Set<number>>()
-    for (const a of assets) {
-      if (a.disposed_at) continue
-      const years = Math.round(a.useful_life_months / 12)
-      if (!byCategory.has(a.category)) byCategory.set(a.category, new Set())
-      byCategory.get(a.category)!.add(years)
-    }
-    if (byCategory.size > 0) {
-      const lines: string[] = ['Avskrivningar görs linjärt över bedömd nyttjandeperiod:']
-      const categoryLabels: Record<string, string> = {
-        immaterial: 'Immateriella anläggningstillgångar',
-        building: 'Byggnader',
-        land_improvement: 'Markanläggningar',
-        machinery: 'Maskiner',
-        equipment: 'Inventarier',
-        vehicle: 'Fordon',
-        computer: 'Datorer',
-        other_tangible: 'Övriga materiella anläggningstillgångar',
-      }
-      for (const [cat, yearsSet] of byCategory.entries()) {
-        const yrs = Array.from(yearsSet).sort((a, b) => a - b)
-        const yrsLabel = yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}-${yrs[yrs.length - 1]} år`
-        lines.push(`• ${categoryLabels[cat] ?? cat}: ${yrsLabel}`)
-      }
-      notes.push({
-        number: notes.length + 1,
-        title: 'Avskrivningar',
-        body: lines.join('\n'),
-      })
-    }
+  const depreciationLines = depreciationPrincipleLines(assets)
+  if (depreciationLines.length > 0) {
+    notes.push({
+      number: notes.length + 1,
+      title: 'Avskrivningar',
+      body: depreciationLines.join('\n'),
+    })
   }
 
   // Anläggningstillgångar roll-forward (ÅRL 5:8 §). Per-category IB →
@@ -1104,16 +1107,23 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   })
+  // One source per nedskrivning, as under K3: the register's in the
+  // roll-forward, the rest of the ledger's write-down accounts in their own
+  // note (a write-down booked by hand is disclosed, never twice).
+  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStart, periodEnd)
   if (rollforwardNote) {
     notes.push(rollforwardNote)
-    const tieOut = rollforwardTieOutWarning(
+    const tieOut = rollforwardTieOut(
       rollforwardAssets,
       tbFullRows,
       periodStart,
       periodEnd,
+      tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
-    if (tieOut) warnings.push(tieOut)
+    if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
   }
+  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1, registeredWriteDowns)
+  if (impairmentNote) notes.push(impairmentNote)
 
   // Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. We fetch the
   // full employment-window data because the column 'is_active' doesn't exist
@@ -1197,7 +1207,7 @@ async function buildK2Noter(
     })
   }
 
-  return { notes, warnings, shareCapital }
+  return { notes, warnings, errors, shareCapital }
 }
 
 interface LatentTaxMovement {
@@ -1332,9 +1342,10 @@ async function buildK3Noter(
   fiscalPeriodId: string,
   allPeriods: PeriodRow[],
   registerTexts: RegisterDisclosureTexts | null = null,
-): Promise<{ notes: NoteEntry[]; warnings: string[]; assets: Asset[]; fixedAssetNoteFromRegister: boolean }> {
+): Promise<{ notes: NoteEntry[]; warnings: string[]; errors: string[]; assets: Asset[]; fixedAssetNoteFromRegister: boolean }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+  const errors: string[] = []
 
   const isAb = entityType === 'aktiebolag'
   const maybeAb = isAb || entityType === 'unknown'
@@ -1440,6 +1451,7 @@ async function buildK3Noter(
           ? 'recognized'
           : 'none',
       hasCapitalizedLease,
+      holdsLand: assets.some((a) => !a.disposed_at && a.category === 'land'),
     }),
   )
 
@@ -1503,23 +1515,25 @@ async function buildK3Noter(
     periodStart: periodStartIso,
     periodEnd: periodEndIso,
   })
+  // One source per nedskrivning (ÅRL 5 kap. 8 § p. 5): the register's in the
+  // roll-forward, the rest of the ledger's write-down accounts in the note
+  // below (ledger-fixed-asset-notes.ts).
+  const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStartIso, periodEndIso)
   if (rollforwardNote) {
     notes.push(rollforwardNote)
-    // The register carries no nedskrivningar: they are in the ledger and in
-    // the note below, so the tie-out compares the register net of them.
-    const tieOut = rollforwardTieOutWarning(
+    const tieOut = rollforwardTieOut(
       rollforwardAssets,
       tbFullRows,
       periodStartIso,
       periodEndIso,
-      tangibleImpairmentBalance(tbFullRows),
+      tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
-    if (tieOut) warnings.push(tieOut)
+    if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
   }
   // ÅRL 5 kap. 8 §: nedskrivningar of immateriella and materiella
-  // anläggningstillgångar, and the finansiella anläggningstillgångar the
-  // register never reaches, from the ledger.
-  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1)
+  // anläggningstillgångar booked outside the register, and the finansiella
+  // anläggningstillgångar the register never reaches, from the ledger.
+  const impairmentNote = buildTangibleImpairmentNote(tbFullRows, notes.length + 1, registeredWriteDowns)
   if (impairmentNote) notes.push(impairmentNote)
   const financialNote = buildFinancialFixedAssetsNote(tbFullRows, notes.length + 1)
   if (financialNote) notes.push(financialNote)
@@ -1616,6 +1630,6 @@ async function buildK3Noter(
   // disclosure the user answers: the disclosure matrix prints it
   // (disclosures/k3-mindre.ts, applied in model.ts), never a default "Inga".
 
-  return { notes, warnings, assets, fixedAssetNoteFromRegister: rollforwardNote !== null }
+  return { notes, warnings, errors, assets, fixedAssetNoteFromRegister: rollforwardNote !== null }
 }
 

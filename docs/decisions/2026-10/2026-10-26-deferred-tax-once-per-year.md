@@ -1,0 +1,1 @@
+[2026-10-26] One deferred tax voucher per year: commit_deferred_tax refuses a second while the first stands, so a changed calculation reverses the first by storno and the recorded items always match the posted voucher the K3 note reads.

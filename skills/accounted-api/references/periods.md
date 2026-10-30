@@ -2,10 +2,73 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure. Under K3: the deferred tax inputs of a year, the 18.7 model for own development, and the transition to K3 (kap. 35: start, relief and note facts, commit).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `PATCH /api/v1/companies/{companyId}/accounting-policies`
+
+**Choose the K3 model for internally generated intangible assets: expense or capitalise (punkt 18.7).**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+K3 punkt 18.7: a company applies either the kostnadsföringsmodell (expense) or the aktiveringsmodell (capitalise) to all its own development. Only the aktiveringsmodell lets own development be capitalised on 1010/1019, and a capitalised amount is moved to the fond för utvecklingsutgifter at year-end (ÅRL 4:2). K3 companies only. Switching away from capitalise while capitalised own development is on the register is a change of accounting policy (K3 kap. 10) and is refused. Owners and admins only. Dry-runnable.
+
+**Use when:** A K3 company starts capitalising own development, or states that it expenses it.
+**Do not use for:** Purchased intangibles (always capitalised on 1090/1099) or K2 companies (own development is always expensed).
+
+**Pitfalls:**
+- 422 DEVELOPMENT_MODEL_REFUSED for a K2 company or a switch away from capitalise with own development capitalised.
+- 403 FORBIDDEN for a member who is not an owner or admin.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ development_expenditure_model: "expense" | "capitalise" }
+```
+
+Example request:
+```json
+{
+  "development_expenditure_model": "capitalise"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { development_expenditure_model: "expense" | "capitalise" },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "development_expenditure_model": "capitalise"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies/{companyId}/accounts`
 
@@ -3613,6 +3676,84 @@ Example response `200`:
 
 ---
 
+### `PUT /api/v1/companies/{companyId}/fiscal-periods/{id}/deferred-tax`
+
+**Save the uppskjuten skatt inputs of a K3 year: whether the tax loss carried forward is recognised and why, and differences entered by hand.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+K3 kapitel 29. The register computes the buildings' differences itself (their tax plan against the carrying amount); this saves what it cannot know: the 29.29 judgement that a tax loss carried forward will be used (recognised only with the reason written down), and temporary differences entered by hand (an item whose carrying amount and tax value differ, e.g. a provision deductible when paid). Untaxed reserves stay gross (29.37) and are never entered. The deferred tax is posted with the year-end dispositions (uppskjuten_skatt_kap29). K3 years only. Dry-runnable.
+
+**Use when:** Before posting the year-end dispositions of a K3 year with a tax loss or a temporary difference the register does not compute.
+**Do not use for:** K2 years (no deferred tax) or obeskattade reserver.
+
+**Pitfalls:**
+- loss_recognised needs loss_reason (29.29): 400 VALIDATION_ERROR.
+- K2 years answer 422 DEFERRED_TAX_NOT_APPLICABLE; a locked or closed year 409 PERIOD_LOCKED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  loss_recognised: boolean,
+  loss_reason?: string | null,
+  manual_items: { label: string, nature: "asset" | "liability", carrying_amount: number, tax_value: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "loss_recognised": true,
+  "loss_reason": "Avtal ger vinst 2027.",
+  "manual_items": []
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscal_period_id: string,
+    loss_recognised: boolean,
+    loss_reason: string | null,
+    manual_items: { label: string, nature: string, carrying_amount: number, tax_value: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_period_id": "0c1e…",
+    "loss_recognised": true,
+    "loss_reason": "Avtal ger vinst 2027.",
+    "manual_items": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/lock`
 
 **Lock a fiscal period (no new entries can be posted into it).**
@@ -4663,6 +4804,350 @@ Example response `200`:
     "bas_account": null,
     "linked_company_id": null,
     "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/k3-transition`
+
+**Read the company's transition to K3 (kap. 35): the first K3 year, the relief chosen, the note facts, and the assets the 35.18 split concerns.**
+`scope:reports:read · risk:low · idempotent · reversible`
+
+transition is null until it is started. committed is true once the transition voucher is posted (or the transition was committed with nothing to book); a storno of the voucher opens it again. assets lists the tangible assets from before the transition date with their carrying amount at the transition and their split status (plain, split, components, later_depreciation_posted). With fiscal_period_id, year answers that year's framework.
+
+**Use when:** Before the first K3 year-end after K2, or to check whether the transition is done before the årsredovisning.
+**Do not use for:** The K2/K3 choice itself (company settings) or the årsredovisning's notes.
+
+**Pitfalls:**
+- Only the mindre företag route is supported: the transition date is the first day of the first K3 year and comparatives are not restated.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `fiscal_period_id` | query | `string` | no | A fiscal year whose framework to answer as year. |
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": null,
+    "committed": false,
+    "transition_date": null,
+    "year": null,
+    "assets": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/k3-transition`
+
+**Start the transition to K3 on the first K3 fiscal year (an open year reported under K3).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+K3 kapitel 35, once per company (35.1). The transition date is the first day of that year (35.7 andra stycket: a mindre företag that does not restate its comparatives). Nothing is booked: the component split (assets.transition-split.set), the relief choice and note facts (k3-transition.update) and the commit (k3-transition.commit) follow. Dry-runnable.
+
+**Use when:** A company that prepared its earlier årsredovisningar under K2 closes its first K3 year.
+**Do not use for:** A new company whose first year is K3 (no earlier financial report: nothing to transition).
+
+**Pitfalls:**
+- The year must be open and reported under K3: 409 K3_TRANSITION_BLOCKED (not_k3, period_locked, already_started).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ fiscal_period_id: string }
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "0c1e…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": {
+      "k3_transition_id": "9f3b…"
+    },
+    "committed": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/k3-transition`
+
+**Set the transition's 35.27 relief and the facts its notes state: the relief rules applied (35.31) and the principles changed (35.33).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+deferred_tax_relief true: no deferred tax in the opening balance (35.27, only when the information cannot be produced without unreasonable cost); it is fixed once the transition is committed. relief_rules are the other relief rules applied (35.21-35.26, 35.28, 35.29, 35.34); changed_principles describes the accounting principles changed at the transition. The notes stay editable after the commit. Dry-runnable.
+
+**Use when:** While preparing the first K3 year, before the commit and the årsredovisning.
+**Do not use for:** Booking anything (k3-transition.commit).
+
+**Pitfalls:**
+- The relief cannot change once the transition is committed: reverse the voucher first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  deferred_tax_relief?: boolean,
+  relief_rules?: ("35.21" | "35.22" | "35.23" | "35.24" | "35.25" | "35.26" | "35.28" | "35.29" | "35.34")[],
+  changed_principles?: string
+}
+```
+
+Example request:
+```json
+{
+  "deferred_tax_relief": false,
+  "relief_rules": [
+    "35.22"
+  ],
+  "changed_principles": "Byggnader skrivs av per komponent (K3 17.4)."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transition: { k3_transition_id: string, fiscal_period_id: string, deferred_tax_relief: boolean, relief_rules: string[], changed_principles: string, journal_entry_id: string | null, opening_deferred_tax: number, committed_at: string | null } | null,
+    committed: boolean,
+    transition_date: string | null,
+    year: { fiscal_period_id: string, framework: "k2" | "k3", open: boolean } | null,
+    assets: { asset_id: string, name: string, status: string, cost: number, accumulated: number, carrying_amount: number, months_used: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transition": {
+      "k3_transition_id": "9f3b…",
+      "relief_rules": [
+        "35.22"
+      ]
+    },
+    "committed": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/k3-transition`
+
+**Drop a transition to K3 that is not committed and has no component splits left.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Undoes k3-transition.start. Refused once committed (reverse the voucher first) or while assets are split at it (undo each split first). Dry-runnable.
+
+**Use when:** The transition was started on the wrong year, or the company was on K3 all along.
+**Do not use for:** Undoing a posted transition (storno the transition voucher).
+
+**Pitfalls:**
+- 409 K3_TRANSITION_BLOCKED (committed, has_splits).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: { k3_transition_id: string, deleted: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "k3_transition_id": "9f3b…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/k3-transition/commit`
+
+**Post the transition to K3: the opening deferred tax and the stated adjustments against equity on the first day of the first K3 year.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
+
+K3 punkt 35.11. One system voucher dated the transition date: the opening deferred tax (the buildings on their tax plan at the day before, a tax loss brought in with its 29.29 reason, differences entered by hand; net on 2240 or 1370, 29.32) unless the 35.27 relief is chosen, and each stated adjustment (a balance sheet account and amount, + debit / - credit) against balanserat resultat. Locked and closed years are never touched. Nothing to book commits without a voucher. The dry run answers the voucher lines. A storno of the voucher opens the transition again.
+
+**Use when:** After the component splits and the relief choice, before the first K3 year-end.
+**Do not use for:** Year-end deferred tax (posted with the dispositions) or corrections of earlier years (rättelse of fel, K3 kap. 10).
+
+**Pitfalls:**
+- Adjustments only on balance sheet accounts outside equity and 2240/1370: 400 INVALID_K3_TRANSITION.
+- loss_carryforward needs the reason that convincingly supports its use (29.29).
+- Once committed: 409 K3_TRANSITION_BLOCKED (committed).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  adjustments?: { account_number: string, amount: number, description: string }[],
+  loss_carryforward?: { deficit: number, reason: string } | null,
+  manual_items?: { label: string, nature: "asset" | "liability", carrying_amount: number, tax_value: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "adjustments": [],
+  "loss_carryforward": {
+    "deficit": 100000,
+    "reason": "Avtal ger vinst 2027."
+  },
+  "manual_items": []
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string | null,
+    transition_date: string,
+    opening_deferred_tax: number,
+    lines: { account_number: string, debit: number, credit: number, description: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "c41d…",
+    "transition_date": "2026-01-01",
+    "opening_deferred_tax": 20600,
+    "lines": []
   },
   "meta": {
     "request_id": "req_…",

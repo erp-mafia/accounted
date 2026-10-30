@@ -1326,6 +1326,22 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Assets and accruals
   { name: 'assets', file: 'assets.json', orderBy: 'created_at' },
   { name: 'depreciation_schedules', file: 'depreciation_schedules.json', orderBy: 'created_at' },
+  // K3 components and what each was charged in a posted avskrivning: the
+  // per-component register BFNAR 2013:2 punkt 4.8 presumes.
+  { name: 'asset_components', file: 'asset_components.json', orderBy: 'created_at' },
+  { name: 'depreciation_schedule_components', file: 'depreciation_schedule_components.json', orderBy: 'created_at' },
+  // Nedskrivningar and their reversals (ÅRL 4:5, K3 27), with the
+  // recoverable amount and the assessment each rests on.
+  { name: 'asset_value_adjustments', file: 'asset_value_adjustments.json', orderBy: 'created_at' },
+  // Uppskjuten skatt (K3 kap. 29): the inputs of each year and the
+  // temporary differences each posted voucher was computed from.
+  { name: 'deferred_tax_assessments', file: 'deferred_tax_assessments.json', orderBy: 'created_at' },
+  { name: 'deferred_tax_items', file: 'deferred_tax_items.json', orderBy: 'created_at' },
+  // The transition to K3 (kap. 35): the first K3 year, the relief rules and
+  // changed principles the notes state, the opening deferred tax, and the
+  // assets split on components at the transition (35.18).
+  { name: 'k3_transitions', file: 'k3_transitions.json', orderBy: 'created_at' },
+  { name: 'asset_transition_splits', file: 'asset_transition_splits.json', orderBy: 'created_at', pageKey: 'asset_id' },
   // Finansiella leasingavtal (K3 kapitel 20): the terms each start and
   // year-end verifikat was computed from, and which years are booked:
   // underlag for those verifikat (BFL 7 kap. 1 §).

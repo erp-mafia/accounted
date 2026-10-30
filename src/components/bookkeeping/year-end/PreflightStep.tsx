@@ -8,6 +8,7 @@ import { ExclamationTriangleIcon, InformationCircleIcon, XCircleIcon } from '@/c
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { BokslutChecklist } from './BokslutChecklist'
+import { K3TransitionCard } from './K3TransitionCard'
 
 interface PreflightStepProps {
   report: BokslutReadinessReport | null
@@ -100,6 +101,8 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           ))}
         </section>
       )}
+
+      <K3TransitionCard periodId={report.period.id} />
 
       <BokslutChecklist periodId={report.period.id} />
 

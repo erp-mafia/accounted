@@ -9287,9 +9287,9 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   ASSET_DISPOSAL_BLOCKED: {
     httpStatus: 409,
     message_sv:
-      'Avyttringen kan inte bokföras eftersom avskrivningar redan finns för samma eller en senare period. Återför den felaktiga avskrivningen med storno först.',
+      'Avyttringen kan inte bokföras eftersom avskrivningar eller en nedskrivning redan finns för samma eller en senare period. Återför den felaktiga posten med storno först.',
     message_en:
-      'The disposal cannot be posted because depreciation already exists for the same or a later period. Reverse the incorrect depreciation first.',
+      'The disposal cannot be posted because depreciation or a write-down already exists for the same or a later period. Reverse the incorrect entry first.',
   },
   ASSET_JAMKNING_DATA_REQUIRED: {
     httpStatus: 422,
@@ -9339,9 +9339,147 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     // in Swedish; message_sv is the fallback that lists every rule.
     thrown_message_sv: true,
     message_sv:
-      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet minus restvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
+      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet minus restvärdet och ha ett datum som inte är senare än i dag eller före anskaffningsdatumet. För en tillgång med komponenter ska det stämma med summan av komponenternas belopp.',
     message_en:
-      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost less the residual value, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
+      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost less the residual value and carry a date that is not after today or before the acquisition date. For an asset with components it must agree with the sum of the components\' amounts.',
+  },
+  ASSET_COMPONENTS_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgångens komponenter har ändrats sedan avskrivningen beräknades. Beräkna förslaget på nytt innan du bokför.',
+    message_en:
+      'The asset\'s components changed after the depreciation was calculated. Recalculate the proposal before posting.',
+  },
+  ASSET_COMPONENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Komponenten kunde inte hittas.',
+    message_en: 'Component not found.',
+  },
+  ASSET_COMPONENT_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Komponenten är redan utbytt och finns inte längre i balansräkningen.',
+    message_en: 'The component has already been replaced and is no longer on the balance sheet.',
+  },
+  ASSET_LAST_COMPONENT: {
+    httpStatus: 409,
+    message_sv:
+      'Den sista komponenten kan inte tas bort utan att ersättas: då lämnar hela tillgången balansräkningen. Använd avyttring i stället.',
+    message_en:
+      'The last component cannot leave without a replacement: the whole asset would then leave the balance sheet. Dispose of the asset instead.',
+  },
+  ASSET_COMPONENT_STATE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Komponentens avskrivningar har ändrats sedan utbytet beräknades. Beräkna utbytet på nytt.',
+    message_en: 'The component\'s depreciation changed after the replacement was calculated. Calculate it again.',
+  },
+  ASSET_COMPONENT_REVERSAL_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Komponentutbytet kan inte återföras: avskrivning för utbytesåret eller ett senare år är redan bokförd utan den utbytta komponenten. Återför den avskrivningen med storno först.',
+    message_en:
+      'The component replacement cannot be reversed: depreciation for the replacement year or a later year is already posted without the replaced component. Reverse that depreciation first.',
+  },
+  ASSET_COMPONENT_REPLACEMENT_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Komponenten kan inte bytas ut nu: avskrivningen för ett tidigare år måste bokföras först, årets eller ett senare års avskrivning är redan bokförd (byt då ut per balansdagen, eller återför avskrivningen med storno först), eller så har komponenten en nedskrivning kvar (återför den först).',
+    message_en:
+      'The component cannot be replaced now: an earlier year\'s depreciation must be posted first, this or a later year\'s depreciation is already posted (replace as of the balance sheet date, or reverse the depreciation first), or a write-down is outstanding on the component (reverse it first).',
+  },
+  ASSET_COMPONENT_IMPAIRED: {
+    httpStatus: 409,
+    message_sv: 'Komponenten har en nedskrivning kvar och kan inte bytas ut. Återför nedskrivningen först.',
+    message_en: 'A write-down is outstanding on the component, so it cannot be replaced. Reverse the write-down first.',
+  },
+  ASSET_VALUE_ADJUSTMENT_BLOCKED: {
+    httpStatus: 409,
+    // AssetValueAdjustmentBlockedError names the reason in Swedish.
+    thrown_message_sv: true,
+    message_sv:
+      'Nedskrivningen kan inte bokföras: kontrollera räkenskapsåret, att årets avskrivning är bokförd och att återvinningsvärdet ger en nedskrivning eller återföring.',
+    message_en:
+      'The write-down cannot be posted: check the fiscal year, that the year\'s depreciation is posted, and that the recoverable amount gives a write-down or a reversal (a goodwill write-down is never reversed).',
+  },
+  ASSET_VALUE_ADJUSTMENT_REVERSAL_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Nedskrivningen kan inte återföras med storno: en senare avskrivning, nedskrivning eller avyttring bygger på det nedskrivna värdet. Återför den först.',
+    message_en:
+      'The write-down cannot be reversed: a later depreciation, write-down or disposal is based on the written-down value. Reverse that first.',
+  },
+  DEFERRED_TAX_ALREADY_POSTED: {
+    httpStatus: 409,
+    message_sv:
+      'Uppskjuten skatt är redan bokförd för räkenskapsåret. Återför den verifikationen med storno innan en ny beräkning bokförs.',
+    message_en:
+      'Deferred tax is already posted for the fiscal year. Reverse that voucher before posting a new calculation.',
+  },
+  K3_TRANSITION_BLOCKED: {
+    httpStatus: 409,
+    // K3TransitionBlockedError names the reason in Swedish.
+    thrown_message_sv: true,
+    message_sv:
+      'Övergången till K3 kan inte genomföras: kontrollera att räkenskapsåret är öppet och upprättas enligt K3 och att övergången inte redan är bokförd.',
+    message_en:
+      'The transition to K3 cannot proceed: check that the fiscal year is open and reported under K3 and that the transition is not already posted.',
+  },
+  INVALID_K3_TRANSITION: {
+    httpStatus: 400,
+    // K3TransitionInvalidError names the rule in Swedish.
+    thrown_message_sv: true,
+    message_sv: 'Övergångsjusteringarna är ogiltiga (K3 punkt 35.11).',
+    message_en: 'The transition adjustments are invalid (K3 35.11).',
+  },
+  DEFERRED_TAX_NOT_APPLICABLE: {
+    httpStatus: 422,
+    message_sv: 'Uppskjuten skatt redovisas bara när räkenskapsåret upprättas enligt K3 (BFNAR 2012:1 kap. 29).',
+    message_en: 'Deferred tax is recognised only when the fiscal year is reported under K3 (BFNAR 2012:1 chapter 29).',
+  },
+  DEVELOPMENT_MODEL_REFUSED: {
+    httpStatus: 422,
+    // DevelopmentModelRefusedError names the reason in Swedish.
+    thrown_message_sv: true,
+    message_sv:
+      'Modellen för internt upparbetade immateriella tillgångar kan inte ändras här: den väljs enligt K3, och ett byte bort från aktiveringsmodellen med aktiverade tillgångar är ett byte av redovisningsprincip.',
+    message_en:
+      'The model for internally generated intangible assets cannot be changed here: it is chosen under K3, and leaving the capitalisation model with capitalised assets is a change of accounting policy.',
+  },
+  OWN_DEVELOPMENT_ACCOUNT: {
+    httpStatus: 400,
+    // AssetOwnDevelopmentAccountError says what to do in Swedish.
+    thrown_message_sv: true,
+    message_sv: 'Bara en tillgång på konto 1010-1019 kan markeras som eget utvecklingsarbete.',
+    message_en: 'Only an asset on account 1010-1019 can be marked as own development.',
+  },
+  OWN_DEVELOPMENT_NOT_CAPITALISED: {
+    httpStatus: 422,
+    // AssetOwnDevelopmentRefusedError names the reason in Swedish.
+    thrown_message_sv: true,
+    message_sv:
+      'Eget utvecklingsarbete kan inte tas upp som tillgång: det kräver K3 och att aktiveringsmodellen är vald (K3 punkt 18.7).',
+    message_en:
+      'Own development expenditure cannot be capitalised: it needs K3 and the capitalisation model chosen (K3 18.7).',
+  },
+  INVALID_TAX_PLAN: {
+    httpStatus: 400,
+    // AssetTaxPlanInvalidError names the rule in Swedish.
+    thrown_message_sv: true,
+    message_sv: 'Den skattemässiga avskrivningsplanen är ogiltig (IL 19 och 20 kap.).',
+    message_en: 'The tax depreciation plan is invalid (Income Tax Act chapters 19 and 20).',
+  },
+  TAX_PLAN_USED_BY_CLOSED_YEAR: {
+    httpStatus: 409,
+    // AssetTaxPlanLockedError says why in Swedish.
+    thrown_message_sv: true,
+    message_sv: 'Den skattemässiga avskrivningsplanen har använts för ett stängt eller låst räkenskapsår och kan inte ändras.',
+    message_en: 'The tax depreciation plan was used by a closed or locked fiscal year and cannot be changed.',
+  },
+  INVALID_LAND_ASSET: {
+    httpStatus: 400,
+    message_sv:
+      'Bara mark har 0 månaders nyttjandeperiod, och mark skrivs inte av: den har inget restvärde, inget redan avskrivet belopp, inget startdatum för avskrivning och inga komponenter. Annan tillgång behöver en nyttjandeperiod på minst 1 månad.',
+    message_en:
+      'Only land has a useful life of 0 months, and land is not depreciated: it has no salvage value, opening depreciation, depreciation start date or components. Any other asset needs a useful life of at least 1 month.',
   },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,
@@ -9352,10 +9490,12 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   },
   INVALID_K3_COMPONENTS: {
     httpStatus: 400,
+    // AssetComponentsInvalidError names the failed rule in Swedish.
+    thrown_message_sv: true,
     message_sv:
-      'Komponentuppdelningen är ogiltig: komponenternas anskaffningsvärden måste summera till tillgångens anskaffningsvärde.',
+      'Komponentuppdelningen är ogiltig: komponenternas anskaffningsvärden måste summera till tillgångens anskaffningsvärde, och varje komponent behöver namn, anskaffningsvärde, nyttjandeperiod (tom för mark) och giltiga datum.',
     message_en:
-      'The component breakdown is invalid: component costs must sum to the acquisition cost of the asset.',
+      'The component breakdown is invalid: component costs must sum to the acquisition cost of the asset, and each component needs a name, a cost, a useful life (empty for land) and valid dates.',
   },
   // Generic on purpose: the flag covers accounts excluded from K2 for several
   // different reasons (egenupparbetade immateriella, uppskjuten skatt,

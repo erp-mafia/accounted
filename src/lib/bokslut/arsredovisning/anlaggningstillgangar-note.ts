@@ -12,7 +12,19 @@
  *   − Avskrivningar på avgående tillgångar
  *   = Utgående ackumulerade avskrivningar
  *
- *   Utgående redovisat värde = utgående anskaffningsvärde − utgående ack. avskrivningar
+ *   - Ingående ackumulerade nedskrivningar (ÅRL 5:8 § p. 5, årets nedskrivningar)
+ *   + Årets nedskrivningar
+ *   − Årets återförda nedskrivningar
+ *   − Nedskrivningar på avgående tillgångar
+ *   = Utgående ackumulerade nedskrivningar
+ *
+ *   Utgående redovisat värde = utgående anskaffningsvärde − utgående ack.
+ *   avskrivningar − utgående ack. nedskrivningar
+ *
+ * The write-down rows (writeDownMovement, posted vouchers only) are printed
+ * for a category that has any, K2 and K3 alike: write-downs are offered to
+ * every company, and a note without them neither tells the year's
+ * nedskrivningar nor ties to the balansräkning.
  *
  * Anskaffningsvärden come from the asset register. Depreciation figures are
  * resolved UPSTREAM (asset-note-figures.ts) from posted depreciation
@@ -22,6 +34,8 @@
  * aggregates per category and formats.
  */
 
+import { roundOre } from '@/lib/money'
+import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import type { NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
 import { formatPdfKronor } from './pdf-format'
@@ -34,6 +48,8 @@ export interface AnlaggningAsset {
   useful_life_months: number
   disposed_at: string | null
   figures: AssetDepreciationFigures
+  /** The year's movement in accumulated write-downs (writeDownMovement); absent: none. */
+  writeDowns?: WriteDownMovement
 }
 
 interface CategoryRollforward {
@@ -46,18 +62,63 @@ interface CategoryRollforward {
   aretsAvskrivning: number
   avgaendeAck: number
   ubAck: number
+  /** Accumulated write-downs (ÅRL 4 kap. 5 §): opening, the year's, reversed, on disposals, closing. */
+  ibNed: number
+  aretsNed: number
+  aterfordaNed: number
+  avgaendeNed: number
+  ubNed: number
   ubRedovisat: number
 }
+
+/**
+ * The principle sentence for mark (category land), K2 and K3 alike: mark
+ * has no limited useful life and is never depreciated (BFNAR 2016:10 kap.
+ * 10, BFNAR 2012:1 17.4), only written down (ÅRL 4 kap. 5 §).
+ */
+export const MARK_NOT_DEPRECIATED = 'Mark skrivs inte av.'
 
 const CATEGORY_LABELS: Record<string, string> = {
   immaterial: 'Immateriella anläggningstillgångar',
   building: 'Byggnader',
+  land: 'Mark',
   land_improvement: 'Markanläggningar',
   machinery: 'Maskiner',
   equipment: 'Inventarier',
   vehicle: 'Fordon',
   computer: 'Datorer',
   other_tangible: 'Övriga materiella anläggningstillgångar',
+}
+
+/**
+ * The K2 "Avskrivningar" note: the depreciation period per category of the
+ * assets on the books, and that mark is not depreciated. Mark has no
+ * limited useful life (useful_life_months 0), so it is never a "0 år" row.
+ * Empty when there is nothing to say.
+ */
+export function depreciationPrincipleLines(
+  assets: ReadonlyArray<{ category: string; useful_life_months: number; disposed_at: string | null }>,
+): string[] {
+  const byCategory = new Map<string, Set<number>>()
+  let holdsLand = false
+  for (const asset of assets) {
+    if (asset.disposed_at) continue
+    if (asset.category === 'land') {
+      holdsLand = true
+      continue
+    }
+    const years = Math.round(asset.useful_life_months / 12)
+    if (!byCategory.has(asset.category)) byCategory.set(asset.category, new Set())
+    byCategory.get(asset.category)!.add(years)
+  }
+  const lines: string[] = byCategory.size > 0 ? ['Avskrivningar görs linjärt över bedömd nyttjandeperiod:'] : []
+  for (const [category, yearsSet] of byCategory.entries()) {
+    const years = Array.from(yearsSet).sort((a, b) => a - b)
+    const label = years.length === 1 ? `${years[0]} år` : `${years[0]}-${years[years.length - 1]} år`
+    lines.push(`• ${CATEGORY_LABELS[category] ?? category}: ${label}`)
+  }
+  if (holdsLand) lines.push(MARK_NOT_DEPRECIATED)
+  return lines
 }
 
 function buildRollforward(
@@ -80,6 +141,11 @@ function buildRollforward(
         aretsAvskrivning: 0,
         avgaendeAck: 0,
         ubAck: 0,
+        ibNed: 0,
+        aretsNed: 0,
+        aterfordaNed: 0,
+        avgaendeNed: 0,
+        ubNed: 0,
         ubRedovisat: 0,
       }
       byCategory.set(category, row)
@@ -118,6 +184,14 @@ function buildRollforward(
     }
 
     row.aretsAvskrivning += asset.figures.aretsAvskrivning
+
+    const writeDowns = asset.writeDowns
+    if (writeDowns) {
+      if (acquiredBeforePeriod) row.ibNed = roundOre(row.ibNed + writeDowns.opening)
+      row.aretsNed = roundOre(row.aretsNed + writeDowns.writtenDown)
+      row.aterfordaNed = roundOre(row.aterfordaNed + writeDowns.reversed)
+      row.avgaendeNed = roundOre(row.avgaendeNed + writeDowns.disposed)
+    }
   }
 
   // Close out totals + ordering
@@ -125,6 +199,7 @@ function buildRollforward(
     const ub = Math.round((r.ibAnskaffning + r.tillkommande - r.avgaende) * 100) / 100
     const ubAck =
       Math.round((r.ibAck + r.aretsAvskrivning - r.avgaendeAck) * 100) / 100
+    const ubNed = roundOre(r.ibNed + r.aretsNed - r.aterfordaNed - r.avgaendeNed)
     return {
       ...r,
       ibAnskaffning: Math.round(r.ibAnskaffning * 100) / 100,
@@ -135,7 +210,8 @@ function buildRollforward(
       aretsAvskrivning: Math.round(r.aretsAvskrivning * 100) / 100,
       avgaendeAck: Math.round(r.avgaendeAck * 100) / 100,
       ubAck,
-      ubRedovisat: Math.round((ub - ubAck) * 100) / 100,
+      ubNed,
+      ubRedovisat: roundOre(ub - ubAck - ubNed),
     }
   })
 
@@ -153,13 +229,22 @@ export function computeRollforwardTotals(
   assets: AnlaggningAsset[],
   periodStart: string,
   periodEnd: string,
-): { ubRedovisat: number; ubAck: number } {
+): { ubRedovisat: number; ubAck: number; ubNed: number } {
   const rows = buildRollforward(assets, periodStart, periodEnd)
   return {
     ubRedovisat:
       Math.round(rows.reduce((sum, r) => sum + r.ubRedovisat, 0) * 100) / 100,
     ubAck: Math.round(rows.reduce((sum, r) => sum + r.ubAck, 0) * 100) / 100,
+    ubNed: roundOre(rows.reduce((sum, r) => sum + r.ubNed, 0)),
   }
+}
+
+/** True when an asset carries any write-down movement for the year. */
+export function holdsWriteDowns(assets: readonly AnlaggningAsset[]): boolean {
+  return assets.some((asset) => {
+    const w = asset.writeDowns
+    return Boolean(w && (w.opening !== 0 || w.writtenDown !== 0 || w.reversed !== 0 || w.disposed !== 0 || w.closing !== 0))
+  })
 }
 
 // ASCII hyphen for negatives: the note body renders in the ÅR PDF with
@@ -199,6 +284,14 @@ export function buildAnlaggningstillgangarNote(params: {
     if (row.avgaendeAck !== 0)
       lines.push(`  Återförda avskrivningar på avgående: ${fmt(row.avgaendeAck)} kr`)
     lines.push(`  Utgående ackumulerade avskrivningar: ${minus(row.ubAck)} kr`)
+    // ÅRL 5 kap. 8 § p. 5: årets nedskrivningar, for a category that has any.
+    if (row.ibNed !== 0 || row.aretsNed !== 0 || row.aterfordaNed !== 0 || row.avgaendeNed !== 0 || row.ubNed !== 0) {
+      lines.push(`  Ingående ackumulerade nedskrivningar: ${minus(row.ibNed)} kr`)
+      if (row.aretsNed !== 0) lines.push(`  Årets nedskrivningar: ${minus(row.aretsNed)} kr`)
+      if (row.aterfordaNed !== 0) lines.push(`  Årets återförda nedskrivningar: ${fmt(row.aterfordaNed)} kr`)
+      if (row.avgaendeNed !== 0) lines.push(`  Återförda nedskrivningar på avgående: ${fmt(row.avgaendeNed)} kr`)
+      lines.push(`  Utgående ackumulerade nedskrivningar: ${minus(row.ubNed)} kr`)
+    }
     lines.push(`  Utgående redovisat värde: ${fmt(row.ubRedovisat)} kr`)
     lines.push('')
   }

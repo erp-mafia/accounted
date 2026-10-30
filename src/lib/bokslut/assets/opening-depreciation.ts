@@ -9,6 +9,7 @@
  * acquisition cost is already written off.
  */
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { roundOre } from '@/lib/money'
 import type { K3Component } from '@/types'
 
 export interface OpeningDepreciationCandidate {
@@ -18,6 +19,9 @@ export interface OpeningDepreciationCandidate {
   salvage_value?: number | null
   opening_accumulated_depreciation?: number | null
   opening_depreciation_date?: string | null
+  /** K3 components: the depreciable base is their cost less their salvage
+   *  values (the asset-level salvage is not read), and an amount given for
+   *  the asset is split over them (allocateOpeningToComponents). */
   k3_components?: K3Component[] | null
 }
 
@@ -27,7 +31,6 @@ export type OpeningDepreciationIssueKind =
   | 'date_required'
   | 'date_future'
   | 'date_before_acquisition'
-  | 'components'
 
 export interface OpeningDepreciationIssue {
   /** Stable key; the dialogs map it to the `assets.opening.error_<kind>`
@@ -45,8 +48,10 @@ export interface OpeningDepreciationIssue {
  *   opening amount above the depreciable base would leave a negative plan.
  * - An amount above 0 needs the date it is stated per; the date must not be
  *   after today and not before the acquisition date.
- * - Not combined with K3 components: the opening amount is not split per
- *   component, so the engine could not continue each component's plan.
+ * - With K3 components the amount is the components' total: their
+ *   depreciable bases cap it, and the asset service splits it over them
+ *   unless each component states its own (K3 17.4; founder decision of
+ *   2026-09-23 reversed by the K3 plan, decision 4 of 2026-10-26).
  */
 export function validateOpeningDepreciation(
   value: OpeningDepreciationCandidate,
@@ -64,8 +69,16 @@ export function validateOpeningDepreciation(
     })
     return issues
   }
-  const depreciableBase =
-    Math.round((value.acquisition_cost - Number(value.salvage_value ?? 0)) * 100) / 100
+  const components = Array.isArray(value.k3_components) && value.k3_components.length > 0
+    ? value.k3_components
+    : null
+  const depreciableBase = components
+    ? roundOre(
+        components
+          .filter((component) => component.useful_life_months !== null)
+          .reduce((sum, component) => sum + Number(component.cost) - Number(component.salvage_value ?? 0), 0),
+      )
+    : roundOre(value.acquisition_cost - Number(value.salvage_value ?? 0))
   if (amount > depreciableBase) {
     issues.push({
       kind: 'exceeds_cost',
@@ -95,14 +108,6 @@ export function validateOpeningDepreciation(
         message: 'Datumet för redan avskrivet belopp får inte vara före anskaffningsdatumet.',
       })
     }
-  }
-  if (amount > 0 && Array.isArray(value.k3_components) && value.k3_components.length > 0) {
-    issues.push({
-      kind: 'components',
-      path: 'opening_accumulated_depreciation',
-      message:
-        'Redan avskrivet belopp för tillgångar med K3-komponenter stöds inte ännu. Behåll komponentuppdelningen.',
-    })
   }
   return issues
 }

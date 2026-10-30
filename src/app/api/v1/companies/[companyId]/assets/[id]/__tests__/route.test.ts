@@ -247,10 +247,14 @@ describe('PATCH /api/v1/companies/{companyId}/assets/{id}', () => {
     const res = await PATCH(patchRequest(url(ASSET_ID), { name: 'Renamed', notes: 'Serie C02' }), routeParams(ASSET_ID))
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID, {
-      name: 'Renamed',
-      notes: 'Serie C02',
-    })
+    // The key's user acts: an own-development mark's audit row names them.
+    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      ASSET_ID,
+      { name: 'Renamed', notes: 'Serie C02' },
+      { userId: 'user-1' },
+    )
     expect(body.data).toMatchObject({ id: ASSET_ID, name: 'Renamed', notes: 'Serie C02', has_posted_depreciation: false })
   })
 })

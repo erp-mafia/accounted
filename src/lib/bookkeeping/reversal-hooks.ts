@@ -77,6 +77,9 @@ export const REVERSAL_MIRROR_REQUIRED: readonly JournalEntrySourceType[] = Objec
   'collection_settlement',
   'customer_loss',
   'counterparty_setoff',
+  // A K3 component replacement (lib/bokslut/assets/component-reversal.ts);
+  // every other system voucher passes the hook untouched.
+  'system',
 ] satisfies JournalEntrySourceType[])
 
 /**

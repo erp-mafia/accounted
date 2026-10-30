@@ -16,6 +16,8 @@ vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) =>
 }))
 
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
   saveTaxAdjustments: vi.fn(),
 }))
@@ -43,6 +45,11 @@ vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(),
+}))
+
+vi.mock('@/lib/bokslut/tax-provision/deferred-tax-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/tax-provision/deferred-tax-service')>()),
+  postDeferredTax: vi.fn(),
 }))
 
 const requireAuthMock = vi.fn()
@@ -77,6 +84,7 @@ import {
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { postDeferredTax } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { GET, POST, PUT } from '../route'
 
 const idParams = { params: Promise.resolve({ id: 'period-1' }) }
@@ -851,6 +859,37 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
       expect(supabase.from).toHaveBeenCalledWith('companies')
       expect(createJournalEntry).toHaveBeenCalledOnce()
     })
+  })
+
+  it('posts the K3 deferred tax on temporary differences last, from the bolagsskatt computation\'s underskott', async () => {
+    // Not the removed kind below: uppskjuten_skatt_kap29 is deferred tax on
+    // temporary differences and a recognised loss (K3 29.19), never on
+    // obeskattade reserver (29.37).
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: periodClient(openPeriod), error: null })
+    vi.mocked(calculateBolagsskatt).mockResolvedValue({
+      kind: 'bolagsskatt',
+      label: 'Bolagsskatt 20,6 %',
+      description: 'Ingen skatt.',
+      amount: 0,
+      lines: [],
+      warnings: [],
+      computation: { taxableResult: -100_000 },
+    })
+    vi.mocked(postDeferredTax).mockResolvedValue({ id: 'entry-deferred' } as Awaited<ReturnType<typeof postDeferredTax>>)
+
+    const { status, body } = await parseJsonResponse<{ data: { created: Array<{ kind: string }> } }>(
+      await post({ items: [{ kind: 'uppskjuten_skatt_kap29' }, { kind: 'bolagsskatt' }] }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.created).toEqual([{ kind: 'uppskjuten_skatt_kap29', entry: { id: 'entry-deferred' } }])
+    expect(postDeferredTax).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ id: 'period-1', period_end: '2025-12-31' }),
+      { closingDeficit: 100_000 },
+    )
   })
 
   it('rejects the removed uppskjuten_skatt kind as a validation error (K3 29.37)', async () => {

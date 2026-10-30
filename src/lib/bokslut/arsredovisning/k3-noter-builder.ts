@@ -1,4 +1,5 @@
 import type { NoteEntry } from './types'
+import { MARK_NOT_DEPRECIATED } from './anlaggningstillgangar-note'
 import { formatPdfKronor } from './pdf-format'
 
 /**
@@ -53,11 +54,14 @@ export function buildK3RedovisningsPrinciper(params: {
   hasComponents: boolean
   deferredTax: 'none' | 'recognized' | 'unknown'
   hasCapitalizedLease: boolean
+  /** Mark is on the books: it has no useful life and is not depreciated. */
+  holdsLand?: boolean
 }): NoteEntry {
-  const { hasComponents, deferredTax, hasCapitalizedLease } = params
+  const { hasComponents, deferredTax, hasCapitalizedLease, holdsLand = false } = params
   const paragraphs: string[] = [
     'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen (1995:1554) och Bokföringsnämndens allmänna råd BFNAR 2012:1 Årsredovisning och koncernredovisning (K3).',
-    'Värderingsprinciper: Tillgångar och skulder värderas till anskaffningsvärde om inget annat anges. Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar och eventuella nedskrivningar. Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod.',
+    'Värderingsprinciper: Tillgångar och skulder värderas till anskaffningsvärde om inget annat anges. Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar och eventuella nedskrivningar. Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod.' +
+      (holdsLand ? ` ${MARK_NOT_DEPRECIATED}` : ''),
   ]
   if (hasComponents) {
     paragraphs.push(
@@ -251,11 +255,14 @@ export function buildMateriellaAnlaggningsNot(params: {
   const active = assets.filter(
     (a) => !a.disposed_at && tangibleCategories.has(a.category),
   )
-  if (active.length === 0) return null
+  // Mark is a tangible asset without a useful life: never depreciated, so
+  // it is named in the principle, never given an avskrivningstid.
+  const holdsLand = assets.some((a) => !a.disposed_at && a.category === 'land')
+  if (active.length === 0 && !holdsLand) return null
 
   const linesOut: string[] = [
-    'Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar.',
-    '',
+    'Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar.' +
+      (holdsLand ? ` ${MARK_NOT_DEPRECIATED}` : ''),
   ]
 
   // Group by category for the avskrivningstider summary.
@@ -274,7 +281,7 @@ export function buildMateriellaAnlaggningsNot(params: {
     if (!byCategory.has(a.category)) byCategory.set(a.category, new Set())
     byCategory.get(a.category)!.add(years)
   }
-  linesOut.push('Avskrivningstider per kategori:')
+  if (byCategory.size > 0) linesOut.push('', 'Avskrivningstider per kategori:')
   for (const [cat, yearsSet] of byCategory.entries()) {
     const yrs = Array.from(yearsSet).sort((a, b) => a - b)
     const yrsLabel =
@@ -295,8 +302,10 @@ export function buildMateriellaAnlaggningsNot(params: {
       for (const c of components) {
         const bookValue = c.acquisition_cost - c.accumulated_depreciation
         const years = Math.round(c.useful_life_months / 12)
+        // A mark component (no useful life) is not written off: no "0 år".
+        const life = years > 0 ? `avskrivningstid ${years} år` : 'skrivs inte av'
         linesOut.push(
-          `  • ${c.name}: anskaffningsvärde ${fmt(c.acquisition_cost)} kr, ackumulerad avskrivning ${fmt(c.accumulated_depreciation)} kr, bokfört värde ${fmt(bookValue)} kr (avskrivningstid ${years} år)`,
+          `  • ${c.name}: anskaffningsvärde ${fmt(c.acquisition_cost)} kr, ackumulerad avskrivning ${fmt(c.accumulated_depreciation)} kr, bokfört värde ${fmt(bookValue)} kr (${life})`,
         )
         totalCost += c.acquisition_cost
         totalAccum += c.accumulated_depreciation

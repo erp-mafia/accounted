@@ -10,6 +10,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExistingFond } from '../reserves/periodiseringsfond-service'
 
+// These cases are K2 years: the year's framework (the per-year resolver) is K2.
+vi.mock('@/lib/bokslut/framework-for-year', () => ({
+  frameworkForYear: vi.fn(async () => 'k2'),
+  frameworkOnDate: vi.fn(async () => 'k2'),
+}))
 vi.mock('@/lib/reports/income-statement', () => ({
   generateIncomeStatement: vi.fn(),
 }))
@@ -19,6 +24,8 @@ vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', () => ({
   sumPostedYearEndDispositions: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
+  // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
+  loadBuildingTaxAdjustment: vi.fn(async () => ({ net: 0, lines: [], warnings: [] })),
   loadTaxAdjustmentSnapshot: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator', () => ({

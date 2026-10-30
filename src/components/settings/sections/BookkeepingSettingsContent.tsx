@@ -15,6 +15,7 @@ import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { DirectBookingToggle } from '@/components/settings/DirectBookingToggle'
 import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
+import { DevelopmentModelForm } from '@/components/settings/DevelopmentModelForm'
 import { MonthlyFxRevaluationAction } from '@/components/settings/MonthlyFxRevaluationAction'
 import { fxMonthlyRevaluationEnabled } from '@/lib/env/fx-monthly-revaluation-switch'
 import {
@@ -137,6 +138,8 @@ export function BookkeepingSettingsContent() {
               onSaved={(next) => setFramework(next)}
             />
           )}
+          {/* K3 punkt 18.7: the model for internally generated intangibles. */}
+          {choosesFramework && framework === 'k3' && <DevelopmentModelForm />}
           <SettingsRow
             label={t('method_label')}
             htmlFor="accounting_method"

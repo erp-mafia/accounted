@@ -73,4 +73,24 @@ describe('impairments of intangible and tangible fixed assets', () => {
   it('is absent without impairments', () => {
     expect(buildTangibleImpairmentNote(rows.slice(0, 2), 5)).toBeNull()
   })
+
+  // One source per nedskrivning: what the register booked on 1228 is in the
+  // register roll-forward, so only the rest is disclosed here.
+  it('discloses only what the register did not book, and nothing when it booked it all', () => {
+    const booked = (writtenDown: number) =>
+      new Map([['1228', { opening: 0, writtenDown, reversed: 0, disposed: 0, closing: writtenDown }]])
+    expect(buildTangibleImpairmentNote(rows, 5, booked(5000))).toBeNull()
+    expect(tangibleImpairmentBalance(rows, booked(5000))).toBe(0)
+
+    const note = buildTangibleImpairmentNote(rows, 5, booked(3000))
+    expect(plain(note?.body)).toContain('utanför anläggningsregistret')
+    expect(plain(note?.body)).toContain('  Årets nedskrivningar: -2 000 kr')
+    expect(tangibleImpairmentBalance(rows, booked(3000))).toBe(-2000)
+  })
+
+  it('leaves out an account where the register holds more than the ledger, for the tie-out to report', () => {
+    const more = new Map([['1228', { opening: 0, writtenDown: 8000, reversed: 0, disposed: 0, closing: 8000 }]])
+    expect(buildTangibleImpairmentNote(rows, 5, more)).toBeNull()
+    expect(tangibleImpairmentBalance(rows, more)).toBe(0)
+  })
 })

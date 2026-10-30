@@ -1,0 +1,1 @@
+[2026-10-26] A building's tax depreciation rate is stated per asset: IL 19 kap. 5 § sets it by economic life with no statutory table (markanläggningar at most 5 or 10 %, 20 kap. 5 §). Without one, INK2S 4.9 makes no adjustment and warns, as before, rather than guess a rate.

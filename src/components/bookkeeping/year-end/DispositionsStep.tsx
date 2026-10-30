@@ -15,6 +15,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DepreciationPanel } from './DepreciationPanel'
 import { EfDeclarationSection } from './EfDeclarationSection'
+import { DeferredTaxCard } from './DeferredTaxCard'
 import { LossCarryforwardRegister, LossRegisterDeficitHint } from './LossCarryforwardRegister'
 import type {
   DispositionsProposal,
@@ -344,6 +345,17 @@ export function DispositionsStep({
           prefills: present only while BOLAGET_COMPANY_IDS opens it. */}
       {proposal.taxAdjustments?.lossRegister && (
         <LossCarryforwardRegister periodId={periodId} onSaved={() => void loadProposals()} />
+      )}
+
+      {proposal.deferredTax && (
+        <DeferredTaxCard
+          periodId={periodId}
+          snapshot={proposal.deferredTax}
+          onSaved={(next) => {
+            setProposal(next)
+            setUi(createUiState(next))
+          }}
+        />
       )}
 
       {/* Attention is ochre sentences, not cards (conventions 6 and 12):
@@ -741,6 +753,12 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
         break
       case 'sarskild_loneskatt':
         items.push({ kind: 'sarskild_loneskatt' })
+        break
+      case 'uppskjuten_skatt_kap29':
+        items.push({ kind: 'uppskjuten_skatt_kap29' })
+        break
+      case 'fond_for_utvecklingsutgifter':
+        items.push({ kind: 'fond_for_utvecklingsutgifter' })
         break
       case 'periodiseringsfond_avsattning':
         items.push({

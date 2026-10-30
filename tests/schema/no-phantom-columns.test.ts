@@ -307,7 +307,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // are inserted in one request built by a map, so a failed insert leaves no
 // half list behind and a pasted list is not thousands of requests. Every
 // other stock count select and payload is a literal.
-const UNRESOLVED_CEILING = 445
+// 450 (2026-10-26, K3 components): +5 for the component register
+// (lib/bokslut/assets/asset-service.ts, component-service.ts): a component
+// row is built once by componentInsertRow so create, add and the full-list
+// patch write the same columns, and a component update writes only the
+// fields that changed (a changed estimate must pass a posted, locked basis).
+const UNRESOLVED_CEILING = 450
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

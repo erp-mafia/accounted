@@ -5,8 +5,12 @@
  *     the anskaffningsvärde at the start of the year, what came in and went
  *     out, and the accumulated nedskrivningar with the year's change;
  *   - nedskrivningar of immateriella and materiella anläggningstillgångar
- *     (the "Ackumulerade nedskrivningar" accounts 10x8-12x8): the register
- *     roll-forward carries depreciation only.
+ *     (the "Ackumulerade nedskrivningar" accounts 10x8-12x8) that were
+ *     booked OUTSIDE the anläggningsregister: by hand, or before Accounted.
+ *     A write-down posted through the register is in the register
+ *     roll-forward (anlaggningstillgangar-note.ts); here each account shows
+ *     only what the register did not book (registerWriteDownsByAccount),
+ *     so no nedskrivning is disclosed twice (ÅRL 5 kap. 8 § p. 5).
  *
  * Pure, from the year's FULL trial balance. An account is an impairment
  * account when its name says so ("nedskrivning"), as in BAS (1018, 1118,
@@ -14,6 +18,8 @@
  * only source that names them.
  */
 import { K2_BR_MAPPINGS, k2BrSectionForAccount } from '@/lib/bokslut/ixbrl/k2-mapper'
+import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
+import { roundOre } from '@/lib/money'
 import type { TrialBalanceRow } from '@/types'
 import type { NoteEntry } from './types'
 import { formatPdfKronor } from './pdf-format'
@@ -117,32 +123,85 @@ export function buildFinancialFixedAssetsNote(rows: readonly Row[], noteNumber: 
   return { number: noteNumber, title: 'Finansiella anläggningstillgångar', body: blocks.join('\n\n') }
 }
 
-/** Accumulated impairments of immateriella and materiella anläggningstillgångar (1000-1299), net debit. */
-export function tangibleImpairmentBalance(rows: readonly Row[]): number {
-  return rows
-    .filter((row) => row.account_number >= '1000' && row.account_number < '1300' && isImpairment(row))
-    .reduce((sum, row) => sum + net(row.closing_debit, row.closing_credit), 0)
+/** What the register booked on one write-down account in the year, by account number. */
+export type RegisteredWriteDowns = ReadonlyMap<string, WriteDownMovement>
+
+/** One write-down account's nedskrivningar booked outside the register (positive amounts). */
+interface OutsideRegister {
+  name: string
+  opening: number
+  written: number
+  released: number
+  closing: number
 }
 
-/** The note on nedskrivningar of immateriella and materiella anläggningstillgångar, or null without any. */
-export function buildTangibleImpairmentNote(rows: readonly Row[], noteNumber: number): NoteEntry | null {
-  const impairments = rows.filter(
-    (row) => row.account_number >= '1000' && row.account_number < '1300' && isImpairment(row) && moved(row),
+/**
+ * The ledger's write-down accounts of 1000-1299 less what the register
+ * booked on them. An account whose remainder does not add up as a
+ * write-down (the register holds more than the ledger) is left out: the
+ * note cannot show it, and the asset note's tie-out reports it instead.
+ */
+function outsideRegister(rows: readonly Row[], registered: RegisteredWriteDowns): OutsideRegister[] {
+  const out: OutsideRegister[] = []
+  for (const row of rows) {
+    if (!(row.account_number >= '1000' && row.account_number < '1300' && isImpairment(row))) continue
+    const booked = registered.get(row.account_number)
+    const remainder = {
+      name: row.account_name,
+      opening: roundOre(-net(row.opening_debit, row.opening_credit) - (booked?.opening ?? 0)),
+      written: roundOre((row.period_credit || 0) - (booked?.writtenDown ?? 0)),
+      released: roundOre((row.period_debit || 0) - (booked?.reversed ?? 0) - (booked?.disposed ?? 0)),
+      closing: roundOre(-net(row.closing_debit, row.closing_credit) - (booked?.closing ?? 0)),
+    }
+    const values = [remainder.opening, remainder.written, remainder.released, remainder.closing]
+    if (values.every((value) => Math.abs(value) < 0.005)) continue
+    if (values.some((value) => value < -0.005)) continue
+    out.push(remainder)
+  }
+  return out
+}
+
+/**
+ * Accumulated nedskrivningar of immateriella and materiella
+ * anläggningstillgångar (1000-1299) booked outside the register, net
+ * debit: what the asset note discloses from the ledger next to the
+ * register roll-forward.
+ */
+export function tangibleImpairmentBalance(rows: readonly Row[], registered: RegisteredWriteDowns = new Map()): number {
+  return roundOre(outsideRegister(rows, registered).reduce((sum, row) => sum - row.closing, 0))
+}
+
+/**
+ * The note on nedskrivningar of immateriella and materiella
+ * anläggningstillgångar booked outside the register, or null without any.
+ */
+export function buildTangibleImpairmentNote(
+  rows: readonly Row[],
+  noteNumber: number,
+  registered: RegisteredWriteDowns = new Map(),
+): NoteEntry | null {
+  const outside = outsideRegister(rows, registered)
+  if (outside.length === 0) return null
+  const blocks = outside.map((row) =>
+    [
+      row.name,
+      `  Ingående nedskrivningar: ${fmt(-row.opening)}`,
+      `  Årets nedskrivningar: ${fmt(-row.written)}`,
+      `  Återförda och avgående nedskrivningar: ${fmt(row.released)}`,
+      `  Utgående nedskrivningar: ${fmt(-row.closing)}`,
+    ].join('\n'),
   )
-  if (impairments.length === 0) return null
-  const blocks = impairments.map((row) => {
-    const m = sumMovement([row])
-    return [
-      row.account_name,
-      `  Ingående nedskrivningar: ${fmt(m.opening)}`,
-      `  Årets nedskrivningar: ${fmt(m.decrease)}`,
-      `  Återförda och avgående nedskrivningar: ${fmt(m.increase)}`,
-      `  Utgående nedskrivningar: ${fmt(m.closing)}`,
-    ].join('\n')
-  })
+  const registerHolds = [...registered.values()].some(
+    (m) => m.opening !== 0 || m.writtenDown !== 0 || m.reversed !== 0 || m.disposed !== 0 || m.closing !== 0,
+  )
   return {
     number: noteNumber,
     title: 'Nedskrivningar av anläggningstillgångar',
-    body: blocks.join('\n\n'),
+    body: [
+      ...(registerHolds
+        ? ['Nedskrivningar som bokförts utanför anläggningsregistret. Nedskrivningar som bokförts genom registret redovisas i noten Anläggningstillgångar.', '']
+        : []),
+      blocks.join('\n\n'),
+    ].join('\n'),
   }
 }

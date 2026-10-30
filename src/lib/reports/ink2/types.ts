@@ -119,8 +119,26 @@ export interface INK2SRutor {
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
   '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
+  '7666': number  // 4.9 (+) Skattemässig justering för avskrivning på byggnader och annan fast egendom
+  '7765': number  // 4.9 (-) Skattemässig justering för avskrivning på byggnader och annan fast egendom
   '7670': number  // 4.15 Överskott, flyttas till punkt 1.1 (INK2 7104)
   '7770': number  // 4.16 Underskott, flyttas till punkt 1.2 (INK2 7114)
+}
+
+/**
+ * The INK2S 4.9 rows as the form names them (Skatteverket's label, Swedish
+ * in every locale): the book depreciation on fast egendom against the tax
+ * plan, filed net.
+ */
+export function ink2sBuildingRows(
+  ink2s: Pick<INK2SRutor, '7666' | '7765'>,
+): { field: '7666' | '7765'; label: string; amount: number }[] {
+  return ([
+    ['7666', 'Skattemässig justering för avskrivning på byggnader och annan fast egendom (+)'],
+    ['7765', 'Skattemässig justering för avskrivning på byggnader och annan fast egendom (-)'],
+  ] as const)
+    .filter(([field]) => ink2s[field] > 0)
+    .map(([field, label]) => ({ field, label, amount: ink2s[field] }))
 }
 
 // Account mapping configuration for INK2R

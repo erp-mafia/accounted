@@ -485,3 +485,15 @@ import '@/app/api/v1/companies/[companyId]/setoffs/route'
 import '@/app/api/v1/companies/[companyId]/setoffs/counterparty/route'
 
 export {}
+
+// K3 (accounted#111): nedskrivning, component replacement, a building's tax
+// plan, the split at the transition, the deferred tax inputs, the 18.7 model
+// and the transition to K3 (lib/operations/k3.ts).
+import '@/app/api/v1/companies/[companyId]/assets/[id]/value-adjustments/route'
+import '@/app/api/v1/companies/[companyId]/assets/[id]/components/[componentId]/replace/route'
+import '@/app/api/v1/companies/[companyId]/assets/[id]/tax-plan/route'
+import '@/app/api/v1/companies/[companyId]/assets/[id]/transition-split/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/deferred-tax/route'
+import '@/app/api/v1/companies/[companyId]/accounting-policies/route'
+import '@/app/api/v1/companies/[companyId]/k3-transition/route'
+import '@/app/api/v1/companies/[companyId]/k3-transition/commit/route'

@@ -625,6 +625,9 @@ export function validateAnnualReportCompleteness(
   for (const warning of report.warnings) {
     push(issues, 'AR-SOURCE-WARNING', 'warning', 'statements', warning)
   }
+  for (const error of report.errors ?? []) {
+    push(issues, 'AR-SOURCE-ERROR', 'error', 'notes', error)
+  }
 
   const errorCount = issues.filter((item) => item.severity === 'error').length
   const warningCount = issues.filter((item) => item.severity === 'warning').length

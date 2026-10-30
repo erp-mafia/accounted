@@ -32,7 +32,7 @@ Load a sibling with \`gnubok_load_skill\` when you reach its part.
 Answer each of these with a tool, not an assumption:
 
 1. **Which company.** \`gnubok_list_companies\`. Several: ask which one, then pass that \`company_id\` on every call, including approval. Never let the connection default decide.
-2. **Legal form, accounting method, framework.** \`gnubok_get_agent_briefing\` gives identity and \`accounting_method\` (kontantmetoden or faktureringsmetoden). This skill is for AB; if the company is an enskild firma, jump to "If the company is an enskild firma" below. K2 or K3: \`gnubok_preview_arsredovisning\` returns \`report.accounting_framework\`. K3 changes many bokslut items (deferred tax, component depreciation): see stop conditions.
+2. **Legal form, accounting method, framework.** \`gnubok_get_agent_briefing\` gives identity and \`accounting_method\` (kontantmetoden or faktureringsmetoden). This skill is for AB; if the company is an enskild firma, jump to "If the company is an enskild firma" below. K2 or K3: \`gnubok_preview_arsredovisning\` returns \`report.accounting_framework\`. K3 adds its own steps (the transition, components, nedskrivning, deferred tax): see "If the company reports under K3".
 3. **Which year, and its state.** \`gnubok_list_fiscal_periods\`. Find the period the user means by its \`period_end\` (the räkenskapsår may be brutet, never assume 31 December). Status: open, locked or closed.
 4. **Earlier years.** In the same list, check every period that ends before this one. See "If a prior year is not closed".
 5. **Bank.** \`gnubok_get_reconciliation_status\` with \`date_from\`/\`date_to\` = the period. No connected bank or a difference at balansdagen means the books are not complete yet.
@@ -137,6 +137,23 @@ A revisor is required when the company exceeded at least two of these in each of
 
 When there is a revisor or an accounting firm, or any stop condition below applies: \`gnubok_audit_package({ fiscal_period_id, estimate_only: true })\` for the size, then without \`estimate_only\` for the zip (SIE-4, reports, receipts, audit log, voucher gaps). The \`download_url\` is valid one hour: give it to the user at once. Tell them what is done and what is left for the professional.
 
+## If the company reports under K3
+
+Read \`gnubok_get_k3_transition({ fiscal_period_id })\` first: \`year.framework\` says whether this year is K3. Every K3 tool below is search-only: if your client does not list it, stage it through \`gnubok_stage_tool\`. Each amount, life and judgement comes from the user or their accountant, never from you.
+
+**The first K3 year after K2 (K3 kapitel 35).** Ask: "Were the company's earlier årsredovisningar prepared under K2?" If yes and \`committed\` is false, the transition comes before the year's depreciation:
+1. \`gnubok_start_k3_transition({ fiscal_period_id })\`. The transition date is the first day of this year; comparatives are not restated (the mindre företag route, the only one Accounted supports).
+2. For each tangible asset in \`assets\` with status \`plain\` whose significant parts have materially different useful lives (a building's stomme, tak, installationer): ask for each part's carrying amount at the transition and its total useful life counted from first use, then \`gnubok_split_asset_at_k3_transition\`. The carrying amounts must add up to the asset's. Nothing is booked. A \`later_depreciation_posted\` asset needs this year's depreciation reversed first.
+3. Deferred tax in the opening balance: the default. The 35.27 relief (none) only when the user says the information cannot be produced without unreasonable cost. \`gnubok_update_k3_transition\` records it, the other relief rules applied and the accounting principles changed (the notes 35.31 and 35.33 print them).
+4. Other differences in principle the accountant has computed: each as a balance sheet account and amount in \`adjustments\`. Stage \`gnubok_commit_k3_transition\` (high-risk) and read its preview with the user: every line is booked against balanserat resultat on the transition date.
+
+**Every K3 year.**
+- Buildings and markanläggningar: \`gnubok_set_asset_tax_plan\` with the tax depreciation rate the user or their tax adviser gives (IL 19 kap. 5 §). Without it INK2S 4.9 makes no adjustment and the deferred tax leaves the building out.
+- A replaced part of a component asset: \`gnubok_replace_asset_component\` on the replacement date.
+- After the year's depreciation: ask whether any asset has lost value materially and lastingly (K3 27.4). Only with the user's recoverable amount and their reason: \`gnubok_post_asset_value_adjustment\` on the balansdag (a reversal the same way; never for goodwill).
+- Own development: \`gnubok_set_development_model\` (owners and admins) when the company capitalises it; the fond för utvecklingsutgifter then shows among the dispositions.
+- Deferred tax: \`gnubok_set_deferred_tax_inputs\` for a tax loss the user judges recoverable (with their reason, K3 29.29) and differences the register does not compute. \`gnubok_propose_dispositioner\` then shows \`uppskjuten_skatt_kap29\`. Post it and the fond from the Bokslut page in Accounted, never with \`gnubok_create_voucher\`: the page records what the deferred tax was computed from with the voucher.
+
 ## If the company is an enskild firma
 
 This skill is filtered to AB, but if you reach it for an EF: readiness, accruals, depreciation and \`gnubok_run_year_end\` work the same way (the close uses the EF equity account, named on the approval card). There are no bokslutsdispositioner and no bolagsskatt to book: \`gnubok_propose_dispositioner\` returns none. Periodiseringsfond, expansionsfond, räntefördelning and egenavgifter exist only in the NE-bilaga and are never booked. \`gnubok_preview_ef_declaration({ fiscal_period_id })\` computes them, but it needs inputs only the owner has (\`kapitalunderlag\`, last year's \`prior_year_schablonavdrag\` and \`prior_year_actual_charged\`, an existing expansionsfond): ask for last year's NE-bilaga. The choices go through \`tax-planning\`. No årsredovisning; the NE-bilaga goes with Inkomstdeklaration 1 in early May.
@@ -155,7 +172,7 @@ This skill is filtered to AB, but if you reach it for an EF: readiness, accruals
 
 Stop, say "This needs a human: here is what I found", list the facts, and offer the audit package when useful:
 - Eget kapital below half of the registered aktiekapital (kontrollbalansräkning, ABL 25 kap). The board has duties and personal liability.
-- K3 framework, deferred tax, koncernbidrag, or a company whose buildings generate most of its revenue.
+- Under K3: a större företag, a transition that restates the comparatives, or an amount the user cannot give for a split, a nedskrivning or a temporary difference. Also koncernbidrag, or a company whose buildings generate most of its revenue.
 - Any integrity blocker, IB/UB mismatch, IB already posted in the next year, or a prior year closed wrongly.
 - An amount the user cannot back with underlag, or a disposition the user wants that you cannot build from the proposal.
 - Anything touching a closed year.
@@ -188,6 +205,8 @@ In the user's language, short groups:
 - \`gnubok_post_kontantmetod_cutoff\`: kontantmetoden cut-off, årsomföring per invoice (search-only, via \`gnubok_stage_tool\`)
 - \`gnubok_propose_accruals\`, \`gnubok_list_accrual_schedules\`: periodiseringar
 - \`gnubok_list_assets\`, \`gnubok_create_asset\`, \`gnubok_dispose_asset\`, \`gnubok_propose_annual_depreciation\`, \`gnubok_post_annual_depreciation\`: avskrivningar
+- \`gnubok_get_k3_transition\`, \`gnubok_start_k3_transition\`, \`gnubok_split_asset_at_k3_transition\`, \`gnubok_update_k3_transition\`, \`gnubok_commit_k3_transition\`, \`gnubok_delete_k3_transition\`: the transition to K3
+- \`gnubok_set_asset_tax_plan\`, \`gnubok_replace_asset_component\`, \`gnubok_post_asset_value_adjustment\`, \`gnubok_set_development_model\`, \`gnubok_set_deferred_tax_inputs\`: K3 years
 - \`gnubok_run_currency_revaluation\`: optional FX review before the close
 - \`gnubok_propose_dispositioner\`, \`gnubok_create_voucher\`: bokslutsdispositioner and tax
 - \`gnubok_run_year_end\`: the close (high-risk, irreversible)

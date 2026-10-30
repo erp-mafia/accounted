@@ -85,6 +85,7 @@
       "lib/composition/payment-attest-gate.ts -> lib/supplier-invoices/attest-policy-read",
       "lib/composition/reconciliation-signoffs.ts -> lib/reconciliation/schemas",
       "lib/composition/reconciliation-signoffs.ts -> lib/reconciliation/signoff-store",
+      "lib/composition/reversal-hooks.ts -> lib/bokslut/assets/component-reversal",
       "lib/composition/reversal-hooks.ts -> lib/bookkeeping/payment-sync",
       "lib/composition/reversal-hooks.ts -> lib/collections/settlement-reversal",
       "lib/composition/reversal-hooks.ts -> lib/customer-loss/reversal",

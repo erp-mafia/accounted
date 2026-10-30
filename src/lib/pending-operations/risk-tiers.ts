@@ -116,6 +116,20 @@ const RISK_TIERS = {
   correct_entry_lines_inline: 'high',
   // Re-plans months not yet posted; posted verifikat never change.
   replan_accrual_schedule: 'low',
+  // K3 (lib/operations/k3.ts): a nedskrivning or a component replacement
+  // books a verifikat undone only by storno; the transition voucher too. The
+  // split at the transition books nothing but sets the basis every later K3
+  // depreciation plans from, and the 18.7 model is an accounting policy.
+  post_asset_value_adjustment: 'high',
+  replace_asset_component: 'high',
+  set_asset_tax_plan: 'low',
+  set_asset_transition_split: 'medium',
+  save_deferred_tax_inputs: 'low',
+  update_accounting_policies: 'medium',
+  start_k3_transition: 'low',
+  update_k3_transition: 'low',
+  delete_k3_transition: 'low',
+  commit_k3_transition: 'high',
   redate_entry: 'high',
   mark_no_document_required: 'medium',
   book_vat_settlement: 'high',

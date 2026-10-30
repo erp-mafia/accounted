@@ -6,9 +6,15 @@ import { createLogger } from '@/lib/logger'
 import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   AccountsNotInChartError,
+  AssetComponentRefusedError,
+  AssetComponentsChangedError,
   AssetDepreciationRefusedError,
   AssetOpeningChangedError,
+  AssetValueAdjustmentBlockedError,
   BookkeepingDatabaseError,
+  DeferredTaxAlreadyPostedError,
+  K3TransitionBlockedError,
+  k3TransitionBlockFromRpc,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
   CannotReverseNonPostedError,
@@ -25,6 +31,8 @@ import {
   JournalLineBothSidesNonZeroError,
   JournalEntryNotFoundError,
   UnattendedCommitLimitExceededError,
+  valueAdjustmentBlockFromRpc,
+  type BookkeepingOperation,
 } from '@/lib/bookkeeping/errors'
 import {
   correctionChainDepth,
@@ -1094,6 +1102,9 @@ export interface CommitAssetDisposalInput {
   jamkning_original_input_vat: number | null
   jamkning_original_deduction_percent: number | null
   jamkning_new_deduction_percent: number | null
+  /** K3 components: the split of current_depreciation over the active
+   *  components. Omitted (and not sent) for an asset without components. */
+  components?: AssetComponentSplitLine[]
 }
 
 /**
@@ -1133,9 +1144,13 @@ export async function commitAssetDisposal(
     p_jamkning_new_deduction_percent: input.jamkning_new_deduction_percent,
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
+    ...(input.components ? { p_components: input.components } : {}),
   })
 
   if (error) {
+    const pgCode = (error as { code?: string }).code
+    if (pgCode === 'PT409' && error.message === 'ASSET_OPENING_CHANGED') throw new AssetOpeningChangedError()
+    if (pgCode === 'PT409' && error.message === 'ASSET_COMPONENTS_CHANGED') throw new AssetComponentsChangedError()
     log.error('commit_asset_disposal RPC failed', error, {
       operation: 'commit_asset_disposal',
       companyId,
@@ -1198,6 +1213,19 @@ export async function commitAssetDisposal(
   return result
 }
 
+/**
+ * One component's share of a planenlig avskrivning (K3 17.4), with the
+ * component's opening snapshot the share was computed from. The posting RPCs
+ * refuse a split that does not cover exactly the asset's active components,
+ * whose openings changed, or that does not sum to the voucher.
+ */
+export interface AssetComponentSplitLine {
+  component_id: string
+  amount: number
+  expected_opening_amount: number
+  expected_opening_date: string | null
+}
+
 export interface AssetDepreciationLink {
   asset_id: string
   /** The amount the register row records. The RPC refuses it unless it equals
@@ -1206,6 +1234,9 @@ export interface AssetDepreciationLink {
   /** Opening snapshot used to calculate this proposal, checked under the row lock. */
   opening_accumulated_depreciation: number
   opening_depreciation_date: string | null
+  /** K3 components: the per-component split, required for a component asset.
+   *  Omitted (and not sent) for an asset without components. */
+  components?: AssetComponentSplitLine[]
 }
 
 /**
@@ -1278,6 +1309,7 @@ export async function commitAssetDepreciation(
     p_expected_opening_date: link.opening_depreciation_date,
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
+    ...(link.components ? { p_components: link.components } : {}),
   })
 
   if (error) {
@@ -1305,6 +1337,9 @@ export async function commitAssetDepreciation(
     if (pgCode === 'P0002') throw new AssetDepreciationRefusedError('asset_not_found')
     if (pgCode === 'PT409' && error.message === 'ASSET_OPENING_CHANGED') {
       throw new AssetOpeningChangedError()
+    }
+    if (pgCode === 'PT409' && error.message === 'ASSET_COMPONENTS_CHANGED') {
+      throw new AssetComponentsChangedError()
     }
 
     log.error('commit_asset_depreciation RPC failed', error, {
@@ -1370,6 +1405,361 @@ export async function commitAssetDepreciation(
     payload: { entry: completeEntry, userId, companyId },
   })
   return { entry: completeEntry, scheduleId: row.schedule_id }
+}
+
+export interface AssetComponentReplacementInput {
+  asset_id: string
+  component_id: string
+  derecognised_at: string
+  /** The component's depreciation up to the derecognition date, on the voucher. */
+  depreciation_to_date: number
+  /** The accumulated depreciation the voucher clears (opening, posted and to date). */
+  accumulated_cleared: number
+  /** The component that replaces it (K3 17.5), registered with no voucher:
+   *  the expenditure is already on the asset account. Null derecognises only. */
+  new_component: {
+    name: string
+    cost: number
+    useful_life_months: number | null
+    salvage_value: number
+    acquisition_date: string | null
+    depreciation_start_date: string | null
+  } | null
+}
+
+/**
+ * Commit a component replacement draft (K3 17.5, 17.21A): the voucher that
+ * takes the component off the books AND the register change (derecognised,
+ * the replacing component registered) in one database transaction
+ * (commit_asset_component_replacement, which delegates numbering to
+ * commit_journal_entry and holds the asset row lock). On any refusal the
+ * draft is left cancelled, never stranded.
+ */
+export async function commitAssetComponentReplacement(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id' | 'fiscal_period_id'>,
+  input: AssetComponentReplacementInput,
+): Promise<{ entry: JournalEntry; newComponentId: string | null }> {
+  const actor = getActor()
+  const { data, error } = await supabase.rpc('commit_asset_component_replacement', {
+    p_company_id: companyId,
+    p_asset_id: input.asset_id,
+    p_component_id: input.component_id,
+    p_entry_id: draft.id,
+    p_fiscal_period_id: draft.fiscal_period_id,
+    p_derecognised_at: input.derecognised_at,
+    p_depreciation_to_date: input.depreciation_to_date,
+    p_accumulated_cleared: input.accumulated_cleared,
+    p_new_component: input.new_component,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    await cancelRefusedSqlDraft(supabase, companyId, draft.id, 'commit_asset_component_replacement')
+    if (pgCode === 'PT409') {
+      switch (error.message) {
+        case 'ASSET_COMPONENT_NOT_ACTIVE':
+        case 'ASSET_LAST_COMPONENT':
+        case 'ASSET_COMPONENT_STATE_CHANGED':
+        case 'ASSET_COMPONENT_IMPAIRED':
+          throw new AssetComponentRefusedError(error.message)
+      }
+    }
+    if (pgCode === 'P0002') throw new AssetComponentRefusedError('ASSET_COMPONENT_NOT_FOUND')
+    log.error('commit_asset_component_replacement RPC failed', error, {
+      operation: 'commit_asset_component_replacement',
+      companyId,
+      userId,
+      entityType: 'asset',
+      entityId: input.asset_id,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_asset_component_replacement', error.message, error.code)
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { voucher_number: number; new_component_id: string | null }
+    | null
+    | undefined
+
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draft.id, {
+    operation: 'commit_asset_component_replacement',
+    fetchOperation: 'fetch_asset_component_replacement_entry',
+    assetId: input.asset_id,
+    what: 'asset component replacement',
+  })
+  return { entry, newComponentId: row?.new_component_id ?? null }
+}
+
+/** Cancel a draft whose SQL posting function refused it, so it is never stranded. */
+async function cancelRefusedSqlDraft(
+  supabase: SupabaseClient,
+  companyId: string,
+  draftId: string,
+  operation: string,
+): Promise<void> {
+  const { error: cancelError } = await supabase
+    .from('journal_entries')
+    .update({ status: 'cancelled' })
+    .eq('id', draftId)
+    .eq('status', 'draft')
+  if (cancelError) {
+    log.error('orphan posting draft cleanup failed (phantom draft remains)', cancelError, {
+      operation: `${operation}.cleanup`,
+      companyId,
+      entityType: 'journal_entry',
+      entityId: draftId,
+    })
+  }
+}
+
+/**
+ * Reload a voucher a SQL posting function has committed, and announce it.
+ * Committed at this point: a transient reload failure must not read as a
+ * failed posting, so retry once and log the divergence before throwing.
+ */
+async function reloadCommittedSqlEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string,
+  context: { operation: string; fetchOperation: BookkeepingOperation; assetId?: string; what: string },
+): Promise<JournalEntry> {
+  let completeEntry: JournalEntry | null = null
+  let lastFetchError: { message: string } | null = null
+  for (let attempt = 0; attempt < 2 && !completeEntry; attempt++) {
+    const { data: reloaded, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', entryId)
+      .eq('company_id', companyId)
+      .single()
+    if (reloaded && !fetchError) completeEntry = reloaded as JournalEntry
+    else lastFetchError = fetchError ?? { message: 'posted entry not found' }
+  }
+  if (!completeEntry) {
+    log.error(`${context.what} committed but posted entry reload failed`, lastFetchError, {
+      operation: context.operation,
+      companyId,
+      userId,
+      ...(context.assetId ? { entityType: 'asset', entityId: context.assetId } : {}),
+      journalEntryId: entryId,
+    })
+    throw new BookkeepingDatabaseError(
+      context.fetchOperation,
+      `${context.what} voucher is committed but could not be reloaded: ${lastFetchError?.message ?? 'posted entry not found'}`,
+    )
+  }
+  await eventBus.emit({
+    type: 'journal_entry.committed',
+    payload: { entry: completeEntry, userId, companyId },
+  })
+  return completeEntry
+}
+
+export interface AssetValueAdjustmentInput {
+  asset_id: string
+  kind: 'impairment' | 'impairment_reversal'
+  /** The balansdag: the last day of the draft's fiscal year. */
+  adjustment_date: string
+  amount: number
+  /** Återvinningsvärde (K3 27.5) the amount was derived from. */
+  recoverable_amount: number
+  reason: string
+  /** The 77xx the voucher books (nedskrivning or återföring). */
+  expense_account: string
+  /** The 12x8 it books against. */
+  accumulated_account: string
+  /** A component asset: the amount per active component, summing to `amount`. */
+  components?: Array<{ component_id: string; amount: number }>
+}
+
+/**
+ * Commit a nedskrivning or its reversal (ÅRL 4:5, K3 27): the voucher AND
+ * the asset_value_adjustments rows in one database transaction
+ * (commit_asset_value_adjustment, which delegates numbering to
+ * commit_journal_entry and holds the asset row lock). A refusal the caller
+ * can act on throws AssetValueAdjustmentBlockedError; the draft is left
+ * cancelled either way.
+ */
+export async function commitAssetValueAdjustment(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id' | 'fiscal_period_id'>,
+  input: AssetValueAdjustmentInput,
+): Promise<{ entry: JournalEntry }> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_asset_value_adjustment', {
+    p_company_id: companyId,
+    p_asset_id: input.asset_id,
+    p_entry_id: draft.id,
+    p_fiscal_period_id: draft.fiscal_period_id,
+    p_kind: input.kind,
+    p_adjustment_date: input.adjustment_date,
+    p_amount: input.amount,
+    p_recoverable_amount: input.recoverable_amount,
+    p_reason: input.reason,
+    p_expense_account: input.expense_account,
+    p_accumulated_account: input.accumulated_account,
+    p_components: input.components ?? null,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    await cancelRefusedSqlDraft(supabase, companyId, draft.id, 'commit_asset_value_adjustment')
+    const block = pgCode === 'PT409' ? valueAdjustmentBlockFromRpc(error.message) : null
+    if (block) throw new AssetValueAdjustmentBlockedError(block)
+    log.error('commit_asset_value_adjustment RPC failed', error, {
+      operation: 'commit_asset_value_adjustment',
+      companyId,
+      userId,
+      entityType: 'asset',
+      entityId: input.asset_id,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_asset_value_adjustment', error.message, error.code)
+  }
+
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draft.id, {
+    operation: 'commit_asset_value_adjustment',
+    fetchOperation: 'fetch_asset_value_adjustment_entry',
+    assetId: input.asset_id,
+    what: 'asset write-down',
+  })
+  return { entry }
+}
+
+export interface DeferredTaxPostingInput {
+  /** Net deferred tax at the balansdag: positive a liability, negative an asset. */
+  closing: number
+  /** closing less what the ledger held; the voucher's net change on 2240 less 1370. */
+  change: number
+  /** The temporary differences it was computed from (deferred_tax_items rows). */
+  items: Array<{
+    kind: string
+    label: string
+    carrying_amount: number
+    tax_value: number
+    temporary_difference: number
+    tax_rate: number
+    deferred_tax: number
+  }>
+}
+
+/**
+ * Commit a deferred tax draft (K3 kap. 29): the year_end voucher on
+ * 8940/2240/1370 AND its items in one database transaction
+ * (commit_deferred_tax, which delegates numbering to commit_journal_entry).
+ * A second posting for a year whose first one stands is refused
+ * (DeferredTaxAlreadyPostedError); the draft is left cancelled either way.
+ */
+export async function commitDeferredTax(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id' | 'fiscal_period_id'>,
+  input: DeferredTaxPostingInput,
+): Promise<{ entry: JournalEntry }> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_deferred_tax', {
+    p_company_id: companyId,
+    p_entry_id: draft.id,
+    p_fiscal_period_id: draft.fiscal_period_id,
+    p_closing: input.closing,
+    p_change: input.change,
+    p_items: input.items,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    await cancelRefusedSqlDraft(supabase, companyId, draft.id, 'commit_deferred_tax')
+    if (pgCode === 'PT409' && error.message === 'DEFERRED_TAX_ALREADY_POSTED') {
+      throw new DeferredTaxAlreadyPostedError()
+    }
+    log.error('commit_deferred_tax RPC failed', error, {
+      operation: 'commit_deferred_tax',
+      companyId,
+      userId,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_deferred_tax', error.message, error.code)
+  }
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draft.id, {
+    operation: 'commit_deferred_tax',
+    fetchOperation: 'fetch_deferred_tax_entry',
+    what: 'deferred tax',
+  })
+  return { entry }
+}
+
+export interface K3TransitionPostingInput {
+  /** The retained-result account the adjustments are booked against (35.11). */
+  equityAccount: string
+  /** The opening deferred tax at the transition: positive a liability, negative an asset. */
+  openingDeferredTax: number
+  /** The voucher's net change on 2240 less 1370. */
+  deferredTaxChange: number
+  /** The temporary differences the opening deferred tax was computed from. */
+  items: DeferredTaxPostingInput['items']
+}
+
+/**
+ * Commit the K3 transition voucher (BFNAR 2012:1 35.11): balance sheet
+ * adjustments and the opening deferred tax against equity, dated the first
+ * day of the first K3 year, and the transition marked committed, in one
+ * database transaction (commit_k3_transition, which delegates numbering to
+ * commit_journal_entry). A refusal leaves the draft cancelled and throws
+ * K3TransitionBlockedError with the reason.
+ */
+export async function commitK3Transition(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id'>,
+  input: K3TransitionPostingInput,
+): Promise<{ entry: JournalEntry }> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_k3_transition', {
+    p_company_id: companyId,
+    p_entry_id: draft.id,
+    p_equity_account: input.equityAccount,
+    p_opening_deferred_tax: input.openingDeferredTax,
+    p_deferred_tax_change: input.deferredTaxChange,
+    p_deferred_tax_items: input.items,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    await cancelRefusedSqlDraft(supabase, companyId, draft.id, 'commit_k3_transition')
+    const reason = pgCode === 'PT409' ? k3TransitionBlockFromRpc(error.message) : null
+    if (reason) throw new K3TransitionBlockedError(reason)
+    log.error('commit_k3_transition RPC failed', error, {
+      operation: 'commit_k3_transition',
+      companyId,
+      userId,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_k3_transition', error.message, error.code)
+  }
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draft.id, {
+    operation: 'commit_k3_transition',
+    fetchOperation: 'fetch_k3_transition_entry',
+    what: 'K3 transition',
+  })
+  return { entry }
 }
 
 /**

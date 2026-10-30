@@ -52,6 +52,9 @@ export const BUSINESS_EVENT_KINDS = [
   'payroll.vacation_liability_adjusted',
   'sale.customer_loss',
   'counterparty.set_off',
+  'asset.impaired',
+  'asset.impairment_reversed',
+  'ledger.k3_transition',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -61,8 +64,10 @@ export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
  * generic source type, so only the producer that records the event can name
  * them. Milersättning (a kostnadsersättning, not an utlägg) is booked with
  * source_type 'manual'; its history projects as ledger.manual. A planenlig
- * avskrivning is booked as 'year_end' and an asset disposal as 'system'
- * (lib/bokslut/assets); a skattekonto row booked from the Skatteverket feed
+ * avskrivning is booked as 'year_end' and an asset disposal or nedskrivning
+ * (and its reversal) as 'system' (lib/bokslut/assets), and so is the
+ * transition to K3 (lib/bokslut/k3-transition: balance sheet adjustments
+ * against equity, K3 35.11); a skattekonto row booked from the Skatteverket feed
  * is 'system' too (the skatteverket extension). Their history projects as
  * year_end.closing and ledger.system. The semesterårsavslut's adjustment of
  * the semesterlöneskuld (lib/salary/semesterberedning.ts) is booked as
@@ -75,6 +80,9 @@ export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = [
   'asset.disposed',
   'se.tax_account.booked',
   'payroll.vacation_liability_adjusted',
+  'asset.impaired',
+  'asset.impairment_reversed',
+  'ledger.k3_transition',
 ]
 
 /** The shape business_events_kind_check enforces. */

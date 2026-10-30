@@ -97,8 +97,8 @@ registerEndpoint({
   doNotUseFor:
     'Taking the asset out of the register (POST /assets/{id}/dispose). Changing the basis after depreciation is posted (storno the postings first).',
   pitfalls: [
-    'k3_components: null clears an existing breakdown; a non-null array is validated against the acquisition_cost that will be in effect after the patch and requires K3.',
-    'Opening depreciation is validated against the merged row: 0 <= opening_accumulated_depreciation <= acquisition_cost - salvage_value; a positive amount needs opening_depreciation_date between acquisition_date and today (Europe/Stockholm). Zero clears the date. A positive amount cannot be combined with non-empty k3_components; component opening balances are unsupported, so keep the breakdown.',
+    'k3_components is the full component list after the patch (requires K3): an element with component_id changes that component, one without registers a new one, an active component left out is removed (refused once posted), null clears a breakdown that never posted. A component asset\'s acquisition_cost, salvage_value and opening are the components\' sum.',
+    'Opening depreciation is validated against the merged row: 0 <= opening_accumulated_depreciation <= acquisition_cost - salvage_value; a positive amount needs opening_depreciation_date between acquisition_date and today (Europe/Stockholm). Zero clears the date. With components it is their total: split over components that state none, or set per component.',
     'Opening edits post no voucher and perform no automatic reconciliation. Manually reconcile the register totals with the imported ledger before depreciation or disposal. Opening fields lock after depreciation posted through Accounted\'s asset register or disposal (409 ASSET_CORRECTION_BLOCKED); manual ledger postings do not lock them.',
     'An empty body is rejected with 400 VALIDATION_ERROR.',
     'Account overrides on a K2 company may not land on an Ej K2 account (422 K2_EXCLUDED_ACCOUNT).',
@@ -223,7 +223,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         )
       }
 
-      const asset = await updateAsset(ctx.supabase, ctx.companyId!, assetId, body)
+      const asset = await updateAsset(ctx.supabase, ctx.companyId!, assetId, body, { userId: ctx.userId })
       return ok({ id: asset.id, ...assetView(asset, posted.has(assetId)) }, { requestId: ctx.requestId })
     } catch (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })

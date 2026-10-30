@@ -260,6 +260,23 @@ describe('validateAnnualReportCompleteness', () => {
     }))
   })
 
+  // R2: an anläggningar note that does not tie while the register holds
+  // write-downs may not be locked; a K2 company could file it before.
+  it('blocks a K2 report whose build found an error, and lets a plain warning through', () => {
+    const value = input('signing')
+    const message = 'Anläggningsnotens utgående redovisade värde stämmer inte; noten måste stämma mot balansräkningen innan årsredovisningen kan låsas.'
+    value.report.errors = [message]
+    const blocked = validateAnnualReportCompleteness(value)
+    expect(blocked.ok).toBe(false)
+    expect(blocked.issues).toContainEqual(expect.objectContaining({ code: 'AR-SOURCE-ERROR', severity: 'error', message }))
+
+    const warned = input('signing')
+    warned.report.warnings = ['Anläggningsnotens utgående redovisade värde stämmer inte.']
+    expect(validateAnnualReportCompleteness(warned).issues).toContainEqual(
+      expect.objectContaining({ code: 'AR-SOURCE-WARNING', severity: 'warning' }),
+    )
+  })
+
   it('reports a cash-flow omission the law does not allow, and nothing when honoured', () => {
     const value = input('draft')
     value.report.accounting_framework = 'k3'

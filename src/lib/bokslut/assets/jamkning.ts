@@ -176,7 +176,7 @@ function isRealProperty(args: {
   category?: AssetCategory
 }): boolean {
   if (args.basAssetAccount && /^11\d{2}$/.test(args.basAssetAccount)) return true
-  return args.category === 'building' || args.category === 'land_improvement'
+  return args.category === 'building' || args.category === 'land' || args.category === 'land_improvement'
 }
 
 function yearsRemaining(acquisitionDate: string, disposalDate: string, totalYears: number): number {

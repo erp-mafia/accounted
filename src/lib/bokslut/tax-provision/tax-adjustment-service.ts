@@ -310,3 +310,10 @@ function summarizeTaxAdjustments(items: TaxAdjustmentItem[]): TaxAdjustmentSnaps
     deficitCarryforward: roundOre(deficitCarryforward),
   }
 }
+
+/**
+ * INK2S 4.9 (buildings, markanläggningar and mark on their tax plan) is a
+ * tax adjustment like the ones above; re-exported here so the declaration
+ * reads every adjustment through this module.
+ */
+export { loadBuildingTaxAdjustment } from '@/lib/bokslut/assets/building-tax-service'

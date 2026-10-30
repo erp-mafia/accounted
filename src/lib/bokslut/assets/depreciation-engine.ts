@@ -7,6 +7,19 @@ import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import type { AssetComponentSplitLine } from '@/lib/bookkeeping/engine'
+import { chunk } from '@/lib/utils'
+import {
+  activeComponentsOf,
+  computeComponentDepreciation,
+  computeUnitCharge,
+  hasComponents,
+  historyCompleteFrom,
+  type ComponentCharge,
+} from './component-depreciation'
+import { loadComponentSplits, postedByComponent } from './component-history'
+import { plainAssetUnit, usesUnitEngine } from './asset-units'
+import { writtenDownByKey } from './value-adjustments'
 import type {
   Asset,
   FiscalPeriod,
@@ -31,6 +44,8 @@ export interface AssetDepreciation {
    *  (om journal_entry_id är null). */
   existingScheduleId?: string
   existingJournalEntryId?: string | null
+  /** K3 components: the charge per active component, summing to `amount`. */
+  components?: ComponentCharge[]
 }
 
 export interface DepreciationProposal {
@@ -434,97 +449,10 @@ function followsPlan(plan: LinearPlan, history: readonly PostedDepreciationPerio
   return Math.abs(roundOre(planned) - roundOre(posted)) < 0.005
 }
 
-export interface ComponentDepreciationResult {
-  /** Sum of per-component depreciation, rounded to whole kronor. */
-  amount: number
-  /** True if any component was pro-rated (mid-year acquisition or disposal). */
-  proRated: boolean
-  /** Per-component breakdown: names mirror `asset.k3_components[*].name`.
-   *  Each amount is rounded to whole kronor; the total `amount` is the sum
-   *  of these rounded values (so the breakdown reconciles exactly with the
-   *  total: no hidden öre). */
-  perComponent: { name: string; amount: number }[]
-}
-
-/**
- * Compute component depreciation for a K3 asset (BFNAR 2012:1 ch.17.4).
- *
- * Mirrors `computeLinearAnnual` per component: the depreciable base is
- * `cost − salvage_value` (salvage defaults to 0 when omitted), and the
- * annual amount is `depreciableBase × 12 / useful_life_months`, scaled by
- * the fiscal year's length like every other path. The pro-ration window is
- * the overlap between the period and the asset's active life: components
- * share the same acquisition_date and disposal date as the parent asset,
- * because BFNAR 2012:1 treats them as a single
- * accounting unit for acquisition / disposal purposes; only the depreciation
- * schedule is split.
- *
- * Per-component amounts are rounded to whole kronor individually, then
- * summed, so the breakdown returned by this function reconciles exactly
- * with `amount`. This matches the linear / declining methods which also
- * round at the per-asset level.
- */
-export function computeComponentDepreciation(
-  asset: Asset,
-  fiscalPeriod: Pick<FiscalPeriod, 'period_start' | 'period_end'>,
-): ComponentDepreciationResult {
-  const components = asset.k3_components ?? []
-  if (components.length === 0) {
-    return { amount: 0, proRated: false, perComponent: [] }
-  }
-
-  // Pre-compute the period vs life window so each component shares the
-  // same date math (acquisition_date and disposal date are asset-level).
-  const acquisition = isoToDate(asset.acquisition_date)
-  const periodStart = isoToDate(fiscalPeriod.period_start)
-  const periodEndInclusive = isoToDate(fiscalPeriod.period_end)
-  const disposalEnd = asset.disposed_at ? isoToDate(asset.disposed_at) : null
-  const fullPeriodDays = daysBetween(periodStart, periodEndInclusive) + 1
-  const yearLength = fiscalYearLengthFactor(periodStart, periodEndInclusive)
-
-  const perComponent: { name: string; amount: number }[] = []
-  let total = 0
-  let anyProRated = false
-
-  for (const [index, component] of components.entries()) {
-    const label = component.name?.trim() || `Komponent ${index + 1}`
-    const cost = Number(component.cost)
-    const salvage = Number(component.salvage_value ?? 0)
-    const depreciableBase = cost - salvage
-    if (depreciableBase <= 0 || component.useful_life_months <= 0) {
-      perComponent.push({ name: label, amount: 0 })
-      continue
-    }
-
-    const annualRate = 12 / component.useful_life_months
-    const lifeEndExclusive = addMonths(acquisition, component.useful_life_months)
-
-    const windowStart = maxDate(acquisition, periodStart)
-    let windowEnd = minDate(periodEndInclusive, addDays(lifeEndExclusive, -1))
-    if (disposalEnd) windowEnd = minDate(windowEnd, disposalEnd)
-
-    if (windowEnd < windowStart) {
-      perComponent.push({ name: label, amount: 0 })
-      continue
-    }
-
-    const windowDays = daysBetween(windowStart, windowEnd) + 1
-    const fraction = windowDays / fullPeriodDays
-    if (fraction < 0.999) anyProRated = true
-
-    const annualAmount = depreciableBase * annualRate
-    const proRatedAmount = annualAmount * fraction * yearLength
-    const rounded = Math.round(proRatedAmount)
-    perComponent.push({ name: label, amount: rounded })
-    total += rounded
-  }
-
-  return {
-    amount: total,
-    proRated: anyProRated,
-    perComponent,
-  }
-}
+// The component path (BFNAR 2012:1 17.4) lives in ./component-depreciation:
+// per component, prospective, from each component's posted history.
+export { computeComponentDepreciation }
+export type { ComponentDepreciationResult } from './component-depreciation'
 
 interface PriorScheduleRow {
   asset_id: string
@@ -657,11 +585,171 @@ export async function proposeAnnualPostings(
     })
   }
 
+  // K3 component assets, mark, a later depreciation start and written-down
+  // assets are planned by the unit engine from their own posted history:
+  // their lines are computed here and take the place of whatever the loop
+  // above made of them.
+  const unitLines = await unitProposalItems(supabase, companyId, period, assets, existing)
+  const proposed = unitLines.size === 0
+    ? items
+    : assets.flatMap((asset) =>
+        unitLines.has(asset.id)
+          ? (unitLines.get(asset.id) ? [unitLines.get(asset.id)!] : [])
+          : items.filter((item) => item.asset.id === asset.id),
+      )
+
   return {
     fiscalPeriod: period,
-    items,
-    totalAmount: items.reduce((sum, item) => sum + item.amount, 0),
+    items: proposed,
+    totalAmount: proposed.reduce((sum, item) => sum + item.amount, 0),
   }
+}
+
+/**
+ * The proposal lines of the assets the unit engine plans (asset-units.ts):
+ * a K3 component asset per active component from that component's posted
+ * split, any other such asset as one unit from its posted total; both after
+ * the net write-down dated before the year. An asset maps to null when
+ * nothing is due this year. One read of the posted history for those assets,
+ * and none when the register has none.
+ */
+async function unitProposalItems(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>,
+  assets: readonly Asset[],
+  existing: ReadonlyMap<string, { id: string; journal_entry_id: string | null }>,
+): Promise<Map<string, AssetDepreciation | null>> {
+  const unitAssets = assets.filter(
+    (asset) => usesUnitEngine(asset) && !(asset.disposed_at && asset.disposed_at < period.period_start),
+  )
+  const lines = new Map<string, AssetDepreciation | null>()
+  if (unitAssets.length === 0) return lines
+
+  type PostedRow = { id: string; asset_id: string; fiscal_period_id: string; planned_depreciation: number | string }
+  let posted: PostedRow[]
+  let periods: Array<Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>>
+  try {
+    ;[posted, periods] = await Promise.all([
+      Promise.all(
+        chunk(unitAssets.map((asset) => asset.id), 200).map((ids) =>
+          fetchAllRows<PostedRow>(({ from, to }) =>
+            supabase
+              .from('depreciation_schedules')
+              .select('id, asset_id, fiscal_period_id, planned_depreciation')
+              .eq('company_id', companyId)
+              .in('asset_id', ids)
+              .neq('fiscal_period_id', period.id)
+              .not('journal_entry_id', 'is', null)
+              .order('id', { ascending: true })
+              .range(from, to),
+          ),
+        ),
+      ).then((pages) => pages.flat()),
+      fetchAllRows<Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>>(({ from, to }) =>
+        supabase
+          .from('fiscal_periods')
+          .select('id, period_start, period_end')
+          .eq('company_id', companyId)
+          .order('period_start', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+    ])
+  } catch (error) {
+    throw new Error(`Failed to load depreciation history: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  // Only what was posted for years before this one is its history: a later
+  // year's posting (a year booked ahead, or this year proposed again after
+  // the next was closed) is not "before", as on the plain path
+  // (priorDepreciationTotal).
+  const before = new Set(periods.filter((row) => row.period_end < period.period_start).map((row) => row.id))
+  posted = posted.filter((row) => before.has(row.fiscal_period_id))
+  const componentAssetIds = new Set(unitAssets.filter((asset) => hasComponents(asset)).map((asset) => asset.id))
+  const componentRows = posted.filter((row) => componentAssetIds.has(row.asset_id))
+  const postedBefore = componentRows.length === 0
+    ? new Map<string, number>()
+    : postedByComponent(
+        await loadComponentSplits(supabase, companyId, componentRows.map((row) => row.id)),
+        new Set(componentRows.map((row) => row.id)),
+      )
+
+  for (const asset of unitAssets) {
+    const assetRows = posted.filter((row) => row.asset_id === asset.id)
+    const postedPeriods = new Set(assetRows.map((row) => row.fiscal_period_id))
+    const isComplete = (anchor: string) => historyCompleteFrom(anchor, period.period_start, periods, postedPeriods)
+    const writtenDown = writtenDownByKey(asset, { before: period.period_start })
+    const existingSchedule = existing.get(asset.id)
+    const schedule = {
+      existingScheduleId: existingSchedule?.id,
+      existingJournalEntryId: existingSchedule?.journal_entry_id ?? null,
+    }
+
+    if (componentAssetIds.has(asset.id)) {
+      const result = computeComponentDepreciation(asset, period, { posted: postedBefore, writtenDown, isComplete })
+      if (result.amount <= 0) {
+        lines.set(asset.id, null)
+        continue
+      }
+      lines.set(asset.id, {
+        asset,
+        amount: result.amount,
+        netBookValueAfter: roundOre(
+          activeComponentsOf(asset).reduce(
+            (sum, component) =>
+              sum +
+              component.cost -
+              (component.opening?.amount ?? 0) -
+              (postedBefore.get(component.id) ?? 0) -
+              (writtenDown.get(component.id) ?? 0),
+            0,
+          ) - result.amount,
+        ),
+        proRated: result.proRated,
+        ...schedule,
+        components: result.perComponent,
+      })
+      continue
+    }
+
+    const postedTotal = roundOre(assetRows.reduce((sum, row) => sum + (Number(row.planned_depreciation) || 0), 0))
+    const unit = plainAssetUnit(
+      asset,
+      { posted: postedTotal, writtenDown: writtenDown.get(asset.id) ?? 0, isComplete },
+      period.period_start,
+    )
+    const charge = computeUnitCharge(unit, period)
+    if (charge.amount <= 0) {
+      lines.set(asset.id, null)
+      continue
+    }
+    lines.set(asset.id, {
+      asset,
+      amount: charge.amount,
+      netBookValueAfter: roundOre(
+        unit.cost - (unit.opening?.amount ?? 0) - unit.postedBefore - unit.writtenDownBefore - charge.amount,
+      ),
+      proRated: charge.proRated,
+      ...schedule,
+    })
+  }
+  return lines
+}
+
+/**
+ * The per-component split as the posting RPCs take it (p_components).
+ * Undefined for a legacy component value with no register rows (only an
+ * archived migration-reset company keeps one): the RPC posts it as a whole,
+ * as before the register existed.
+ */
+export function componentSplitOf(charges: readonly ComponentCharge[]): AssetComponentSplitLine[] | undefined {
+  if (charges.length === 0 || charges.some((charge) => !charge.registered)) return undefined
+  return charges.map((charge) => ({
+    component_id: charge.componentId,
+    amount: charge.amount,
+    expected_opening_amount: charge.openingAmount,
+    expected_opening_date: charge.openingDate,
+  }))
 }
 
 /**
@@ -785,6 +873,11 @@ export async function commitAnnualPostings(
             planned_depreciation: item.amount,
             opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
             opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+            // The split the RPC records per component (K3 17.4); absent for
+            // an asset without components, whose request is unchanged.
+            ...(item.components && componentSplitOf(item.components)
+              ? { components: componentSplitOf(item.components) }
+              : {}),
           },
         ],
       })

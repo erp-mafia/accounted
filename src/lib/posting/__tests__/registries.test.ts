@@ -54,6 +54,8 @@ describe('business event kinds (a closed, add-only list)', () => {
     expect(BUSINESS_EVENT_KINDS.slice(33, 34)).toEqual(['payroll.vacation_liability_adjusted'])
     expect(BUSINESS_EVENT_KINDS.slice(34, 35)).toEqual(['sale.customer_loss'])
     expect(BUSINESS_EVENT_KINDS.slice(35, 36)).toEqual(['counterparty.set_off'])
+    expect(BUSINESS_EVENT_KINDS.slice(36, 38)).toEqual(['asset.impaired', 'asset.impairment_reversed'])
+    expect(BUSINESS_EVENT_KINDS.slice(38, 39)).toEqual(['ledger.k3_transition'])
   })
 
   it('gives every source type the database accepts a kind, and every kind but the producer-named ones a source type', () => {

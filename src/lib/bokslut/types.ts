@@ -1,4 +1,5 @@
 import type { CreateJournalEntryLineInput, EntityType } from '@/types'
+import type { DeferredTaxSnapshot } from './tax-provision/deferred-tax-service'
 
 export type DispositionKind =
   | 'bolagsskatt'
@@ -6,6 +7,14 @@ export type DispositionKind =
   | 'periodiseringsfond_ateforing'
   | 'overavskrivningar'
   | 'sarskild_loneskatt'
+  /** Uppskjuten skatt on temporary differences and a recognised loss, K3
+   *  years only (BFNAR 2012:1 kap. 29): 8940 against 2240/1370. Not the
+   *  'uppskjuten_skatt' kind removed 2026-08-05, which was on obeskattade
+   *  reserver (K3 29.37 keeps those gross). */
+  | 'uppskjuten_skatt_kap29'
+  /** Fond för utvecklingsutgifter, K3 (ÅRL 4 kap. 2 och 8 §§): an equity
+   *  transfer between 2089 and balanserat resultat, no result effect. */
+  | 'fond_for_utvecklingsutgifter'
 
 /**
  * Common shape every bokslut-disposition calculator returns. The wizard renders
@@ -116,4 +125,6 @@ export interface DispositionsProposal {
   completedDispositions?: CompletedDisposition[]
   /** Non-blocking calculation warnings surfaced in the statutory wizard. */
   warnings?: string[]
+  /** K3 years: what the uppskjuten skatt is computed from (absent in a K2 year). */
+  deferredTax?: DeferredTaxSnapshot
 }

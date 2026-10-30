@@ -52,6 +52,7 @@ function stateWith(overrides: Partial<DispositionState> = {}): DispositionState 
     existingFonder: [
       { account_number: '2129', cohort_year: 2019, balance: 60_000, opening_balance: 60_000, must_return_this_year: true },
     ],
+    buildingTaxAdjustment: 0,
     ...overrides,
   }
 }

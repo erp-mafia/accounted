@@ -22,6 +22,7 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     hasOwners: true,
     settlement: { withdrawal: '2893', contribution: '2893' },
     memberCapital: false,
+    developmentFund: true,
     maintenanceFund: null,
     shareRegister: true,
   },

@@ -414,7 +414,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     uses: [],
     libFolders: ['bokslut/assets'],
-    operationPrefixes: [],
+    // Nedskrivning, component replacement, a building's tax plan, the split
+    // at the transition to K3 (lib/operations/k3.ts).
+    operationPrefixes: ['assets'],
     v1Segments: ['assets'],
     jurisdictions: SE,
   },
@@ -433,11 +435,33 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     // commitments: agreements, ställda säkerheter and eventualförpliktelser,
     // the group structure (Bolaget, behind BOLAGET_COMPANY_IDS).
     libFolders: ['bokslut', 'commitments'],
+    // The K3 year-end doors (lib/operations/k3.ts): the transition to K3,
+    // the deferred tax inputs and the 18.7 model.
     // tax-loss-carryforwards: the underskottsregister (lib/bokslut/loss-carryforward).
     // inventory-counts: the year-end stock count (lib/bokslut/stock-count,
     // Bolaget, behind BOLAGET_COMPANY_IDS); session routes and MCP only.
-    operationPrefixes: ['arsredovisning', 'tax-loss-carryforwards', 'agreements', 'securities', 'group-links', 'inventory-counts'],
-    v1Segments: ['fiscal-periods/:id/arsredovisning', 'tax-loss-carryforwards', 'agreements', 'agreement-obligations', 'securities', 'group-links'],
+    operationPrefixes: [
+      'arsredovisning',
+      'k3-transition',
+      'deferred-tax',
+      'accounting-policies',
+      'tax-loss-carryforwards',
+      'agreements',
+      'securities',
+      'group-links',
+      'inventory-counts',
+    ],
+    v1Segments: [
+      'fiscal-periods/:id/arsredovisning',
+      'fiscal-periods/:id/deferred-tax',
+      'k3-transition',
+      'accounting-policies',
+      'tax-loss-carryforwards',
+      'agreements',
+      'agreement-obligations',
+      'securities',
+      'group-links',
+    ],
     jurisdictions: SE,
   },
   {

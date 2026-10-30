@@ -148,6 +148,7 @@ describe('path parameter typing', () => {
       'capital-changes/:id': null,
       'cash-accounts/:id': 'cash_account',
       'companies/:companyId': 'company',
+      'components/:componentId': null,
       'company-roles/:id': null,
       'corporate-meetings/:id': null,
       'connections/:connectionId': null,

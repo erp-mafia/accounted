@@ -1,0 +1,1 @@
+[2026-10-26] Deferred tax covers a recognised tax loss (the user's judgement with its reason, K3 29.29) and hand-entered differences; an IL 18 pool has none beyond its reserve (räkenskapsenlig), buildings join with the IL 19 tax model. Net on 2240 or 1370 (29.32), at 20.6 %.

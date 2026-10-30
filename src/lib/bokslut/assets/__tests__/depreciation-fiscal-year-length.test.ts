@@ -154,7 +154,7 @@ describe('12-month years: amounts are unchanged', () => {
       makeComponentAsset({ acquisition_date: '2025-04-01' }),
       CALENDAR_2025,
     )
-    expect(result.perComponent).toEqual([
+    expect(result.perComponent).toMatchObject([
       { name: 'Stomme', amount: 904 },
       { name: 'Tak', amount: 904 },
     ])
@@ -223,7 +223,7 @@ describe('förlängt first year (15 months)', () => {
       makeComponentAsset({ acquisition_date: '2025-06-01' }),
       LONG_15_MONTHS,
     )
-    expect(result.perComponent).toEqual([
+    expect(result.perComponent).toMatchObject([
       { name: 'Stomme', amount: 1_500 },
       { name: 'Tak', amount: 1_500 },
     ])
@@ -353,7 +353,7 @@ describe('förkortat year (6 months)', () => {
       makeComponentAsset({ acquisition_date: '2025-07-01' }),
       SHORT_6_MONTHS,
     )
-    expect(result.perComponent).toEqual([
+    expect(result.perComponent).toMatchObject([
       { name: 'Stomme', amount: 600 },
       { name: 'Tak', amount: 600 },
     ])

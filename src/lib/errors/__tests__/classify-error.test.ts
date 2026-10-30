@@ -79,6 +79,13 @@ describe('classifyError: the same code on every door', () => {
     expect((await restCode(err)).code).toBe('INTERNAL_ERROR')
   })
 
+  it('reads a code with a digit inside a word, never a bare SQLSTATE', async () => {
+    const k3 = Object.assign(new Error('Komponenterna stämmer inte.'), { code: 'INVALID_K3_COMPONENTS' })
+    expect(classifyError(k3).code).toBe('INVALID_K3_COMPONENTS')
+    expect(await restCode(k3)).toEqual({ code: 'INVALID_K3_COMPONENTS', status: 400 })
+    expect(classifyError(Object.assign(new Error('no data'), { code: 'P0002' })).code).not.toBe('P0002')
+  })
+
   it('answers the registry status for a coded refusal', async () => {
     expect(await restCode(codedRefusal('PERIOD_LOCK_ALREADY_LOCKED', 'Period is already locked'))).toEqual({
       code: 'PERIOD_LOCK_ALREADY_LOCKED',
