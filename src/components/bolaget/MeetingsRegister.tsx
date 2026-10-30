@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { BolagetHeader } from './BolagetHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -476,9 +478,10 @@ export function MeetingsRegister() {
   if (!selectedId) {
     return (
       <div className="space-y-8">
-        <PageHeader
+        <BolagetHeader
           title={t('title')}
-          help={<p className="text-sm">{t('help')}</p>}
+          subtitle={t('subtitle')}
+          help={t('help')}
           action={
             canWrite ? (
               <Button size="sm" onClick={() => setCreateForm({ kind: 'arsstamma', organ: 'bolagsstamma', meeting_date: today(), meeting_time: '', place: '', fiscal_period_id: periods[0]?.id ?? '' })}>
@@ -607,7 +610,11 @@ export function MeetingsRegister() {
     <div className="space-y-8">
       <PageHeader
         title={m ? m.title : t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        help={
+          <HelpPopover>
+            <p>{t('help')}</p>
+          </HelpPopover>
+        }
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => select(null)}>

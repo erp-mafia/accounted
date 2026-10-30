@@ -116,3 +116,37 @@ describe('the invoicer role', () => {
     expect(hrefs('owner')).toEqual(expect.arrayContaining(['/salary', '/bookkeeping', '/transactions']))
   })
 })
+
+describe('the one Bolaget row (founder decision 2026-10-30)', () => {
+  const hub = item({ href: '/bolaget', module: 'corporate', requiresBolagetHub: true })
+
+  it('is hidden outside the rollout, for every form', () => {
+    for (const entityType of ['aktiebolag', 'enskild_firma'] as const) {
+      expect(passesNavGates(hub, ctx({ entityType, bolagetEnabled: false, commitmentsEnabled: false }))).toBe(false)
+      expect(passesNavGates(hub, ctx({ entityType }))).toBe(false)
+    }
+  })
+
+  it('shows where Avtal och åtaganden is open, for any form', () => {
+    expect(passesNavGates(hub, ctx({ entityType: 'enskild_firma', commitmentsEnabled: true }))).toBe(true)
+  })
+
+  it('shows where the registers are open: the rollout and an aktiebolag', () => {
+    expect(passesNavGates(hub, ctx({ bolagetEnabled: true }))).toBe(true)
+    expect(passesNavGates(hub, ctx({ entityType: 'enskild_firma', bolagetEnabled: true }))).toBe(false)
+  })
+
+  it('is one row with no sub-items in the real menu, and nothing else names a Bolaget page', async () => {
+    const { NAV_V2_COMPANY, NAV_V2_TOP } = await import('@/components/dashboard/nav-v2')
+    const tree = (overrides: Partial<NavGateContext>) => gateNavTree([...NAV_V2_TOP, ...NAV_V2_COMPANY], ctx(overrides))
+    const all = (overrides: Partial<NavGateContext>) => tree(overrides).flatMap((i) => [i.href, ...(i.sub ?? []).map((s) => s.href)])
+
+    const open = tree({ bolagetEnabled: true, commitmentsEnabled: true }).filter((i) => i.href.startsWith('/bolaget'))
+    expect(open).toHaveLength(1)
+    expect(open[0]).toMatchObject({ href: '/bolaget', labelKey: 'bolaget' })
+    expect(open[0].sub ?? []).toEqual([])
+    expect(all({ bolagetEnabled: true, commitmentsEnabled: true }).filter((h) => h.startsWith('/bolaget') || h === '/commitments')).toEqual(['/bolaget'])
+
+    expect(all({ bolagetEnabled: false, commitmentsEnabled: false }).filter((h) => h.startsWith('/bolaget') || h === '/commitments')).toEqual([])
+  })
+})

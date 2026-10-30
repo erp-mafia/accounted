@@ -147,13 +147,7 @@
     "v2_bank_accounts": "Bankkonton",
     "arkiv_signings": "Signeringar",
     "budget": "Budget",
-    "bolaget_registers": "Ägare och styrelse",
-    "bolaget_aktiebok": "Ägare och aktiebok",
-    "bolaget_styrelse": "Styrelse och firmateckning",
-    "bolaget_capital": "Kapital och utdelning",
-    "bolaget_owner_tax": "Ägarskatt och närstående",
-    "bolaget_meetings": "Möten och protokoll",
-    "commitments": "Avtal och åtaganden"
+    "bolaget": "Bolaget"
   },
   "trial_expired_dialog": {
     "title": "Vill du fortsätta använda Accounted med alla kopplingar och förmåner?",
@@ -18238,6 +18232,7 @@
   },
   "bolaget_owner_tax": {
     "title": "Ägarskatt och närstående",
+    "subtitle": "K10, lån med ägare och närstående, KU20",
     "help": "Underlag för K10 per delägare och inkomstår enligt 3:12-reglerna från 2026, lån mellan bolaget och ägare, styrelse, VD och närstående med kontroll mot låneförbudet i 21 kap. aktiebolagslagen, den särskilda förteckningen, noten om lån till styrelse och VD, och kontrolluppgift KU20 för ränta till ägare. Inget här bokförs.",
     "load_failed": "Kunde inte hämta ägarskatt och närstående",
     "save_failed": "Kunde inte spara",
@@ -18363,6 +18358,7 @@
   },
   "bolaget_capital": {
     "title": "Kapital och utdelning",
+    "subtitle": "Utdelning, emissioner och aktieägartillskott",
     "help": "Utdelningar från stämmans beslut till utbetalning, fördelade per ägare enligt aktieboken, kontrolluppgift KU31 per inkomstår, nyemission, fondemission och minskning av aktiekapitalet, och aktieägartillskott. Varje bokföring visas i förhand och bokförs som ett verifikat.",
     "load_failed": "Kunde inte hämta kapital och utdelning",
     "new_dividend": "Ny utdelning",
@@ -18522,6 +18518,7 @@
   },
   "bolaget_meetings": {
     "title": "Möten och protokoll",
+    "subtitle": "Stämmor, styrelsemöten och protokoll",
     "help": "Bolagsstämmor, styrelsemöten och beslut per capsulam med dagordning, beslut, röstlängd och protokoll (7 och 8 kap. aktiebolagslagen). En årsstämma fylls i från årsredovisningen och styrelsen. När mötet markeras som hållet får styrelseprotokoll sitt nummer och stämmodagen förs in i årsredovisningen. När protokollet skrivs under med BankID eller på papper ändras styrelsen och revisorn enligt besluten, och protokollet kan sedan inte ändras.",
     "new_meeting": "Nytt möte",
     "load_failed": "Kunde inte läsa mötena",
@@ -18708,6 +18705,7 @@
   },
   "bolaget_aktiebok": {
     "title": "Ägare och aktiebok",
+    "subtitle": "Vem som äger aktierna, och sedan när",
     "help": "Aktieboken (5 kap. aktiebolagslagen) visar vem som äger varje aktie, med datum för varje ändring. Varje händelse förs in med nästa nummer och kan aldrig ändras, bara rättas med en ny anteckning. Skriv ut aktieboken per ett datum till bolagsstämman, ett utdrag per ägare eller ett aktiebrev.",
     "as_of": "Per datum",
     "export": "Exportera",
@@ -18877,6 +18875,7 @@
   },
   "bolaget_roles": {
     "title": "Styrelse och firmateckning",
+    "subtitle": "Styrelse, VD, firmatecknare och revisor",
     "help": "Vem som sitter i styrelsen, är verkställande direktör, tecknar firman eller är revisor, och sedan när (8 kap. aktiebolagslagen). En roll avslutas med ett datum och finns kvar i historiken. Här finns också bolagets verkliga huvudmän, föreslagna från aktieboken, med den dokumentation lagen kräver.",
     "as_of": "Per datum",
     "add_role": "Ny roll",
@@ -18952,8 +18951,44 @@
     "roster_added": "{count, plural, one {En undertecknare hämtad} other {# undertecknare hämtade}} från Styrelse och firmateckning",
     "roster_failed": "Kunde inte hämta undertecknare från styrelsen"
   },
+  "bolaget_hub": {
+    "title": "Bolaget",
+    "subtitle": "Bolagets register i korthet",
+    "help": "Översikten visar det viktigaste ur bolagets register: ägarna och aktieboken, styrelsen och firmateckningen, nästa möte, kommande betalningar och avtalen. Varje rad leder till sin flik, där registret förs.",
+    "tabs_label": "Bolagets register",
+    "tab": {
+      "overview": "Översikt",
+      "owners": "Ägare",
+      "board": "Styrelse",
+      "meetings": "Möten",
+      "capital": "Kapital",
+      "owner_tax": "Ägarskatt",
+      "agreements": "Avtal"
+    },
+    "row": {
+      "owners": "Ägare",
+      "board": "Styrelse",
+      "next_meeting": "Nästa möte",
+      "payments": "Kommande betalningar",
+      "agreements": "Avtal"
+    },
+    "owners_summary": "{count, plural, one {# ägare} other {# ägare}}, {shares, number} aktier",
+    "owners_all_allocated": "alla aktier fördelade",
+    "owners_part_allocated": "{register, number} av {settings, number} aktier i aktieboken",
+    "owners_empty": "Inga ägare i aktieboken än",
+    "board_summary": "{count, plural, one {# ledamot} other {# ledamöter}}",
+    "board_empty": "Ingen styrelse registrerad",
+    "signatory": "firmateckning: {rule}",
+    "meeting_none": "Inget planerat möte",
+    "payments_none": "Inga betalningar de närmaste 90 dagarna",
+    "payments_missed": "{count, plural, one {# betalning uteblev} other {# betalningar uteblev}}",
+    "more": "+{count} till",
+    "agreements_summary": "{count, plural, one {# aktivt avtal} other {# aktiva avtal}}",
+    "load_failed": "En del av översikten kunde inte läsas"
+  },
   "bolaget_commitments": {
     "title": "Avtal och åtaganden",
+    "subtitle": "Avtal, betalningar och säkerheter",
     "help": "Det företaget har skrivit under och lovat: avtal med betalningar och datum, ställda säkerheter och eventualförpliktelser, och koncernen. Kommande betalningar jämförs med banken varje dag och uppsägnings- och slutdatum hamnar i Viktiga datum. Inget bokförs härifrån. Säkerheterna och moderföretaget skriver noterna i årsredovisningen; en text du skriver där går före.",
     "load_failed": "Kunde inte hämta avtal och åtaganden",
     "save_failed": "Kunde inte spara",
@@ -18994,7 +19029,8 @@
     "agreements_empty_description": "Lägg in hyresavtal, leasing, lån, abonnemang, försäkringar, tillstånd, domäner och andra avtal så att betalningar och uppsägningsdatum inte glöms bort.",
     "agreements_ended_empty": "Inga avslutade avtal",
     "origin_derived": "Från arkivet",
-    "amount_per": "{amount} per {period}",
+    "amount_per_period": "{amount}/{period}",
+    "upcoming_more": "+{count} till",
     "agreement_add": "Nytt avtal",
     "agreement_edit": "Ändra avtal",
     "agreement_end": "Avsluta avtal",
@@ -19027,11 +19063,10 @@
       "yearly": "Varje år",
       "one_time": "En gång"
     },
-    "period_per": {
-      "monthly": "månad",
+    "period_short": {
+      "monthly": "mån",
       "quarterly": "kvartal",
-      "yearly": "år",
-      "one_time": "gång"
+      "yearly": "år"
     },
     "kind": {
       "rental": "Hyresavtal",

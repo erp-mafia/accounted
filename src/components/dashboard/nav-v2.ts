@@ -3,8 +3,8 @@ import {
   ArrowsRightLeftIcon,
   BanknotesIcon,
   BookOpenIcon,
-  BriefcaseIcon,
   BuildingLibraryIcon,
+  BuildingOfficeIcon,
   ChartBarIcon,
   CheckCircleIcon,
   ClipboardDocumentListIcon,
@@ -13,7 +13,6 @@ import {
   InboxIcon,
   PercentBadgeIcon,
   SparklesIcon,
-  UsersIcon,
   WalletIcon,
   type Icon,
 } from '@/components/icons'
@@ -52,8 +51,11 @@ export interface NavGateFlags {
   requiresArkiv?: boolean
   /** Signeringar: shown only where BankID document signing is switched on (lib/navigation/nav-rollouts.ts). */
   requiresSigning?: boolean
-  /** Avtal och åtaganden: shown only for companies in the Bolaget rollout (BOLAGET_COMPANY_IDS, lib/env/commitments-switch.ts). */
-  requiresCommitments?: boolean
+  /**
+   * The one Bolaget row: shown where Avtal och åtaganden is open, or the
+   * registers are (the rollout and a form that keeps an aktiebok).
+   */
+  requiresBolagetHub?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
@@ -62,8 +64,6 @@ export interface NavGateFlags {
   hiddenWithInkorgV2?: boolean
   /** The Autogiro page (/invoices/autogiro): shown only for companies in the AUTOGIRO_COMPANY_IDS rollout (lib/invoices/autogiro/flag.ts). */
   requiresAutogiro?: boolean
-  /** The Bolaget registers (aktiebok, styrelse): shown only for companies in the BOLAGET_COMPANY_IDS rollout (lib/env/bolaget-switch.ts). */
-  requiresBolaget?: boolean
   requiredCapability?: CapabilityKey
   /** Show only for these legal forms (one or several). */
   entityOnly?: EntityType | readonly EntityType[]
@@ -262,32 +262,16 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     ],
   },
   {
-    // Bolaget, the legal entity: the aktiebok and the board over time
-    // (ABL 5, 6 and 8 kap.). An aktiebolag's, per company while it rolls out.
-    href: '/bolaget/aktiebok',
+    // Bolaget, one row (founder decision 2026-10-30): the registers of the
+    // company as a legal entity (aktiebok, board, meetings, capital, owner
+    // tax; ABL 5, 6 and 8 kap.) and Avtal och åtaganden live behind the tab
+    // bar of the /bolaget pages, not as sub-items here. Shown where either
+    // half is open: per company while it rolls out (nav-gates.ts).
+    href: '/bolaget',
     module: 'corporate',
-    labelKey: 'bolaget_registers',
-    icon: UsersIcon,
-    entityOnly: ['aktiebolag'],
-    requiresBolaget: true,
-    sub: [
-      { href: '/bolaget/aktiebok', module: 'corporate', labelKey: 'bolaget_aktiebok', entityOnly: ['aktiebolag'], requiresBolaget: true },
-      { href: '/bolaget/styrelse', module: 'corporate', labelKey: 'bolaget_styrelse', entityOnly: ['aktiebolag'], requiresBolaget: true },
-      { href: '/bolaget/moten', module: 'corporate', labelKey: 'bolaget_meetings', entityOnly: ['aktiebolag'], requiresBolaget: true },
-      { href: '/bolaget/kapital', module: 'corporate', labelKey: 'bolaget_capital', entityOnly: ['aktiebolag'], requiresBolaget: true },
-      { href: '/bolaget/agarskatt', module: 'corporate', labelKey: 'bolaget_owner_tax', entityOnly: ['aktiebolag'], requiresBolaget: true },
-    ],
-  },
-  {
-    // Avtal och åtaganden (Bolaget): agreements with their payments and
-    // dates, ställda säkerheter and eventualförpliktelser, and the group
-    // structure the årsredovisning notes are written from. Per company
-    // while it rolls out.
-    href: '/commitments',
-    module: 'year-end',
-    labelKey: 'commitments',
-    icon: BriefcaseIcon,
-    requiresCommitments: true,
+    labelKey: 'bolaget',
+    icon: BuildingOfficeIcon,
+    requiresBolagetHub: true,
   },
 ]
 

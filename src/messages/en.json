@@ -147,13 +147,7 @@
     "v2_bank_accounts": "Bank accounts",
     "arkiv_signings": "Signings",
     "budget": "Budget",
-    "bolaget_registers": "Owners and board",
-    "bolaget_aktiebok": "Owners and share register",
-    "bolaget_styrelse": "Board and signatories",
-    "bolaget_capital": "Capital and dividends",
-    "bolaget_owner_tax": "Owner tax and related parties",
-    "bolaget_meetings": "Meetings and minutes",
-    "commitments": "Agreements and commitments"
+    "bolaget": "Company"
   },
   "trial_expired_dialog": {
     "title": "Would you like to keep using Accounted with every connection and benefit?",
@@ -18238,6 +18232,7 @@
   },
   "bolaget_owner_tax": {
     "title": "Owner tax and related parties",
+    "subtitle": "K10, loans with owners and related parties, KU20",
     "help": "The K10 underlag per owner and income year under the 3:12 rules from 2026, loans between the company and its owners, board, CEO and related persons checked against the loan prohibition in chapter 21 of the Companies Act, the special list, the note on loans to the board and CEO, and the KU20 statement for interest paid to owners. Nothing here is booked.",
     "load_failed": "Could not load owner tax and related parties",
     "save_failed": "Could not save",
@@ -18363,6 +18358,7 @@
   },
   "bolaget_capital": {
     "title": "Capital and dividends",
+    "subtitle": "Dividends, share issues and shareholder contributions",
     "help": "Dividends from the general meeting's decision to the payout, split per holder from the share register, the KU31 statement per income year, new issues, bonus issues and reductions of share capital, and shareholder contributions. Every booking is previewed and posted as a voucher.",
     "load_failed": "Could not load capital and dividends",
     "new_dividend": "New dividend",
@@ -18522,6 +18518,7 @@
   },
   "bolaget_meetings": {
     "title": "Meetings and minutes",
+    "subtitle": "General meetings, board meetings and minutes",
     "help": "General meetings, board meetings and decisions per capsulam with agenda, decisions, voting list and minutes (Swedish Companies Act, chapters 7 and 8). An annual general meeting is filled in from the annual report and the board. Marking a meeting as held numbers board minutes and records the meeting date on the annual report. When the minutes are signed with BankID or on paper, the board and auditor change as decided, and the minutes cannot be changed after that.",
     "new_meeting": "New meeting",
     "load_failed": "Could not read the meetings",
@@ -18708,6 +18705,7 @@
   },
   "bolaget_aktiebok": {
     "title": "Owners and share register",
+    "subtitle": "Who owns the shares, and since when",
     "help": "The share register (aktiebok, Swedish Companies Act chapter 5) shows who owns each share, with the date of every change. Each event is entered with the next number and can never be changed, only corrected by a new entry. Print the register as of a date for the general meeting, an extract per owner or a share certificate.",
     "as_of": "As of",
     "export": "Export",
@@ -18877,6 +18875,7 @@
   },
   "bolaget_roles": {
     "title": "Board and signatories",
+    "subtitle": "Board, CEO, signatories and auditor",
     "help": "Who sits on the board, is CEO, signs for the company or audits it, and since when (Swedish Companies Act chapter 8). A role ends with a date and stays in the history. The company's beneficial owners are here too, proposed from the share register, with the record the law requires.",
     "as_of": "As of",
     "add_role": "New role",
@@ -18952,8 +18951,44 @@
     "roster_added": "{count, plural, one {One signer fetched} other {# signers fetched}} from Board and signatories",
     "roster_failed": "Could not fetch signers from the board"
   },
+  "bolaget_hub": {
+    "title": "Company",
+    "subtitle": "The company's registers at a glance",
+    "help": "The overview shows the essentials from the company's registers: the owners and the share register, the board and the signatories, the next meeting, upcoming payments and the agreements. Each line leads to its tab, where the register is kept.",
+    "tabs_label": "Company registers",
+    "tab": {
+      "overview": "Overview",
+      "owners": "Owners",
+      "board": "Board",
+      "meetings": "Meetings",
+      "capital": "Capital",
+      "owner_tax": "Owner tax",
+      "agreements": "Agreements"
+    },
+    "row": {
+      "owners": "Owners",
+      "board": "Board",
+      "next_meeting": "Next meeting",
+      "payments": "Upcoming payments",
+      "agreements": "Agreements"
+    },
+    "owners_summary": "{count, plural, one {# owner} other {# owners}}, {shares, number} shares",
+    "owners_all_allocated": "all shares allocated",
+    "owners_part_allocated": "{register, number} of {settings, number} shares in the register",
+    "owners_empty": "No owners in the share register yet",
+    "board_summary": "{count, plural, one {# member} other {# members}}",
+    "board_empty": "No board registered",
+    "signatory": "signatories: {rule}",
+    "meeting_none": "No meeting planned",
+    "payments_none": "No payments in the next 90 days",
+    "payments_missed": "{count, plural, one {# payment missed} other {# payments missed}}",
+    "more": "+{count} more",
+    "agreements_summary": "{count, plural, one {# active agreement} other {# active agreements}}",
+    "load_failed": "Part of the overview could not be loaded"
+  },
   "bolaget_commitments": {
     "title": "Agreements and commitments",
+    "subtitle": "Agreements, payments and securities",
     "help": "What the company has signed and promised: agreements with their payments and dates, pledged securities and contingent liabilities, and the group. Upcoming payments are compared with the bank every day and notice and end dates go to Important dates. Nothing is booked from here. The securities and the parent company write the notes in the annual report; a text you write there takes precedence.",
     "load_failed": "Could not load agreements and commitments",
     "save_failed": "Could not save",
@@ -18994,7 +19029,8 @@
     "agreements_empty_description": "Add rental agreements, leases, loans, subscriptions, insurance, permits, domains and other agreements so payments and notice dates are not forgotten.",
     "agreements_ended_empty": "No ended agreements",
     "origin_derived": "From the archive",
-    "amount_per": "{amount} per {period}",
+    "amount_per_period": "{amount}/{period}",
+    "upcoming_more": "+{count} more",
     "agreement_add": "New agreement",
     "agreement_edit": "Edit agreement",
     "agreement_end": "End agreement",
@@ -19027,11 +19063,10 @@
       "yearly": "Every year",
       "one_time": "Once"
     },
-    "period_per": {
-      "monthly": "month",
-      "quarterly": "quarter",
-      "yearly": "year",
-      "one_time": "time"
+    "period_short": {
+      "monthly": "mo",
+      "quarterly": "qtr",
+      "yearly": "yr"
     },
     "kind": {
       "rental": "Rental agreements",

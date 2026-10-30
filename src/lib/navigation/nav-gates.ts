@@ -2,6 +2,7 @@ import type { NavGateFlags, NavV2Item } from '@/components/dashboard/nav-v2'
 import type { CapabilitySurface } from '@/lib/modules/capabilities'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { keepsShareRegister } from '@/lib/company/entity-type'
 import type { EntityType } from '@/types'
 
 /**
@@ -96,8 +97,12 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
   // Signeringar follows the signing switch, as every other signing affordance does.
   if (item.requiresSigning && !ctx.signingEnabled) return false
-  // Avtal och åtaganden rolls out per company with the rest of Bolaget.
-  if (item.requiresCommitments && !ctx.commitmentsEnabled) return false
+  // Bolaget is one row over two halves that roll out per company
+  // (BOLAGET_COMPANY_IDS): Avtal och åtaganden for every form, the
+  // registers for a form that keeps an aktiebok. The row shows where either
+  // half is open; outside both the /bolaget pages 404. The same form rule
+  // as the pages' gate (lib/bolaget/gate.ts).
+  if (item.requiresBolagetHub && !ctx.commitmentsEnabled && !(ctx.bolagetEnabled && keepsShareRegister(ctx.entityType))) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
   // The new Inkorg page rolls out per company, and Underlag under Inköp
@@ -107,8 +112,6 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // Autogiro rolls out per company; outside it the page shows only what the
   // company already holds, so the menu does not advertise it.
   if (item.requiresAutogiro && !ctx.autogiroEnabled) return false
-  // The Bolaget registers roll out per company (BOLAGET_COMPANY_IDS); outside it the pages 404.
-  if (item.requiresBolaget && !ctx.bolagetEnabled) return false
   // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
   // the active company holds the capability. The page + API gates enforce
   // the paywall; this keeps the sidebar from advertising a dead workspace.
