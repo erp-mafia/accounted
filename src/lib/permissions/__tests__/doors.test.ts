@@ -205,3 +205,70 @@ describe('scope defaults', () => {
     expect(none).toEqual(['pending_operations:approve'])
   })
 })
+
+describe('the Bolaget doors', () => {
+  const doorOf = (id: string) => {
+    const op = operationsById.get(id)
+    expect(op, id).toBeDefined()
+    return operationDoor(op!)!
+  }
+
+  it('keeps the ownership and signatory registers for an owner or admin on every door', () => {
+    for (const key of [
+      'POST /api/bolaget/share-register/events',
+      'POST /api/bolaget/share-classes',
+      'PATCH /api/bolaget/share-classes/:id',
+      'POST /api/bolaget/roles',
+      'POST /api/bolaget/roles/:id/end',
+      'POST /api/bolaget/signatory-rules',
+      'POST /api/bolaget/beneficial-owners/assessments',
+      'PATCH /api/bolaget/people/:partyId',
+      'PATCH /api/bolaget/settings',
+    ]) {
+      expect(sessionRouteDoor(key), key).toMatchObject({ permission: 'settings', effect: 'record' })
+    }
+    for (const id of [
+      'share-register.events.create',
+      'share-classes.create',
+      'share-classes.update',
+      'company-roles.create',
+      'company-roles.end',
+      'signatory-rules.set',
+      'beneficial-owners.confirm',
+    ]) {
+      expect(doorOf(id), id).toMatchObject({ permission: 'settings', effect: 'record' })
+    }
+  })
+
+  it('lets any writer keep the other Bolaget records on every door, and posts only through the ledger doors', () => {
+    for (const id of [
+      'corporate-meetings.create',
+      'corporate-meetings.update',
+      'corporate-meetings.decisions.record',
+      'corporate-meetings.hold',
+      'dividends.create',
+      'capital-changes.create',
+      'k10-inputs.set',
+      'owner-loans.create',
+      'owner-loans.update',
+      'owner-loans.set-interest',
+      'agreements.create',
+      'agreements.update',
+      'agreements.end',
+      'securities.create',
+      'securities.update',
+      'group-links.create',
+      'group-links.update',
+    ]) {
+      expect(doorOf(id), id).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
+    }
+    for (const id of ['dividends.book', 'dividends.pay', 'shareholder-contributions.create', 'capital-changes.book']) {
+      expect(doorOf(id), id).toMatchObject({ permission: 'bookkeeping.write', effect: 'ledger' })
+    }
+    expect(sessionRouteDoor('POST /api/bolaget/meetings')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
+    expect(sessionRouteDoor('POST /api/bolaget/capital/dividends')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
+    expect(sessionRouteDoor('POST /api/bolaget/capital/dividends/:id/book')).toMatchObject({ permission: 'bookkeeping.write', effect: 'ledger' })
+    expect(sessionRouteDoor('PUT /api/bolaget/owner-tax/k10/:year/owners/:partyId')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
+    expect(sessionRouteDoor('POST /api/commitments/agreements')).toMatchObject({ permission: 'bookkeeping.write', effect: 'record' })
+  })
+})

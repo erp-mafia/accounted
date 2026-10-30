@@ -1455,16 +1455,17 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Ägare och aktiebok (Bolaget, generated only while BOLAGET_COMPANY_IDS
   // names a company): the register is kept for an aktiebolag, its dates are
   // real days and a new holder or role is named. The beneficial-owner
-  // assessment reads the owners as register parties (kind person).
-  gnubok_register_share_event: { args: { to_name: 'Bo Ek', share_count: 100 }, rows: { companies: { entity_type: 'aktiebolag' } } },
-  gnubok_create_share_class: { args: { code: 'B' }, rows: { companies: { entity_type: 'aktiebolag' }, share_classes: { code: 'A', votes_per_share: 1 } } },
-  gnubok_update_share_class: { rows: { companies: { entity_type: 'aktiebolag' } } },
-  gnubok_add_company_role: { args: { name: 'Bo Ek', valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' } } },
-  gnubok_end_company_role: { args: { valid_to: '2026-06-30' }, rows: { companies: { entity_type: 'aktiebolag' }, company_roles: { valid_from: '2026-01-15', valid_to: null } } },
-  gnubok_set_signatory_rule: { args: { valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' }, company_signatory_rules: { valid_from: '2025-01-01', valid_to: null } } },
+  // assessment reads the owners as register parties (kind person). The
+  // caller is an owner: these registers refuse a member (requireCompanyAdmin).
+  gnubok_register_share_event: { args: { to_name: 'Bo Ek', share_count: 100 }, rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' } } },
+  gnubok_create_share_class: { args: { code: 'B' }, rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' }, share_classes: { code: 'A', votes_per_share: 1 } } },
+  gnubok_update_share_class: { rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' } } },
+  gnubok_add_company_role: { args: { name: 'Bo Ek', valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' } } },
+  gnubok_end_company_role: { args: { valid_to: '2026-06-30' }, rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' }, company_roles: { valid_from: '2026-01-15', valid_to: null } } },
+  gnubok_set_signatory_rule: { args: { valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' }, company_signatory_rules: { valid_from: '2025-01-01', valid_to: null } } },
   gnubok_confirm_beneficial_owners: {
     args: { assessed_on: '2026-01-15' },
-    rows: { companies: { entity_type: 'aktiebolag' }, parties: { kind: 'person', display_name: 'Bo Ek', org_number: null } },
+    rows: { companies: { entity_type: 'aktiebolag' }, company_members: { role: 'owner' }, parties: { kind: 'person', display_name: 'Bo Ek', org_number: null } },
   },
   // One paid, unbooked SEK order at 25 % on the day and an open, unlocked
   // 2026: the preview derives and sums the lines and never reaches the engine.

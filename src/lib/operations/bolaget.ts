@@ -7,7 +7,8 @@
  * Reads answer names and masked identities only. A personnummer never
  * travels these doors: the inputs name a person by party_id or by name, and
  * the person's identity is completed in Accounted (Ägare och aktiebok).
- * Every write stages over MCP and a person approves it.
+ * Every write stages over MCP and a person approves it. Every write is an
+ * owner's or admin's (FORBIDDEN for a member), staged or approved.
  *
  * Every door is dark outside BOLAGET_COMPANY_IDS and for a legal form that
  * keeps no aktiebok (BOLAGET_DISABLED, BOLAGET_NOT_FOR_LEGAL_FORM).
@@ -20,6 +21,7 @@ import { addCompanyRole, endCompanyRole, loadRoles, setSignatoryRule } from '@/l
 import { createShareClass, loadShareRegisterData, registerShareEvent, updateShareClass } from '@/lib/bolaget/share-register'
 import { rolesView, shareEventsView, shareRegisterView } from '@/lib/bolaget/view'
 import { COMPANY_ROLE_KINDS, SHARE_EVENT_KINDS, TRANSFER_REASONS, type ShareClass } from '@/lib/bolaget/types'
+import { requireCompanyAdmin } from './access'
 import { defineOperation, type OperationContext, type OperationOutcome } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -30,7 +32,24 @@ async function gated<T>(ctx: OperationContext, run: () => Promise<OperationOutco
   return run()
 }
 
+// The same sentence as the dashboard's owner/admin refusal (companyAdminRequiredResponse).
+const ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan göra det här.'
+
+/**
+ * The ownership and signatory registers are an owner's or admin's, as their
+ * dashboard routes are (requireAdmin). v1 and MCP run as the service role, so
+ * the role is checked here, on a dry run too: an MCP stage by a member is
+ * refused up front and an approval checks the approving user.
+ */
+async function adminGated<T>(ctx: OperationContext, run: () => Promise<OperationOutcome<T>>): Promise<OperationOutcome<T>> {
+  return gated(ctx, async () => {
+    const refused = await requireCompanyAdmin(ctx, ADMIN_MESSAGE)
+    return refused ?? run()
+  })
+}
+
 const GATE_CODES = ['BOLAGET_DISABLED', 'BOLAGET_NOT_FOR_LEGAL_FORM']
+const ADMIN_WRITE_CODES = [...GATE_CODES, 'FORBIDDEN']
 const AS_OF = saneIsoDateSchema.optional().describe('The day the answer is for (YYYY-MM-DD). Default today.')
 const PARTY_ID = z.string().uuid()
 const NAME = z.string().trim().min(1).max(200)
@@ -429,7 +448,7 @@ export const shareRegisterEventsCreate = defineOperation({
     to_party_id: z.string().nullable(),
   }),
   errorCodes: [
-    ...GATE_CODES,
+    ...ADMIN_WRITE_CODES,
     'SHARE_REGISTER_NOT_HELD',
     'SHARE_REGISTER_RANGE_TAKEN',
     'SHARE_REGISTER_RANGE_REQUIRED',
@@ -469,7 +488,7 @@ export const shareRegisterEventsCreate = defineOperation({
     },
   },
   run: (ctx, input, { dryRun }) =>
-    gated(ctx, () => registerShareEvent(ctx, { ...input, created_via: ctx.pendingOperationId ? 'mcp' : 'api' }, { dryRun })),
+    adminGated(ctx, () => registerShareEvent(ctx, { ...input, created_via: ctx.pendingOperationId ? 'mcp' : 'api' }, { dryRun })),
 })
 
 const SHARE_EVENT_LABEL_FOR_TITLE: Record<string, string> = {
@@ -521,7 +540,7 @@ export const shareClassesCreate = defineOperation({
     })
     .strict(),
   output: ShareClassOut,
-  errorCodes: [...GATE_CODES, 'SHARE_CLASS_DUPLICATE'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'SHARE_CLASS_DUPLICATE'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/share-classes' },
   mcp: {
     name: 'gnubok_create_share_class',
@@ -531,7 +550,7 @@ export const shareClassesCreate = defineOperation({
     keywords: ['aktieslag', 'a-aktier', 'b-aktier', 'röstvärde', 'förbehåll', 'hembudsförbehåll', 'förköpsförbehåll'],
     stage: { pendingType: 'create_share_class', title: (input) => `Nytt aktieslag ${typeof input.code === 'string' ? input.code : ''}`.trim() },
   },
-  run: (ctx, input, { dryRun }) => gated(ctx, async () => classOutcome(await createShareClass(ctx, input, { dryRun }))),
+  run: (ctx, input, { dryRun }) => adminGated(ctx, async () => classOutcome(await createShareClass(ctx, input, { dryRun }))),
 })
 
 /** The share-class change, exported for the dashboard route (which takes the id from its path). */
@@ -560,7 +579,7 @@ export const shareClassesUpdate = defineOperation({
   },
   input: ShareClassUpdateIn,
   output: ShareClassOut,
-  errorCodes: [...GATE_CODES, 'SHARE_CLASS_NOT_FOUND'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'SHARE_CLASS_NOT_FOUND'],
   http: { method: 'PATCH', path: '/api/v1/companies/:companyId/share-classes/:id', pathParams: { id: 'share_class_id' } },
   mcp: {
     name: 'gnubok_update_share_class',
@@ -571,7 +590,7 @@ export const shareClassesUpdate = defineOperation({
     stage: { pendingType: 'update_share_class', title: () => 'Ändra aktieslag' },
   },
   run: (ctx, input, { dryRun }) =>
-    gated(ctx, () => {
+    adminGated(ctx, () => {
       const { share_class_id, ...patch } = input
       return updateShareClass(ctx, share_class_id, patch, { dryRun }).then(classOutcome)
     }),
@@ -605,7 +624,7 @@ export const companyRolesCreate = defineOperation({
     })
     .strict(),
   output: z.object({ company_role_id: z.string(), party_id: z.string(), role: z.string(), valid_from: z.string().nullable() }),
-  errorCodes: [...GATE_CODES, 'COMPANY_ROLE_DUPLICATE', 'BOLAGET_PARTY_NOT_FOUND', 'BOLAGET_PARTY_INVALID', 'BOLAGET_PERSONNUMMER_IN_APP_ONLY'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'COMPANY_ROLE_DUPLICATE', 'BOLAGET_PARTY_NOT_FOUND', 'BOLAGET_PARTY_INVALID', 'BOLAGET_PERSONNUMMER_IN_APP_ONLY'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/company-roles' },
   mcp: {
     name: 'gnubok_add_company_role',
@@ -616,7 +635,7 @@ export const companyRolesCreate = defineOperation({
     stage: { pendingType: 'add_company_role', title: (input) => `Ny roll: ${typeof input.role === 'string' ? input.role : ''}`.trim() },
   },
   run: (ctx, input, { dryRun }) =>
-    gated(ctx, () =>
+    adminGated(ctx, () =>
       addCompanyRole(
         ctx,
         {
@@ -658,7 +677,7 @@ export const companyRolesEnd = defineOperation({
   },
   input: CompanyRoleEndIn,
   output: z.object({ company_role_id: z.string(), valid_to: z.string() }),
-  errorCodes: [...GATE_CODES, 'COMPANY_ROLE_NOT_FOUND', 'COMPANY_ROLE_ALREADY_ENDED', 'BOLAGET_DATES_INVALID'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'COMPANY_ROLE_NOT_FOUND', 'COMPANY_ROLE_ALREADY_ENDED', 'BOLAGET_DATES_INVALID'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/company-roles/:id/end', pathParams: { id: 'company_role_id' } },
   mcp: {
     name: 'gnubok_end_company_role',
@@ -669,7 +688,7 @@ export const companyRolesEnd = defineOperation({
     stage: { pendingType: 'end_company_role', title: () => 'Avsluta roll' },
   },
   run: (ctx, input, { dryRun }) =>
-    gated(ctx, () => {
+    adminGated(ctx, () => {
       const { end_reason, ...end } = input
       return endCompanyRole(ctx, { ...end, reason: end_reason }, { dryRun })
     }),
@@ -698,7 +717,7 @@ export const signatoryRulesSet = defineOperation({
     })
     .strict(),
   output: z.object({ signatory_rule_id: z.string(), rule_text: z.string(), valid_from: z.string(), ended_rule_ids: z.array(z.string()) }),
-  errorCodes: [...GATE_CODES, 'BOLAGET_DATES_INVALID'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'BOLAGET_DATES_INVALID'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/signatory-rules' },
   mcp: {
     name: 'gnubok_set_signatory_rule',
@@ -709,7 +728,7 @@ export const signatoryRulesSet = defineOperation({
     stage: { pendingType: 'set_signatory_rule', title: () => 'Ny firmateckning' },
   },
   run: (ctx, input, { dryRun }) =>
-    gated(ctx, () => setSignatoryRule(ctx, { ...input, source: input.decision_id ? 'decision' : 'person' }, { dryRun })),
+    adminGated(ctx, () => setSignatoryRule(ctx, { ...input, source: input.decision_id ? 'decision' : 'person' }, { dryRun })),
 })
 
 export const beneficialOwnersConfirm = defineOperation({
@@ -760,7 +779,7 @@ export const beneficialOwnersConfirm = defineOperation({
     deadline_source_key: z.string().nullable(),
     filing_url: z.string(),
   }),
-  errorCodes: [...GATE_CODES, 'BENEFICIAL_OWNER_INVALID', 'BOLAGET_PARTY_NOT_FOUND', 'BOLAGET_DATES_INVALID'],
+  errorCodes: [...ADMIN_WRITE_CODES, 'BENEFICIAL_OWNER_INVALID', 'BOLAGET_PARTY_NOT_FOUND', 'BOLAGET_DATES_INVALID'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/beneficial-owners/assessments' },
   mcp: {
     name: 'gnubok_confirm_beneficial_owners',
@@ -770,7 +789,7 @@ export const beneficialOwnersConfirm = defineOperation({
     keywords: ['verklig huvudman', 'bekräfta verkliga huvudmän', 'lrvh', 'anmäla verklig huvudman'],
     stage: { pendingType: 'confirm_beneficial_owners', title: () => 'Verkliga huvudmän: utredning' },
   },
-  run: (ctx, input, { dryRun }) => gated(ctx, () => confirmBeneficialOwners(ctx, input, { dryRun })),
+  run: (ctx, input, { dryRun }) => adminGated(ctx, () => confirmBeneficialOwners(ctx, input, { dryRun })),
 })
 
 export const BOLAGET_OPERATIONS = [

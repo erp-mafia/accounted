@@ -296,6 +296,28 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'supplier-payees.confirm': PAYMENTS_RECORD,
   // The attest policy is an owner's or admin's (requireAdmin on its route).
   'supplier-invoices.attest-policy.update': SETTINGS,
+  // Bolaget records any writer keeps (companies:write would make them
+  // owner/admin): meetings and decisions, capital decisions, the owners'
+  // K10 inputs, owner loans, agreements, securities and group links. Any
+  // writer, decided 2026-10-29. The ownership and signatory registers stay
+  // on the scope default (SETTINGS) and refuse a member in run().
+  'corporate-meetings.create': BOOK_RECORD,
+  'corporate-meetings.update': BOOK_RECORD,
+  'corporate-meetings.decisions.record': BOOK_RECORD,
+  'corporate-meetings.hold': BOOK_RECORD,
+  'dividends.create': BOOK_RECORD,
+  'capital-changes.create': BOOK_RECORD,
+  'k10-inputs.set': BOOK_RECORD,
+  'owner-loans.create': BOOK_RECORD,
+  'owner-loans.update': BOOK_RECORD,
+  'owner-loans.set-interest': BOOK_RECORD,
+  'agreements.create': BOOK_RECORD,
+  'agreements.update': BOOK_RECORD,
+  'agreements.end': BOOK_RECORD,
+  'securities.create': BOOK_RECORD,
+  'securities.update': BOOK_RECORD,
+  'group-links.create': BOOK_RECORD,
+  'group-links.update': BOOK_RECORD,
   // Bank rows in and out of the feed, and links between documents: no books change.
   'bank-feed.start': BOOK_HOUSE,
   'bank-feed.select': BOOK_HOUSE,
@@ -668,17 +690,21 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/webshop-orders/:id/create-invoice': INVOICING,
     'PUT /api/webshop-orders/settings': BOOK_RECORD,
 
-    // ── Bolaget: the company's statutory registers (requireWrite routes) ──
-    '/api/bolaget/share-register': BOOK_RECORD,
-    '/api/bolaget/share-classes': BOOK_RECORD,
-    '/api/bolaget/roles': BOOK_RECORD,
+    // ── Bolaget: the company's statutory registers ─────────────────────
+    // Ownership and signatories: the aktiebok, the share classes, the roles,
+    // the firmateckning, the verkliga huvudmän, the register's people
+    // (identity and address of holders and role persons) and the register
+    // settings (avstämningsbolag). Owner/admin (requireAdmin).
+    '/api/bolaget/share-register': SETTINGS,
+    '/api/bolaget/share-classes': SETTINGS,
+    '/api/bolaget/roles': SETTINGS,
+    '/api/bolaget/signatory-rules': SETTINGS,
+    '/api/bolaget/beneficial-owners': SETTINGS,
+    '/api/bolaget/people': SETTINGS,
+    '/api/bolaget/settings': SETTINGS,
     // Meetings and minutes: an adopted election changes the roles when the
-    // minutes are signed; nothing posts to the ledger.
+    // minutes are signed; nothing posts to the ledger. Any writer.
     '/api/bolaget/meetings': BOOK_RECORD,
-    '/api/bolaget/signatory-rules': BOOK_RECORD,
-    '/api/bolaget/beneficial-owners': BOOK_RECORD,
-    '/api/bolaget/people': BOOK_RECORD,
-    '/api/bolaget/settings': BOOK_RECORD,
     // Capital events: recording a decision, cancelling it, the KU31 answer
     // and linking a payout already booked write the register; booking a
     // decision, paying a dividend and a shareholder contribution post
