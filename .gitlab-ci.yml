@@ -20,6 +20,8 @@ workflow:
     # The report benchmark (perf-reports below): its schedule, and a run by
     # hand from Run pipeline in the web UI. No other job runs in either.
     - if: $CI_PIPELINE_SOURCE == "schedule" && $PERF_REPORTS == "1"
+    # The simulated company (sim-company below): its own schedule.
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /^Simulated company/
     - if: $CI_PIPELINE_SOURCE == "web"
     # A branch with an open merge request already gets the MR pipeline.
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
@@ -281,12 +283,12 @@ pg-upgrade:
       done < /tmp/new-migrations.txt
       psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/pg/upgrade/assert.sql
 
-# MCP tools driven through a real supabase-js client against a real PostgREST.
-# Services share one network per job (FF_NETWORK_PER_BUILD) so PostgREST can
-# reach Postgres by its alias.
-tool-pg:
+# Postgres and PostgREST with every migration replayed, for the jobs that drive
+# the product through a real supabase-js client. Services share one network per
+# job (FF_NETWORK_PER_BUILD) so PostgREST can reach Postgres by its alias.
+.tool-pg-stack:
   stage: pg
-  extends: [.npm, .mr-only]
+  extends: .npm
   needs: []
   variables:
     FF_NETWORK_PER_BUILD: "true"
@@ -308,7 +310,7 @@ tool-pg:
         PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
         PGRST_DB_MAX_ROWS: "100000"
         PGRST_SERVER_PORT: "3000"
-  script:
+  before_script:
     - npm ci --prefer-offline --no-audit --fund=false
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null
     - |
@@ -337,7 +339,37 @@ tool-pg:
         sleep 1
       done
       curl -sf -o /dev/null "$TOOL_PG_REST_URL/"
+
+# MCP tools driven through a real supabase-js client against a real PostgREST.
+tool-pg:
+  extends: [.tool-pg-stack, .mr-only]
+  script:
     - npm run test:tools
+
+# The simulated company (tests/sim): three years of a company built through the
+# MCP tools, then moms, AGI, INK2 and the årsredovisning judged against an
+# answer key worked out from the same events. Too long for every merge request,
+# so it has its own nightly schedule, told apart by its description because the
+# project allows no pipeline variables, a manual job in a pipeline started from
+# Run pipeline, and a run on any merge request that changes the company itself.
+sim-company:
+  extends: .tool-pg-stack
+  timeout: 60m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_PIPELINE_SCHEDULE_DESCRIPTION =~ /^Simulated company/
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - tests/sim/**/*
+        - scripts/sim/**/*
+  script:
+    - SIM_SCALE=full npm run sim:build
+    - npm run test:sim
+  artifacts:
+    when: always
+    paths: [.local/sim/]
+    expire_in: 14 days
 
 # The report benchmark (scripts/perf/README.md, "Report benchmark"): every
 # migration replayed into Postgres 17 with prod's shared_buffers and work_mem,
@@ -357,7 +389,7 @@ perf-reports:
   interruptible: true
   timeout: 30m
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $PERF_REPORTS == "1"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $PERF_REPORTS == "1" && $CI_PIPELINE_SCHEDULE_DESCRIPTION !~ /^Simulated company/
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
   services:

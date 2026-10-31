@@ -33,6 +33,7 @@ const unitProject = {
       '**/node_modules/**',
       '**/*.pg.test.ts',
       '**/*.tool.test.ts',
+      '**/*.sim.test.ts',
       '**/.claude/**',
       '**/.next/**',
     ],
@@ -78,14 +79,32 @@ const toolPgProject = {
   },
 }
 
+// Reports judged against the simulated company: reads a company `npm run
+// sim:build` put in the tool-pg stack, never writes. See tests/sim/.
+const simProject = {
+  resolve: { alias },
+  test: {
+    name: 'sim',
+    globals: true,
+    environment: 'node' as const,
+    include: ['**/*.sim.test.ts'],
+    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
+    setupFiles: ['tests/sim/setup.ts'],
+    fileParallelism: false,
+    testTimeout: 60000,
+  },
+}
+
 // Only register the pg-real project when DATABASE_URL is set. Local devs
 // running a bare `vitest run` would otherwise hit the schema sanity check
 // against a non-existent DB. `npm run test:pg` is the opt-in entry point, and
-// `npm run test:tools` is the equivalent for tool-pg.
+// `npm run test:tools` and `npm run test:sim` are the equivalents for tool-pg
+// and the simulated company.
 const projects = [
   unitProject,
   ...(process.env.DATABASE_URL ? [pgRealProject] : []),
   ...(process.env.TOOL_PG_REST_URL ? [toolPgProject] : []),
+  ...(process.env.SIM_TESTS ? [simProject] : []),
 ]
 
 export default defineConfig({

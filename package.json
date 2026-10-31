@@ -32,6 +32,8 @@
     "test:pg": "vitest run --project pg-real",
     "tools:pg:reset": "bash scripts/tool-pg/reset.sh",
     "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg",
+    "sim:build": "tsx --conditions react-server scripts/sim/build.ts",
+    "test:sim": "SIM_TESTS=1 vitest run --project sim",
     "local:up": "bash scripts/local/up.sh",
     "local:check": "tsx scripts/local/check.ts",
     "local:down": "tsx scripts/local/down.ts"
