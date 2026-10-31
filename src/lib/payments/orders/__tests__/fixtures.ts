@@ -247,3 +247,149 @@ export function arcimInvoice(overrides: Record<string, unknown> = {}): Record<st
     ...overrides,
   }
 }
+
+/**
+ * The shape of the case that made orders without an invoice settle by their
+ * debit (2026-10): a skattekonto payment BankID-signed in a signing the bank
+ * finalised, while its status API keeps answering RCVD, so the order stays
+ * awaiting_signature next to a 'signed' batch. The debit arrives through
+ * Enable Banking, already booked to the skattekonto, with Skatteverket's
+ * bankgiro hyphenated in the text and no end-to-end id. Ids and the amount
+ * are placeholders.
+ */
+export const RCVD_TAX = {
+  companyId: 'c0ffee00-0000-4000-8000-0000000000c1',
+  userId: 'c0ffee00-0000-4000-8000-0000000000a1',
+  cashAccountId: 'c0ffee00-0000-4000-8000-0000000000ca',
+  orderId: 'c0ffee00-0000-4000-8000-000000000001',
+  batchId: 'c0ffee00-0000-4000-8000-0000000000b1',
+  transactionId: 'c0ffee00-0000-4000-8000-0000000000d1',
+} as const
+
+/** The skattekonto order: signed in RCVD_TAX.batchId, the bank still at RCVD. */
+export function rcvdTaxOrder(overrides: Partial<PaymentOrderRow> = {}): PaymentOrderRow {
+  return order(RCVD_TAX.orderId, {
+    company_id: RCVD_TAX.companyId,
+    user_id: RCVD_TAX.userId,
+    purpose: 'skattekonto',
+    supplier_invoice_id: null,
+    batch_id: RCVD_TAX.batchId,
+    status: 'awaiting_signature',
+    amount: 12345,
+    requested_execution_date: '2026-10-27',
+    cash_account_id: RCVD_TAX.cashAccountId,
+    payee_type: 'bankgiro',
+    payee_bankgiro: '50501055',
+    payee_name: 'Skatteverket',
+    payee_source: 'skatteverket',
+    reference_type: 'ocr',
+    reference: '1655446688087',
+    provider: 'open_payments',
+    provider_payment_id: 'pay-tax-1',
+    provider_payment_product: 'swedish-giro',
+    provider_status: 'RCVD',
+    submitted_by: RCVD_TAX.userId,
+    submitted_at: '2026-10-26T17:05:00Z',
+    signed_at: null,
+    executed_at: null,
+    ...overrides,
+  })
+}
+
+/** The signing the order is in: BankID finalised. */
+export function rcvdTaxBatch(overrides: Partial<PaymentOrderBatchRow> = {}): PaymentOrderBatchRow {
+  return batch({
+    id: RCVD_TAX.batchId,
+    company_id: RCVD_TAX.companyId,
+    user_id: RCVD_TAX.userId,
+    status: 'signed',
+    provider_authorisation_id: 'auth-tax-1',
+    signing_started_at: '2026-10-26T17:06:00Z',
+    signed_at: '2026-10-26T17:09:00Z',
+    order_count: 1,
+    total_amount: 12345,
+    ...overrides,
+  })
+}
+
+/** Its debit, as Enable Banking delivered it and the bank rule booked it. */
+export function rcvdTaxDebit(overrides: Partial<Transaction> = {}): Transaction {
+  return makeTransaction({
+    id: RCVD_TAX.transactionId,
+    company_id: RCVD_TAX.companyId,
+    user_id: RCVD_TAX.userId,
+    date: '2026-10-27',
+    value_date: null,
+    amount: -12345,
+    currency: 'SEK',
+    description: '5050-1055 Betalning',
+    original_description: '5050-1055 Betalning',
+    reference: null,
+    counterparty_iban: null,
+    counterparty_account: null,
+    end_to_end_id: null,
+    cash_account_id: RCVD_TAX.cashAccountId,
+    import_source: 'enable_banking',
+    potential_supplier_invoice_id: null,
+    supplier_invoice_id: null,
+    journal_entry_id: 'je-skattekonto',
+    is_ignored: false,
+    merchant_name: null,
+    ...overrides,
+  })
+}
+
+/** One employee's net pay on a salary run, paid to the account on the employee card. */
+export function salaryOrder(id: string, overrides: Partial<PaymentOrderRow> = {}): PaymentOrderRow {
+  return order(id, {
+    company_id: RCVD_TAX.companyId,
+    user_id: RCVD_TAX.userId,
+    purpose: 'salary',
+    supplier_invoice_id: null,
+    salary_run_id: 'run-1',
+    employee_id: `emp-${id}`,
+    batch_id: 'batch-salary',
+    status: 'accepted',
+    amount: 23456.5,
+    requested_execution_date: '2026-10-28',
+    cash_account_id: RCVD_TAX.cashAccountId,
+    payee_type: 'bank_account',
+    payee_bankgiro: null,
+    payee_clearing: '8327',
+    payee_account: '9012345',
+    payee_name: 'Anna Exempel',
+    payee_source: 'employee',
+    reference_type: 'message',
+    reference: 'Lön 2026-10',
+    provider: 'open_payments',
+    provider_payment_id: `pay-${id}`,
+    provider_status: 'ACSP',
+    signed_at: '2026-10-27T09:00:00Z',
+    ...overrides,
+  })
+}
+
+/** A salary payment's debit: the run's message in the text, nothing about the employee. */
+export function salaryDebit(id: string, overrides: Partial<Transaction> = {}): Transaction {
+  return makeTransaction({
+    id,
+    company_id: RCVD_TAX.companyId,
+    user_id: RCVD_TAX.userId,
+    date: '2026-10-28',
+    value_date: '2026-10-28',
+    amount: -23456.5,
+    currency: 'SEK',
+    description: 'LÖN 2026-10',
+    original_description: 'LÖN 2026-10',
+    reference: null,
+    counterparty_iban: null,
+    counterparty_account: null,
+    end_to_end_id: null,
+    cash_account_id: RCVD_TAX.cashAccountId,
+    import_source: 'open_payments',
+    supplier_invoice_id: null,
+    journal_entry_id: null,
+    is_ignored: false,
+    ...overrides,
+  })
+}

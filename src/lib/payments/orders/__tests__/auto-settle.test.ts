@@ -267,7 +267,9 @@ describe('loadOpenPaymentOrders', () => {
 
     expect(orders.map((o) => o.id)).toEqual([ARCIM.orderId])
     expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['company_id', ARCIM.companyId])
-    expect(db.findCalls('payment_orders', 'in')).toContainEqual(['status', ['accepted', 'awaiting_second_signer', 'executed']])
+    // The settleable statuses and awaiting_signature, for an order without an
+    // invoice whose signing finished while the bank still answers RCVD (link-by-debit.test.ts).
+    expect(db.findCalls('payment_orders', 'in')).toContainEqual(['status', ['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']])
     expect(db.findCalls('payment_orders', 'is')).toContainEqual(['supplier_invoice_payment_id', null])
     expect(db.findCalls('payment_orders', 'not')).toContainEqual(['provider_payment_id', 'is', null])
     expect(db.findCalls('payment_orders', 'gte')).toEqual([['created_at', '2026-08-14T12:00:00.000Z']])

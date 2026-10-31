@@ -23,6 +23,13 @@
  * carrying its end-to-end id. An order the bank has not yet reported executed,
  * matched by amount, account and date, is outside the trigger's rule: it is
  * linked here, with a 'matched' event that says the debit decided it.
+ *
+ * An order without a supplier invoice (skattekonto, salary) has no payment
+ * row and no trigger: its debit is booked the way it always is (the
+ * skattekonto account, the salary voucher), and linkOrderToDebit only links
+ * the order to it and moves it to executed. A bank that keeps answering RCVD
+ * after the BankID finished would otherwise leave the order waiting for
+ * good. Nothing is booked there.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -31,8 +38,17 @@ import { roundOre } from '@/lib/money'
 import { bookSupplierBankMatch } from '@/lib/invoices/book-supplier-bank-match'
 import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupplierInvoice, Transaction } from '@/types'
-import { DEBIT_SETTLEABLE_ORDER_STATUSES, isDebitSettleableOrder, type DebitMatchBasis } from './debit-match'
-import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
+import {
+  DEBIT_LINKABLE_ORDER_STATUSES,
+  debitOfTransaction,
+  findLinkableOrderForDebit,
+  isDebitLinkableOrder,
+  isDebitSettleableOrder,
+  type DebitLinkBasis,
+  type DebitMatchBasis,
+} from './debit-match'
+import { SIGNING_FINISHED_BATCH_STATUSES } from './status'
+import { logPaymentOrderEvents, type PaymentOrderBatchRow, type PaymentOrderRow } from './types'
 
 /** How far back an open order is still a candidate for a debit in a new batch. */
 export const OPEN_ORDER_LOOKBACK_DAYS = 60
@@ -41,9 +57,11 @@ export const OPEN_ORDER_LOOKBACK_DAYS = 60
 export const PAYMENT_ORDER_MATCH_METHOD = 'payment_order'
 
 /**
- * The company's open bank payment orders a debit may settle: signed at the
- * bank, invoice attached, not yet matched, created within the lookback.
- * Never throws: the batch's heuristics run without it.
+ * The company's open bank payment orders a debit may settle or link, created
+ * within the lookback: signed at the bank and not yet matched, with an
+ * invoice (isDebitSettleableOrder, booked by its debit) or without one
+ * (isDebitLinkableOrder, only linked). Never throws: the batch's heuristics
+ * run without it.
  */
 export async function loadOpenPaymentOrders(
   supabase: SupabaseClient,
@@ -56,17 +74,54 @@ export async function loadOpenPaymentOrders(
       .from('payment_orders')
       .select('*')
       .eq('company_id', companyId)
-      .in('status', [...DEBIT_SETTLEABLE_ORDER_STATUSES])
+      // The settleable statuses and awaiting_signature, for an order without
+      // an invoice whose signing finished while the bank still answers RCVD.
+      .in('status', [...DEBIT_LINKABLE_ORDER_STATUSES])
       .is('supplier_invoice_payment_id', null)
-      .not('supplier_invoice_id', 'is', null)
       .not('provider_payment_id', 'is', null)
       .gte('created_at', since)
       .order('created_at', { ascending: true })
       .limit(500)
     if (error) return []
-    return ((data ?? []) as PaymentOrderRow[]).filter(isDebitSettleableOrder)
+    const orders = await withFinishedSignings(supabase, Array.isArray(data) ? (data as PaymentOrderRow[]) : [])
+    return orders.filter((order) => isDebitSettleableOrder(order) || isDebitLinkableOrder(order))
   } catch {
     return []
+  }
+}
+
+/**
+ * The orders with signed_at filled in from their signing where the order
+ * itself has none: an order without an invoice still awaiting_signature
+ * whose BankID finished (the batch is signed, or waits for a second signer)
+ * while the bank keeps answering RCVD (isBankConfirming). Only the copy in
+ * memory changes; it is what isDebitLinkableOrder reads. Never throws: a
+ * failed read leaves every such order unsigned, and so unlinked.
+ */
+export async function withFinishedSignings<T extends Pick<PaymentOrderRow, 'company_id' | 'status' | 'signed_at' | 'batch_id' | 'supplier_invoice_id'>>(
+  supabase: SupabaseClient,
+  orders: T[],
+): Promise<T[]> {
+  const waiting = orders.filter((o) => o.status === 'awaiting_signature' && !o.signed_at && o.batch_id && o.supplier_invoice_id == null)
+  if (waiting.length === 0) return orders
+  try {
+    const { data, error } = await supabase
+      .from('payment_order_batches')
+      .select('id, company_id, status, signed_at')
+      .in('id', [...new Set(waiting.map((o) => o.batch_id as string))])
+    if (error || !Array.isArray(data)) return orders
+    const finished = new Map<string, Pick<PaymentOrderBatchRow, 'company_id' | 'signed_at'>>()
+    for (const batch of data as Array<Pick<PaymentOrderBatchRow, 'id' | 'company_id' | 'status' | 'signed_at'>>) {
+      if (batch.signed_at && SIGNING_FINISHED_BATCH_STATUSES.has(batch.status)) finished.set(batch.id, batch)
+    }
+    return orders.map((order) => {
+      const batch = order.batch_id ? finished.get(order.batch_id) : undefined
+      return waiting.includes(order) && batch && batch.company_id === order.company_id ? { ...order, signed_at: batch.signed_at } : order
+    })
+  } catch {
+    // Safe to ignore: without the signings every order still awaiting_signature
+    // stays unsigned, so nothing is linked; the next run reads them again.
+    return orders
   }
 }
 
@@ -302,4 +357,127 @@ async function linkOrderToPayment(
     evidence.log,
   )
   return 'debit'
+}
+
+export type LinkRefusal =
+  | 'order_not_linkable'
+  | 'transaction_not_open'
+  | 'debit_does_not_match'
+  | 'transaction_linked_elsewhere'
+  | 'link_failed'
+
+export type LinkOrderToDebitResult = { ok: true; fromStatus: PaymentOrderRow['status'] } | { ok: false; reason: LinkRefusal }
+
+export interface LinkOrderToDebitArgs {
+  /** The order as the caller matched it (findLinkableOrderForDebit); it is read again before the link. */
+  order: Pick<PaymentOrderRow, 'id' | 'company_id'>
+  /** The debit as the caller matched it; it is read again before the link. */
+  transaction: Pick<Transaction, 'id'>
+  basis: DebitLinkBasis
+  log: Logger
+}
+
+/**
+ * Link an order without a supplier invoice (skattekonto, salary) to its own
+ * debit and move it to executed: the money left the account, whatever the
+ * bank's status API still says. Books nothing and writes nothing on the
+ * transaction: the row is booked the way it always is. The order, its
+ * signing and the debit are read again first, so an unsigned order is never
+ * linked, a debit never links two orders, and the update is a
+ * compare-and-set on the status read. An order the bank already reported
+ * executed keeps the bank's executed_at; any other gets the debit's day.
+ * Never throws.
+ */
+export async function linkOrderToDebit(supabase: SupabaseClient, args: LinkOrderToDebitArgs): Promise<LinkOrderToDebitResult> {
+  const companyId = args.order.company_id
+  try {
+    const { data: orderData } = await supabase
+      .from('payment_orders')
+      .select('*')
+      .eq('id', args.order.id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const read = (orderData ?? null) as PaymentOrderRow | null
+    const [order] = read ? await withFinishedSignings(supabase, [read]) : []
+    if (!order || !isDebitLinkableOrder(order)) return { ok: false, reason: 'order_not_linkable' }
+
+    const { data: txData } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('id', args.transaction.id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const transaction = (txData ?? null) as Transaction | null
+    if (!transaction || transaction.is_ignored || transaction.supplier_invoice_id || !(transaction.amount < 0)) {
+      return { ok: false, reason: 'transaction_not_open' }
+    }
+    // The same rule the caller applied, on the rows as they are now.
+    if (findLinkableOrderForDebit(debitOfTransaction(transaction), [order])?.order.id !== order.id) {
+      return { ok: false, reason: 'debit_does_not_match' }
+    }
+
+    const { data: otherData, error: otherError } = await supabase
+      .from('payment_orders')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('matched_transaction_id', transaction.id)
+      .limit(1)
+    if (otherError) return { ok: false, reason: 'link_failed' }
+    if (Array.isArray(otherData) && otherData.length > 0) return { ok: false, reason: 'transaction_linked_elsewhere' }
+
+    const { data: linked, error } = await supabase
+      .from('payment_orders')
+      .update({
+        status: 'executed',
+        // Undefined keys are left out of the request: the bank's own time stays.
+        executed_at: order.executed_at ? undefined : `${transaction.date}T00:00:00.000Z`,
+        matched_transaction_id: transaction.id,
+        matched_at: new Date().toISOString(),
+      })
+      .eq('id', order.id)
+      .eq('company_id', companyId)
+      .eq('status', order.status)
+      .is('matched_transaction_id', null)
+      .is('supplier_invoice_id', null)
+      .select('id')
+    if (error || !Array.isArray(linked) || linked.length !== 1) {
+      args.log.warn('payment order could not be linked to its debit', {
+        orderId: order.id,
+        transactionId: transaction.id,
+        error: error?.message ?? null,
+      })
+      return { ok: false, reason: 'link_failed' }
+    }
+    await logPaymentOrderEvents(
+      supabase,
+      [
+        {
+          company_id: companyId,
+          payment_order_id: order.id,
+          event_type: 'matched',
+          from_status: order.status,
+          to_status: 'executed',
+          provider_status: order.provider_status,
+          actor_user_id: null,
+          detail: {
+            transaction_id: transaction.id,
+            by: 'debit',
+            method: PAYMENT_ORDER_MATCH_METHOD,
+            matched_by: args.basis,
+            purpose: order.purpose,
+            debit_date: transaction.date,
+          },
+        },
+      ],
+      args.log,
+    )
+    return { ok: true, fromStatus: order.status }
+  } catch (err) {
+    args.log.warn('payment order could not be linked to its debit', {
+      orderId: args.order.id,
+      transactionId: args.transaction.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { ok: false, reason: 'link_failed' }
+  }
 }

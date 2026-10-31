@@ -23,10 +23,19 @@
  * A debit that carries one of OUR end-to-end ids but names none of the open
  * orders is another payment of ours (settled already, or in another state):
  * it never matches by amount, the same rule the settlement trigger applies.
+ *
+ * An order without a supplier invoice (purpose skattekonto, salary) is never
+ * booked by its debit: the row is booked the way it always is (the
+ * skattekonto account, the salary voucher). Its debit only links the order
+ * (findLinkableOrderForDebit), and since that moves the order to executed,
+ * a final status, the rule is stricter: the order is signed, the debit is
+ * from the order's own account, and besides amount and day it names the
+ * order (its end-to-end id, its payee, or its own OCR number or message).
  */
 
 import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
+import type { Transaction } from '@/types'
 import type { PaymentOrderStatus } from './status'
 import type { PaymentOrderRow } from './types'
 
@@ -219,4 +228,134 @@ export function findOrderForDebit<T extends DebitMatchCandidate>(
   }
   if (withPayee.length === 1) return { order: withPayee[0], confidence: 0.98, basis: 'payee' }
   return null
+}
+
+/**
+ * Orders without a supplier invoice whose own debit may link them: at the
+ * bank and signed. awaiting_signature is here for a signing that finished
+ * while the bank still answers RCVD (isBankConfirming): such an order counts
+ * only with signed_at, its own or its signing's (withFinishedSignings fills
+ * it in from the batch).
+ */
+export const DEBIT_LINKABLE_ORDER_STATUSES: readonly PaymentOrderStatus[] = [
+  'awaiting_signature',
+  'awaiting_second_signer',
+  'accepted',
+  'executed',
+]
+
+export type DebitLinkCandidate = DebitMatchCandidate &
+  Pick<PaymentOrderRow, 'purpose' | 'signed_at' | 'matched_transaction_id' | 'reference' | 'payee_account'>
+
+/** What named the order in its debit besides amount, account and day, kept in the order's 'matched' event. */
+export type DebitLinkBasis = 'end_to_end_id' | 'payee' | 'reference'
+
+export interface DebitOrderLink<T extends DebitLinkCandidate> {
+  order: T
+  basis: DebitLinkBasis
+}
+
+/** An order without an invoice its own debit may link: signed, at the bank, not yet linked. */
+export function isDebitLinkableOrder(order: DebitLinkCandidate): boolean {
+  return (
+    order.purpose !== 'supplier_invoice' &&
+    order.supplier_invoice_id == null &&
+    DEBIT_LINKABLE_ORDER_STATUSES.includes(order.status) &&
+    (order.status !== 'awaiting_signature' || order.signed_at != null) &&
+    order.matched_transaction_id == null &&
+    order.supplier_invoice_payment_id == null &&
+    order.provider_payment_id != null
+  )
+}
+
+/** A reference shorter than this ('Lön' alone, a short message) is in too many texts to count as evidence. */
+const MIN_REFERENCE_EVIDENCE = 6
+
+function foldSpaces(text: string): string {
+  return foldText(text).replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Whether the debit's text carries the order's own reference: an OCR number
+ * as a run of its digits (containsGiroNumber), a message ('Lön 2026-10')
+ * compared folded, so 'LÖN 2026-10' carries it.
+ */
+function debitCarriesReference(debit: OrderDebit, reference: string | null): boolean {
+  const wanted = foldSpaces(reference ?? '')
+  if (wanted.length < MIN_REFERENCE_EVIDENCE) return false
+  const texts = [debit.description, debit.reference]
+  if (/^\d+$/.test(wanted)) return texts.some((text) => containsGiroNumber(text, wanted))
+  return texts.some((text) => Boolean(text) && foldSpaces(text as string).includes(wanted))
+}
+
+/**
+ * Whether the debit names the payee's bank account: its digits in the text,
+ * or the counterparty account ending in them (banks prefix the clearing
+ * number, some zero-padded). At least five digits.
+ */
+function debitNamesPayeeAccount(debit: OrderDebit, order: DebitLinkCandidate): boolean {
+  const account = order.payee_account?.replace(/\D/g, '') ?? ''
+  if (account.length < 5) return false
+  const counterparty = debit.counterparty_account?.replace(/\D/g, '') ?? ''
+  if (counterparty.endsWith(account)) return true
+  return [debit.description, debit.reference].some((text) => containsGiroNumber(text, account))
+}
+
+/** What in the debit names this order besides its amount, or null when nothing does. */
+export function debitLinkEvidence(debit: OrderDebit, order: DebitLinkCandidate): DebitLinkBasis | null {
+  const endToEndId = debit.end_to_end_id?.trim().toLowerCase() ?? ''
+  if (endToEndId && endToEndId === order.end_to_end_id.toLowerCase()) return 'end_to_end_id'
+  if (debitNamesPayee(debit, order) || debitNamesPayeeAccount(debit, order)) return 'payee'
+  if (debitCarriesReference(debit, order.reference)) return 'reference'
+  return null
+}
+
+/**
+ * The order without an invoice this debit is the payment of, or null.
+ * `candidates` are the company's orders (loadOpenPaymentOrders, or the
+ * status sync's read); anything not linkable is ignored here too. The debit
+ * moves exactly the order's amount from the order's own account on a day of
+ * its execution window, and names it (debitLinkEvidence). Two such orders
+ * are told apart only by the payee or the end-to-end id, never guessed: a
+ * salary run's message is the same on every employee's payment.
+ */
+export function findLinkableOrderForDebit<T extends DebitLinkCandidate>(
+  debit: OrderDebit,
+  candidates: readonly T[],
+): DebitOrderLink<T> | null {
+  const open = candidates.filter(isDebitLinkableOrder)
+  if (open.length === 0) return null
+  const fits = (order: T) =>
+    sameAmount(debit, order) && debit.cash_account_id === order.cash_account_id && debitInExecutionWindow(debit, order)
+
+  const endToEndId = debit.end_to_end_id?.trim().toLowerCase() ?? ''
+  if (endToEndId) {
+    const named = open.filter((order) => order.end_to_end_id.toLowerCase() === endToEndId)
+    if (named.length === 1) return fits(named[0]) ? { order: named[0], basis: 'end_to_end_id' } : null
+    if (named.length > 1 || OWN_END_TO_END_ID.test(endToEndId)) return null
+  }
+
+  const byShape = open.filter(fits)
+  if (byShape.length === 1) {
+    const basis = debitLinkEvidence(debit, byShape[0])
+    return basis ? { order: byShape[0], basis } : null
+  }
+  const byPayee = byShape.filter((order) => debitLinkEvidence(debit, order) === 'payee')
+  return byPayee.length === 1 ? { order: byPayee[0], basis: 'payee' } : null
+}
+
+/** A stored transactions row as the matchers read it. */
+export function debitOfTransaction(row: Transaction): OrderDebit {
+  return {
+    amount: row.amount,
+    currency: row.currency,
+    date: row.date,
+    value_date: row.value_date ?? null,
+    cash_account_id: row.cash_account_id,
+    description: row.original_description ?? row.description,
+    reference: row.reference,
+    counterparty_iban: row.counterparty_iban,
+    counterparty_account: row.counterparty_account,
+    end_to_end_id: row.end_to_end_id ?? null,
+  }
 }
