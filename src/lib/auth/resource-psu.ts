@@ -13,7 +13,12 @@
  *   - bank_connection_psus: the number an Open Payments connection's current
  *     consent was created with, upserted whenever a consent is created for
  *     the row.
- *   - payment_batch_psus: the number a signing's payments were created with.
+ *   - payment_batch_psus: the number a signing's payments were created with,
+ *     and the IP address the signing was started from (psu_ip_address):
+ *     the unattended status reads and cancels send it again, because some
+ *     banks (Länsförsäkringar, SEB) refuse a payment status read without a
+ *     PSU-IP-Address. Kept only while a payment of the signing is at the
+ *     bank: the status sync clears it after (lib/payments/orders/sync.ts).
  *
  * Encrypted with the BankID key as payment_signers holds it; read and written
  * by the service role only. Nothing here ever logs a personnummer: a stored
@@ -21,6 +26,7 @@
  * caller falls back to what it did before (the number on file, or none).
  */
 
+import { isIP } from 'node:net'
 import { decryptStoredPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { createLogger } from '@/lib/logger'
@@ -41,6 +47,25 @@ export interface StoredConnectionPsu {
 const log = createLogger('resource-psu')
 
 const SOURCES: ReadonlySet<string> = new Set(['typed', 'on_file', 'signatory_link'])
+
+/**
+ * The signer's IP address as it may be kept and sent to a bank again
+ * (PSU-IP-Address): a plain IPv4 or IPv6 address, the rule Connect's
+ * sanitiseIpAddress applies before it sends the header, without a zone index
+ * (never a client's public address, and the inet column refuses it).
+ * Anything else is null: never stored, never sent, never guessed.
+ */
+export function signerIpAddress(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed && !trimmed.includes('%') && isIP(trimmed) !== 0 ? trimmed : null
+}
+
+/** A column the database does not have yet (the minutes between deploy and migration): 42703 on a read. */
+function isMissingColumn(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === '42703' || code === 'PGRST204'
+}
 
 /** A database error's own message (never a value from the row). */
 function messageOf(error: unknown): string {
@@ -131,17 +156,72 @@ export async function storedBatchPsu(batchId: string): Promise<string | null> {
   }
 }
 
-/** Keep the number a signing's payments were created with. Best effort, like rememberConnectionPsu. */
-export async function rememberBatchPsu(input: { batchId: string; companyId: string; personalNumber: string | null }): Promise<void> {
+/** What a signing's payments were created with: the PSU-ID and the IP address of the person who started it, each null when none is kept. */
+export interface StoredBatchSigner {
+  psuId: string | null
+  ipAddress: string | null
+}
+
+const NO_SIGNER: StoredBatchSigner = { psuId: null, ipAddress: null }
+
+/**
+ * The PSU-ID and the IP address a signing's payments were created with, for
+ * a call no person is present for (the status sync, an agent's cancel). Before
+ * the column exists the PSU-ID is read alone, as before.
+ */
+export async function storedBatchSigner(batchId: string): Promise<StoredBatchSigner> {
+  try {
+    const { data, error } = await createServiceClient()
+      .from('payment_batch_psus')
+      .select('psu_id_enc, psu_ip_address')
+      .eq('batch_id', batchId)
+      .maybeSingle()
+    if (error && isMissingColumn(error)) return { psuId: await storedBatchPsu(batchId), ipAddress: null }
+    if (error) throw error
+    const row = data as { psu_id_enc?: unknown; psu_ip_address?: unknown } | null
+    if (!row) return NO_SIGNER
+    return { psuId: decrypted(row.psu_id_enc, 'batch', batchId), ipAddress: signerIpAddress(row.psu_ip_address) }
+  } catch (error) {
+    log.warn('stored PSU-ID could not be read; falling back', { batchId, message: messageOf(error) })
+    return NO_SIGNER
+  }
+}
+
+/**
+ * Keep the number a signing's payments were created with, and the IP address
+ * the signing was started from when it is one (signerIpAddress). Best effort,
+ * like rememberConnectionPsu. The PSU-ID is what the bank requires: a write
+ * the database refuses with the address (the column not there yet, between
+ * deploy and migration) is made again without it. No address leaves one kept
+ * earlier for the same signing as it was.
+ */
+export async function rememberBatchPsu(input: {
+  batchId: string
+  companyId: string
+  personalNumber: string | null
+  ipAddress?: string | null
+}): Promise<void> {
   const normalized = normalizeSignerPersonalNumber(input.personalNumber)
   if (!normalized) return
+  const psuIdEnc = encryptPersonalNumberForStorage(normalized)
+  const ipAddress = signerIpAddress(input.ipAddress)
   try {
-    const { error } = await createServiceClient()
-      .from('payment_batch_psus')
-      .upsert(
-        { batch_id: input.batchId, company_id: input.companyId, psu_id_enc: encryptPersonalNumberForStorage(normalized) },
-        { onConflict: 'batch_id' },
-      )
+    const writer = createServiceClient()
+    const withoutIp = () =>
+      writer
+        .from('payment_batch_psus')
+        .upsert({ batch_id: input.batchId, company_id: input.companyId, psu_id_enc: psuIdEnc }, { onConflict: 'batch_id' })
+    let { error } = ipAddress
+      ? await writer
+          .from('payment_batch_psus')
+          .upsert({ batch_id: input.batchId, company_id: input.companyId, psu_id_enc: psuIdEnc, psu_ip_address: ipAddress }, { onConflict: 'batch_id' })
+      : await withoutIp()
+    if (error && ipAddress) {
+      // The code only: a refusal's message may quote the value.
+      const code = (error as { code?: unknown }).code
+      log.warn('IP address of a payment signing not stored; keeping the PSU-ID alone', { batchId: input.batchId, code: typeof code === 'string' ? code : 'unknown' })
+      ;({ error } = await withoutIp())
+    }
     if (error) throw error
   } catch (error) {
     log.warn('PSU-ID of a payment signing not stored', { batchId: input.batchId, message: messageOf(error) })

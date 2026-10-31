@@ -384,7 +384,7 @@ export async function cancelPaymentOrder(
     return { ok: true, dryRun: true, preview: { payment_order_id: order.id, status: order.status, at_bank: true, bank_asked: true } }
   }
   // The PSU-ID the payment was created with leads (several banks require it on a cancel).
-  const party = await buildPartyContext(ctx, order, { personalNumber: null, ipAddress: input.signer?.ipAddress ?? null, userAgent: input.signer?.userAgent ?? null }, { batchId: order.batch_id })
+  const party = await buildPartyContext(ctx, order, { personalNumber: null, ipAddress: input.signer?.ipAddress ?? null, userAgent: input.signer?.userAgent ?? null }, { batchId: order.batch_id, unattended: !input.signer })
   if (!party.ok) return party.outcome
   await logPaymentOrderEvents(writer, [
     { company_id: ctx.companyId, payment_order_id: order.id, event_type: 'cancel_requested', from_status: order.status, actor_user_id: ctx.userId },
@@ -468,7 +468,7 @@ export async function resolvePaymentOrder(
     if (!provider) {
       bankAnswer = 'no_provider'
     } else {
-      const party = await buildPartyContext(ctx, order, { personalNumber: null, ipAddress: input.signer?.ipAddress ?? null, userAgent: input.signer?.userAgent ?? null }, { batchId: order.batch_id })
+      const party = await buildPartyContext(ctx, order, { personalNumber: null, ipAddress: input.signer?.ipAddress ?? null, userAgent: input.signer?.userAgent ?? null }, { batchId: order.batch_id, unattended: !input.signer })
       if (!party.ok) return party.outcome
       try {
         await provider.getPaymentState(party.ctx, order.provider_payment_id, order.provider_payment_product ?? 'domestic')

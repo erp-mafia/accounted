@@ -895,9 +895,10 @@ async function sendAndSign(
     order.provider_payment_product = created.product
     order.provider_status = created.providerStatus
     // The bank holds a payment created with this PSU-ID: its status reads,
-    // a restart and a cancel send the same one (once per signing).
+    // a restart and a cancel send the same one (once per signing), and the
+    // unattended reads the IP address the signing was started from.
     if (!psuKept) {
-      await rememberBatchPsu({ batchId: batch.id, companyId: ctx.companyId, personalNumber: party.signerPersonalNumber })
+      await rememberBatchPsu({ batchId: batch.id, companyId: ctx.companyId, personalNumber: party.signerPersonalNumber, ipAddress: party.psuIpAddress })
       psuKept = true
     }
   }
@@ -1133,9 +1134,10 @@ export async function restartPaymentSigning(
     }
   }
   let next = moved.batch
-  // A new signing over the same payments: they keep the PSU-ID they were created with.
+  // A new signing over the same payments: they keep the PSU-ID they were
+  // created with, and the IP address of the person restarting it.
   if (!moved.same && built.storedPsu) {
-    await rememberBatchPsu({ batchId: next.id, companyId: ctx.companyId, personalNumber: party.ctx.signerPersonalNumber })
+    await rememberBatchPsu({ batchId: next.id, companyId: ctx.companyId, personalNumber: party.ctx.signerPersonalNumber, ipAddress: party.ctx.psuIpAddress })
   }
   if (!moved.same && next.signing_target === 'basket') {
     const withBasket = await createBasket(ctx, provider, party.ctx, next, moved.orders)
