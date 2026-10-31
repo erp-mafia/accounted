@@ -1,0 +1,1 @@
+[2026-10-29] "Use own account number" on the invoice payee check is one click only when the BBAN is the printed clearing plus a payable number, else it opens the account: Swedish BBANs come with clearing, without it or padded, and a guessed split prints a stranger's account.

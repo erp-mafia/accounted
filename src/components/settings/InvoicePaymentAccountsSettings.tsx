@@ -36,10 +36,12 @@ import {
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import {
   accountsPrintingOtherAccountIban,
+  accountsPrintingOtherAccountNumber,
   blankPrimaryPayeeAccount,
   cashAccountPayee,
   isUsableInvoicePayee,
   type PrintedIbanOfOtherAccount,
+  type PrintedNumberOfOtherAccount,
 } from '@/lib/cash-accounts/invoice-payee-rules'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -61,6 +63,11 @@ interface InvoicePaymentAccountsSettingsProps {
 type PayeeForm = Record<keyof CashAccountPayeeFields, string> & { name: string }
 
 const NONE = '__none__'
+
+/** One account whose invoices print another account's IBAN or domestic number. */
+type PrintedElsewhere =
+  | (PrintedIbanOfOtherAccount & { kind: 'iban' })
+  | (PrintedNumberOfOtherAccount & { kind: 'account_number' })
 
 function formFromAccount(account: CashAccount): PayeeForm {
   return {
@@ -251,10 +258,16 @@ export function InvoicePaymentAccountsSettings({
     [accounts, editingId],
   )
   const blankPrimary = useMemo(() => blankPrimaryPayeeAccount(accounts), [accounts])
-  // Accounts whose invoices print another account's bank IBAN (crm#1483):
-  // one attention line for the first, the rest counted; each fix brings up
-  // the next.
-  const printedElsewhere = useMemo(() => accountsPrintingOtherAccountIban(accounts), [accounts])
+  // Accounts whose invoices print another account's bank IBAN (crm#1483) or
+  // clearing and account number: one attention line for the first, the rest
+  // counted; each fix brings up the next.
+  const printedElsewhere = useMemo<PrintedElsewhere[]>(
+    () => [
+      ...accountsPrintingOtherAccountIban(accounts).map((hit) => ({ ...hit, kind: 'iban' as const })),
+      ...accountsPrintingOtherAccountNumber(accounts).map((hit) => ({ ...hit, kind: 'account_number' as const })),
+    ],
+    [accounts],
+  )
   // Legacy entries: payment instructions saved per currency before accounts
   // existed, with no account to land on. They still print (the resolver
   // falls back to them) until the user attaches them to an account.
@@ -516,18 +529,19 @@ export function InvoicePaymentAccountsSettings({
   }
 
   /**
-   * Print the account's own bank IBAN instead of another account's
-   * (crm#1483). The same PATCH as typing it into the account's form; the
-   * route's twin check lets it through because it is the row's own IBAN.
+   * Print the account's own bank IBAN (crm#1483) or account number instead
+   * of another account's. The same PATCH as typing it into the account's
+   * form; the route's twin check lets an IBAN through because it is the
+   * row's own.
    */
-  async function printOwnIban(account: CashAccount, ownIban: string) {
+  async function printOwnDetails(account: CashAccount, own: { iban: string } | { account_number: string }) {
     if (isSaving) return
     setIsSaving(true)
     try {
       const res = await fetch(`/api/cash-accounts/${account.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ iban: ownIban }),
+        body: JSON.stringify(own),
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
@@ -713,9 +727,17 @@ export function InvoicePaymentAccountsSettings({
     )
   }
 
-  /** The one action the attention line offers: print the account's own IBAN, or open the account to fix it by hand. */
-  function printedIbanAction({ account, ownIban }: PrintedIbanOfOtherAccount) {
-    if (ownIban) return { label: t('printed_iban_use_own'), onClick: () => void printOwnIban(account, ownIban) }
+  /** The one action the attention line offers: print the account's own IBAN or number, or open the account to fix it by hand. */
+  function printedElsewhereAction(hit: PrintedElsewhere) {
+    const { account } = hit
+    if (hit.kind === 'iban' && hit.ownIban) {
+      const iban = hit.ownIban
+      return { label: t('printed_iban_use_own'), onClick: () => void printOwnDetails(account, { iban }) }
+    }
+    if (hit.kind === 'account_number' && hit.ownAccountNumber) {
+      const accountNumber = hit.ownAccountNumber
+      return { label: t('printed_account_number_use_own'), onClick: () => void printOwnDetails(account, { account_number: accountNumber }) }
+    }
     return { label: t('printed_iban_edit'), onClick: () => startEdit(account) }
   }
 
@@ -733,7 +755,7 @@ export function InvoicePaymentAccountsSettings({
           {printedFix && (
             <AttnLine
               className="px-1 py-3"
-              action={printedIbanAction(printedFix)}
+              action={printedElsewhereAction(printedFix)}
               trailing={
                 printedElsewhere.length > 1 ? (
                   <span className="text-muted-foreground">
@@ -743,8 +765,8 @@ export function InvoicePaymentAccountsSettings({
                 ) : undefined
               }
             >
-              {t('printed_iban_other_account', {
-                last4: printedFix.printedIban.slice(-4),
+              {t(printedFix.kind === 'iban' ? 'printed_iban_other_account' : 'printed_account_number_other_account', {
+                last4: (printedFix.kind === 'iban' ? printedFix.printedIban : printedFix.printedAccountNumber).slice(-4),
                 account: accountLabel(printedFix.account),
                 other: printedFix.other.ledger_account,
               })}
