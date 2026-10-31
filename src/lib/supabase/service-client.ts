@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type SupabaseClientOptions } from '@supabase/supabase-js'
+import { withActorHeader } from '@/lib/supabase/actor-header'
 
 /**
  * Auth options every server-side Supabase client MUST use.
@@ -47,6 +48,11 @@ export const SERVER_AUTH_OPTIONS = {
  * The auth options are spread LAST, so a caller passing its own `auth` block
  * cannot accidentally re-enable the ticker.
  *
+ * Every PostgREST request names the actor of the scope it runs in (the
+ * x-accounted-actor header, lib/supabase/actor-header.ts), around the
+ * caller's own fetch when it passes one: a service-role request has no
+ * session, and the audit log reads the person from the header instead.
+ *
  * Browser clients are a different case and must keep the ticker: a signed-in
  * tab genuinely needs its access token refreshed. Those go through
  * `lib/supabase/client.ts`, which is unaffected.
@@ -58,6 +64,7 @@ export function createServiceRoleClient(
 ): SupabaseClient {
   return createClient(url, key, {
     ...options,
+    global: { ...options?.global, fetch: withActorHeader(options?.global?.fetch) },
     auth: { ...options?.auth, ...SERVER_AUTH_OPTIONS },
   })
 }

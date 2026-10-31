@@ -34,6 +34,7 @@ const keyFixture = vi.hoisted(() => ({
   apiKeyName: 'MCP-klient (OAuth)',
   client: 'claude' as string | null,
   serviceAccount: null as { id: string; name: string } | null,
+  unattendedCommitLimit: null as number | null,
 }))
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
@@ -67,6 +68,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       apiKeyName: keyFixture.apiKeyName,
       mode: 'live',
       serviceAccount: keyFixture.serviceAccount,
+      unattendedCommitLimit: keyFixture.unattendedCommitLimit,
     })),
     createServiceClientNoCookies: vi.fn(() => supabase),
   }
@@ -84,6 +86,7 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 
 import { handleMcpRequest } from '../server'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 
 function approveRequest(): Request {
   return new Request('http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
@@ -113,6 +116,7 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
     keyFixture.apiKeyName = 'MCP-klient (OAuth)'
     keyFixture.client = 'claude'
     keyFixture.serviceAccount = null
+    keyFixture.unattendedCommitLimit = null
     commitSpy.mockResolvedValue({ status: 'committed' })
   })
 
@@ -159,5 +163,49 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
     expect(appendProcessingHistory).toHaveBeenCalledWith(
       expect.objectContaining({ actor: { type: 'api_key', id: 'key-oauth-1', label: 'Integration' } }),
     )
+  })
+})
+
+describe('MCP tool call: the actor scope it runs in', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    keyFixture.apiKeyName = 'MCP-klient (OAuth)'
+    keyFixture.client = 'claude'
+    keyFixture.serviceAccount = null
+    keyFixture.unattendedCommitLimit = null
+  })
+
+  /** What the scope looked like while the tool ran (the commit happens inside the approve tool). */
+  async function actorDuringToolCall(): Promise<ReturnType<typeof getActor>> {
+    let seen: ReturnType<typeof getActor>
+    commitSpy.mockImplementation(async () => {
+      seen = getActor()
+      return { status: 'committed' }
+    })
+    await approveAndReadCommitOptions()
+    return seen
+  }
+
+  it("names the connector and the key's user, so the audit rows of its service-role writes name them", async () => {
+    // commitPendingOperation is mocked, so this is the tool call's own scope,
+    // the one every service-role request of the call sends as x-accounted-actor.
+    expect(await actorDuringToolCall()).toEqual({ type: 'mcp_oauth', label: 'Claude (Anthropic)', userId: 'user-1' })
+    // Nothing leaks past the request.
+    expect(getActor()).toBeUndefined()
+  })
+
+  it("names a service account and its sponsor for a service account's key", async () => {
+    keyFixture.apiKeyName = 'Nyckel 1'
+    keyFixture.serviceAccount = { id: 'sa-1', name: 'Nattlig synk' }
+    expect(await actorDuringToolCall()).toEqual({ type: 'service_account', label: 'Nattlig synk', userId: 'user-1' })
+  })
+
+  it("leaves the key's unattended ceiling out of the scope: direct MCP writes were never bound by it", async () => {
+    keyFixture.apiKeyName = 'Integration'
+    keyFixture.unattendedCommitLimit = 5000
+    const seen = await actorDuringToolCall()
+    expect(seen).toEqual({ type: 'api_key', label: 'Integration', userId: 'user-1' })
+    expect(seen).not.toHaveProperty('unattendedCommitLimit')
   })
 })

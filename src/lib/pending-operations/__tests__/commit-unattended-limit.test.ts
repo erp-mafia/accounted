@@ -207,7 +207,7 @@ describe('commitPendingOperation: unattended commit limit', () => {
     )
 
     expect(runWithActor).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(runWithActor).mock.calls[0][0]).toEqual(apiKeyActor)
+    expect(vi.mocked(runWithActor).mock.calls[0][0]).toEqual({ ...apiKeyActor, userId: 'user-1' })
   })
 
   it('also covers categorize_transaction and supplier invoices from the inbox', async () => {

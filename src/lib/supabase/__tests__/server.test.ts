@@ -41,10 +41,13 @@ describe('createServiceClient', () => {
     )
     const options = createServerClientMock.mock.calls[0][2] as {
       cookies: { getAll: () => unknown[]; setAll: () => void }
+      global?: { fetch?: unknown }
     }
     expect(options.cookies.getAll()).toEqual([])
     expect(() => options.cookies.setAll()).not.toThrow()
     expect(cookiesMock).not.toHaveBeenCalled()
+    // Its PostgREST requests name the scope's actor (lib/supabase/actor-header.ts).
+    expect(options.global?.fetch).toEqual(expect.any(Function))
   })
 })
 

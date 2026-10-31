@@ -183,7 +183,9 @@ describe('commitPendingOperation: create_voucher', () => {
     })
 
     expect(result.status).toBe('committed')
-    expect(seenActor).toEqual({ type: 'api_key', label: 'Claude Desktop' })
+    // The approver rides along: the audit log names them for the executor's
+    // service-role writes.
+    expect(seenActor).toEqual({ type: 'api_key', label: 'Claude Desktop', userId: 'user-1' })
   })
 
   it('leaves attribution unset when opts.actor is omitted (pre-attribution behaviour)', async () => {

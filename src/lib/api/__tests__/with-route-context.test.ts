@@ -53,7 +53,9 @@ describe('withRouteContext', () => {
 
     await route(new Request('http://localhost/api/test', { method: 'POST' }), EMPTY_PARAMS)
 
-    expect(seen).toEqual({ type: 'user' })
+    // The user's id rides along: the audit log names them for the handler's
+    // service-role writes (lib/supabase/actor-header.ts).
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
     expect(getActor()).toBeUndefined()
   })
 

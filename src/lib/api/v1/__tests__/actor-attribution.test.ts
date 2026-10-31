@@ -152,6 +152,20 @@ describe('v1 handlers run inside the commit-actor scope', () => {
     expect(seen?.label).toBe('DueCue automation stager')
   })
 
+  it("names the key's user as the person the request acts for", async () => {
+    let seen: ReturnType<typeof getActor>
+    const handler = withApiV1(OPERATION, async (_req, ctx) => {
+      seen = getActor()
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    await handler(makeRequest(URL_FOR), staticParams())
+
+    // The audit log reads it from the x-accounted-actor header of every
+    // service-role request the handler makes (lib/supabase/actor-header.ts).
+    expect(seen?.userId).toBe('user-1')
+  })
+
   it('falls back to a stable label when the key is unnamed', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -197,10 +211,12 @@ describe('v1 handlers run inside the commit-actor scope', () => {
 
     await handler(makeRequest(URL_FOR), staticParams())
 
-    expect(seen).toEqual({ type: 'service_account', label: 'Nattlig fakturasynk' })
+    // The sponsor rides on the actor too: the audit log names them for the
+    // request's service-role writes (lib/supabase/actor-header.ts).
+    expect(seen).toEqual({ type: 'service_account', label: 'Nattlig fakturasynk', userId: 'sponsor-1' })
     // The rows it writes carry the sponsor: the user the key acts as.
     expect(ctxSeen).toEqual({
-      actor: { type: 'service_account', label: 'Nattlig fakturasynk' },
+      actor: { type: 'service_account', label: 'Nattlig fakturasynk', userId: 'sponsor-1' },
       serviceAccount: { id: 'sa-1', name: 'Nattlig fakturasynk' },
       userId: 'sponsor-1',
     })

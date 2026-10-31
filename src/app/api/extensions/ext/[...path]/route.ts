@@ -378,9 +378,10 @@ async function handleRequest(
 
   // Build context and dispatch. The second cookie-session door besides
   // withRouteContext: commits an extension makes (inbox booking, supplier
-  // invoices) record the signed-in user as their actor, as there.
+  // invoices) record the signed-in user as their actor, as there, and so do
+  // the audit rows of its service-role writes.
   const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId, Boolean(user.is_anonymous))
-  const response = await runWithActor({ type: 'user' }, () => route.handler(handlerRequest, ctx))
+  const response = await runWithActor({ type: 'user', userId: user.id }, () => route.handler(handlerRequest, ctx))
   // A 403 from the handler is a check of its own after the gates passed.
   recordShadow(
     response?.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },
