@@ -1590,8 +1590,8 @@ function pinResults(pins: {
   supplierInvoice?: boolean
   expenseClaim?: boolean
   bankTransaction?: boolean
-  inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
-  inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+  inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null; [column: string]: unknown }>
+  inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null; [column: string]: unknown }>
   signingRequest?: boolean
 } = {}): Array<{ data: unknown; error: null }> {
   return [
@@ -1793,6 +1793,90 @@ describe('deleteDocument', () => {
     const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
 
     expect(result.ok).toBe(true)
+  })
+
+  // crm#1565: the foreign key only nulled the item's document_id, so a
+  // "Väntar på dig" item with a reading and no underlag stayed behind.
+  describe('the inbox item the document alone stood for', () => {
+    const ITEM = {
+      id: 'item-1',
+      document_id: 'doc-1',
+      peppol_xml_document_id: null,
+      matched_transaction_id: null,
+      created_journal_entry_id: null,
+      created_supplier_invoice_id: null,
+    }
+    type Builder = { delete: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; in: ReturnType<typeof vi.fn>; is: ReturnType<typeof vi.fn> }
+    const deletesOn = (supabase: ReturnType<typeof makeClient>, table: string) =>
+      supabase.from.mock.calls
+        .map((c, i) => ({ table: c[0] as string, b: supabase.from.mock.results[i].value as Builder }))
+        .filter((x) => x.table === table && x.b.delete.mock.calls.length > 0)
+        .map((x) => x.b)
+
+    it('goes with the document, after it, with the rule repeated as guards', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: null }, { data: null, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: ['item-1'] })
+      const tables = supabase.from.mock.calls.map((c) => c[0])
+      expect(tables.slice(-2)).toEqual(['document_attachments', 'invoice_inbox_items'])
+      const [inboxDelete] = deletesOn(supabase, 'invoice_inbox_items')
+      expect(inboxDelete.eq.mock.calls).toContainEqual(['company_id', 'company-1'])
+      expect(inboxDelete.in.mock.calls).toEqual([['id', ['item-1']]])
+      expect(inboxDelete.is.mock.calls).toEqual([
+        ['document_id', null],
+        ['created_journal_entry_id', null],
+        ['created_supplier_invoice_id', null],
+        ['matched_transaction_id', null],
+      ])
+    })
+
+    it('keeps an e-invoice item that still has its received XML: only the document goes', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [{ ...ITEM, peppol_xml_document_id: 'doc-xml' }] }), { data: null, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: [] })
+      expect(deletesOn(supabase, 'document_attachments')).toHaveLength(1)
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('keeps the item when the document cannot go: a verifikat holds it (BFL 7 kap 2 §)', async () => {
+      results = [{ data: { ...LOOSE_DOC.data, journal_entry_id: 'entry-1' }, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', block: 'verifikat', status: 409 })
+      expect(deletesOn(supabase, 'document_attachments')).toHaveLength(0)
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('keeps the item when the database trigger refuses the document delete', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: { message: 'Cannot delete document linked to a posted journal entry (Bokforingslagen)' } }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry' })
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('still answers the document delete as done when the item cannot be removed', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: null }, { data: null, error: { message: 'boom', code: '57014' } }]
+      serviceClientOverride = makeClient()
+
+      const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: ['item-1'] })
+    })
   })
 
   it('throws, deleting nothing, when a pin cannot be read: an unknown pin is never free', async () => {

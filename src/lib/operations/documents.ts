@@ -336,7 +336,7 @@ export const documentsDelete = defineOperation({
       'The file is removed from storage too: this cannot be undone.',
       'A document still pinned to a bank transaction returns 409 DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION: detach it from the transaction first.',
       'The underlag of a supplier invoice or an expense claim returns 409 DOC_DELETE_SUPPLIER_INVOICE_UNDERLAG or DOC_DELETE_EXPENSE_CLAIM_UNDERLAG, whatever its status and even before any verifikat links it.',
-      'The file or the received Peppol XML of a booked or converted inbox item returns 409 DOC_DELETE_BOOKED_INBOX_ITEM; an inbox item never booked does not hold its files.',
+      'The file or the received Peppol XML of a booked or converted inbox item returns 409 DOC_DELETE_BOOKED_INBOX_ITEM; an inbox item never booked does not hold its files, and one left with no file goes with them (the dry run lists it in inbox_item_ids_deleted_too).',
     ],
     example: { response: { data: { document_id: '4f1c…', deleted: true }, meta: META } },
   },

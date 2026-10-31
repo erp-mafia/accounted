@@ -6,6 +6,7 @@ import {
   DOCUMENT_DELETE_REFUSALS,
   canDeleteDocument,
   documentDeleteRefusal,
+  inboxItemsLeftEmpty,
   readDocumentDeletePins,
   type DocumentDeleteBlock,
   type DocumentDeleteRefusalCode,
@@ -1350,7 +1351,12 @@ export async function linkToJournalEntry(
 }
 
 export type DeleteDocumentResult =
-  | { ok: true; document: Pick<DocumentAttachment, 'id' | 'file_name'> }
+  | {
+      ok: true
+      document: Pick<DocumentAttachment, 'id' | 'file_name'>
+      /** The inbox items that carried only this document and went with it (inboxItemsLeftEmpty). */
+      discardedInboxItemIds: string[]
+    }
   | { ok: false; reason: 'not_found'; status: number; message: string }
   | {
       ok: false
@@ -1379,6 +1385,10 @@ export type DeleteDocumentResult =
  * pin read and the delete (a bank transaction's underlag) is still refused by
  * the database; the error is thrown with its SQLSTATE intact so
  * lib/errors/foreign-key-refusal.ts answers it.
+ *
+ * An unbooked inbox item whose only file this was goes with it
+ * (inboxItemsLeftEmpty, crm#1565): the foreign key only nulls its
+ * document_id, which left a "Väntar på dig" item with no underlag behind.
  */
 export async function deleteDocument(
   supabase: SupabaseClient,
@@ -1403,9 +1413,8 @@ export async function deleteDocument(
 
   // The verifikat link needs no further read; the other pins are read only
   // for a document it lets go.
-  const refusal = canDeleteDocument(doc)
-    ? documentDeleteRefusal(doc, await readDocumentDeletePins(supabase, companyId, documentId))
-    : documentDeleteRefusal(doc, { supplierInvoice: false, expenseClaim: false, bankTransaction: false, inboxItems: [] })
+  const pins = canDeleteDocument(doc) ? await readDocumentDeletePins(supabase, companyId, documentId) : null
+  const refusal = documentDeleteRefusal(doc, pins ?? { supplierInvoice: false, expenseClaim: false, bankTransaction: false, inboxItems: [] })
   if (refusal) {
     return {
       ok: false,
@@ -1446,6 +1455,27 @@ export async function deleteDocument(
     throw dbError(deleteError, null)
   }
 
+  // Read before the delete: the foreign key has nulled their document_id
+  // now. The guards repeat the rule so an item booked, converted, matched or
+  // given another file in between stays.
+  const discardedInboxItemIds = pins ? inboxItemsLeftEmpty(documentId, pins.inboxItems) : []
+  if (discardedInboxItemIds.length > 0) {
+    const { error: inboxError } = await supabase
+      .from('invoice_inbox_items')
+      .delete()
+      .eq('company_id', companyId)
+      .in('id', discardedInboxItemIds)
+      .is('document_id', null)
+      .is('created_journal_entry_id', null)
+      .is('created_supplier_invoice_id', null)
+      .is('matched_transaction_id', null)
+    // The document is gone either way; a failure leaves the item as before
+    // (deleteInboxItem clears it) and must not answer the delete as failed.
+    if (inboxError) {
+      log.error('inbox item left by a deleted document was not removed', inboxError, { companyId, documentId, inboxItemIds: discardedInboxItemIds })
+    }
+  }
+
   if (doc.storage_path) {
     // Remove BOTH key layouts. During the Phase B backfill a document can
     // briefly exist under the legacy and the company-scoped key at once;
@@ -1474,5 +1504,5 @@ export async function deleteDocument(
     },
   })
 
-  return { ok: true, document: { id: doc.id, file_name: doc.file_name } }
+  return { ok: true, document: { id: doc.id, file_name: doc.file_name }, discardedInboxItemIds }
 }

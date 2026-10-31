@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   canDeleteDocument,
   documentDeleteRefusal,
+  inboxItemsLeftEmpty,
   offersDocumentDelete,
   readDocumentDeletePins,
   type DocumentDeletePins,
@@ -143,5 +144,43 @@ describe('readDocumentDeletePins', () => {
   it('throws with the SQLSTATE when a pin cannot be read', async () => {
     const { supabase } = client([{ data: [], error: null }, { data: null, error: { message: 'permission denied', code: '42501' } }])
     await expect(readDocumentDeletePins(supabase, 'company-1', 'doc-1')).rejects.toMatchObject({ code: '42501' })
+  })
+})
+
+// crm#1565: deleting a document nulls its inbox item's document_id (ON DELETE
+// SET NULL); an item left with nothing goes with the document instead of
+// staying in Behöver dig with a reading and no underlag.
+describe('inboxItemsLeftEmpty', () => {
+  const item = (overrides: Record<string, unknown> = {}) => ({
+    id: 'item-1',
+    document_id: 'doc-1',
+    peppol_xml_document_id: null,
+    matched_transaction_id: null,
+    ...neverBooked,
+    ...overrides,
+  })
+
+  it('takes an unbooked item whose only file is the document', () => {
+    expect(inboxItemsLeftEmpty('doc-1', [item()])).toEqual(['item-1'])
+  })
+
+  it('takes an e-invoice whose file and received XML are both the document, once', () => {
+    const xmlOnly = item({ peppol_xml_document_id: 'doc-1' })
+    expect(inboxItemsLeftEmpty('doc-1', [xmlOnly, xmlOnly])).toEqual(['item-1'])
+  })
+
+  it.each([
+    { what: 'an e-invoice that keeps its received XML', overrides: { peppol_xml_document_id: 'doc-xml' } },
+    { what: 'an e-invoice that keeps its PDF when the XML goes', overrides: { document_id: 'doc-pdf', peppol_xml_document_id: 'doc-1' } },
+    { what: 'an item matched to a bank transaction', overrides: { matched_transaction_id: 'tx-1' } },
+    { what: 'a booked item', overrides: booked },
+    { what: 'an item turned into a supplier invoice', overrides: converted },
+  ])('keeps $what', ({ overrides }) => {
+    expect(inboxItemsLeftEmpty('doc-1', [item(overrides)])).toEqual([])
+  })
+
+  it('never takes an item read without its id or files (the refusal-only shape)', () => {
+    expect(inboxItemsLeftEmpty('doc-1', [neverBooked])).toEqual([])
+    expect(inboxItemsLeftEmpty('doc-1', [{ ...neverBooked, id: 'item-1' }])).toEqual([])
   })
 })
