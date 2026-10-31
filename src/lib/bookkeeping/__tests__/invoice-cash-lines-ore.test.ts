@@ -102,7 +102,7 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
     expect(buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1236).lines).toEqual(before)
   })
 
-  it('a foreign invoice ignores the bank amount: no 3740, unchanged entry', () => {
+  it('a foreign invoice without a bank amount books the customer share at the invoice rate', () => {
     const eur = invoice({
       currency: 'EUR',
       exchange_rate: 11.5,
@@ -111,8 +111,11 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
       vat_amount: 25,
       items: [item({ unit_price: 100, line_total: 100, vat_amount: 25 })],
     })
-    const before = buildInvoiceCashLines(eur, 'aktiebolag').lines
-    expect(buildInvoiceCashLines(eur, 'aktiebolag', undefined, '1930', 1437).lines).toEqual(before)
+    expect(rows(buildInvoiceCashLines(eur, 'aktiebolag').lines)).toEqual([
+      ['1930', 1437.5, 0],
+      ['3001', 0, 1150],
+      ['2611', 0, 287.5],
+    ])
   })
 
   it('ROT: the customer share is what is owed, 1513 and the credits stay put', () => {

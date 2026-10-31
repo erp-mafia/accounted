@@ -3888,6 +3888,7 @@
     "entity_ekonomisk_forening": "Ekonomisk förening",
     "entity_bostadsrattsforening": "Bostadsrättsförening",
     "entity_form_help": "Company form cannot be changed. Contact support if needed.",
+    "entity_registry_unsupported": "Bolagsverket lists {registry}, which Accounted does not support yet. Bookkeeping, VAT and employer declarations work, but equity, year-end and the income tax return follow the rules of the company form above.",
     "tax_vat_heading": "Tax & VAT",
     "f_skatt_label": "F-skattsedel",
     "f_skatt_help": "Approved for F-skatt (independent business activity).",

@@ -10,6 +10,7 @@ import {
   SettingsInput,
   SettingsReveal,
   SettingsRow,
+  SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { formatAmount } from '@/lib/utils'
@@ -26,6 +27,12 @@ interface TaxSettingsFormProps {
   kuTriggers?: KuSignalTrigger[]
   /** Invoice-derived signal: invoices with ROT/RUT deductions exist. */
   rotRutSignalDetected?: boolean
+  /**
+   * The form Bolagsverket registers the company as, when it is one Accounted
+   * cannot represent yet (a handelsbolag or kommanditbolag set up as another
+   * form): named beside the form the books follow (PH 237).
+   */
+  registryFormLabel?: string | null
 }
 
 /**
@@ -48,6 +55,7 @@ export function TaxSettingsForm({
   euPurchasesDetected = false,
   kuTriggers = [],
   rotRutSignalDetected = false,
+  registryFormLabel = null,
 }: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
@@ -86,6 +94,11 @@ export function TaxSettingsForm({
                 })
               : ''}
           </span>
+          {registryFormLabel && (
+            <SettingsRowNote className="basis-full">
+              {t('entity_registry_unsupported', { registry: registryFormLabel })}
+            </SettingsRowNote>
+          )}
         </SettingsRow>
 
         <SettingsRow label={t('f_skatt_label')} htmlFor="f_skatt" help={t('f_skatt_help')}>

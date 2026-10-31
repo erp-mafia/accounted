@@ -3888,6 +3888,7 @@
     "entity_ekonomisk_forening": "Ekonomisk förening",
     "entity_bostadsrattsforening": "Bostadsrättsförening",
     "entity_form_help": "Företagsform kan inte ändras. Kontakta support vid behov.",
+    "entity_registry_unsupported": "Bolagsverket anger {registry}, som Accounted inte stöder ännu. Bokföring, moms och arbetsgivardeklaration fungerar, men eget kapital, bokslut och inkomstdeklaration följer reglerna för företagsformen ovan.",
     "tax_vat_heading": "Skatt & moms",
     "f_skatt_label": "F-skattsedel",
     "f_skatt_help": "Godkänd för F-skatt (självständig näringsverksamhet).",
