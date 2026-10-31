@@ -9,6 +9,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
@@ -20,6 +21,7 @@ import { followUpDelayMs, PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES
 import { VerificationStateText } from './VerificationStateText'
 import { verificationStep } from '@/lib/payments/orders/readiness'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
+import { RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import {
   allowanceRefusalOf,
   bankIdAutostartHref,
@@ -82,6 +84,12 @@ export interface SigningClient {
   poll(input: { batchId: string; personalNumber: string | null; psuAuthoriserId?: string | null }, signal?: AbortSignal): Promise<SigningView>
   verification?: boolean
   /**
+   * A signing link to the other signatory can be sent from here, when the
+   * bank waits for them (Skicka en länk). Absent on the link's own page: the
+   * firmatecknare there has no login to send one with.
+   */
+  signingLinks?: boolean
+  /**
    * This month's bank payments against the cap, for a session that can read
    * them and ask for more (Begär fler betalningar). Absent on the payment
    * signing link: the firmatecknare has no login, and a refusal at the cap
@@ -96,6 +104,7 @@ const SESSION_SIGNING_CLIENT: SigningClient = {
   secondSignature: startSecondSignature,
   poll: pollSigning,
   verification: true,
+  signingLinks: true,
   usage: () => fetchBankPaymentsUsage(),
 }
 
@@ -138,8 +147,8 @@ interface BankIdSigningFlowProps {
   secondSignatureBatchId?: string | null
   /** The result offers Kontrasignera when the bank waits for another signatory here; false where the link that signed is spent. */
   offerSecondSignature?: boolean
-  /** Under the other signatory's number on the method step: another way to reach them (a signing link). */
-  secondSignatureAside?: React.ReactNode
+  /** Called when a signing link to the other signatory was sent from the flow (Skicka en länk): the parent reloads its list on close. */
+  onLinkIssued?: () => void
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -186,7 +195,7 @@ export function BankIdSigningFlow({
   initialPersonalNumber = null,
   secondSignatureBatchId = null,
   offerSecondSignature = true,
-  secondSignatureAside = null,
+  onLinkIssued,
 }: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
@@ -214,6 +223,10 @@ export function BankIdSigningFlow({
   const [stopped, setStopped] = useState<string | null>(null)
   /** The signing this flow gives the second signature to, as the other signatory; null for a first signature. */
   const [second, setSecond] = useState<string | null>(secondSignatureBatchId)
+  /** Skicka en länk: the payments that wait for the other signatory, while the link form is open in place of the flow. */
+  const [linkOrders, setLinkOrders] = useState<SigningOrderSummary[] | null>(null)
+  /** A link is out for these payments: a second one would be refused while it is open. */
+  const [linkSent, setLinkSent] = useState(false)
   const sentToBank = useRef(false)
   // The bank's step, when it signs in several: which one, since when, and
   // which ones this signing has been through (a new one means a new QR).
@@ -572,6 +585,27 @@ export function BankIdSigningFlow({
     </p>
   ) : null
 
+  // A link to the other signatory names exactly the payments of the signing
+  // that wait for them (the server's rule): those the bank answered for, or,
+  // opened from the list with Kontrasignera, the orders given.
+  const waitingIds = signing ? new Set(signing.orders.filter((o) => o.status === 'awaiting_second_signer').map((o) => o.id)) : null
+  const waitingOrders = waitingIds ? orders.filter((o) => waitingIds.has(o.id)) : orders
+  const canSendLink = client.signingLinks === true && !linkSent && waitingOrders.length > 0 && (waitingIds === null || waitingOrders.length === waitingIds.size)
+
+  if (linkOrders) {
+    // Closed or sent, the flow is back where it was: the dialog's own close ends it.
+    return (
+      <RequestSigningLinkPanel
+        orders={linkOrders}
+        onClose={() => setLinkOrders(null)}
+        onIssued={() => {
+          setLinkSent(true)
+          onLinkIssued?.()
+        }}
+      />
+    )
+  }
+
   if (stage === 'method' && stopped) {
     return (
       <div className="space-y-4">
@@ -587,7 +621,7 @@ export function BankIdSigningFlow({
     return (
       <div className="space-y-4">
         {bankLine}
-        {second && <p className="text-[13px] leading-relaxed">{t('second_signature_intro')}</p>}
+        {second && <p className="text-[13px] leading-relaxed">{t('second_signature_intro', { bank: bankLabel })}</p>}
         <p className="text-[13px] text-muted-foreground">
           {t('sign_summary', { count: orders.length, total: formatCurrency(total, currency) })}
         </p>
@@ -605,7 +639,14 @@ export function BankIdSigningFlow({
           </label>
         )}
         {psuAuthoriserField}
-        {second && secondSignatureAside}
+        {second && canSendLink && (
+          <p className="text-[12.5px] text-muted-foreground">
+            {t('second_signer_elsewhere')}{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setLinkOrders(waitingOrders)}>
+              {t('second_signer_send_link')}
+            </button>
+          </p>
+        )}
         {refusal === 'verification' && (
           <AttnLine action={client.verification === false ? undefined : verificationAction}>
             {verification && verification.state !== 'not_started' && verification.state !== 'valid' ? (
@@ -743,8 +784,10 @@ export function BankIdSigningFlow({
   const doneFailureText = doneFailure
     ? (providerCodeText(t, doneFailure) ?? (retryableSecond ? t('signing_failed') : t('signing_failed_permanent', { code: doneFailure })))
     : null
-  // The bank waits for another signatory who signs here with BankID, not in its online bank.
-  const secondHere = signing?.status === 'awaiting_second_signer' && signing.second_signature_here === true
+  // The bank wants one more signature: another signatory's BankID here, or a signature in its online bank.
+  const awaitingSecond = signing?.status === 'awaiting_second_signer'
+  const secondHere = awaitingSecond && signing?.second_signature_here === true
+  const offerSecond = secondHere && offerSecondSignature && signing !== null
   const anyWithBank = (signing?.orders ?? []).some((o) =>
     ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'].includes(o.status),
   )
@@ -781,14 +824,23 @@ export function BankIdSigningFlow({
           {signing?.follow_up ? t('result_bank_confirming', { count: confirming }) : t('result_bank_confirming_later', { count: confirming })}
         </p>
       )}
-      {anyWithBank && (
-        <p className="text-[12.5px] text-muted-foreground">
-          {secondHere ? t('result_second_signer_here') : signing?.status === 'awaiting_second_signer' ? t('result_second_signer') : t('result_hint')}
-        </p>
+      {anyWithBank && !awaitingSecond && <p className="text-[12.5px] text-muted-foreground">{t('result_hint')}</p>}
+      {anyWithBank && awaitingSecond && (
+        // The next step, not a footnote: whose signature the bank waits for,
+        // where it is given, and how a company that wants one signature gets there.
+        <div className="space-y-2">
+          <p className="text-[13px] leading-relaxed">{t(secondHere ? 'result_second_signer_here' : 'result_second_signer', { bank: bankLabel })}</p>
+          <p className="text-[12.5px] text-muted-foreground">{t('result_sign_alone', { bank: bankLabel })}</p>
+        </div>
       )}
       <DialogFooter>
         {closeButton}
-        {secondHere && offerSecondSignature && signing && <Button onClick={() => signSecond(signing.batch_id)}>{t('sign_second')}</Button>}
+        {offerSecond && canSendLink && (
+          <Button variant="secondary" onClick={() => setLinkOrders(waitingOrders)}>
+            {t('second_signer_send_link')}
+          </Button>
+        )}
+        {offerSecond && signing && <Button onClick={() => signSecond(signing.batch_id)}>{t('sign_second')}</Button>}
       </DialogFooter>
     </div>
   )

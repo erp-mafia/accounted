@@ -4,7 +4,6 @@ import { useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import type { PaymentOrder } from './payments-client'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
@@ -21,10 +20,8 @@ interface SignPaymentOrdersDialogProps {
   pendingBatchId?: string | null
   /** Kontrasignera: the signing the bank holds for another signatory, who signs it here. */
   secondSignatureBatchId?: string | null
-  /** Kontrasignera, when the other signatory is not at this screen: a signing link to them instead. */
-  onRequestLink?: () => void
   onOpenChange: (open: boolean) => void
-  /** Called on close when payments were sent to the bank. */
+  /** Called on close when payments were sent to the bank, or a signing link went out from the dialog. */
   onDone: () => void
 }
 
@@ -36,7 +33,6 @@ export function SignPaymentOrdersDialog({
   resume = null,
   pendingBatchId = null,
   secondSignatureBatchId = null,
-  onRequestLink,
   onOpenChange,
   onDone,
 }: SignPaymentOrdersDialogProps) {
@@ -64,30 +60,15 @@ export function SignPaymentOrdersDialog({
           resume={resume}
           pendingBatchId={pendingBatchId}
           secondSignatureBatchId={secondSignatureBatchId}
-          secondSignatureAside={
-            onRequestLink ? (
-              <p className="text-[12.5px] text-muted-foreground">
-                {t('second_signer_elsewhere')}{' '}
-                <button
-                  type="button"
-                  className={QUIET_LINK_CLASS}
-                  onClick={() => {
-                    // Closed first, so the list reloads only when this dialog sent something to the bank.
-                    close(false)
-                    onRequestLink()
-                  }}
-                >
-                  {t('second_signer_send_link')}
-                </button>
-              </p>
-            ) : null
-          }
           closeButton={
             <Button variant="secondary" onClick={() => close(false)}>
               {t('close')}
             </Button>
           }
           onSentToBank={() => {
+            sent.current = true
+          }}
+          onLinkIssued={() => {
             sent.current = true
           }}
           onStageChange={setStage}

@@ -31,7 +31,7 @@ interface RequestSigningLinkPanelProps {
   onClose: () => void
   /** Called once the link exists, mailed or not. */
   onIssued?: (link: IssuedSigningLink) => void
-  /** Render the title and description here: true inside a dialog that has none of its own for this step. */
+  /** Render the title and description here: true inside a dialog that has none of its own for this step; false keeps only the description, under the dialog's own title. */
   withHeader?: boolean
 }
 
@@ -90,12 +90,15 @@ export function RequestSigningLinkPanel({ orders, onClose, onIssued, withHeader 
     }
   }
 
+  const description = t('description', { count: orders.length, total: formatCurrency(total, currency) })
   const header = withHeader ? (
     <DialogHeader>
       <DialogTitle>{t('title')}</DialogTitle>
-      <DialogDescription>{t('description', { count: orders.length, total: formatCurrency(total, currency) })}</DialogDescription>
+      <DialogDescription>{description}</DialogDescription>
     </DialogHeader>
-  ) : null
+  ) : (
+    <p className="text-[13px] text-muted-foreground">{description}</p>
+  )
 
   if (issued) {
     return (
