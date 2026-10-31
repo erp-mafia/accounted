@@ -10,11 +10,17 @@
  * invoice no longer open, amounts apart) the row keeps the suggestion a
  * person confirms. Runs before the supplier heuristics: it is the strongest
  * evidence there is.
+ *
+ * The debit of an order without an invoice (skattekonto, salary) only links
+ * the order (findLinkableOrderForDebit, linkOrderToDebit): the row is booked
+ * the way it always is, so the pass answers 'none' and the matchers after it
+ * and the mapping rule still run on it. A link that fails here (a client
+ * that may not write orders) is made by the status sync's sweep.
  */
-import type { IngestMatcher } from '@/lib/transactions/ingest-matcher'
+import type { IngestBatch, IngestMatcher } from '@/lib/transactions/ingest-matcher'
 import type { RawTransaction, Transaction } from '@/types'
-import { findOrderForDebit, type OrderDebit } from './debit-match'
-import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from './auto-settle'
+import { findLinkableOrderForDebit, findOrderForDebit, type OrderDebit } from './debit-match'
+import { linkOrderToDebit, loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from './auto-settle'
 import type { PaymentOrderRow } from './types'
 
 /**
@@ -37,6 +43,26 @@ export function debitForOrderMatch(stored: Transaction, raw: RawTransaction): Or
   }
 }
 
+/** Link the order without an invoice this debit pays, if one; never books and never explains the row. */
+async function linkOrderWithoutInvoice(
+  batch: IngestBatch,
+  open: readonly PaymentOrderRow[],
+  tx: Transaction,
+  debit: OrderDebit,
+): Promise<void> {
+  const link = findLinkableOrderForDebit(debit, open)
+  if (!link) return
+  // One debit per order per batch.
+  batch.claims.add('payment_order', link.order.id)
+  const linked = await linkOrderToDebit(batch.supabase, { order: link.order, transaction: tx, basis: link.basis, log: batch.log })
+  batch.log.info(linked.ok ? 'payment order linked to its debit' : 'payment order left for the status sync', {
+    orderId: link.order.id,
+    transactionId: tx.id,
+    basis: link.basis,
+    ...(linked.ok ? {} : { reason: linked.reason }),
+  })
+}
+
 interface PaymentOrderIngestState {
   /** The company's open orders, read once per batch; a claimed order is never matched again. */
   orders: readonly PaymentOrderRow[]
@@ -55,9 +81,14 @@ export const paymentOrderIngestMatcher: IngestMatcher<PaymentOrderIngestState> =
   async match(batch, state, { tx, raw, reread }) {
     const open = state.orders.filter((o) => !batch.claims.has('payment_order', o.id))
     if (open.length === 0) return 'none'
-    const match = findOrderForDebit(debitForOrderMatch(tx, raw), open)
-    const invoiceId = match?.order.supplier_invoice_id
-    if (!match || !invoiceId || batch.claims.has('supplier_invoice', invoiceId)) return 'none'
+    const debit = debitForOrderMatch(tx, raw)
+    const match = findOrderForDebit(debit, open)
+    if (!match) {
+      await linkOrderWithoutInvoice(batch, open, tx, debit)
+      return 'none'
+    }
+    const invoiceId = match.order.supplier_invoice_id
+    if (!invoiceId || batch.claims.has('supplier_invoice', invoiceId)) return 'none'
 
     const order = match.order
     // One debit per order per batch, booked or suggested.

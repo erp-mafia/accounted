@@ -18,10 +18,13 @@
  * credited) is cancelled at the bank, once: a confirmed cancel cancels the
  * order, any other answer holds it for a person (release.ts).
  *
- * Last, the sweep: an executed order still unsettled whose debit is already
+ * Last, the sweeps: an executed order still unsettled whose debit is already
  * in the feed and still unbooked (the debit arrived before the bank reported
  * the payment executed, or before this release) is booked with it
  * (auto-settle.ts), the same way ingest books a debit that arrives after.
+ * And a signed order without an invoice (skattekonto, salary) whose debit is
+ * in the feed, booked or not, is linked to it and executed (linkOrderToDebit):
+ * a bank may answer RCVD long after the money left.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -34,17 +37,21 @@ import {
   PaymentProviderError,
   type PaymentPartyContext,
 } from '@/lib/payments/initiation/provider'
-import { addDaysIso } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import type { Transaction } from '@/types'
 import { applyProviderState } from './apply-state'
-import { settleOrderWithDebit } from './auto-settle'
+import { linkOrderToDebit, settleOrderWithDebit, withFinishedSignings } from './auto-settle'
 import {
+  DEBIT_LINKABLE_ORDER_STATUSES,
   DEBIT_WINDOW_DAYS_AFTER,
   DEBIT_WINDOW_DAYS_BEFORE,
+  debitOfTransaction,
+  findLinkableOrderForDebit,
   findOrderForDebit,
+  isDebitLinkableOrder,
   isDebitSettleableOrder,
+  type DebitLinkBasis,
   type DebitMatchBasis,
-  type OrderDebit,
 } from './debit-match'
 import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, unpayableOrders } from './release'
@@ -91,6 +98,8 @@ export interface PaymentStatusSyncResult {
   signedLate: number
   /** Executed orders settled by a debit already in the feed (auto-settle.ts). */
   settledByDebit: number
+  /** Orders without an invoice (skattekonto, salary) linked to their debit in the feed and executed (linkOrderToDebit). */
+  linkedByDebit: number
   errors: number
   /** True when no payments provider is registered: only the stale-claim pass ran. */
   noProvider?: boolean
@@ -296,6 +305,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     cancelledForClosedInvoice: 0,
     heldForPerson: 0,
     settledByDebit: 0,
+    linkedByDebit: 0,
     errors: 0,
   }
 
@@ -357,23 +367,8 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   }
 
   await settleExecutedOrdersByDebit(writer, log, result)
+  await linkOrdersWithoutInvoiceByDebit(writer, log, result)
   return result
-}
-
-/** A stored transactions row as the matcher reads it. */
-function debitOf(row: Transaction): OrderDebit {
-  return {
-    amount: row.amount,
-    currency: row.currency,
-    date: row.date,
-    value_date: row.value_date ?? null,
-    cash_account_id: row.cash_account_id,
-    description: row.original_description ?? row.description,
-    reference: row.reference,
-    counterparty_iban: row.counterparty_iban,
-    counterparty_account: row.counterparty_account,
-    end_to_end_id: row.end_to_end_id ?? null,
-  }
 }
 
 /**
@@ -403,7 +398,7 @@ async function unbookedDebitFor(
   if (error) throw error
   const rows = Array.isArray(data) ? (data as Transaction[]) : []
   const matches = rows.flatMap((row) => {
-    const match = findOrderForDebit(debitOf(row), [order])
+    const match = findOrderForDebit(debitOfTransaction(row), [order])
     return match ? [{ transaction: row, confidence: match.confidence, basis: match.basis }] : []
   })
   if (matches.length === 1) return matches[0]
@@ -475,6 +470,112 @@ async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, 
     } catch (err) {
       result.errors += 1
       log.warn('debit sweep failed for one order', { orderId: order.id, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+}
+
+/**
+ * The one debit in the feed, booked or not, that is this order's: the
+ * order's amount from its account in its execution window, naming it
+ * (findLinkableOrderForDebit decides among all of the company's linkable
+ * orders, so a debit two of them could be is left alone). A debit another
+ * order is linked to already is not a candidate.
+ */
+async function linkableDebitFor(
+  writer: SupabaseClient,
+  order: PaymentOrderRow,
+  companyOrders: readonly PaymentOrderRow[],
+): Promise<{ transaction: Transaction; basis: DebitLinkBasis } | null> {
+  const { data, error } = await writer
+    .from('transactions')
+    .select('*')
+    .eq('company_id', order.company_id)
+    .eq('cash_account_id', order.cash_account_id)
+    .eq('currency', order.currency)
+    .eq('amount', -Number(order.amount))
+    .is('supplier_invoice_id', null)
+    .eq('is_ignored', false)
+    .in('import_source', [...DEBIT_FEEDS])
+    .gte('date', addDaysIso(order.requested_execution_date, -(DEBIT_WINDOW_DAYS_BEFORE + DEBIT_READ_SLACK_DAYS)))
+    .lte('date', addDaysIso(order.requested_execution_date, DEBIT_WINDOW_DAYS_AFTER + DEBIT_READ_SLACK_DAYS))
+    .limit(20)
+  if (error) throw error
+  const rows = Array.isArray(data) ? (data as Transaction[]) : []
+  let matches = rows.flatMap((row) => {
+    const link = findLinkableOrderForDebit(debitOfTransaction(row), companyOrders)
+    return link && link.order.id === order.id ? [{ transaction: row, basis: link.basis }] : []
+  })
+  if (matches.length > 1) {
+    // Another order's debit of the same shape (a salary run pays several
+    // employees the same message) is not this one's.
+    const { data: linkedData, error: linkedError } = await writer
+      .from('payment_orders')
+      .select('matched_transaction_id')
+      .eq('company_id', order.company_id)
+      .in('matched_transaction_id', matches.map((m) => m.transaction.id))
+    if (linkedError) throw linkedError
+    const linked = new Set(
+      (Array.isArray(linkedData) ? (linkedData as Array<{ matched_transaction_id: string | null }>) : []).map((r) => r.matched_transaction_id),
+    )
+    matches = matches.filter((m) => !linked.has(m.transaction.id))
+  }
+  if (matches.length === 1) return matches[0]
+  const named = matches.filter((m) => m.basis === 'end_to_end_id')
+  return named.length === 1 ? named[0] : null
+}
+
+/**
+ * Signed orders without an invoice (skattekonto, salary) nobody has linked,
+ * each linked to its own debit when exactly one debit in the feed is it.
+ * Books nothing. An order is read from the day before its execution date
+ * (the earliest its debit may land) until EXECUTED_ORDER_SWEEP_DAYS after.
+ * Idempotent: linkOrderToDebit reads the order, its signing and the debit
+ * again, and a linked order leaves the read's filter.
+ */
+async function linkOrdersWithoutInvoiceByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult): Promise<void> {
+  let orders: PaymentOrderRow[]
+  try {
+    const today = todayIsoStockholm()
+    const { data, error } = await writer
+      .from('payment_orders')
+      .select('*')
+      .in('status', [...DEBIT_LINKABLE_ORDER_STATUSES])
+      .is('supplier_invoice_id', null)
+      .is('matched_transaction_id', null)
+      .not('provider_payment_id', 'is', null)
+      .gte('requested_execution_date', addDaysIso(today, -EXECUTED_ORDER_SWEEP_DAYS))
+      .lte('requested_execution_date', addDaysIso(today, DEBIT_WINDOW_DAYS_BEFORE))
+      .order('requested_execution_date', { ascending: true })
+      .limit(BATCH_LIMIT)
+    if (error) throw error
+    // The read's own filter, applied again in code, with the signings that
+    // finished while the bank still answers RCVD.
+    orders = (await withFinishedSignings(writer, Array.isArray(data) ? (data as PaymentOrderRow[]) : [])).filter(isDebitLinkableOrder)
+  } catch (err) {
+    result.errors += 1
+    log.error('payment orders without an invoice could not be read for the debit sweep', err as Error)
+    return
+  }
+
+  for (const order of orders) {
+    try {
+      const debit = await linkableDebitFor(writer, order, orders.filter((o) => o.company_id === order.company_id))
+      if (!debit) continue
+      const outcome = await linkOrderToDebit(writer, { order, transaction: debit.transaction, basis: debit.basis, log })
+      if (outcome.ok) {
+        result.linkedByDebit += 1
+        log.info('payment order without an invoice linked to its debit', {
+          orderId: order.id,
+          transactionId: debit.transaction.id,
+          basis: debit.basis,
+          fromStatus: outcome.fromStatus,
+        })
+      } else {
+        log.info('payment order without an invoice left unlinked', { orderId: order.id, transactionId: debit.transaction.id, reason: outcome.reason })
+      }
+    } catch (err) {
+      result.errors += 1
+      log.warn('debit link sweep failed for one order', { orderId: order.id, error: err instanceof Error ? err.message : String(err) })
     }
   }
 }

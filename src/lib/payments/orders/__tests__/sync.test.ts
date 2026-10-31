@@ -26,7 +26,7 @@ vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchPsu: (...args: unknown[])
 
 import { syncPaymentOrderStatuses } from '../sync'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
-import { ARCIM, arcimDebit, arcimInvoice, arcimOrder } from './fixtures'
+import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
 
 const COMPANY = 'company-1'
 
@@ -268,6 +268,7 @@ describe('syncPaymentOrderStatuses', () => {
       cancelledForClosedInvoice: 0,
       heldForPerson: 0,
       settledByDebit: 0,
+      linkedByDebit: 0,
       errors: 0,
       noProvider: true,
     })
@@ -467,11 +468,75 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
       { data: [order('o1', { status: 'accepted' })] },
       { data: [{ id: 'o1' }] },
       { data: null, error: { message: 'connection reset' } }, // the sweep's read
+      { data: [] }, // the link sweep's read: nothing without an invoice
     ])
 
     const result = await run()
 
     expect(result).toMatchObject({ checked: 1, moved: 1, settledByDebit: 0, errors: 1 })
     expect(patches('payment_orders').at(-1)).toMatchObject({ status: 'executed' })
+  })
+})
+
+describe('syncPaymentOrderStatuses: the link sweep for orders without an invoice', () => {
+  /** The bank answers RCVD for the signed skattekonto order, whose debit is in the feed and booked already. */
+  function seedRcvd(options: { batch?: Record<string, unknown> } = {}) {
+    registerPaymentInitiationProvider(provider(vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] })))
+    db.setTable('payment_order_batches', [
+      { data: [] }, // no abandoned signing
+      { data: [rcvdTaxBatch(options.batch)] }, // the order's signing, read for the sweep and again before the link
+    ])
+    db.setTable('payment_orders', [
+      { data: [rcvdTaxOrder()] }, // in flight: the bank is asked, answers RCVD
+      { data: [{ id: RCVD_TAX.orderId }] }, // provider columns refreshed, status unchanged
+      { data: [] }, // executed supplier orders: none
+      { data: [rcvdTaxOrder()] }, // orders without an invoice, unlinked
+      { data: rcvdTaxOrder() }, // read again before the link
+      { data: [] }, // no other order is linked to the debit
+      { data: [{ id: RCVD_TAX.orderId }] }, // the compare-and-set
+    ])
+    db.setTable('transactions', [{ data: [rcvdTaxDebit()] }, { data: rcvdTaxDebit() }])
+  }
+
+  it('links the RCVD skattekonto order of a finished signing to its booked debit and executes it, booking nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-30T08:00:00Z'))
+    try {
+      seedRcvd()
+
+      const result = await run()
+
+      expect(result).toMatchObject({ checked: 1, moved: 0, linkedByDebit: 1, settledByDebit: 0, errors: 0 })
+      // Orders without an invoice from 14 days back to tomorrow, unlinked, at the bank.
+      expect(db.findCalls('payment_orders', 'gte')).toContainEqual(['requested_execution_date', '2026-10-16'])
+      expect(db.findCalls('payment_orders', 'lte')).toContainEqual(['requested_execution_date', '2026-10-31'])
+      expect(db.findCalls('payment_orders', 'is')).toEqual(
+        expect.arrayContaining([['supplier_invoice_id', null], ['matched_transaction_id', null]]),
+      )
+      // The debit may be booked already: no journal_entry_id filter on the read.
+      expect(db.findCalls('transactions', 'is')).toEqual([['supplier_invoice_id', null]])
+      expect(patches('payment_orders').at(-1)).toMatchObject({
+        status: 'executed',
+        executed_at: '2026-10-27T00:00:00.000Z',
+        matched_transaction_id: RCVD_TAX.transactionId,
+      })
+      expect(events()).toContainEqual(
+        expect.objectContaining({ event_type: 'matched', from_status: 'awaiting_signature', to_status: 'executed', provider_status: 'RCVD' }),
+      )
+      expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+      expect(db.findCalls('transactions', 'update')).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves an order whose signing never finished, however well the debit fits', async () => {
+    seedRcvd({ batch: { status: 'created', signed_at: null } })
+
+    const result = await run()
+
+    expect(result).toMatchObject({ linkedByDebit: 0, errors: 0 })
+    expect(patches('payment_orders').some((p) => p.status === 'executed')).toBe(false)
+    expect(events().some((e) => e.event_type === 'matched')).toBe(false)
   })
 })

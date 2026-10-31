@@ -1,8 +1,9 @@
 /**
  * A payment in to the skattekonto never books through the supplier payment
  * settlement: its bank debit is booked once, like any bank row to
- * Skatteverket (against the skattekonto account), and the order neither
- * matches the debit nor creates a journal entry when the bank executes it.
+ * Skatteverket (against the skattekonto account), and the order never
+ * creates a journal entry. Its debit only links the order
+ * (linkOrderToDebit, link-by-debit.test.ts).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -18,7 +19,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 
 import { loadOpenPaymentOrders, settleOrderWithDebit } from '../auto-settle'
-import { findOrderForDebit, isDebitSettleableOrder } from '../debit-match'
+import { findOrderForDebit, isDebitLinkableOrder, isDebitSettleableOrder } from '../debit-match'
 import { ARCIM, arcimDebit, arcimOrder } from './fixtures'
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as unknown as Logger
@@ -70,10 +71,11 @@ describe('an executed skattekonto payment and its bank debit', () => {
     ).toBeNull()
   })
 
-  it('is left out of the open orders the import settles against', async () => {
+  it('is loaded with the open orders only as one its debit links, never one it books', async () => {
     db.setTable('payment_orders', { data: [taxOrder] })
-    expect(await loadOpenPaymentOrders(db.supabase as unknown as SupabaseClient, ARCIM.companyId)).toEqual([])
-    expect(db.findCalls('payment_orders', 'not')).toContainEqual(['supplier_invoice_id', 'is', null])
+    expect(await loadOpenPaymentOrders(db.supabase as unknown as SupabaseClient, ARCIM.companyId)).toEqual([taxOrder])
+    expect(isDebitLinkableOrder(taxOrder)).toBe(true)
+    expect(isDebitSettleableOrder(taxOrder)).toBe(false)
   })
 
   it('is refused by the settlement before anything is booked', async () => {
