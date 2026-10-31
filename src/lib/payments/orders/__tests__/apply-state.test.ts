@@ -36,4 +36,36 @@ describe('applyProviderState', () => {
     expect(db.findCalls('payment_orders', 'update')[0]![0]).toMatchObject({ status: 'accepted', provider_status: 'ACSP' })
     expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'awaiting_signature'])
   })
+
+  it('keeps the bank reason on an order it rejects, where Betalningar, Att göra and the mail read it', async () => {
+    const db = createTableMockSupabase({ payment_orders: { data: [{ id: 'o1' }] }, payment_order_events: { data: null } })
+
+    const next = await applyProviderState(
+      db.supabase as never,
+      order('o1', { status: 'awaiting_second_signer' }),
+      { providerStatus: 'RJCT', status: 'rejected', messages: ['PSU_RIGHTS_MISSING'], refusalCode: 'PSU_RIGHTS_MISSING' },
+      null,
+      log as never,
+    )
+
+    expect(next).toBe('rejected')
+    expect(db.findCalls('payment_orders', 'update')[0]![0]).toMatchObject({ status: 'rejected', provider_error_code: 'PSU_RIGHTS_MISSING' })
+  })
+
+  it('writes no reason when the bank gave none, or when the order does not end', async () => {
+    const db = createTableMockSupabase({ payment_orders: { data: [{ id: 'o1' }] }, payment_order_events: { data: null } })
+
+    await applyProviderState(db.supabase as never, order('o1', { status: 'accepted' }), { providerStatus: 'RJCT', status: 'rejected', messages: [] }, null, log as never)
+    await applyProviderState(
+      db.supabase as never,
+      order('o2', { status: 'awaiting_second_signer' }),
+      { providerStatus: 'PATC', status: 'awaiting_second_signer', messages: ['AUTHORISATION_PENDING_API'], secondSignatureViaApi: true },
+      null,
+      log as never,
+    )
+
+    const [rejected, waiting] = db.findCalls('payment_orders', 'update').map(([p]) => p as Record<string, unknown>)
+    expect(rejected!.provider_error_code).toBeUndefined()
+    expect(waiting!.provider_error_code).toBeUndefined()
+  })
 })

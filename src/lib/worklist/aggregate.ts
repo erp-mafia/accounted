@@ -3,6 +3,7 @@ import type {
   BankSwitchDue,
   DocumentToSignDue,
   ExpensePayoutDue,
+  PaymentFailedDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -33,6 +34,7 @@ import {
   countCollectionDecisionsAndBatch,
   countReminderBatchReady,
   getOverdueInvoicesDue,
+  countPaymentsFailedDue,
   countPaymentsVerificationDue,
   countPendingOperations,
   countReconciliationDue,
@@ -101,6 +103,12 @@ export interface GetWorklistCountsOptions {
    */
   supplierPayeeChangesDue?: SupplierPayeeChangeDue[] | Promise<SupplierPayeeChangeDue[]>
   /**
+   * The supplier invoices whose bank payment did not go through the caller
+   * is already fetching (Hem renders one row each): the count is the list's
+   * length instead of a second read.
+   */
+  paymentsFailedDue?: PaymentFailedDue[] | Promise<PaymentFailedDue[]>
+  /**
    * The open suggestions the caller is already fetching (Hem renders one
    * Förslag card each, at most three): the count is the list's length
    * instead of a second read.
@@ -159,6 +167,7 @@ export async function getWorklistCounts(
     paymentsVerificationRenewal,
     supplierPayeeChange,
     documentsToSign,
+    paymentFailed,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -210,6 +219,9 @@ export async function getWorklistCounts(
       : options.userId
         ? countDocumentsToSign(supabase, companyId, options.userId)
         : 0,
+    options.paymentsFailedDue
+      ? Promise.resolve(options.paymentsFailedDue).then((rows) => rows.length)
+      : countPaymentsFailedDue(supabase, companyId),
   ])
 
   // The overdue customer invoices are one grouped row (lib/worklist/types.ts
@@ -248,6 +260,7 @@ export async function getWorklistCounts(
       payments_verification_renewal: paymentsVerificationRenewal,
       supplier_payee_change: supplierPayeeChange,
       documents_to_sign: documentsToSign,
+      payment_failed: paymentFailed,
     },
     total:
       bookTransaction +
@@ -277,7 +290,8 @@ export async function getWorklistCounts(
       bankSwitch +
       paymentsVerificationRenewal +
       supplierPayeeChange +
-      documentsToSign,
+      documentsToSign +
+      paymentFailed,
     overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
     inboxHref: inboxHref(isInkorgV2Enabled(companyId)),
   }

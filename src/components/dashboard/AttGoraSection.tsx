@@ -15,10 +15,11 @@ import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
-import type { DocumentToSignDue, PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
+import type { DocumentToSignDue, PaymentFailedDue, PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
 import { PayeeChangeDialog } from '@/components/payments/PayeeChangeDialog'
 import type { AllocationTransaction } from '@/components/transactions/MatchAllocationDialog'
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
+import { failedPaymentReasonText, type BankPaymentsTranslator } from '@/lib/payments/orders/failed-payment-reason'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
@@ -127,6 +128,12 @@ interface AttGoraSectionProps {
    * each is held until it is decided.
    */
   supplierPayeeChanges?: SupplierPayeeChangeDue[]
+  /**
+   * Supplier invoices whose newest bank payment the bank rejected or that
+   * failed, still to pay (lib/worklist payment_failed): one row each at the
+   * top of the list, opening the invoice, where it is paid again.
+   */
+  paymentsFailed?: PaymentFailedDue[]
   /**
    * Bank rows that settle several open invoices of one counterparty
    * (lib/worklist listSuggestedMatches, the matches carrying `allocations`):
@@ -278,6 +285,7 @@ export default function AttGoraSection({
   bankSwitches = [],
   paymentsVerification = null,
   supplierPayeeChanges = [],
+  paymentsFailed = [],
   invoiceSets = [],
   suggestions = [],
   grantReview = null,
@@ -294,6 +302,7 @@ export default function AttGoraSection({
   const tCollections = useTranslations('collections')
   const tReminders = useTranslations('reminders')
   const tAttest = useTranslations('att_gora_attest')
+  const tBankPayments = useTranslations('bank_payments')
   const router = useRouter()
   const { formatDateLong } = useFormat()
   // The Dokumentinkorg is a paid (AI) surface: a non-payer's home to-do list
@@ -429,7 +438,8 @@ export default function AttGoraSection({
     !bevakaRows &&
     urgentSwitches.length === 0 &&
     verificationExpired === null &&
-    payeeChanges.length === 0
+    payeeChanges.length === 0 &&
+    paymentsFailed.length === 0
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -543,6 +553,26 @@ export default function AttGoraSection({
     />
   )
 
+  // One row per supplier invoice whose bank payment did not go through: the
+  // label opens the invoice, where Betala via banken (or the betalfil) pays
+  // it again, with the bank's reason (failedPaymentReasonText, the mail's
+  // rule too). The supplier is not paid, so the rows lead the list (band Nu).
+  const paymentFailedRow = (item: PaymentFailedDue) => {
+    const reason = failedPaymentReasonText(tBankPayments as unknown as BankPaymentsTranslator, item.status, item.reason_code)
+    const invoice = item.supplier_invoice_number?.trim() || (item.arrival_number != null ? `#${item.arrival_number}` : null)
+    return (
+      <WorklistRow
+        key={`payment-failed-${item.supplier_invoice_id}`}
+        href={`/supplier-invoices/${item.supplier_invoice_id}`}
+        icon={ExclamationTriangleIcon}
+        label={t('row_payment_failed', { payee: item.payee_name })}
+        hint={t('row_payment_failed_hint')}
+        detail={invoice ? t('row_payment_failed_detail', { invoice, reason }) : reason}
+        badge={<span className="text-xs tabular-nums text-muted-foreground">{formatCurrency(item.amount, item.currency)}</span>}
+      />
+    )
+  }
+
   // One row per connection to switch: the deep link opens Koppla banken in
   // switch mode for exactly that row. Past the deadline the row says the
   // feed has stopped; inside 14 days a chip counts the days (an exception,
@@ -596,10 +626,11 @@ export default function AttGoraSection({
             </div>
           ) : (
             <div className="pb-2">
-              {(urgentSwitches.length > 0 || verificationExpired || payeeChanges.length > 0) && (
+              {(urgentSwitches.length > 0 || verificationExpired || payeeChanges.length > 0 || paymentsFailed.length > 0) && (
                 <div>
                   <BandHeader>{t('band_now')}</BandHeader>
                   <div>
+                    {paymentsFailed.map(paymentFailedRow)}
                     {payeeChanges.map(payeeChangeRow)}
                     {verificationExpired && verificationRow(verificationExpired)}
                     {urgentSwitches.map(switchRow)}

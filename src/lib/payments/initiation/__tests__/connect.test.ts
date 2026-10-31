@@ -240,6 +240,16 @@ describe('the operations', () => {
     expect(plain).not.toHaveProperty('secondSignatureViaApi')
   })
 
+  // Production, 2026-10-20: RJCT with PSU_RIGHTS_MISSING, three days after the signing.
+  it('names the reason of a refused payment from its first message, and only of a refused one', async () => {
+    const rjct = { providerStatus: 'RJCT', status: 'rejected', messages: ['PSU_RIGHTS_MISSING'] }
+    expect(await provider(fetchAnswering(200, rjct)).getPaymentState(CTX, 'pay-1', 'swedish-giro')).toEqual({ ...rjct, refusalCode: 'PSU_RIGHTS_MISSING' })
+    const silent = await provider(fetchAnswering(200, { ...rjct, messages: [] })).getPaymentState(CTX, 'pay-1', 'swedish-giro')
+    expect(silent).not.toHaveProperty('refusalCode')
+    const accepted = await provider(fetchAnswering(200, { providerStatus: 'ACSP', status: 'accepted', messages: ['INFO'] })).getPaymentState(CTX, 'pay-1', 'swedish-giro')
+    expect(accepted).not.toHaveProperty('refusalCode')
+  })
+
   it('createSigningBasket keys the basket by its sorted payment ids', async () => {
     const fetchMock = fetchAnswering(200, { providerBasketId: 'bask-1' })
     const basket = await provider(fetchMock).createSigningBasket(CTX, ['p-2', 'p-1'])
