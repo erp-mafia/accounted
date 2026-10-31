@@ -17,12 +17,16 @@ import {
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { useCompany } from '@/contexts/CompanyContext'
+import { plannedLegalFormOfSnapshot } from '@/lib/company-lookup/entity-type-map'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { createClient } from '@/lib/supabase/client'
 import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
 
 export function TaxSettingsContent() {
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  const { company } = useCompany()
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const searchParams = useSearchParams()
@@ -79,6 +83,28 @@ export function TaxSettingsContent() {
       cancelled = true
     }
   }, [])
+
+  // The Företag page shows Bolagsverket's form (companies.tic_snapshot). A
+  // handelsbolag or kommanditbolag is set up as another form until Accounted
+  // supports it, so this page names the registry's form beside the one the
+  // books follow instead of contradicting the Företag page silently (PH 237).
+  const [registryFormLabel, setRegistryFormLabel] = useState<string | null>(null)
+  useEffect(() => {
+    if (!company?.id) return
+    const supabase = createClient()
+    let cancelled = false
+    supabase
+      .from('companies')
+      .select('tic_snapshot')
+      .eq('id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setRegistryFormLabel(plannedLegalFormOfSnapshot(data?.tic_snapshot)?.label ?? null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
 
   // The Skatteverket connection moved to its own page under Kopplingar
   // (2026-09-24). A connect flow started before the move still returns here
@@ -172,6 +198,7 @@ export function TaxSettingsContent() {
           euPurchasesDetected={euPurchasesDetected}
           kuTriggers={kuTriggers}
           rotRutSignalDetected={rotRutSignalDetected}
+          registryFormLabel={registryFormLabel}
         />
       </SettingsFormWrapper>
 

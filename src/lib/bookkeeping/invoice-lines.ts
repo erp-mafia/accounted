@@ -26,7 +26,7 @@ import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from './invoice-
 import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
-import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
@@ -904,10 +904,12 @@ export interface InvoiceCashLinesSource {
 
 /**
  * The SEK that arrived on the bank row a kontantmetoden payment is matched
- * to, for buildInvoiceCashLines' `knownBankSek`. Undefined unless the row is
- * in SEK: öresavrundning is a whole-krona rule, and a foreign row settles
- * with a kursdiff instead. One derivation for the match route, its preview
- * and createInvoiceCashEntry, so what the dialog shows is what gets booked.
+ * to, for buildInvoiceCashLines' `knownBankSek`: on a SEK invoice the base
+ * of the öresavrundning, on a foreign invoice of the kursdiff. Undefined
+ * unless the row is in SEK (a row on a foreign-currency account books the
+ * customer share at the invoice's rate). One derivation for the match route,
+ * its preview and createInvoiceCashEntry, so what the dialog shows is what
+ * gets booked.
  */
 export function invoiceCashBankSek(
   bankTransaction?: { amount: number; currency?: string | null } | null,
@@ -980,6 +982,7 @@ function cashRecognitionLines(
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
  *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
+ *   Dr/Cr  7960/3960 Kursdiff       [foreign invoice: bank vs share]  (if applicable)
  *   Credit 2420/3740 Överbetalning  [bank above share]   (if applicable)
  *   Debit  6570 Avgift betaltjänst  [bank below share]   (if applicable)
  *
@@ -988,8 +991,12 @@ function cashRecognitionLines(
  * krona to the customer share is öresavrundning: 1930 takes what arrived and
  * 3740 the gap (customer side of oreRoundingLine), so 1930 follows the bank
  * statement. Revenue and moms stay on the invoice amounts: 3740 carries no
- * VAT. An exact row, a gap of a krona or more (the routes refuse those
- * before booking) and a foreign invoice book the customer share as before.
+ * VAT. An exact row and a gap of a krona or more (the routes refuse those
+ * before booking) book the customer share as before. On a foreign invoice
+ * revenue and moms stay at the invoice's rate (the rate of the taxable
+ * event), 1930 takes what arrived and the gap is the realised kursvinst
+ * (3960) or kursförlust (7960), as the faktureringsmetoden clearing books it
+ * (crm#1551).
  *
  * `overpaymentAccount`: when the row brought a krona or more ABOVE the
  * customer share and this names an account allowed to take the excess
@@ -1068,7 +1075,15 @@ export function buildInvoiceCashLines(
   const shortfall = knowsBank ? paymentFeeShortfall(customerShare, knownBankSek) : 0
   const fee =
     shortfall !== 0 && feeAccount && paymentFeeAllowed(feeAccount, shortfall, customerShare) ? shortfall : 0
-  const bankAmount = roundOre(customerShare - oreGap + overpayment - fee)
+  // A foreign invoice settled by a known SEK amount: the customer share is
+  // the invoice's foreign amount at its own rate, so the whole gap to what
+  // arrived is kursdiff (the match doors settle in full only within
+  // FX_FULL_SETTLEMENT_BAND). > 0 is a gain.
+  const fxGain =
+    isForeign && customerShare > 0 && knownBankSek != null && knownBankSek > 0
+      ? roundOre(knownBankSek - customerShare)
+      : 0
+  const bankAmount = roundOre(customerShare - oreGap + overpayment - fee + fxGain)
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -1087,6 +1102,9 @@ export function buildInvoiceCashLines(
   }
   if (fee !== 0) {
     lines.push({ ...paymentFeeLine(fee, feeAccount!), dimensions: defaultDimensions })
+  }
+  if (fxGain !== 0) {
+    lines.push({ ...fxDifferenceLine(fxGain), dimensions: defaultDimensions })
   }
 
   return {

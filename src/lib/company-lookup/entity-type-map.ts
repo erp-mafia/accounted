@@ -107,3 +107,15 @@ export function mapPlannedLegalForm(ticType: string | null | undefined): Planned
   }
   return null
 }
+
+/**
+ * The planned form a cached registry snapshot (companies.tic_snapshot) names,
+ * or null. Such a company was set up as the nearest supported form (or before
+ * the journey stopped on it), so its settings show a form Bolagsverket does
+ * not: the Moms och skatt page names the registry's form beside it (PH 237).
+ */
+export function plannedLegalFormOfSnapshot(snapshot: unknown): PlannedLegalForm | null {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  const legalEntityType = (snapshot as { legalEntityType?: unknown }).legalEntityType
+  return typeof legalEntityType === 'string' ? mapPlannedLegalForm(legalEntityType) : null
+}

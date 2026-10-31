@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType } from '../entity-type-map'
+import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType, plannedLegalFormOfSnapshot } from '../entity-type-map'
 
 describe('mapEntityType', () => {
   it('maps the exact AB codes and labels to aktiebolag', () => {
@@ -134,5 +134,24 @@ describe('mapEntityType: ekonomisk förening', () => {
     expect(mapEntityType('Bostadsrättsförening')).not.toBe('ekonomisk_forening')
     expect(mapEntityType('Kooperativ hyresrättsförening')).toBeNull()
     expect(mapEntityType('Sambruksförening')).toBeNull()
+  })
+})
+
+describe('plannedLegalFormOfSnapshot: the registry form a company set up as another form carries (PH 237)', () => {
+  it('reads the snapshot legalEntityType through mapPlannedLegalForm', () => {
+    expect(plannedLegalFormOfSnapshot({ legalEntityType: 'Kommanditbolag', registration: { vat: true } })).toMatchObject({
+      code: 'kommanditbolag',
+      label: 'Kommanditbolag',
+    })
+    expect(plannedLegalFormOfSnapshot({ legalEntityType: 'Handelsbolag' })?.code).toBe('handelsbolag')
+  })
+
+  it('is null for a supported form, a missing or malformed snapshot', () => {
+    expect(plannedLegalFormOfSnapshot({ legalEntityType: 'Aktiebolag' })).toBeNull()
+    expect(plannedLegalFormOfSnapshot({ legalEntityType: 'Enskild näringsidkare' })).toBeNull()
+    expect(plannedLegalFormOfSnapshot({ legalEntityType: 42 })).toBeNull()
+    expect(plannedLegalFormOfSnapshot({})).toBeNull()
+    expect(plannedLegalFormOfSnapshot(null)).toBeNull()
+    expect(plannedLegalFormOfSnapshot('Kommanditbolag')).toBeNull()
   })
 })
