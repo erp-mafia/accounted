@@ -25,10 +25,14 @@
  * And a signed order without an invoice (skattekonto, salary) whose debit is
  * in the feed, booked or not, is linked to it and executed (linkOrderToDebit):
  * a bank may answer RCVD long after the money left.
+ *
+ * Every run, bank or not, clears the signer's IP address of each signing none
+ * of whose orders is at the bank any more (forgetIpsOfClosedSignings): it is
+ * personal data kept only for the reads and cancels above.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { storedBatchPsu } from '@/lib/auth/resource-psu'
+import { storedBatchSigner, type StoredBatchSigner } from '@/lib/auth/resource-psu'
 import { companyOrgNumber } from '@/lib/company/org-number'
 import type { Logger } from '@/lib/logger'
 import {
@@ -38,6 +42,7 @@ import {
   type PaymentPartyContext,
 } from '@/lib/payments/initiation/provider'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Transaction } from '@/types'
 import { applyProviderState } from './apply-state'
 import { linkOrderToDebit, settleOrderWithDebit, withFinishedSignings } from './auto-settle'
@@ -78,6 +83,13 @@ const DEBIT_FEEDS = ['open_payments', 'enable_banking'] as const
  */
 const DEBIT_READ_SLACK_DAYS = 3
 
+/**
+ * An order whose payment is still at the bank: read by this sync, and
+ * cancelled when its invoice closed. Its signing's kept IP address stays
+ * while one of its orders is in one of these.
+ */
+const AT_THE_BANK: readonly PaymentOrderStatus[] = ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted']
+
 /** Statuses only a finished signing reaches. */
 const SIGNED: ReadonlySet<PaymentOrderStatus> = new Set(['awaiting_second_signer', 'accepted', 'executed'])
 
@@ -100,6 +112,8 @@ export interface PaymentStatusSyncResult {
   settledByDebit: number
   /** Orders without an invoice (skattekonto, salary) linked to their debit in the feed and executed (linkOrderToDebit). */
   linkedByDebit: number
+  /** Signings none of whose orders is at the bank any more whose signer's IP address was cleared. */
+  forgottenIps: number
   errors: number
   /** True when no payments provider is registered: only the stale-claim pass ran. */
   noProvider?: boolean
@@ -107,33 +121,38 @@ export interface PaymentStatusSyncResult {
 
 /**
  * Reading a payment's status (or cancelling it) unattended: the company, the
- * debtor bank and the PSU-ID the payment was created with (several banks
- * require the same one on every later call to it, payment_batch_psus); null
- * when none is kept. No person is present, so no IP address or user agent.
+ * debtor bank, the PSU-ID the payment was created with (several banks
+ * require the same one on every later call to it) and the IP address the
+ * signing was started from (Länsförsäkringar and SEB refuse a status read
+ * without a PSU-IP-Address), both from payment_batch_psus; null when none is
+ * kept, never a guessed or a server address. No person is present, so no
+ * user agent.
  */
-function statusParty(order: PaymentOrderRow, orgNumber: string, psuId: string | null): PaymentPartyContext {
+function statusParty(order: PaymentOrderRow, orgNumber: string, signer: StoredBatchSigner): PaymentPartyContext {
   return {
     companyId: order.company_id,
     companyOrgNumber: orgNumber,
     accountContext: paymentAccountContext(order.debtor_snapshot.psu_type),
     debtorBic: order.debtor_snapshot.bic,
     affiliatedAspspId: order.debtor_snapshot.affiliated_aspsp_id ?? null,
-    signerPersonalNumber: psuId,
-    psuIpAddress: null,
+    signerPersonalNumber: signer.psuId,
+    psuIpAddress: signer.ipAddress,
     psuUserAgent: null,
   }
 }
 
-/** The PSU-ID each signing's payments were created with, read once per signing and run. */
-type BatchPsuOf = (batchId: string | null) => Promise<string | null>
+/** The PSU-ID and IP address each signing's payments were created with, read once per signing and run. */
+type BatchPsuOf = (batchId: string | null) => Promise<StoredBatchSigner>
+
+const NO_SIGNER: StoredBatchSigner = { psuId: null, ipAddress: null }
 
 function batchPsuReader(): BatchPsuOf {
-  const read = new Map<string, Promise<string | null>>()
+  const read = new Map<string, Promise<StoredBatchSigner>>()
   return (batchId) => {
-    if (!batchId) return Promise.resolve(null)
+    if (!batchId) return Promise.resolve(NO_SIGNER)
     let psu = read.get(batchId)
     if (!psu) {
-      psu = storedBatchPsu(batchId)
+      psu = storedBatchSigner(batchId)
       read.set(batchId, psu)
     }
     return psu
@@ -306,6 +325,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     heldForPerson: 0,
     settledByDebit: 0,
     linkedByDebit: 0,
+    forgottenIps: 0,
     errors: 0,
   }
 
@@ -321,7 +341,10 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   }
 
   // Dark installation: nothing below can be done without asking a bank.
-  if (!(await hasPaymentInitiationProviders())) return { ...result, noProvider: true }
+  if (!(await hasPaymentInitiationProviders())) {
+    await forgetIpsOfClosedSignings(writer, log, result)
+    return { ...result, noProvider: true }
+  }
 
   const orgNumbers = new Map<string, string | null>()
   const psuOf = batchPsuReader()
@@ -330,7 +353,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   const { data, error } = await writer
     .from('payment_orders')
     .select('*')
-    .in('status', ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'])
+    .in('status', [...AT_THE_BANK])
     .not('provider_payment_id', 'is', null)
     .order('provider_status_at', { ascending: true, nullsFirst: true })
     .limit(BATCH_LIMIT)
@@ -368,7 +391,62 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
 
   await settleExecutedOrdersByDebit(writer, log, result)
   await linkOrdersWithoutInvoiceByDebit(writer, log, result)
+  await forgetIpsOfClosedSignings(writer, log, result)
   return result
+}
+
+/** The signings whose kept IP address the sweep looks at per run. */
+const IP_SWEEP_LIMIT = 200
+
+/**
+ * The signer's IP address (payment_batch_psus.psu_ip_address) is personal
+ * data kept only for the unattended reads and cancels of the signing's
+ * payments: once none of its orders is at the bank (every one final,
+ * released back to approved, or moved to a newer signing), nothing reads it
+ * again and it is cleared. No order joins a signing after its start, so a
+ * signing found closed stays closed. Additive like the debit sweeps: a
+ * failure is one error line and the next run tries again; before the column
+ * exists (between deploy and migration) there is nothing to clear.
+ */
+async function forgetIpsOfClosedSignings(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult): Promise<void> {
+  try {
+    const { data, error } = await writer
+      .from('payment_batch_psus')
+      .select('batch_id')
+      .not('psu_ip_address', 'is', null)
+      .limit(IP_SWEEP_LIMIT)
+    if (error) {
+      const code = (error as { code?: unknown }).code
+      if (code === '42703') return
+      throw error
+    }
+    const kept = (Array.isArray(data) ? (data as Array<{ batch_id: string }>) : []).map((row) => row.batch_id)
+    if (kept.length === 0) return
+    // Every open order of those signings: a salary run's one signing may hold more than a page.
+    const open = await fetchAllRows<{ batch_id: string | null }>(({ from, to }) =>
+      writer
+        .from('payment_orders')
+        .select('batch_id')
+        .in('batch_id', kept)
+        .in('status', [...AT_THE_BANK])
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    const stillAtBank = new Set(open.map((row) => row.batch_id))
+    const closed = kept.filter((batchId) => !stillAtBank.has(batchId))
+    if (closed.length === 0) return
+    const { data: cleared, error: clearError } = await writer
+      .from('payment_batch_psus')
+      .update({ psu_ip_address: null })
+      .in('batch_id', closed)
+      .not('psu_ip_address', 'is', null)
+      .select('batch_id')
+    if (clearError) throw clearError
+    result.forgottenIps += Array.isArray(cleared) ? cleared.length : 0
+  } catch (err) {
+    result.errors += 1
+    log.error('signer IP addresses of closed signings could not be cleared', err as Error)
+  }
 }
 
 /**

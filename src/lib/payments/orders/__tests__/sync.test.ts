@@ -21,8 +21,9 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({ anchorSupplierInvoiceDocument: vi.fn() }))
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({ clearSettledInvoiceSuggestions: vi.fn() }))
-const mockStoredBatchPsu = vi.fn()
-vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchPsu: (...args: unknown[]) => mockStoredBatchPsu(...args) }))
+const mockStoredBatchSigner = vi.fn()
+vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchSigner: (...args: unknown[]) => mockStoredBatchSigner(...args) }))
+const NO_SIGNER = { psuId: null, ipAddress: null }
 
 import { syncPaymentOrderStatuses } from '../sync'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
@@ -81,7 +82,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetPaymentInitiationProviders()
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
-  mockStoredBatchPsu.mockResolvedValue(null)
+  mockStoredBatchSigner.mockResolvedValue(NO_SIGNER)
   db = createTableMockSupabase({
     company_settings: { data: { org_number: '556677-8899', accounting_method: 'accrual' } },
     cash_accounts: { data: { ledger_account: '1930' } },
@@ -114,8 +115,10 @@ describe('syncPaymentOrderStatuses', () => {
     )
   })
 
-  it('sends the PSU-ID the payments were created with on every status read and cancel, read once per signing, with no IP or user agent', async () => {
-    mockStoredBatchPsu.mockImplementation(async (batchId: string) => (batchId === 'batch-1' ? '198001019879' : null))
+  it('sends the PSU-ID and the IP address the payments were created with on every status read and cancel, read once per signing, with no user agent', async () => {
+    mockStoredBatchSigner.mockImplementation(async (batchId: string) =>
+      batchId === 'batch-1' ? { psuId: '198001019879', ipAddress: '203.0.113.10' } : NO_SIGNER,
+    )
     const getPaymentState = vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] })
     const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' })
     registerPaymentInitiationProvider(provider(getPaymentState, cancelPayment))
@@ -130,17 +133,17 @@ describe('syncPaymentOrderStatuses', () => {
 
     await run()
 
-    const kept = expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: null, psuUserAgent: null })
+    const kept = expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: '203.0.113.10', psuUserAgent: null })
     expect(getPaymentState).toHaveBeenCalledWith(kept, 'pay-o1', 'swedish-giro')
     expect(getPaymentState).toHaveBeenCalledWith(kept, 'pay-o2', 'swedish-giro')
     expect(cancelPayment).toHaveBeenCalledWith(kept, 'pay-o1', 'swedish-giro')
-    // A signing without a kept number reads as before: no PSU-ID.
-    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: null }), 'pay-o3', 'swedish-giro')
-    expect(mockStoredBatchPsu.mock.calls.map(([id]) => id).sort()).toEqual(['batch-1', 'batch-old'])
+    // A signing without a kept number or address reads as before: no PSU-ID, no IP, never a guessed one.
+    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: null, psuIpAddress: null }), 'pay-o3', 'swedish-giro')
+    expect(mockStoredBatchSigner.mock.calls.map(([id]) => id).sort()).toEqual(['batch-1', 'batch-old'])
   })
 
-  it('reads an abandoned signing\'s payments with the PSU-ID they were created with', async () => {
-    mockStoredBatchPsu.mockResolvedValue('198001019879')
+  it('reads an abandoned signing\'s payments with the PSU-ID and the IP address they were created with', async () => {
+    mockStoredBatchSigner.mockResolvedValue({ psuId: '198001019879', ipAddress: '2001:db8::1' })
     const getPaymentState = vi.fn().mockResolvedValue({ providerStatus: 'ACSP', status: 'accepted', messages: [] })
     registerPaymentInitiationProvider(provider(getPaymentState))
     db.setTable('payment_order_batches', [{ data: [SIGNING] }, { data: [{ id: 'batch-1' }] }])
@@ -148,8 +151,8 @@ describe('syncPaymentOrderStatuses', () => {
 
     await run()
 
-    expect(mockStoredBatchPsu).toHaveBeenCalledWith('batch-1')
-    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: null }), 'pay-o1', 'swedish-giro')
+    expect(mockStoredBatchSigner).toHaveBeenCalledWith('batch-1')
+    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: '2001:db8::1' }), 'pay-o1', 'swedish-giro')
   })
 
   it('sweeps claims nobody finished in one database call, before anything else and even with no provider registered', async () => {
@@ -255,7 +258,7 @@ describe('syncPaymentOrderStatuses', () => {
     expect(getPaymentState).not.toHaveBeenCalled()
   })
 
-  it('stops after the stale-claim sweep when the installation has no payments provider', async () => {
+  it('stops after the stale-claim sweep (and the IP sweep, which needs no bank) when the installation has no payments provider', async () => {
     const result = await run()
 
     expect(result).toEqual({
@@ -269,6 +272,7 @@ describe('syncPaymentOrderStatuses', () => {
       heldForPerson: 0,
       settledByDebit: 0,
       linkedByDebit: 0,
+      forgottenIps: 0,
       errors: 0,
       noProvider: true,
     })
@@ -538,5 +542,63 @@ describe('syncPaymentOrderStatuses: the link sweep for orders without an invoice
     expect(result).toMatchObject({ linkedByDebit: 0, errors: 0 })
     expect(patches('payment_orders').some((p) => p.status === 'executed')).toBe(false)
     expect(events().some((e) => e.event_type === 'matched')).toBe(false)
+  })
+})
+
+describe('the signer\'s IP address once the signing is closed', () => {
+  const kept = (...ids: string[]) => ({ data: ids.map((batch_id) => ({ batch_id })) })
+
+  it('is cleared for every signing none of whose orders is at the bank, and kept while one still is', async () => {
+    db.setTable('payment_batch_psus', [kept('batch-done', 'batch-open', 'batch-moved'), { data: [{ batch_id: 'batch-done' }, { batch_id: 'batch-moved' }] }])
+    // After the main read and the debit sweeps (none here): the open orders of the kept signings.
+    db.setTable('payment_orders', (calls) => {
+      const statuses = calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1] as string[] | undefined
+      const batches = calls.find((c) => c.method === 'in' && c.args[0] === 'batch_id')
+      return batches && statuses ? { data: [{ batch_id: 'batch-open' }] } : { data: [] }
+    })
+
+    const result = await run()
+
+    expect(result.forgottenIps).toBe(2)
+    const [read] = db.findCalls('payment_batch_psus', 'not')
+    expect(read).toEqual(['psu_ip_address', 'is', null])
+    const openRead = db.findCalls('payment_orders', 'in').find(([column]) => column === 'batch_id')
+    expect(openRead).toEqual(['batch_id', ['batch-done', 'batch-open', 'batch-moved']])
+    const statusRead = db.findCalls('payment_orders', 'in').filter(([column]) => column === 'status').at(-1)
+    expect(statusRead).toEqual(['status', ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted']])
+    expect(db.payloads('payment_batch_psus', 'update')).toEqual([{ psu_ip_address: null }])
+    expect(db.findCalls('payment_batch_psus', 'in')).toEqual([['batch_id', ['batch-done', 'batch-moved']]])
+  })
+
+  it('runs with no payments provider too: the address is the signer\'s, not the bank\'s', async () => {
+    db.setTable('payment_batch_psus', [kept('batch-done'), { data: [{ batch_id: 'batch-done' }] }])
+
+    const result = await run()
+
+    expect(result).toMatchObject({ noProvider: true, forgottenIps: 1, errors: 0 })
+    expect(db.payloads('payment_batch_psus', 'update')).toEqual([{ psu_ip_address: null }])
+  })
+
+  it('writes nothing when no address is kept, or every kept signing still has an order at the bank', async () => {
+    let result = await run()
+    expect(result.forgottenIps).toBe(0)
+    expect(db.findCalls('payment_batch_psus', 'update')).toEqual([])
+
+    db.setTable('payment_batch_psus', kept('batch-open'))
+    db.setTable('payment_orders', { data: [{ batch_id: 'batch-open' }] })
+    result = await run()
+    expect(result.forgottenIps).toBe(0)
+    expect(db.findCalls('payment_batch_psus', 'update')).toEqual([])
+  })
+
+  it('does nothing before the column exists, and a failure is one error that never undoes the run', async () => {
+    db.setTable('payment_batch_psus', { data: null, error: { code: '42703', message: 'column payment_batch_psus.psu_ip_address does not exist' } })
+    let result = await run()
+    expect(result).toMatchObject({ forgottenIps: 0, errors: 0 })
+
+    db.setTable('payment_batch_psus', [kept('batch-done'), { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }])
+    result = await run()
+    expect(result).toMatchObject({ forgottenIps: 0, errors: 1 })
+    expect(log.error).toHaveBeenCalledWith('signer IP addresses of closed signings could not be cleared', expect.anything())
   })
 })

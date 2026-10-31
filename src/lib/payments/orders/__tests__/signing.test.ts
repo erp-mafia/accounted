@@ -124,9 +124,12 @@ describe('startPaymentSigning', () => {
     const instruction = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls[0]![1]
     expect(instruction).toMatchObject({ amount: 737.5, attempt: 1, payee: { type: 'bankgiro', bankgiro: '50501055' }, reference: { type: 'ocr', value: '4400112233' } })
     expect(db.supabase.rpc).toHaveBeenCalledWith('claim_payment_orders_for_signing', expect.objectContaining({ p_company_id: COMPANY, p_user_id: USER }))
-    // The bank holds payments created with this PSU-ID: kept once for the signing, never read for new payments.
+    // The bank holds payments created with this PSU-ID: kept once for the signing, at its start (before
+    // BankID, so the status sync can read a payment still awaiting signature) with the signer's IP address,
+    // never read for new payments.
     expect(mock.rememberBatchPsu).toHaveBeenCalledTimes(1)
-    expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-1', companyId: COMPANY, personalNumber: '199001011239' })
+    expect(mock.rememberBatchPsu.mock.invocationCallOrder[0]).toBeLessThan((provider.startSigning as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+    expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-1', companyId: COMPANY, personalNumber: '199001011239', ipAddress: '203.0.113.10' })
     expect(mock.storedBatchPsu).not.toHaveBeenCalled()
   })
 
@@ -392,7 +395,7 @@ describe('startPaymentSigning', () => {
       expect(db.tables()).not.toContain('payment_signers')
       expect(db.tables()).not.toContain('bankid_identities')
       // Not remembered for the sender, but kept for this signing: its payments were created with it.
-      expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: single.id, companyId: COMPANY, personalNumber: '199001011239' })
+      expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: single.id, companyId: COMPANY, personalNumber: '199001011239', ipAddress: '203.0.113.10' })
     })
   })
 
@@ -1027,7 +1030,7 @@ describe('restartPaymentSigning', () => {
     expect(mock.storedBatchPsu).toHaveBeenCalledWith('batch-1')
     expect(provider.getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: KEPT_PSU, psuIpAddress: '203.0.113.10' }), 'pay-1', 'swedish-giro')
     expect(provider.startSigning).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: KEPT_PSU }), expect.anything(), 'qr', null)
-    expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-2', companyId: COMPANY, personalNumber: KEPT_PSU })
+    expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-2', companyId: COMPANY, personalNumber: KEPT_PSU, ipAddress: '203.0.113.10' })
   })
 
   it('signs nothing while a create of the signing has not ended', async () => {
@@ -1178,7 +1181,7 @@ describe('restartPaymentSigning', () => {
       expect(instruction).toMatchObject({ endToEndId: waitingOrder('o1', 1).end_to_end_id, attempt: 2 })
       expect(provider.startSigning).toHaveBeenLastCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-2', product: 'swedish-giro' }, 'qr', null)
       // The recreated payments live in a new signing: it keeps the number they were created with.
-      expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-2', companyId: COMPANY, personalNumber: '199001011239' })
+      expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-2', companyId: COMPANY, personalNumber: '199001011239', ipAddress: '203.0.113.10' })
       expect(events()).toContainEqual(
         expect.objectContaining({
           payment_order_id: 'o1',

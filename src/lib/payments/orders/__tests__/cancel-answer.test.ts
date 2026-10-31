@@ -7,7 +7,10 @@ import { batch, COMPANY, fakeProvider, USER, waitingOrder } from './fixtures'
 
 const mock = vi.hoisted(() => ({ supabase: null as unknown }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.supabase }))
-vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchPsu: vi.fn().mockResolvedValue('198001019879') }))
+vi.mock('@/lib/auth/resource-psu', () => ({
+  storedBatchPsu: vi.fn().mockResolvedValue('198001019879'),
+  storedBatchSigner: vi.fn().mockResolvedValue({ psuId: '198001019879', ipAddress: null }),
+}))
 
 import { cancelPaymentOrder, isReleasableUnsigned, RELEASE_UNSIGNED_AFTER_MINUTES, type CancelSigning } from '../lifecycle'
 

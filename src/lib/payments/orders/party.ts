@@ -9,7 +9,7 @@
 
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import { companyOrgNumber } from '@/lib/company/org-number'
-import { storedBatchPsu } from '@/lib/auth/resource-psu'
+import { storedBatchPsu, storedBatchSigner, type StoredBatchSigner } from '@/lib/auth/resource-psu'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { psuAuthoriserIdFor } from '@/lib/bank-feed/psu-authoriser'
 import type { PaymentPartyContext } from '@/lib/payments/initiation/provider'
@@ -41,6 +41,12 @@ export async function buildPartyContext(
     requireSigner?: boolean
     /** The signing whose payments the call reaches: the PSU-ID they were created with leads, before the typed number or the one on file. */
     batchId?: string | null
+    /**
+     * No person's request is behind the call (an agent's cancel): the IP
+     * address the signing was started from stands in for the person's, as on
+     * the status sync's reads (payment_batch_psus). Never a guessed address.
+     */
+    unattended?: boolean
   } = {},
 ): Promise<{ ok: true; ctx: PaymentPartyContext; storedPsu: boolean } | { ok: false; outcome: OperationOutcome<never> }> {
   const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
@@ -50,7 +56,12 @@ export async function buildPartyContext(
   if (signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const stored = options.batchId ? await storedBatchPsu(options.batchId) : null
+  const kept: StoredBatchSigner | null = !options.batchId
+    ? null
+    : options.unattended
+      ? await storedBatchSigner(options.batchId)
+      : { psuId: await storedBatchPsu(options.batchId), ipAddress: null }
+  const stored = kept?.psuId ?? null
   const personalNumber = stored ?? typed ?? (signer.lookupOnFile === false ? null : await signerPersonalNumberOnFile(ctx.userId))
   if (options.requireSigner && !personalNumber) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED' } }
@@ -68,7 +79,7 @@ export async function buildPartyContext(
       debtorBic: order.debtor_snapshot.bic,
       affiliatedAspspId: order.debtor_snapshot.affiliated_aspsp_id ?? null,
       signerPersonalNumber: personalNumber,
-      psuIpAddress: signer.ipAddress,
+      psuIpAddress: signer.ipAddress ?? kept?.ipAddress ?? null,
       psuUserAgent: signer.userAgent,
       ...(authoriser.value ? { psuAuthoriserId: authoriser.value } : {}),
     },
