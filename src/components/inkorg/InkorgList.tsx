@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import { cn, formatCurrency } from '@/lib/utils'
+import { OVERDUE_CHIP } from '@/lib/status-display'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { rowStatus } from '@/lib/inkorg/decision'
@@ -118,7 +119,11 @@ function InkorgRow({
     ) : status.kind === 'paid_by_receipt' ? (
       <Badge variant="secondary">{t('status_paid_by_receipt')}</Badge>
     ) : status.kind === 'to_pay' ? (
-      <Badge variant="secondary">{t('status_to_pay', { date: shortDate(status.dueDate, locale) })}</Badge>
+      status.overdue ? (
+        <Badge variant={OVERDUE_CHIP}>{t('status_overdue', { date: shortDate(status.dueDate, locale) })}</Badge>
+      ) : (
+        <Badge variant="secondary">{t('status_to_pay', { date: shortDate(status.dueDate, locale) })}</Badge>
+      )
     ) : status.kind === 'unreadable' ? (
       <Badge variant="destructive">{t('row_unreadable')}</Badge>
     ) : status.kind === 'linked' ? (

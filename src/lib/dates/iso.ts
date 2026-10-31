@@ -107,3 +107,14 @@ export function endOfDayIsoStockholm(isoDate: string): string {
   const instant = new Date(atUtcMidnightEnd.getTime() - stockholmOffsetMinutes(atUtcMidnightEnd) * 60_000)
   return instant.toISOString().replace(/\.000Z$/, 'Z')
 }
+
+/**
+ * Whether a due date has passed: it lies before `today` (both YYYY-MM-DD,
+ * today as todayIsoStockholm gives it). The due date itself is still on
+ * time. The one date rule behind every "Förfallen": a registered supplier
+ * invoice's nightly flip (isOverduePayable) and the Inkorg's unregistered
+ * invoices both read it.
+ */
+export function isPastDue(dueDate: string, today: string): boolean {
+  return dueDate < today
+}
