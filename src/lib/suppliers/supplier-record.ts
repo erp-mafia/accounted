@@ -8,6 +8,7 @@
  */
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 
 export const SupplierRecordSchema = z.object({
   id: z.string().uuid(),
@@ -37,6 +38,8 @@ export const SupplierRecordSchema = z.object({
   self_billing_agreement_ref: z.string().nullable(),
   /** The supplier debits its invoices itself (autogiro, account debit): they stay out of to-pay lists and payments (crm#1463). */
   auto_debit: z.boolean(),
+  /** Dimension bag {sie_dim_no: code} its new supplier invoices take when they name none (accounted#144). */
+  default_dimensions: z.record(z.string(), z.string()),
   notes: z.string().nullable(),
   /** The party (motpart) behind the supplier: one per counterpart, shared with the customer side and the ledger. */
   party_id: z.string().uuid().nullable(),
@@ -53,7 +56,7 @@ export type SupplierRecord = z.infer<typeof SupplierRecordSchema>
  * rows; the test pins it to exactly the schema's fields, in order.
  */
 export const SUPPLIER_RECORD_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, clearing_number, account_number, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, auto_debit, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, clearing_number, account_number, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, auto_debit, default_dimensions, notes, party_id, archived_at, created_at, updated_at'
 
 /**
  * One supplier of the company, or null when no supplier with that id exists
@@ -65,12 +68,14 @@ export async function readSupplierRecord(
   companyId: string,
   supplierId: string,
 ): Promise<{ data: SupplierRecord | null; error: unknown }> {
-  const { data, error } = await supabase
-    .from('suppliers')
-    .select(SUPPLIER_RECORD_COLUMNS)
-    .eq('company_id', companyId)
-    .eq('id', supplierId)
-    .maybeSingle()
+  const { data, error } = await tolerateMissingDefaultDimensions(SUPPLIER_RECORD_COLUMNS, (columns) =>
+    supabase
+      .from('suppliers')
+      .select(columns)
+      .eq('company_id', companyId)
+      .eq('id', supplierId)
+      .maybeSingle(),
+  )
   if (error) return { data: null, error }
   return { data: (data as unknown as SupplierRecord | null) ?? null, error: null }
 }

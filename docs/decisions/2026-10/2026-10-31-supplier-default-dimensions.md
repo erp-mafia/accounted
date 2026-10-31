@@ -1,0 +1,1 @@
+[2026-10-31] A supplier's default_dimensions tag its new supplier invoices only when the request sends none; any bag sent, {} included, overrides it whole, and the line's own bag and account rules apply on top: the card is a standing instruction, the invoice the decision.

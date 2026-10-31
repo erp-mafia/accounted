@@ -13,10 +13,12 @@ import { z } from 'zod'
 import type { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { dimensionsBagKey, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
+import { refuseUnknownSupplierDimensions, tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 
 /** The supplier record every door reads back. */
 export const SUPPLIER_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, auto_debit, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, auto_debit, default_dimensions, notes, party_id, archived_at, created_at, updated_at'
 
 export const SupplierRecordSchema = z.object({
   id: z.string().uuid(),
@@ -52,6 +54,8 @@ export const SupplierRecordSchema = z.object({
   updated_at: z.string(),
   /** Debited by the supplier itself (autogiro, account debit), so kept out of to-pay and payments (crm#1463). */
   auto_debit: z.boolean(),
+  /** Dimension bag {sie_dim_no: code} its new supplier invoices take when they name none (accounted#144). */
+  default_dimensions: z.record(z.string(), z.string()),
 })
 
 export type SupplierRecord = z.infer<typeof SupplierRecordSchema>
@@ -83,6 +87,7 @@ const WRITABLE_FIELDS = [
   'default_currency',
   'self_billing_agreement_ref',
   'auto_debit',
+  'default_dimensions',
   'notes',
   'archived_at',
 ] as const
@@ -136,9 +141,16 @@ const PAYMENT_FIELDS: ReadonlySet<string> = new Set([
 
 const NOT_FOUND: Extract<OperationOutcome<never>, { ok: false }> = { ok: false, code: 'SUPPLIER_NOT_FOUND' }
 
-/** '' from a cleared form field and an absent value mean the same as null. */
+/**
+ * '' from a cleared form field and an absent value mean the same as null; a
+ * dimension bag (the one object field) compares by its normalized entries.
+ */
 function comparable(value: unknown): unknown {
-  return value === undefined || value === '' ? null : value
+  if (value === undefined || value === '') return null
+  if (value && typeof value === 'object') {
+    return dimensionsBagKey(normalizeLineDimensions({ dimensions: value as Record<string, string> }))
+  }
+  return value
 }
 
 /**
@@ -164,6 +176,7 @@ export async function updateSupplier(
     const value = (changes as Record<string, unknown>)[key]
     if (value !== undefined) update[key] = value
   }
+  if (changes.default_dimensions) update.default_dimensions = normalizeLineDimensions({ dimensions: changes.default_dimensions })
   if (Object.keys(update).length === 0) {
     return {
       ok: false,
@@ -172,12 +185,14 @@ export async function updateSupplier(
     }
   }
 
-  const { data: current, error: currentError } = await supabase
-    .from('suppliers')
-    .select(SUPPLIER_COLUMNS)
-    .eq('company_id', companyId)
-    .eq('id', supplierId)
-    .maybeSingle()
+  const { data: current, error: currentError } = await tolerateMissingDefaultDimensions(SUPPLIER_COLUMNS, (columns) =>
+    supabase
+      .from('suppliers')
+      .select(columns)
+      .eq('company_id', companyId)
+      .eq('id', supplierId)
+      .maybeSingle(),
+  )
   if (currentError) return { ok: false, code: 'SUPPLIER_UPDATE_FAILED', error: currentError }
   if (!current) return NOT_FOUND
   const row = current as unknown as Record<string, unknown>
@@ -204,6 +219,17 @@ export async function updateSupplier(
     }
   }
 
+  // A new default is judged now, as booking would judge it, not on each
+  // invoice that takes it. A bag a form re-sends unchanged is not written:
+  // nothing to judge, and before the migration that adds the column has run
+  // (where every row reads {}) a re-sent {} still saves the rest.
+  if (changed.includes('default_dimensions')) {
+    const refused = await refuseUnknownSupplierDimensions(supabase, companyId, update.default_dimensions as Record<string, string>)
+    if (refused) return refused
+  } else {
+    delete update.default_dimensions
+  }
+
   // is_active is the legacy flag the dashboard filters still read: it
   // follows every archive and un-archive.
   if (update.archived_at === null) update.is_active = true
@@ -223,13 +249,17 @@ export async function updateSupplier(
     }
   }
 
-  const { data, error } = await supabase
-    .from('suppliers')
-    .update(update)
-    .eq('company_id', companyId)
-    .eq('id', supplierId)
-    .select(SUPPLIER_COLUMNS)
-    .maybeSingle()
+  // Only the bag it already has was sent: nothing to write.
+  if (Object.keys(update).length === 0) return { ok: true, data: row as unknown as SupplierRecord }
+  const { data, error } = await tolerateMissingDefaultDimensions(SUPPLIER_COLUMNS, (columns) =>
+    supabase
+      .from('suppliers')
+      .update(update)
+      .eq('company_id', companyId)
+      .eq('id', supplierId)
+      .select(columns)
+      .maybeSingle(),
+  )
   if (error) {
     if ((error as { code?: string }).code === '23505') {
       return { ok: false, code: 'SUPPLIER_DUPLICATE_ORG_NUMBER', details: { field: 'org_number' } }

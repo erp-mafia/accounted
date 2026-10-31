@@ -109,6 +109,39 @@ describe('createSupplier', () => {
     expect(outcome).toEqual({ ok: false, code: 'SUPPLIER_DUPLICATE_ORG_NUMBER', details: { field: 'org_number' } })
   })
 
+  it('stores a default dimension bag only when it has codes (accounted#144)', async () => {
+    enqueue({ data: { dimensions_enabled: false } })
+    enqueue({ data: { id: 'sup-1' } })
+    await createSupplier(ctx, parse({ default_dimensions: { '1': ' FAST01 ' } }))
+    expect(findCall('suppliers', 'insert')?.[0]).toMatchObject({ default_dimensions: { '1': 'FAST01' } })
+
+    // No codes: the row names no default_dimensions, so it inserts the same
+    // row before and after the migration that adds the column.
+    reset()
+    enqueue({ data: { id: 'sup-2' } })
+    await createSupplier(ctx, parse({ default_dimensions: {} }))
+    expect(findCall('suppliers', 'insert')?.[0]).not.toHaveProperty('default_dimensions')
+  })
+
+  it('refuses a default the registry does not have, on the dry run too, before anything is written', async () => {
+    enqueue({ data: { dimensions_enabled: true } })
+    enqueue({ data: [] })
+    const outcome = await createSupplier(ctx, parse({ default_dimensions: { '9': 'X1' } }), { dryRun: true })
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'DIMENSION_VALIDATION_FAILED',
+      details: { issues: [{ sie_dim_no: '9', reason: 'unknown_dimension' }] },
+    })
+    expect(findCall('suppliers', 'insert')).toBeUndefined()
+  })
+
+  it('creates a supplier without a default while the column is not there yet', async () => {
+    enqueue({ data: null, error: { code: '42703', message: 'column suppliers.default_dimensions does not exist' } })
+    enqueue({ data: { id: 'sup-1', name: 'Testbrand AB' } })
+    const outcome = await createSupplier(ctx, parse({}))
+    expect(outcome).toMatchObject({ ok: true, data: { id: 'sup-1', default_dimensions: {} } })
+  })
+
   it('previews the row on a dry run and writes nothing', async () => {
     const outcome = await createSupplier(ctx, parse({ default_payment_terms: 0 }), { dryRun: true })
 

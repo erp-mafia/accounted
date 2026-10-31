@@ -259,6 +259,11 @@ export default function NewSupplierInvoiceForm({
   const accrualFramework = accrualFrameworkOf(useCompanyOptional()?.company)
 
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
+  // The invoice-level tags start as the supplier's default (accounted#144)
+  // until the user picks one: a supplier switch then swaps in the new
+  // supplier's default, a pick of their own is kept.
+  const defaultDimsPickedRef = useRef(false)
+  const [defaultDimsFromSupplier, setDefaultDimsFromSupplier] = useState(false)
   const [showNewSupplier, setShowNewSupplier] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
   const [pendingSupplierSelect, setPendingSupplierSelect] = useState<string | null>(null)
@@ -676,6 +681,12 @@ export default function NewSupplierInvoiceForm({
     }
 
     applySupplierTerms(supplier)
+
+    if (!defaultDimsPickedRef.current) {
+      const supplierDims = supplier.default_dimensions ?? {}
+      setDefaultDims(supplierDims)
+      setDefaultDimsFromSupplier(Object.keys(supplierDims).length > 0)
+    }
 
     if (supplier.default_expense_account) {
       // Fill every row the user hasn't assigned yet (or plant the first row
@@ -1103,6 +1114,8 @@ export default function NewSupplierInvoiceForm({
   // means the row's panel is open; closing clears the bag entirely so the
   // payload never carries a stale override.
   function setDefaultDimension(dimNo: string, code: string | null) {
+    defaultDimsPickedRef.current = true
+    setDefaultDimsFromSupplier(false)
     setDefaultDims((prev) => {
       const next = { ...prev }
       const trimmed = code?.trim()
@@ -2645,6 +2658,9 @@ export default function NewSupplierInvoiceForm({
                         inputClassName="h-8"
                       />
                     </div>
+                    {defaultDimsFromSupplier && (
+                      <p className="mt-1.5 text-xs text-muted-foreground">{t('default_dims_from_supplier')}</p>
+                    )}
                   </div>
                 )}
                 <div className="py-3 text-[13px]">

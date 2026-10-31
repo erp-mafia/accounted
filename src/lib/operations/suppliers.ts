@@ -44,6 +44,7 @@ const SUPPLIER_EXAMPLE = {
   default_expense_account: '5410',
   default_payment_terms: 14,
   default_currency: 'SEK',
+  default_dimensions: { '1': 'KS01' },
   notes: 'New payment terms agreed 2026-05-12.',
   party_id: null,
   archived_at: null,
@@ -71,6 +72,7 @@ export const suppliersCreate = defineOperation({
       'A Swedish-shaped org_number is stored as the 10-digit key; a foreign registration number is stored as sent.',
       'Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.',
       'default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.',
+      'default_dimensions ({"<sie_dim_no>":"<code>"}, codes from GET /dimensions) tags every new supplier invoice of the supplier that sends no default_dimensions of its own; with dimensions enabled an unknown or archived code returns 400 DIMENSION_VALIDATION_FAILED.',
     ],
     example: {
       request: {
@@ -91,7 +93,7 @@ export const suppliersCreate = defineOperation({
   },
   input: CreateSupplierSchema,
   output: SupplierRecordSchema,
-  errorCodes: ['SUPPLIER_DUPLICATE_ORG_NUMBER', 'SUPPLIER_CREATE_FAILED', 'VALIDATION_ERROR'],
+  errorCodes: ['SUPPLIER_DUPLICATE_ORG_NUMBER', 'SUPPLIER_CREATE_FAILED', 'VALIDATION_ERROR', 'DIMENSION_VALIDATION_FAILED'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/suppliers',
@@ -112,7 +114,7 @@ export const suppliersUpdate = defineOperation({
     description:
       'Patches the supplier with the fields sent; every field is optional and the rest stay as they are. An empty string clears a text field (null for email and default_expense_account). archived_at: null un-archives a supplier archived with DELETE. An archived supplier\'s identifying fields (name, type, org and VAT number, address, bank details) are räkenskapsinformation and cannot change until it is un-archived. The dry run answers the would-be supplier with `changes` (each changed field, from and to) and `payment_details_changed`. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen:
-      'A supplier needs other contact details, address, payment details (bankgiro, plusgiro, clearing and account number, IBAN, BIC), VAT number, default expense account, payment terms or notes, e.g. a supplier imported from SIE with only a name and a bankgiro. Dry-run first to confirm the change.',
+      'A supplier needs other contact details, address, payment details (bankgiro, plusgiro, clearing and account number, IBAN, BIC), VAT number, default expense account, default dimensions, payment terms or notes, e.g. a supplier imported from SIE with only a name and a bankgiro. Dry-run first to confirm the change.',
     doNotUseFor:
       'Archiving a supplier (DELETE sets archived_at). Creating one (POST /suppliers). Merging duplicates: there is no merge; archive the duplicate once its invoices are closed.',
     pitfalls: [
@@ -121,6 +123,7 @@ export const suppliersUpdate = defineOperation({
       'org_number uniqueness is enforced at DB level: 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
       'An archived supplier refuses a change to an identifying field with 400 VALIDATION_ERROR (details.field archived_at, details.offending_fields); send archived_at: null first.',
       'Changing default_expense_account does not rebook earlier supplier invoices: only future bookings pick up the new default.',
+      'default_dimensions replaces the whole bag ({} clears it) and, like the default account, only tags supplier invoices registered after the change; with dimensions enabled an unknown or archived code returns 400 DIMENSION_VALIDATION_FAILED.',
       'A Swedish bank account payee is clearing_number + account_number; bank_account is free text that payment files only read with an explicit clearing number.',
     ],
     example: {
@@ -134,7 +137,7 @@ export const suppliersUpdate = defineOperation({
     archived_at: z.null().optional().describe('null un-archives an archived supplier.'),
   }),
   output: SupplierRecordSchema,
-  errorCodes: ['SUPPLIER_NOT_FOUND', 'SUPPLIER_DUPLICATE_ORG_NUMBER', 'VALIDATION_ERROR'],
+  errorCodes: ['SUPPLIER_NOT_FOUND', 'SUPPLIER_DUPLICATE_ORG_NUMBER', 'VALIDATION_ERROR', 'DIMENSION_VALIDATION_FAILED'],
   http: {
     method: 'PATCH',
     path: '/api/v1/companies/:companyId/suppliers/:id',
@@ -144,10 +147,11 @@ export const suppliersUpdate = defineOperation({
     name: 'gnubok_update_supplier',
     title: 'Update Supplier (Leverantör)',
     description:
-      'Stage a partial edit of a supplier: contact, address, org/VAT number, bankgiro, plusgiro, clearing+account number, IBAN/BIC, default account, payment terms, auto_debit (autogiro), notes. "" clears; archived_at null un-archives. supplier_id from gnubok_list_suppliers.',
+      'Stage a partial edit of a supplier: contact, address, org/VAT number, bankgiro, plusgiro, clearing+account no, IBAN/BIC, default account and dimensions, payment terms, auto_debit (autogiro), notes. "" clears; archived_at null un-archives. supplier_id from gnubok_list_suppliers.',
     keywords: [
       'ändra leverantör',
       'uppdatera leverantör',
+      'leverantörens dimension',
       'leverantörsregister',
       'leverantörens adress',
       'leverantörens bankgiro',

@@ -595,6 +595,35 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     })
   })
 
+  // accounted#144: the supplier's default is staged when the agent sends no
+  // default_dimensions, so the approver sees the tags; {} stages none.
+  it("stages the supplier's default_dimensions when the agent sends none, and none for {}", async () => {
+    const stageWith = async (args: Record<string, unknown>) => {
+      const inserts: Array<Record<string, unknown>> = []
+      const supabase = makeMock({
+        inbox: {
+          id: 'inbox-10',
+          status: 'received',
+          extracted_data: baseExtracted,
+          matched_supplier_id: 'supplier-1',
+          created_supplier_invoice_id: null,
+          document_id: 'doc-10',
+        },
+        // The supplier row the tool reads for its defaults.
+        supplierRecord: { id: 'supplier-1', default_expense_account: '6540', default_dimensions: { '1': 'FAST01' } },
+        inserts,
+      })
+      const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+      const result = (await tool.execute({ inbox_item_id: 'inbox-10', ...args }, 'company-1', 'user-1', supabase)) as { staged: boolean }
+      expect(result.staged).toBe(true)
+      return inserts[0].params as { default_dimensions?: Record<string, string> }
+    }
+
+    expect((await stageWith({})).default_dimensions).toEqual({ '1': 'FAST01' })
+    expect((await stageWith({ default_dimensions: { '6': 'P001' } })).default_dimensions).toEqual({ '6': 'P001' })
+    expect('default_dimensions' in (await stageWith({ default_dimensions: {} }))).toBe(false)
+  })
+
   it('stages no dims keys when nothing is tagged (backward compatible)', async () => {
     const inserts: Array<Record<string, unknown>> = []
     const supabase = makeMock({

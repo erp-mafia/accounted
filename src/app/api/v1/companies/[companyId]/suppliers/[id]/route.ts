@@ -23,7 +23,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { suppliersUpdate } from '@/lib/operations/suppliers'
-import { SUPPLIER_RECORD_COLUMNS, SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
+import { SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
 
 // The record read here (and its select) is defined in
 // lib/suppliers/supplier-record.ts, shared with the MCP drill-in
@@ -247,12 +247,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     }
 
     if (ctx.dryRun) {
-      const { data: current, error: fetchErr } = await ctx.supabase
-        .from('suppliers')
-        .select(SUPPLIER_RECORD_COLUMNS)
-        .eq('company_id', ctx.companyId!)
-        .eq('id', supplierId)
-        .maybeSingle()
+      const { data: current, error: fetchErr } = await readSupplierRecord(ctx.supabase, ctx.companyId!, supplierId)
 
       if (fetchErr) {
         return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })

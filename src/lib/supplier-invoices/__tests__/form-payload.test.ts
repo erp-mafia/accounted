@@ -131,6 +131,7 @@ describe('buildSupplierInvoicePayload', () => {
       notes: undefined,
       paid_with_private_funds: false,
       ore_rounding: true,
+      default_dimensions: {},
       items: [
         {
           description: 'Lokalhyra augusti',
@@ -143,7 +144,6 @@ describe('buildSupplierInvoicePayload', () => {
     })
     // Conditional keys must be absent, not undefined-valued.
     expect(payload).not.toHaveProperty('document_id')
-    expect(payload).not.toHaveProperty('default_dimensions')
     expect(payload.items[0]).not.toHaveProperty('accrual_period_start')
     expect(payload.items[0]).not.toHaveProperty('dimensions')
     expect(payload.items[0]).not.toHaveProperty('apply_slp')
@@ -329,12 +329,15 @@ describe('buildSupplierInvoicePayload', () => {
     expect(payload.items[0].accrual_balance_account).toBeUndefined()
   })
 
-  it('default_dimensions only when non-empty; item bags only when carrying values', () => {
+  it('default_dimensions always as shown, {} included; item bags only when carrying values', () => {
     const bare = buildSupplierInvoicePayload(
       makeFormData({ items: [makeItem({ dimensions: {} })] }),
       makeOpts(),
     )
-    expect(bare).not.toHaveProperty('default_dimensions')
+    // The editor starts from the supplier's default (accounted#144): {} is
+    // the user clearing it, so it must reach the server, which would
+    // otherwise fill the supplier's default back in.
+    expect(bare).toHaveProperty('default_dimensions', {})
     // Open-but-empty per-row panel means inherit: the bag is dropped.
     expect(bare.items[0]).not.toHaveProperty('dimensions')
 

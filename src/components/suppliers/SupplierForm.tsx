@@ -13,6 +13,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LockClosedIcon, XMarkIcon } from '@/components/icons'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { AttnLine } from '@/components/ui/attn-line'
 import { lookupCreditorName, probeCreditorLookup, type CreditorLookupResult } from '@/components/payments/payments-client'
 import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
@@ -50,6 +52,10 @@ export default function SupplierForm({
   // konto combobox is populated on the first paint; without the chart it
   // still accepts a typed 4-digit number.
   const { accounts } = useAccounts()
+  // The default dimensions are offered where the company tags lines at all
+  // (company_settings.dimensions_enabled, the voucher form's gate).
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
 
   // The default account seeds expense lines on supplier invoices, so the
   // browsable list is cost classes 4-7. Any other 4-digit number can still be
@@ -97,6 +103,9 @@ export default function SupplierForm({
     // How the supplier is paid (crm#1463): by the company, or debited by the
     // supplier itself (autogiro, account debit).
     auto_debit: z.boolean(),
+    // Tags its new supplier invoices take (accounted#144); the invoice
+    // editor prefills them and they can be changed there.
+    default_dimensions: z.record(z.string(), z.string()),
     notes: z.string().optional(),
   }), [t])
 
@@ -138,6 +147,7 @@ export default function SupplierForm({
       default_currency: initialData?.default_currency || 'SEK',
       self_billing_agreement_ref: initialData?.self_billing_agreement_ref || '',
       auto_debit: initialData?.auto_debit ?? false,
+      default_dimensions: initialData?.default_dimensions ?? {},
       notes: initialData?.notes || '',
     },
   })
@@ -238,8 +248,11 @@ export default function SupplierForm({
 
   // Empty strings go through as-is: the API schemas normalize them (dropped on
   // create, null on update so a cleared field actually clears the column).
+  // The default dimensions travel only while the form shows them, so a
+  // company that has dimensions off never rewrites a bag set elsewhere.
   const onFormSubmit = (data: FormData) => {
-    onSubmit(data)
+    const { default_dimensions: defaultDimensions, ...rest } = data
+    onSubmit(dimensionsEnabled ? { ...rest, default_dimensions: defaultDimensions } : rest)
   }
 
   return (
@@ -508,6 +521,31 @@ export default function SupplierForm({
           </div>
         </div>
       </div>
+
+      {/* Förvalda dimensioner (accounted#144) */}
+      {dimensionsEnabled && (
+        <div className="space-y-2">
+          <Label>{t('default_dimensions_label')}</Label>
+          <Controller
+            name="default_dimensions"
+            control={control}
+            render={({ field }) => (
+              <LineDimensionFields
+                dimensions={field.value}
+                disabled={!canWrite}
+                onChange={(dimNo, code) => {
+                  const next = { ...field.value }
+                  const trimmed = code?.trim()
+                  if (trimmed) next[dimNo] = trimmed
+                  else delete next[dimNo]
+                  field.onChange(next)
+                }}
+              />
+            )}
+          />
+          <p className="text-xs text-muted-foreground">{t('default_dimensions_help')}</p>
+        </div>
+      )}
 
       {/* Betalningssätt (crm#1463) */}
       <div className="space-y-2">
