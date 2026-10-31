@@ -914,6 +914,9 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/disconnect',
+      // Deletes only the caller's own token: anyone may always take their own
+      // access away, a viewer included.
+      viewerMay: true,
       handler: async (_request: Request, ctx: ExtensionContext) => {
         await deleteTokens(ctx.supabase, ctx.userId, ctx.companyId)
         return NextResponse.json({ success: true })
@@ -1136,6 +1139,8 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/declaration/validate',
+      // A dry run at Skatteverket's /kontrollera: files and saves nothing.
+      viewerMay: true,
       handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
@@ -2324,6 +2329,8 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/transaktioner/group-match-candidates',
+      // Lists match candidates from reads only; linking is POST /:id/match.
+      viewerMay: true,
       handler: async (request: Request, ctx: ExtensionContext) => {
         let body: unknown
         try {

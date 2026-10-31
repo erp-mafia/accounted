@@ -1002,6 +1002,8 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/link/revoke',
+      // Only revokes the caller's own phone link: taking away one's own access.
+      viewerMay: true,
       handler: async (_request: Request, ctx: ExtensionContext) => {
         await ctx.supabase
           .from('whatsapp_phone_links')

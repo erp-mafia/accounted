@@ -7,7 +7,8 @@
  *
  * Today's gate is read from the route itself: withRouteContext's
  * requireAdmin / requireWrite / neither, an extension route's declared
- * requireAdmin / requireWrite at the dispatcher, the invoicer allowlist
+ * requireAdmin / requireWrite at the dispatcher (a write method without
+ * viewerMay counts as requireWrite), the invoicer allowlist
  * (INVOICER_ROUTES), and HAND_ROLLED_GATES for routes that check a role in
  * their handler. A route whose gate cannot be read and is not in
  * HAND_ROLLED_GATES fails the test, so a new route gets a decision.
@@ -143,9 +144,13 @@ const files = routeFiles()
 const extensionRoutes = new Map<string, { requireAdmin: boolean; requireWrite: boolean }>()
 for (const extension of FIRST_PARTY_EXTENSIONS) {
   for (const route of extension.apiRoutes ?? []) {
+    // The dispatcher refuses viewers on a company-context write method
+    // unless the route declares viewerMay, as if it declared requireWrite.
+    const viewerRefusedByDefault =
+      route.method !== 'GET' && !route.skipAuth && !route.skipCompanyContext && !('viewerMay' in route && route.viewerMay === true)
     extensionRoutes.set(`${route.method} ${EXT_PREFIX}${extension.id}${route.path}`, {
       requireAdmin: 'requireAdmin' in route && route.requireAdmin === true,
-      requireWrite: 'requireWrite' in route && route.requireWrite === true,
+      requireWrite: ('requireWrite' in route && route.requireWrite === true) || viewerRefusedByDefault,
     })
   }
 }

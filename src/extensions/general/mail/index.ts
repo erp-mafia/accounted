@@ -214,6 +214,9 @@ export const mailExtension: Extension = {
     {
       method: 'DELETE',
       path: '/connections',
+      // The handler decides the role: the grant's owner may always take their
+      // own access away, anyone else needs owner or admin.
+      viewerMay: true,
       handler: async (request, ctx) => {
         const id = new URL(request.url).searchParams.get('id')
         if (!id) return jsonError('missing_id', 400)

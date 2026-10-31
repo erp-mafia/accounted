@@ -775,6 +775,9 @@ export const enableBankingExtension: Extension = {
     {
       method: 'POST',
       path: '/sync',
+      // A viewer syncs too, on purpose: the handler gives it rawInsertOnly,
+      // so its rows land uncategorised and nothing is booked.
+      viewerMay: true,
       handler: async (request: Request, ctx: ExtensionContext) => {
         const log = ctx.log
         const supabase = ctx.supabase

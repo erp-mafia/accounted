@@ -61,7 +61,9 @@ interface ApiRouteBase {
  * The default route: the dispatcher has authenticated the caller and resolved
  * their active company before the handler runs, so `ctx` is always there.
  * Role gates are declared, not coded: the dispatcher answers 403 before the
- * handler runs, with the same checks withRouteContext makes.
+ * handler runs, with the same checks withRouteContext makes. A write method
+ * (POST, PUT, PATCH, DELETE) refuses viewers by default, as if it declared
+ * requireWrite, unless the route sets viewerMay.
  */
 export interface ContextApiRoute extends ApiRouteBase {
   skipAuth?: false
@@ -73,6 +75,15 @@ export interface ContextApiRoute extends ApiRouteBase {
    * (user_is_company_admin). Implies requireWrite.
    */
   requireAdmin?: boolean
+  /**
+   * Opt a write-method route out of the dispatcher's default viewer refusal.
+   * Only for a route that changes nothing (search, preview, compute, export,
+   * a dry run), or one whose handler decides the viewer case itself (a
+   * viewer's bank sync inserts raw rows only; the owner of a grant may
+   * always take their own access away). Give the reason in a comment at the
+   * route. Ignored with requireWrite or requireAdmin.
+   */
+  viewerMay?: true
   handler: (request: Request, ctx: ExtensionContext) => Promise<Response>
 }
 

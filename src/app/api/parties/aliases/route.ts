@@ -25,6 +25,9 @@ const NAMELESS_KINDS = new Set(['payroll', 'transfer', 'category', 'unsure'])
  * per key records the person's answer with confidence 1. A rename links to
  * the party that already carries the name, when there is one. The resolver
  * never rewrites a person's row: it only reads strings without a live alias.
+ *
+ * A viewer is refused (requireWrite): the write policies on
+ * counterparty_aliases check membership only, not current_user_can_write().
  */
 export const POST = withRouteContext('parties.aliases', async (request, { supabase, companyId, user, log, requestId }) => {
   const validated = await validateBody(request, PartyAliasActionSchema, { log, operation: 'parties.aliases' })
@@ -97,4 +100,4 @@ export const POST = withRouteContext('parties.aliases', async (request, { supaba
   }
 
   return NextResponse.json({ data: { updated: live.length, partyId } })
-})
+}, { requireWrite: true })

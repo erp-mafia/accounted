@@ -78,80 +78,21 @@ export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
  * Dashboard write routes that check no role today (withRouteContext without
  * requireWrite), so a viewer reaches the handler. The permission is the rule
  * the door enforces from W2b on, as W0 already did for the Arkiv revert and
- * finding routes (requireWrite).
+ * finding routes (requireWrite). Empty since W0b gated the last two
+ * (document extraction fields, party aliases).
  */
-export const VIEWER_PASSES_UNGATED_ROUTE: readonly string[] = [
-  'POST /api/documents/:id/extraction/fields',
-  'POST /api/parties/aliases',
-]
+export const VIEWER_PASSES_UNGATED_ROUTE: readonly string[] = []
 
 /**
  * Extension routes the dispatcher declares no role gate for and whose
  * handler checks none, so a viewer reaches the handler. The permission is
  * the rule the door enforces from W2b on; whether the database refused the
  * viewer's write before depends on each table's RLS (current_user_can_write)
- * and on whether the effect lands outside the database at all.
+ * and on whether the effect lands outside the database at all. Empty since
+ * W0b: the dispatcher refuses viewers on every write method unless the route
+ * declares viewerMay.
  */
-export const EXTENSION_ROUTE_WITHOUT_ROLE_GATE: readonly string[] = [
-  'DELETE /api/extensions/ext/arcim-migration/disconnect',
-  'DELETE /api/extensions/ext/enable-banking/disconnect',
-  'DELETE /api/extensions/ext/invoice-inbox/items/:id',
-  'DELETE /api/extensions/ext/shopify/disconnect',
-  'DELETE /api/extensions/ext/stripe/disconnect',
-  'DELETE /api/extensions/ext/woocommerce/disconnect',
-  'DELETE /api/extensions/ext/zettle/disconnect',
-  'PATCH /api/extensions/ext/enable-banking/accounts',
-  'PATCH /api/extensions/ext/invoice-inbox/items/:id/fields',
-  'PATCH /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/ignore',
-  'POST /api/extensions/ext/arcim-migration/accept',
-  'POST /api/extensions/ext/arcim-migration/connect',
-  'POST /api/extensions/ext/arcim-migration/import-documents',
-  'POST /api/extensions/ext/arcim-migration/import-sie',
-  'POST /api/extensions/ext/arcim-migration/migrate',
-  'POST /api/extensions/ext/arcim-migration/migration-jobs',
-  'POST /api/extensions/ext/arcim-migration/migration-jobs/accept',
-  'POST /api/extensions/ext/arcim-migration/migration-jobs/retry',
-  'POST /api/extensions/ext/arcim-migration/migration-jobs/run',
-  'POST /api/extensions/ext/arcim-migration/reconcile',
-  'POST /api/extensions/ext/arcim-migration/submit-token',
-  'POST /api/extensions/ext/cloud-backup/connect',
-  'POST /api/extensions/ext/cloud-backup/disconnect',
-  'POST /api/extensions/ext/cloud-backup/sync',
-  'POST /api/extensions/ext/enable-banking/attach',
-  'POST /api/extensions/ext/enable-banking/connect',
-  'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct',
-  'POST /api/extensions/ext/invoice-inbox/items/:id/convert',
-  'POST /api/extensions/ext/invoice-inbox/items/:id/match-transaction',
-  'POST /api/extensions/ext/invoice-inbox/items/:id/retry-extraction',
-  'POST /api/extensions/ext/invoice-inbox/items/:id/unmatch-transaction',
-  'POST /api/extensions/ext/invoice-inbox/items/bulk-book',
-  'POST /api/extensions/ext/invoice-inbox/upload',
-  'POST /api/extensions/ext/invoice-inbox/upload/complete',
-  'POST /api/extensions/ext/invoice-inbox/upload/create',
-  'POST /api/extensions/ext/shopify/backfill',
-  'POST /api/extensions/ext/shopify/connect',
-  'POST /api/extensions/ext/shopify/sync',
-  'POST /api/extensions/ext/shopify/transaction-sync',
-  'POST /api/extensions/ext/skatteverket/disconnect',
-  'POST /api/extensions/ext/skatteverket/skattekonto/sync',
-  'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/bokfor',
-  'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/match',
-  'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch',
-  'POST /api/extensions/ext/stripe/backfill',
-  'POST /api/extensions/ext/stripe/connect',
-  'POST /api/extensions/ext/stripe/sync',
-  'POST /api/extensions/ext/stripe/transaction-sync',
-  'POST /api/extensions/ext/woocommerce/backfill',
-  'POST /api/extensions/ext/woocommerce/connect',
-  'POST /api/extensions/ext/woocommerce/manual-connect',
-  'POST /api/extensions/ext/woocommerce/sync',
-  'POST /api/extensions/ext/woocommerce/transaction-sync',
-  'POST /api/extensions/ext/zettle/backfill',
-  'POST /api/extensions/ext/zettle/connect',
-  'POST /api/extensions/ext/zettle/sync',
-  'POST /api/extensions/ext/zettle/transaction-sync',
-  'PUT /api/extensions/ext/cloud-backup/schedule',
-]
+export const EXTENSION_ROUTE_WITHOUT_ROLE_GATE: readonly string[] = []
 
 /** Owner-only today; no preset tells the owner from an admin, who holds every permission. */
 export const OWNER_ONLY: readonly string[] = [
