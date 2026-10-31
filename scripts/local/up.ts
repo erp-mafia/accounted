@@ -26,6 +26,8 @@
  * Usage (from the repository root of any checkout; up.sh first gives it a
  * node_modules of its own that matches package-lock.json):
  *   npm run local:up
+ *   npm run local:up -- --sim    also builds the simulated company (tests/sim)
+ *                                and logs in to it: three years of books
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -125,7 +127,12 @@ function replayMigrations(projectId: string): number {
   return files.length - 1
 }
 
-async function seed(supabaseUrl: string, anonKey: string, serviceRoleKey: string, password: string): Promise<string> {
+async function seed(
+  supabaseUrl: string,
+  anonKey: string,
+  serviceRoleKey: string,
+  password: string,
+): Promise<{ userId: string; companyId: string }> {
   const clientOptions = { auth: { persistSession: false, autoRefreshToken: false } }
   const admin = createClient(supabaseUrl, serviceRoleKey, clientOptions)
   const { data: created, error: userError } = await admin.auth.admin.createUser({
@@ -164,7 +171,34 @@ async function seed(supabaseUrl: string, anonKey: string, serviceRoleKey: string
     }),
   )
   if (result.error !== undefined) fail(`creating the seed company failed: ${result.error}`)
-  return result.companyId
+  return { userId, companyId: result.companyId }
+}
+
+/** Builds in its own process: the build's network guard must not reach this script's health checks. */
+function buildSimulatedCompany(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  userId: string,
+  personnummerKey: string,
+): string {
+  const stateFile = path.join(paths.dir, 'sim-state.json')
+  const result = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', '--conditions', 'react-server', 'scripts/sim/build.ts', '--state', stateFile],
+    {
+      cwd: repoRoot,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        SIM_SUPABASE_URL: supabaseUrl,
+        SIM_SERVICE_ROLE_KEY: serviceRoleKey,
+        SIM_USER_ID: userId,
+        SIM_PERSONNUMMER_KEY: personnummerKey,
+      },
+    },
+  )
+  if (result.status !== 0) fail(`building the simulated company failed; see ${path.join(paths.dir, 'sim', 'build.log')}`)
+  return (JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { companyId: string }).companyId
 }
 
 async function startDevServer(port: number, appUrl: string): Promise<number> {
@@ -198,6 +232,7 @@ async function startDevServer(port: number, appUrl: string): Promise<number> {
 
 async function main(): Promise<void> {
   if (!fs.existsSync(path.join(repoRoot, 'supabase', 'migrations'))) fail('run from the repository root')
+  const withSimulatedCompany = process.argv.includes('--sim')
   refuseForeignEnvFile()
   const projectId = projectIdFor(repoRoot)
 
@@ -233,6 +268,7 @@ async function main(): Promise<void> {
   if (!isLoopbackUrl(supabaseUrl)) fail(`refusing a non-local Supabase URL: ${supabaseUrl}`)
 
   const migrations = await timed('migrations', () => replayMigrations(projectId))
+  const personnummerKey = randomBytes(32).toString('hex')
 
   fs.writeFileSync(
     paths.envFile,
@@ -241,14 +277,19 @@ async function main(): Promise<void> {
       supabaseUrl,
       anonKey,
       serviceRoleKey,
-      personnummerKey: randomBytes(32).toString('hex'),
+      personnummerKey,
       cronSecret: randomBytes(16).toString('hex'),
     }),
     { mode: 0o600 },
   )
 
   const password = randomBytes(18).toString('base64url')
-  const companyId = await timed('seed', () => seed(supabaseUrl, anonKey, serviceRoleKey, password))
+  const seeded = await timed('seed', () => seed(supabaseUrl, anonKey, serviceRoleKey, password))
+  const companyId = withSimulatedCompany
+    ? await timed('simulated company', () =>
+        buildSimulatedCompany(supabaseUrl, serviceRoleKey, seeded.userId, personnummerKey),
+      )
+    : seeded.companyId
   const devPid = await timed('dev server', () => startDevServer(ports.app, appUrl))
 
   writeState(repoRoot, {

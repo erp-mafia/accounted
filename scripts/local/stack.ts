@@ -92,12 +92,16 @@ export function removeOwnEnvFile(repoRoot: string): void {
   else console.warn(`Left ${ENV_FILE} in place: local:up did not write it.`)
 }
 
-/** Everything local:up created except the screenshots, which are the evidence local:check leaves behind. */
+/**
+ * Everything local:up created except the screenshots, which are the evidence
+ * local:check leaves behind, and sim/, the record of a company in the tool-pg
+ * stack, which this stack's going does not touch.
+ */
 export function removeStackFiles(repoRoot: string): void {
   const { dir } = stackPaths(repoRoot)
   if (!fs.existsSync(dir)) return
   for (const entry of fs.readdirSync(dir)) {
-    if (entry === SCREENSHOT_DIR) continue
+    if (entry === SCREENSHOT_DIR || entry === 'sim') continue
     fs.rmSync(path.join(dir, entry), { recursive: true, force: true })
   }
 }

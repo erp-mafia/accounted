@@ -1,0 +1,1 @@
+[2026-10-31] End-to-end proof of the books is a simulated company built through the MCP tools and judged by an answer key that imports no product code, not browser tests: most multi-step bugs live in the ledger, and a report can only be wrong against arithmetic it had no part in.

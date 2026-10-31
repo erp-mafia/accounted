@@ -77,6 +77,7 @@ npm run lint             # ESLint
 npm test                 # All Vitest tests
 npx vitest run <dir>     # Tests in one directory
 npm run test:pg          # pg-real tests against real Postgres
+npm run test:sim         # Moms, AGI, INK2 and årsredovisning against the simulated company (/sim-company)
 npm run check:guards     # Ratchet guards; each failure prints its fix
 npm run check:types      # Typecheck ratchet. `npm test` does NOT typecheck: run this before the build
 npm run setup:extensions # Regenerate extension registry from extensions.config.json
@@ -99,7 +100,7 @@ Path rules in `.claude/rules/` load when you touch matching files: design, i18n,
 
 ## Testing
 
-Vitest 4, `node` env, tests in `__tests__/`, scope `src/lib/` and `src/app/api/` (no component or E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, and fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, ...). `vi.clearAllMocks()` and `eventBus.clear()` in `beforeEach`. Trigger, RPC and RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
+Vitest 4, `node` env, tests in `__tests__/`, scope `src/lib/` and `src/app/api/` (no component or E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, and fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, ...). `vi.clearAllMocks()` and `eventBus.clear()` in `beforeEach`. Trigger, RPC and RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks. `tests/sim/` runs a company through three years with the real MCP tools and judges the reports against an independent answer key, nightly; `/sim-company` has the steps.
 
 ## Decision Log
 
