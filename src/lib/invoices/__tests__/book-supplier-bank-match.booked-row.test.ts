@@ -309,6 +309,22 @@ describe('bookSupplierBankMatch on a bank row that is already booked (accounted#
     expect(reverseEntry).not.toHaveBeenCalled()
   })
 
+  it('reverses nothing when edited lines name an account the engine cannot resolve (crm#1550)', async () => {
+    vi.mocked(findUnresolvableAccounts).mockResolvedValue(['8022'])
+    const { supabase } = world({ entries: [OWN_ENTRY] })
+    const result = await match(supabase, { journal_entry_id: OWN_JE }, {
+      stornoExisting: true,
+      customLines: [
+        { account_number: '2440', debit_amount: 1500, credit_amount: 0 },
+        { account_number: '8022', debit_amount: 0, credit_amount: 1500 },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, code: 'ACCOUNTS_NOT_IN_CHART' })
+    expect(findUnresolvableAccounts).toHaveBeenCalledWith(supabase, COMPANY, ['2440', '8022'])
+    expect(reverseEntry).not.toHaveBeenCalled()
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('reverses nothing when the payment account is not in the chart', async () => {
     vi.mocked(findUnresolvableAccounts).mockResolvedValue(['1930'])
     const { supabase } = world({ entries: [OWN_ENTRY] })

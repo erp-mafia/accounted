@@ -59,6 +59,13 @@ vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: edited rows'
+// accounts all resolve here (the read is pinned by account-validation.test.ts).
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+
 // Mocked so it consumes no slot in the queued Supabase mock: the helper's own
 // query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
 const mockClearSuggestions = vi.fn()

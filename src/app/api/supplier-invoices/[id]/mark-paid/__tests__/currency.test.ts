@@ -77,6 +77,11 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
 vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
   recordSupplierInvoiceDuplicateGuardBypass: vi.fn().mockResolvedValue(undefined),
 }))
+// Mocked so it consumes no slot in the queued Supabase mock: edited rows'
+// accounts all resolve here (the read is pinned by account-validation.test.ts).
+vi.mock('@/lib/bookkeeping/account-validation', () => ({
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
 
 // Mocked so it consumes no slot in the queued Supabase mock: the read itself
 // is pinned by lib/payments/orders/__tests__/signed-payment.test.ts.

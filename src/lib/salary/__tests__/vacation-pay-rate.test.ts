@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   vacationDaysFromInput,
+  isBelowStatutorySemestertillagg,
   resolveVacationPayRate,
   semestertillaggRateFromPercentInput,
   semestertillaggRateToPercent,
@@ -117,5 +118,27 @@ describe('semestertillägg form conversion (crm#1529)', () => {
     for (const percent of ['0.43', '0.8', '0.605', '5']) {
       expect(semestertillaggRateToPercent(semestertillaggRateFromPercentInput(percent))).toBe(Number(percent))
     }
+  })
+})
+
+describe('isBelowStatutorySemestertillagg (Semesterlagen 16 a §, crm#1529)', () => {
+  it('flags an entry under 0,43 %, including 0', () => {
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput('0,42'))).toBe(true)
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput('0'))).toBe(true)
+    expect(isBelowStatutorySemestertillagg(0.004)).toBe(true)
+  })
+
+  it('does not flag the statutory rate, a kollektivavtal 0,8 % or an empty field', () => {
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput('0,43'))).toBe(false)
+    expect(isBelowStatutorySemestertillagg(STATUTORY_SEMESTERTILLAGG_RATE)).toBe(false)
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput('0,8'))).toBe(false)
+    // Empty reads as the statutory rate.
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput(''))).toBe(false)
+  })
+
+  it('does not flag an unparseable or missing value', () => {
+    expect(isBelowStatutorySemestertillagg(semestertillaggRateFromPercentInput('abc'))).toBe(false)
+    expect(isBelowStatutorySemestertillagg(null)).toBe(false)
+    expect(isBelowStatutorySemestertillagg(undefined)).toBe(false)
   })
 })

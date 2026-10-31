@@ -12682,16 +12682,15 @@ export const tools: McpTool[] = [
 
       // Honest absence beats fabricated confidence: mark transactions where
       // NO source produced a suggestion so agents investigate instead of
-      // pattern-matching on unrelated rows (P2-1). A row the till's record
-      // explains (a clearing proposal) has a signal even when no category
-      // source matched it.
+      // pattern-matching on unrelated rows (P2-1). Read off this answer
+      // itself: a row that carries any proposal (a catalog match, a
+      // clearing, a salary run link) is never also called empty (crm#1552).
       const noSignal = transactions
         .filter(
           (tx) =>
             (suggestions[tx.id]?.length ?? 0) === 0 &&
             !counterpartyResult[tx.id] &&
-            !(proposed[tx.id] ?? []).some((p) => p.source === 'clearing') &&
-            !payouts.links.has(tx.id),
+            (proposals[tx.id]?.length ?? 0) === 0,
         )
         .map((tx) => tx.id)
 

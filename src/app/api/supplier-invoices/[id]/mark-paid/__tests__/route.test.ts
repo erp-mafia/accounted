@@ -82,6 +82,15 @@ vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
   findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
 }))
 
+// Edited rows' accounts are checked before anything books; every account
+// resolves unless a test says otherwise (the read is pinned by
+// lib/bookkeeping/__tests__/account-validation.test.ts).
+const mockFindUnresolvableAccounts = vi.fn(async (..._args: unknown[]): Promise<string[]> => [])
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: (...args: unknown[]) => mockFindUnresolvableAccounts(...args),
+}))
+
 import { eventBus } from '@/lib/events'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -1175,6 +1184,33 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
     expect(status).toBe(400)
     expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
     expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+  })
+
+  it('refuses edited rows naming an account the engine cannot resolve, before the registration is booked', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    mockFindUnresolvableAccounts.mockResolvedValueOnce(['8022'])
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {
+        payment_date: '2026-05-12',
+        lines: [
+          { account_number: '2440', debit_amount: 10000, credit_amount: 0 },
+          { account_number: '8022', debit_amount: 0, credit_amount: 10000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(mockFindUnresolvableAccounts).toHaveBeenCalledWith(expect.anything(), 'company-1', ['2440', '8022'])
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
   it('a foreign invoice clears the SEK the registration credits, not the invoice rate', async () => {

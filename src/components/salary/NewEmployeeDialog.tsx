@@ -34,6 +34,7 @@ import {
   BANK_CHECKSUM_WARNING_SV,
 } from '@/lib/payments/bank-account'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
+import SemestertillaggRateInput from '@/components/salary/SemestertillaggRateInput'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
@@ -185,6 +186,10 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   const [salaryType, setSalaryType] = useState('monthly')
   const [personnummer, setPersonnummer] = useState('')
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  // Controlled so the below-0,43 % warning follows the typed value. crm#1529
+  const [semestertillaggInput, setSemestertillaggInput] = useState(
+    String(semestertillaggRateToPercent(STATUTORY_SEMESTERTILLAGG_RATE)),
+  )
   const [clearing, setClearing] = useState('')
   const [account, setAccount] = useState('')
   // Suppress the (soft) check-digit warning while the user is still typing in
@@ -503,17 +508,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             )}
             {vacationRule === 'sammaloneregeln' && (
               <Field label={tEmployee('form_semestertillagg_rate')} htmlFor="semestertillagg_rate">
-                <Input
-                  id="semestertillagg_rate"
-                  name="semestertillagg_rate"
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="5"
-                  placeholder="0.43"
-                  defaultValue={semestertillaggRateToPercent(STATUTORY_SEMESTERTILLAGG_RATE)}
-                />
-                <p className="text-xs text-muted-foreground">{tEmployee('form_semestertillagg_rate_hint')}</p>
+                <SemestertillaggRateInput value={semestertillaggInput} onChange={setSemestertillaggInput} />
               </Field>
             )}
           </div>

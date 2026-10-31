@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { parseAmountInput } from '@/lib/money'
 import {
@@ -172,5 +174,32 @@ describe('toggleEditorState (Redigera / Klart)', () => {
     const opened = toggleEditorState(UNEDITED_EDITOR_STATE, match)
     const refetched = match.map((l, i) => (i === 1 ? { ...l, account_number: '3002' } : l))
     expect(toggleEditorState(opened, refetched).rows).toBe(opened.rows)
+  })
+})
+
+/**
+ * The two dialogs that share the card, read as source (no component tests in
+ * this repo): after Klart the card shows the user's rows, and each dialog
+ * sends the editor's rows as `lines`, so what the user saw is what books.
+ */
+describe('the Bokföring card and its two dialogs (crm#1550)', () => {
+  const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+  const CARD = read('../PaymentPreviewLinesCard.tsx')
+  const MATCH = read('../../transactions/InvoiceMatchDialog.tsx')
+  const SUPPLIER = read('../../supplier-invoices/SupplierPaymentDialog.tsx')
+
+  it('Klart goes through toggleEditorState, and the read view shows the edited rows', () => {
+    expect(CARD).toContain('setState((s) => toggleEditorState(s, previewLines ?? []))')
+    expect(CARD).toContain('voucherLineViews(editor.isEdited ? toLinePayload(editor.lines) : (lines ?? []))')
+  })
+
+  it('the bank-match dialog books the edited rows', () => {
+    expect(MATCH).toContain('const linesPayload = preview ? editor.payload : undefined')
+    expect(MATCH).toContain('...(linesPayload ? { lines: linesPayload } : {})')
+  })
+
+  it('the supplier payment dialog books the edited rows', () => {
+    expect(SUPPLIER).toContain('const linesPayload = editor.payload')
+    expect(SUPPLIER).toContain('...(linesPayload ? { lines: linesPayload } : {})')
   })
 })
