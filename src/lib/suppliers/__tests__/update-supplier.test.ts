@@ -29,6 +29,7 @@ const STORED = {
   default_payment_terms: 30,
   default_currency: 'SEK',
   auto_debit: false,
+  default_dimensions: {},
   notes: null,
   party_id: null,
   archived_at: null,
@@ -160,6 +161,93 @@ describe('updateSupplier', () => {
     enqueue({ data: STORED })
     expect((await updateSupplier(ctx, SUPPLIER_ID, { auto_debit: false, city: 'Lund' })).ok).toBe(true)
     expect(findCall('supplier_invoices', 'update')).toBeUndefined()
+  })
+
+  describe('default dimensions (accounted#144)', () => {
+    const DIMENSIONS_OFF = { data: { dimensions_enabled: false } }
+
+    it('stores a new default, normalized, after the registry check', async () => {
+      enqueue({ data: STORED })
+      enqueue(DIMENSIONS_OFF)
+      enqueue({ data: { ...STORED, default_dimensions: { '1': 'FAST01' } } })
+      const outcome = await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: { '1': ' FAST01 ' } })
+      expect(outcome).toMatchObject({ ok: true, data: { default_dimensions: { '1': 'FAST01' } } })
+      expect(findCall('suppliers', 'update')).toEqual([{ default_dimensions: { '1': 'FAST01' } }])
+      expect(findCall('company_settings', 'select')).toEqual(['dimensions_enabled'])
+    })
+
+    it('refuses an archived code with DIMENSION_VALIDATION_FAILED and writes nothing', async () => {
+      enqueue({ data: STORED })
+      enqueue({ data: { dimensions_enabled: true } })
+      enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1, name: 'Fastighet', is_active: true }] })
+      enqueue({ data: [{ dimension_id: 'dim-1', code: 'FAST01', is_active: false }] })
+      const outcome = await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: { '1': 'FAST01' } })
+      expect(outcome).toMatchObject({ ok: false, code: 'DIMENSION_VALIDATION_FAILED', details: { field: 'default_dimensions' } })
+      expect(findCall('suppliers', 'update')).toBeUndefined()
+    })
+
+    it('leaves a bag the form re-sends unchanged alone: no registry check for an archived value already stored', async () => {
+      const tagged = { ...STORED, default_dimensions: { '1': 'FAST01' } }
+      enqueue({ data: tagged })
+      enqueue({ data: { ...tagged, phone: '08-123' } })
+      const outcome = await updateSupplier(ctx, SUPPLIER_ID, { phone: '08-123', default_dimensions: { '1': 'FAST01' } })
+      expect(outcome.ok).toBe(true)
+      expect(findCall('company_settings', 'select')).toBeUndefined()
+    })
+
+    it('clears the default with {} and previews the change', async () => {
+      const tagged = { ...STORED, default_dimensions: { '1': 'FAST01' } }
+      enqueue({ data: tagged })
+      const outcome = await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: {} }, { dryRun: true })
+      expect(outcome).toMatchObject({
+        ok: true,
+        dryRun: true,
+        preview: { changes: { default_dimensions: { from: { '1': 'FAST01' }, to: {} } } },
+      })
+    })
+
+    it('stays editable on an archived supplier: a default is not räkenskapsinformation', async () => {
+      const archived = { ...STORED, archived_at: '2026-03-01T00:00:00Z' }
+      enqueue({ data: archived })
+      enqueue(DIMENSIONS_OFF)
+      enqueue({ data: { ...archived, default_dimensions: { '6': 'P001' } } })
+      expect((await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: { '6': 'P001' } })).ok).toBe(true)
+    })
+
+    describe('before the migration has added the column', () => {
+      const MISSING = { data: null, error: { code: '42703', message: 'column suppliers.default_dimensions does not exist' } }
+      const { default_dimensions: _none, ...legacy } = STORED
+
+      it('saves the rest of a form that re-sends an empty bag, and answers the record as having no default', async () => {
+        enqueue(MISSING)
+        enqueue({ data: legacy })
+        enqueue(MISSING)
+        enqueue({ data: { ...legacy, city: 'Lund' } })
+        const outcome = await updateSupplier(ctx, SUPPLIER_ID, { city: 'Lund', default_dimensions: {} })
+        expect(outcome).toMatchObject({ ok: true, data: { city: 'Lund', default_dimensions: {} } })
+        // The unchanged bag is never written; only the select is retried without the column.
+        expect(findCalls('suppliers', 'update')).toEqual([[{ city: 'Lund' }], [{ city: 'Lund' }]])
+      })
+
+      it('writes nothing when only the unchanged empty bag is sent', async () => {
+        enqueue(MISSING)
+        enqueue({ data: legacy })
+        const outcome = await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: {} })
+        expect(outcome).toMatchObject({ ok: true, data: { name: 'Elnät AB' } })
+        expect(findCall('suppliers', 'update')).toBeUndefined()
+      })
+
+      it('refuses a new default instead of dropping it quietly', async () => {
+        enqueue(MISSING)
+        enqueue({ data: legacy })
+        enqueue(DIMENSIONS_OFF)
+        enqueue({ data: null, error: { code: 'PGRST204', message: "Could not find the 'default_dimensions' column" } })
+        enqueue({ data: null, error: { code: 'PGRST204', message: "Could not find the 'default_dimensions' column" } })
+        const outcome = await updateSupplier(ctx, SUPPLIER_ID, { default_dimensions: { '1': 'FAST01' } })
+        expect(outcome).toMatchObject({ ok: false, code: 'SUPPLIER_UPDATE_FAILED' })
+        expect(findCalls('suppliers', 'update').every(([payload]) => (payload as Record<string, unknown>).default_dimensions)).toBe(true)
+      })
+    })
   })
 
   it('answers SUPPLIER_DUPLICATE_ORG_NUMBER when the org number belongs to another supplier', async () => {

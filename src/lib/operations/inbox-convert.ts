@@ -24,8 +24,8 @@
  *     its cost: 0 % on the line, nothing on 2641, the full total on 2440;
  *   - the item's document becomes the supplier invoice's underlag, and the
  *     registration verifikat's when one is booked (BFL 5 kap 6 §);
- *   - the invoice's default_dimensions and each line's dimensions are stored
- *     on the invoice and its items, the same columns the MCP door
+ *   - the invoice's default_dimensions (else the supplier's) and each line's
+ *     dimensions are stored on the invoice and its items, the same columns the MCP door
  *     (create_supplier_invoice_from_inbox) writes, so the registration
  *     verifikat, its periodisering and the later payment carry the tags;
  *   - a company that books on issue gets the registration verifikat through
@@ -67,6 +67,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { invoiceDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import {
   resolveSupplierInvoiceReverseCharge,
@@ -227,9 +228,10 @@ export async function convertInboxItemToSupplierInvoice(
 
   // Kostnadsställe/projekt (dimensions PR7): the invoice-level bag lands on
   // every generated line, a line's own bag merges over it on the expense
-  // line that item books to. Normalized through the same gate the MCP door
-  // uses; the registry itself is checked when the verifikat is booked.
-  const defaultDimensions = coerceDimensionsBag(body.default_dimensions) ?? {}
+  // line that item books to. The bag sent ({} included), else the
+  // supplier's default (accounted#144). Normalized through the same gate the
+  // MCP door uses; the registry itself is checked when the verifikat is booked.
+  const defaultDimensions = invoiceDefaultDimensions(body.default_dimensions, supplier)
 
   // Typed as the create path's computed row: a supplier_invoice_items field
   // that path writes (dimensions among them) cannot be left out here again.

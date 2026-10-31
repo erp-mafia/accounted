@@ -1606,7 +1606,7 @@ Creates a supplier invoice in `registered` status and posts the registration jou
 - Duplicate (supplier_id, supplier_invoice_number) returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER. Use the credit flow on the original instead of re-registering with a tweaked number.
 - Foreign currency: omit exchange_rate and the server fetches Riksbanken's rate for invoice_date (ML 8 kap 21-23 §). If no rate can be resolved the create is refused with 400 SI_FX_RATE_MISSING rather than stored unconverted: pass exchange_rate explicitly to proceed. A SEK invoice needs no rate and gets total_sek = total.
 - exchange_rate is SEK per 1 unit of the invoice currency and must satisfy 0 < rate < 100000, the same bounds the supplier_invoices CHECK enforces. Out-of-range values return 400 VALIDATION_ERROR; passing an invoice total where a rate belongs is the usual cause.
-- Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
+- Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Omitted default_dimensions takes the default_dimensions of the supplier; {} registers the invoice untagged. The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED: list valid codes via GET /dimensions.
 - Tjänstepension invoices (Avanza etc.): set items[].apply_slp=true on the 741x premium line and the registration JE also books särskild löneskatt (debit 7533 / credit 2514 at 24.26% of the line amount) beyond the payable: 2440 stays at the invoice total. apply_slp on a non-741x account returns 400 SI_CREATE_SLP_INVALID_ACCOUNT.
 - Underlag: upload the invoice PDF with POST /documents first and pass its id as document_id. The document is stored on the invoice and linked to the registration verifikat. A document that is missing, belongs to another company, or is already linked returns 400 SI_CREATE_INVALID_INPUT.
 - Paid privately (eget utlägg): set paid_with_private_funds=true. The invoice is registered as paid and one verifikat books the expense against the payer: the owner (2893 AB, 2018 EF; claimant_name names them) or an employee (employee_id, 2820). payment_date is the out-of-pocket date (defaults to invoice_date). inbox_item_id takes the underlag from an inbox item and is only accepted on this path. With reverse charge the verifikat also books the fiktiv moms and basis pair the registration would, and the payer is owed the net. Not combinable with periodisering.
@@ -3503,6 +3503,7 @@ Creates a new supplier for the company. Bankgiro (with its Luhn check digit), pl
 - A Swedish-shaped org_number is stored as the 10-digit key; a foreign registration number is stored as sent.
 - Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.
 - default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.
+- default_dimensions ({"<sie_dim_no>":"<code>"}, codes from GET /dimensions) tags every new supplier invoice of the supplier that sends no default_dimensions of its own; with dimensions enabled an unknown or archived code returns 400 DIMENSION_VALIDATION_FAILED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3535,6 +3536,7 @@ Request body:
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   self_billing_agreement_ref?: string,
   auto_debit?: boolean,
+  default_dimensions?: Record<string, string>,
   notes?: string
 }
 ```
@@ -3586,7 +3588,8 @@ Response `200`:
     archived_at: string | null,
     created_at: string,
     updated_at: string,
-    auto_debit: boolean
+    auto_debit: boolean,
+    default_dimensions: Record<string, string>
   },
   meta: {
     request_id: string,
@@ -3626,6 +3629,9 @@ Example response `200`:
     "default_expense_account": "5410",
     "default_payment_terms": 14,
     "default_currency": "SEK",
+    "default_dimensions": {
+      "1": "KS01"
+    },
     "notes": null,
     "party_id": null,
     "archived_at": null,
@@ -3690,6 +3696,7 @@ Response `200`:
     default_currency: string,
     self_billing_agreement_ref: string | null,
     auto_debit: boolean,
+    default_dimensions: Record<string, string>,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -3742,7 +3749,7 @@ Example response `200`:
 
 Patches the supplier with the fields sent; every field is optional and the rest stay as they are. An empty string clears a text field (null for email and default_expense_account). archived_at: null un-archives a supplier archived with DELETE. An archived supplier's identifying fields (name, type, org and VAT number, address, bank details) are räkenskapsinformation and cannot change until it is un-archived. The dry run answers the would-be supplier with `changes` (each changed field, from and to) and `payment_details_changed`. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
-**Use when:** A supplier needs other contact details, address, payment details (bankgiro, plusgiro, clearing and account number, IBAN, BIC), VAT number, default expense account, payment terms or notes, e.g. a supplier imported from SIE with only a name and a bankgiro. Dry-run first to confirm the change.
+**Use when:** A supplier needs other contact details, address, payment details (bankgiro, plusgiro, clearing and account number, IBAN, BIC), VAT number, default expense account, default dimensions, payment terms or notes, e.g. a supplier imported from SIE with only a name and a bankgiro. Dry-run first to confirm the change.
 **Do not use for:** Archiving a supplier (DELETE sets archived_at). Creating one (POST /suppliers). Merging duplicates: there is no merge; archive the duplicate once its invoices are closed.
 
 **Pitfalls:**
@@ -3751,6 +3758,7 @@ Patches the supplier with the fields sent; every field is optional and the rest 
 - org_number uniqueness is enforced at DB level: 409 SUPPLIER_DUPLICATE_ORG_NUMBER.
 - An archived supplier refuses a change to an identifying field with 400 VALIDATION_ERROR (details.field archived_at, details.offending_fields); send archived_at: null first.
 - Changing default_expense_account does not rebook earlier supplier invoices: only future bookings pick up the new default.
+- default_dimensions replaces the whole bag ({} clears it) and, like the default account, only tags supplier invoices registered after the change; with dimensions enabled an unknown or archived code returns 400 DIMENSION_VALIDATION_FAILED.
 - A Swedish bank account payee is clearing_number + account_number; bank_account is free text that payment files only read with an explicit clearing number.
 
 | Parameter | In | Type | Required | Notes |
@@ -3786,6 +3794,7 @@ Request body:
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   self_billing_agreement_ref?: string | null,
   auto_debit?: boolean,
+  default_dimensions?: Record<string, string>,
   notes?: string,
   archived_at?: unknown
 }
@@ -3832,7 +3841,8 @@ Response `200`:
     archived_at: string | null,
     created_at: string,
     updated_at: string,
-    auto_debit: boolean
+    auto_debit: boolean,
+    default_dimensions: Record<string, string>
   },
   meta: {
     request_id: string,
@@ -3872,6 +3882,9 @@ Example response `200`:
     "default_expense_account": "5410",
     "default_payment_terms": 14,
     "default_currency": "SEK",
+    "default_dimensions": {
+      "1": "KS01"
+    },
     "notes": "New payment terms agreed 2026-05-12.",
     "party_id": null,
     "archived_at": null,
@@ -3936,7 +3949,7 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, self_billing_agreement_ref?: string, auto_debit?: boolean, notes?: string }[],
+  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, self_billing_agreement_ref?: string, auto_debit?: boolean, default_dimensions?: Record<string, string>, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

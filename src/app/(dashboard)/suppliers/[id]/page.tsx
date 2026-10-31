@@ -62,6 +62,11 @@ export default function SupplierDetailPage() {
   const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
   const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
+  // The codes its new invoices are tagged with, in dimension-number order.
+  const defaultDimensionsLabel = Object.entries(supplier?.default_dimensions ?? {})
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, code]) => code)
+    .join(' · ')
   const party = usePartyDossier(partyId)
   const registryAddress = party.registry?.contact.address ? addressRowsFromRegistry(party.registry.contact.address) : null
   // Which contact fields carry what the register said: one note for the
@@ -352,6 +357,11 @@ export default function SupplierDetailPage() {
             <DefEmpty />
           )}
         </DefRow>
+        {companySettings?.dimensions_enabled === true && (
+          <DefRow label={t('def_default_dimensions')}>
+            {defaultDimensionsLabel ? <span data-ph-mask="">{defaultDimensionsLabel}</span> : <DefEmpty />}
+          </DefRow>
+        )}
       </DetailSection>
 
       </div>
@@ -457,9 +467,18 @@ export default function SupplierDetailPage() {
               plusgiro: supplier.plusgiro || '',
               iban: supplier.iban || '',
               bic: supplier.bic || '',
+              // Every field the form submits starts from the stored value: one
+              // left out here was written back as empty on the next save
+              // (clearing and account number, the self-billing agreement and
+              // autogiro were reset that way).
+              clearing_number: supplier.clearing_number || '',
+              account_number: supplier.account_number || '',
               default_expense_account: supplier.default_expense_account || '',
               default_payment_terms: supplier.default_payment_terms,
               default_currency: supplier.default_currency || 'SEK',
+              self_billing_agreement_ref: supplier.self_billing_agreement_ref || '',
+              auto_debit: supplier.auto_debit ?? false,
+              default_dimensions: supplier.default_dimensions ?? {},
               notes: supplier.notes || '',
             }}
           />

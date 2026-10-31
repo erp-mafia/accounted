@@ -196,9 +196,11 @@ export function buildSupplierInvoicePayload(
     // on 2440 only): see supplierInvoiceCreateUrl.
     ...(paidByPerson && inboxItemId ? { inbox_item_id: inboxItemId } : {}),
     ore_rounding: oreRounding,
-    // Invoice-level default dimensions (kostnadsställe/projekt): only sent
-    // when the user actually picked something.
-    ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
+    // Invoice-level dimensions (kostnadsställe/projekt), always sent: the
+    // editor starts them from the supplier's default and shows them, so {}
+    // is the user clearing that default, not "use the supplier's"
+    // (lib/suppliers/default-dimensions.ts).
+    default_dimensions: defaultDims,
     // The moms the invoice states, when the lines take it (the editor showed
     // it as the booked moms); otherwise the server books the VAT on the sum.
     ...(statedVat && statedVatAccepted

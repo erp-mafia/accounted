@@ -411,3 +411,45 @@ describe('createSupplierInvoice with an upplupen kostnad', () => {
     expectNothingWritten()
   })
 })
+
+// accounted#144: a supplier's default dimension bag is the invoice's when the
+// request sends none; a bag sent, {} included, overrides it.
+describe('createSupplierInvoice: the supplier default dimensions', () => {
+  beforeEach(() => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+    setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID, default_dimensions: { '1': 'FAST01' } }) })
+  })
+
+  it('tags the invoice and every line of its verifikat with the default when the request names none', async () => {
+    const result = await createSupplierInvoice(ctx(), body(), { dryRun: true })
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.default_dimensions).toEqual({ '1': 'FAST01' })
+    const lines = (result.preview.verifikat as { lines: Array<{ account_number: string; dimensions?: Record<string, string> }> }).lines
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) expect(line.dimensions, line.account_number).toEqual({ '1': 'FAST01' })
+  })
+
+  it("keeps a bag the request sends, and {} registers the invoice untagged", async () => {
+    const own = await createSupplierInvoice(ctx(), body({ default_dimensions: { '6': 'P001' } }), { dryRun: true })
+    if (!own.ok || !own.dryRun) throw new Error('expected a dry-run preview')
+    expect(own.preview.default_dimensions).toEqual({ '6': 'P001' })
+
+    const none = await createSupplierInvoice(ctx(), body({ default_dimensions: {} }), { dryRun: true })
+    if (!none.ok || !none.dryRun) throw new Error('expected a dry-run preview')
+    expect(none.preview.default_dimensions).toEqual({})
+    const lines = (none.preview.verifikat as { lines: Array<{ dimensions?: Record<string, string> }> }).lines
+    for (const line of lines) expect(line.dimensions ?? {}).toEqual({})
+  })
+
+  it("lets a line's own bag win per key over the supplier default", async () => {
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({ items: [{ description: 'Material', amount: 1000, account_number: '4010', vat_rate: 0.25, dimensions: { '1': 'FAST02', '6': 'P001' } }] }),
+      { dryRun: true },
+    )
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    const lines = (result.preview.verifikat as { lines: Array<{ account_number: string; dimensions?: Record<string, string> }> }).lines
+    expect(lines.find((l) => l.account_number === '4010')?.dimensions).toEqual({ '1': 'FAST02', '6': 'P001' })
+    expect(lines.find((l) => l.account_number === '2440')?.dimensions).toEqual({ '1': 'FAST01' })
+  })
+})

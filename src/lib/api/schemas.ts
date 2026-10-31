@@ -1843,6 +1843,10 @@ export const CreateSupplierSchema = z.object({
   // The supplier debits its invoices itself (autogiro, account debit):
   // they stay out of to-pay lists and payments (crm#1463).
   auto_debit: z.boolean().optional(),
+  // The dimension bag ({sie_dim_no: code}) its new supplier invoices take
+  // when they name none; {} clears it (accounted#144,
+  // lib/suppliers/default-dimensions.ts).
+  default_dimensions: DimensionsBagSchema.optional(),
   notes: z.string().max(2000).optional(),
 })
 
@@ -2043,7 +2047,9 @@ export const CreateSupplierInvoiceSchema = z.object({
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),
   // Dimensions PR7: invoice-level bag applied to every generated journal line;
-  // items[].dimensions merge over it per expense line.
+  // items[].dimensions merge over it per expense line. Omitted: the
+  // supplier's default_dimensions; {} registers the invoice untagged
+  // (lib/suppliers/default-dimensions.ts).
   default_dimensions: DimensionsBagSchema.optional(),
   // The VAT per rate the supplier's document states. Omitted: the VAT on the
   // summed base per rate. Either way it is spread onto the lines so they sum

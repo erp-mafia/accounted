@@ -465,6 +465,7 @@ import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
+import { supplierDefaultDimensions, tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import { createArticle, updateArticle } from '@/lib/articles/article-commands'
 import { articleLineName, documentLanguageOf, type DocumentLanguage } from '@/lib/articles/line-name'
 import {
@@ -11980,6 +11981,11 @@ export const tools: McpTool[] = [
           maxLength: 3,
           description: 'Default invoice currency, 3-letter ISO code (default SEK).',
         },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Tags its supplier invoices take when they send none, {"<sie_dim_no>":"<code>"}, e.g. {"1":"KS01"}; codes from gnubok_list_dimensions.',
+        },
         notes: { type: 'string', maxLength: 2000 },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -12001,7 +12007,8 @@ export const tools: McpTool[] = [
       // The approver sees the row the approval inserts, the register's
       // defaults applied (lib/suppliers/create-supplier.ts).
       const preview = await createSupplier({ supabase, companyId, userId, log }, params, { dryRun: true })
-      if (!preview.ok || !preview.dryRun) throw new Error('create_supplier: preview failed')
+      if (!preview.ok) throwOutcomeFailure(preview)
+      if (!preview.dryRun) throw new Error('create_supplier: preview failed')
 
       return stage({
         supabase,
@@ -17119,7 +17126,7 @@ export const tools: McpTool[] = [
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every line not setting the key. Unknown values rejected: never auto-created.',
+          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every line not setting the key. Omitted: the supplier\'s default_dimensions; {} = none. Unknown values rejected: never auto-created.',
         },
         notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
         ...STAGING_ARGS_PROPERTIES,
@@ -17268,12 +17275,23 @@ export const tools: McpTool[] = [
       // actively promotes) must point at a supplier in THIS company, or the
       // staged operation would fail opaquely at commit time instead. Its
       // supplier_type decides the default VAT treatment below.
-      const { data: resolvedSupplier } = await supabase
-        .from('suppliers')
-        .select('id, supplier_type, default_expense_account, default_payment_terms, bankgiro, plusgiro, iban, bic')
-        .eq('id', supplierId)
-        .eq('company_id', companyId)
-        .single()
+      // Its default dimensions too (accounted#144), read as "none" before
+      // the migration that adds the column has run.
+      const { data: resolvedSupplier } = await tolerateMissingDefaultDimensions(
+        'id, supplier_type, default_expense_account, default_payment_terms, bankgiro, plusgiro, iban, bic, default_dimensions',
+        (columns) =>
+          supabase.from('suppliers').select(columns).eq('id', supplierId).eq('company_id', companyId).single<{
+            id: string
+            supplier_type: string | null
+            default_expense_account: string | null
+            default_payment_terms: number | null
+            bankgiro: string | null
+            plusgiro: string | null
+            iban: string | null
+            bic: string | null
+            default_dimensions?: unknown
+          }>(),
+      )
       if (!resolvedSupplier) {
         throw new Error(
           supplierResolution === 'override'
@@ -17669,8 +17687,13 @@ export const tools: McpTool[] = [
       // registry in ONE pass (zero queries when nothing is tagged; free-text
       // passthrough while dimensions_enabled is off). The resolved default is
       // staged top-level; each item keeps only its own resolved bag: the
-      // executor merges item-over-default at commit time.
-      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      // executor merges item-over-default at commit time. Omitted, the
+      // supplier's default is staged (accounted#144), so the approver sees
+      // the tags the invoice will carry; {} stages none.
+      const supplierDefault = supplierDefaultDimensions(resolvedSupplier)
+      const defaultDimensions = args.default_dimensions === undefined
+        ? (Object.keys(supplierDefault).length > 0 ? supplierDefault : undefined)
+        : parseDimensionsArg(args.default_dimensions, 'default_dimensions')
       const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
         supabase,
         companyId,

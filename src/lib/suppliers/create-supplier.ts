@@ -16,6 +16,8 @@ import type { CreateSupplierSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { SUPPLIER_COLUMNS, type SupplierRecord } from '@/lib/suppliers/update-supplier'
+import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
+import { refuseUnknownSupplierDimensions, tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import type { Supplier } from '@/types'
 
 export type SupplierCreateInput = z.output<typeof CreateSupplierSchema>
@@ -25,8 +27,13 @@ function setOrNull(value: string | null | undefined): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
 }
 
-/** The row a validated input inserts, with the register's defaults. */
+/**
+ * The row a validated input inserts, with the register's defaults. A default
+ * dimension bag is named only when it has codes, so a supplier without one
+ * inserts the same row before and after the column's migration.
+ */
 function supplierRow(input: SupplierCreateInput) {
+  const defaultDimensions = normalizeLineDimensions({ dimensions: input.default_dimensions })
   return {
     name: input.name,
     supplier_type: input.supplier_type ?? 'swedish_business',
@@ -51,6 +58,7 @@ function supplierRow(input: SupplierCreateInput) {
     default_currency: input.default_currency || 'SEK',
     self_billing_agreement_ref: setOrNull(input.self_billing_agreement_ref),
     auto_debit: input.auto_debit ?? false,
+    ...(Object.keys(defaultDimensions).length > 0 ? { default_dimensions: defaultDimensions } : {}),
     notes: setOrNull(input.notes),
   }
 }
@@ -66,13 +74,19 @@ export async function createSupplier(
 ): Promise<OperationOutcome<SupplierRecord>> {
   const { supabase, companyId, userId, log } = ctx
   const row = supplierRow(input)
-  if (options.dryRun) return { ok: true, dryRun: true, preview: row }
+  if (row.default_dimensions) {
+    const refused = await refuseUnknownSupplierDimensions(supabase, companyId, row.default_dimensions)
+    if (refused) return refused
+  }
+  if (options.dryRun) return { ok: true, dryRun: true, preview: { default_dimensions: {}, ...row } }
 
-  const { data, error } = await supabase
-    .from('suppliers')
-    .insert({ ...row, user_id: userId, company_id: companyId })
-    .select(SUPPLIER_COLUMNS)
-    .single()
+  const { data, error } = await tolerateMissingDefaultDimensions(SUPPLIER_COLUMNS, (columns) =>
+    supabase
+      .from('suppliers')
+      .insert({ ...row, user_id: userId, company_id: companyId })
+      .select(columns)
+      .single(),
+  )
   if (error || !data) {
     if ((error as { code?: string } | null)?.code === '23505') {
       // The org number is not echoed: an individual's would be a personnummer.

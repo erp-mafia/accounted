@@ -88,6 +88,7 @@ import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { resolveSupplierInvoiceDueDate } from '@/lib/supplier-invoices/due-date'
+import { invoiceDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import { buildSelfBillingSnapshot, type SelfBillingSnapshot } from '@/lib/supplier-invoices/self-billing/snapshot'
 import {
   archiveSelfBillingDocument,
@@ -438,6 +439,9 @@ export async function createSupplierInvoice(
   if (supplierError || !supplier || supplier.archived_at) {
     return { ok: false, code: 'SUPPLIER_NOT_FOUND' }
   }
+  // The bag the request sent ({} included), else the supplier's default
+  // (accounted#144); generators apply it to every line.
+  const defaultDimensions = invoiceDefaultDimensions(body.default_dimensions, supplier)
 
   // A foreign supplier defaults to reverse charge; the treatment follows the
   // flag (resolveSupplierInvoiceReverseCharge).
@@ -743,7 +747,7 @@ export async function createSupplierInvoice(
         vat_treatment: vatTreatment,
         reverse_charge: reverseCharge,
         reverse_charge_kind: reverseChargeKind.kind,
-        default_dimensions: body.default_dimensions ?? {},
+        default_dimensions: defaultDimensions,
         total,
       } as unknown as SupplierInvoice,
       items,
@@ -790,7 +794,7 @@ export async function createSupplierInvoice(
         paid_with_private_funds: paidPrivately,
         document_id: documentId,
         notes: body.notes ?? null,
-        default_dimensions: body.default_dimensions ?? {},
+        default_dimensions: defaultDimensions,
         items,
         vat_by_rate: documentVat.byRate,
         would_create_registration_journal_entry: booksOnRegistration || paidPrivately,
@@ -909,8 +913,7 @@ export async function createSupplierInvoice(
       notes: body.notes || null,
       // Display-only öresavrundning override; null = off.
       ore_rounding: body.ore_rounding ?? null,
-      // Invoice-level dimensions bag; generators apply it to every line.
-      default_dimensions: body.default_dimensions ?? {},
+      default_dimensions: defaultDimensions,
     })
     .select()
     .single()

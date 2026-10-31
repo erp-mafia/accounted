@@ -1261,6 +1261,13 @@ export interface Supplier {
    */
   auto_debit?: boolean
 
+  /**
+   * Dimension bag {sie_dim_no: code} its new supplier invoices take when
+   * they name none (accounted#144). Optional: narrow selects and rows read
+   * before 20261031203517 do not carry it.
+   */
+  default_dimensions?: Record<string, string>
+
   notes: string | null
 
   created_at: string
@@ -2182,6 +2189,8 @@ export interface CreateSupplierInput {
   self_billing_agreement_ref?: string | null
   /** The supplier debits its invoices itself (crm#1463). */
   auto_debit?: boolean
+  /** Tags its new supplier invoices take when they name none (accounted#144); {} clears. */
+  default_dimensions?: Record<string, string>
   notes?: string
 }
 
