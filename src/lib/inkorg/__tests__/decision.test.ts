@@ -6,9 +6,10 @@ describe('focusDecision', () => {
   it('asks how an unpaid invoice is paid: register it, pay it in the bank, or it was paid and gets its bank row', () => {
     const d = focusDecision(
       makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-10-30', invoiceDate: '2026-10-01' } }) }),
+      { today: '2026-10-20' },
     )
     expect(d.question).toBe('invoice_paid')
-    expect(d.evidence).toEqual({ kind: 'due', date: '2026-10-30' })
+    expect(d.evidence).toEqual({ kind: 'due', date: '2026-10-30', overdue: false })
     expect(d.actions).toEqual(['register_invoice', 'pay_in_bank', 'match_purchase'])
     expect(d.editorEscape).toBe(true)
   })
@@ -264,10 +265,55 @@ describe('rowStatus', () => {
     evidence_level: 'exakt' as const,
   }
   const invoice = () => makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-10-31' } }) })
+  const TODAY = '2026-10-20'
+  const TO_PAY = { kind: 'to_pay', dueDate: '2026-10-31', overdue: false }
 
   it('says an invoice with a due date is to be paid, while nothing says it is paid', () => {
-    expect(rowStatus(invoice())).toEqual({ kind: 'to_pay', dueDate: '2026-10-31' })
-    expect(rowStatus(invoice(), null)).toEqual({ kind: 'to_pay', dueDate: '2026-10-31' })
+    expect(rowStatus(invoice(), undefined, TODAY)).toEqual(TO_PAY)
+    expect(rowStatus(invoice(), null, TODAY)).toEqual(TO_PAY)
+  })
+
+  // crm#1569: two invoices due 15 Sep looked the same on 31 Oct as one due 19 Nov.
+  it('says an invoice past its due date is overdue, the day after the due date and not before', () => {
+    const due = (dueDate: string, total: number | null = 29625) =>
+      makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate }, totals: { total } }) })
+    expect(rowStatus(due('2026-09-15'), null, '2026-10-31')).toEqual({ kind: 'to_pay', dueDate: '2026-09-15', overdue: true })
+    expect(rowStatus(due('2026-11-19', 11250), null, '2026-10-31')).toEqual({ kind: 'to_pay', dueDate: '2026-11-19', overdue: false })
+    expect(rowStatus(due('2026-10-31'), null, '2026-10-31')).toMatchObject({ overdue: false })
+    expect(rowStatus(due('2026-10-30'), null, '2026-10-31')).toMatchObject({ overdue: true })
+    // An amount not read yet is still owed, as "Att betala" already says.
+    expect(rowStatus(due('2026-09-15', null), null, '2026-10-31')).toMatchObject({ overdue: true })
+    // Nothing to pay: nothing falls due.
+    expect(rowStatus(due('2026-09-15', 0), null, '2026-10-31')).toMatchObject({ overdue: false })
+    // The due date is read as the extraction's other readers read it; one it cannot read is shown as written, never overdue.
+    expect(rowStatus(due('15/9/2026'), null, '2026-10-31')).toEqual({ kind: 'to_pay', dueDate: '2026-09-15', overdue: true })
+    expect(rowStatus(due('2026-09-15T00:00:00'), null, '2026-10-31')).toEqual({ kind: 'to_pay', dueDate: '2026-09-15', overdue: true })
+    expect(rowStatus(due('snart'), null, '2026-10-31')).toEqual({ kind: 'to_pay', dueDate: 'snart', overdue: false })
+  })
+
+  it('never calls an invoice overdue when the reading says nothing is left to pay', () => {
+    // Settled from an account balance before this payment: total 7.75, applied 7.75, amount due 0.00.
+    const prepaid = makeItem({
+      extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-10-01' }, totals: { total: 7.75, prepaidAmount: 7.75 } }),
+    })
+    expect(rowStatus(prepaid, null, '2026-10-31')).toMatchObject({ overdue: false })
+    // Partly settled before: what is left still falls due.
+    const partly = makeItem({
+      extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-10-01' }, totals: { total: 100, prepaidAmount: 40 } }),
+    })
+    expect(rowStatus(partly, null, '2026-10-31')).toMatchObject({ overdue: true })
+    // Paid at the till by card: the document is the proof, nothing falls due.
+    const card = makeItem({
+      extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-10-01' }, totals: { total: 99 }, payment: { method: 'card', cardLast4: null } }),
+    })
+    expect(rowStatus(card, null, '2026-10-31')).toMatchObject({ overdue: false })
+  })
+
+  it('says the opened invoice fell due on the same rule as its row in the list', () => {
+    const item = makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice', invoice: { dueDate: '2026-09-15' }, totals: { total: 29625 } }) })
+    expect(focusDecision(item, { today: '2026-10-31' }).evidence).toEqual({ kind: 'due', date: '2026-09-15', overdue: true })
+    expect(focusDecision(item, { today: '2026-09-15' }).evidence).toEqual({ kind: 'due', date: '2026-09-15', overdue: false })
+    expect(rowStatus(item, null, '2026-10-31')).toMatchObject({ overdue: true })
   })
 
   it('says it looks paid once the bank row it looks paid by is known', () => {
@@ -277,11 +323,11 @@ describe('rowStatus', () => {
 
   it('says it looks paid from the first sight, off the match the list read carries', () => {
     expect(rowStatus({ ...invoice(), bank_match: MATCH })).toEqual({ kind: 'looks_paid' })
-    expect(rowStatus({ ...invoice(), bank_match: null })).toEqual({ kind: 'to_pay', dueDate: '2026-10-31' })
+    expect(rowStatus({ ...invoice(), bank_match: null }, undefined, TODAY)).toEqual(TO_PAY)
   })
 
   it('lets a later read win over the list: the focus view found the row booked since, or found one', () => {
-    expect(rowStatus({ ...invoice(), bank_match: MATCH }, null)).toEqual({ kind: 'to_pay', dueDate: '2026-10-31' })
+    expect(rowStatus({ ...invoice(), bank_match: MATCH }, null, TODAY)).toEqual(TO_PAY)
     expect(rowStatus({ ...invoice(), bank_match: null }, MATCH)).toEqual({ kind: 'looks_paid' })
     // Unknown to a later read: the list's own answer stands.
     expect(rowStatus({ ...invoice(), bank_match: MATCH }, undefined)).toEqual({ kind: 'looks_paid' })
@@ -402,7 +448,7 @@ describe('focusDecision: an invoice its receipt says is paid', () => {
   it('the row says paid by its receipt, not "to pay"', () => {
     expect(rowStatus(invoice, null)).toEqual({ kind: 'paid_by_receipt' })
     expect(rowStatus(invoice, MATCH)).toEqual({ kind: 'looks_paid' })
-    expect(rowStatus({ ...invoice, pairing: null }, null)).toEqual({ kind: 'to_pay', dueDate: '2026-10-03' })
+    expect(rowStatus({ ...invoice, pairing: null }, null, '2026-10-01')).toEqual({ kind: 'to_pay', dueDate: '2026-10-03', overdue: false })
   })
 })
 

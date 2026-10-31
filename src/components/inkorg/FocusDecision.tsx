@@ -738,7 +738,7 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
   const line = (() => {
     switch (evidence.kind) {
       case 'due':
-        return t('ev_due', { date: shortDate(evidence.date, locale) })
+        return t(evidence.overdue ? 'ev_overdue' : 'ev_due', { date: shortDate(evidence.date, locale) })
       case 'issued':
         return t('ev_issued', { date: shortDate(evidence.date, locale) })
       case 'paid_with':

@@ -16,6 +16,8 @@
  * a company-level guard, not part of this row-level predicate.
  */
 
+import { isPastDue } from '@/lib/dates/iso'
+
 /**
  * "Nothing left to pay" threshold, mirroring the cron and the payment/match
  * paths: öre-level rounding must not leave a payable looking unsettled.
@@ -63,7 +65,7 @@ export function isOverduePayable(
 ): boolean {
   if (facts.is_credit_note) return false
   if (facts.remaining_amount <= FULLY_PAID_EPSILON) return false
-  return facts.due_date < today
+  return isPastDue(facts.due_date, today)
 }
 
 /**

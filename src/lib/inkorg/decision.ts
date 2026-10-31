@@ -59,6 +59,10 @@ import type { ExtractedPaymentMethod } from '@/types'
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { cardEvidence } from '@/lib/documents/bank-match/card-token'
+import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
+import { prepaidDeduction } from '@/lib/documents/reading/assemble'
+import { normalizeDate } from '@/lib/documents/extract/fields'
+import { roundOre } from '@/lib/money'
 import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type ReadingRetry, type UnderlagStatus } from './items'
 
 export type DecisionAction =
@@ -106,7 +110,7 @@ export type DecisionEvidence =
       /** The AI provider could not take the last reading: whether the sweep reads it again (./items.ts ReadingRetry). */
       retry?: ReadingRetry
     }
-  | { kind: 'due'; date: string }
+  | { kind: 'due'; date: string; overdue: boolean }
   | { kind: 'issued'; date: string }
   | {
       kind: 'paid_with'
@@ -181,11 +185,12 @@ function privatelyPaid(startable: InkorgStartable): DecisionAction {
 }
 
 /** What the evidence line says for a document waiting for its first decision. */
-function firstDecisionEvidence(item: InkorgItem, kind: InboxDocumentKind | null): DecisionEvidence | null {
+function firstDecisionEvidence(item: InkorgItem, kind: InboxDocumentKind | null, today: string): DecisionEvidence | null {
   const data = item.extracted_data
   const headline = itemHeadline(item)
   if (kind === 'supplier_invoice') {
-    if (data?.invoice?.dueDate) return { kind: 'due', date: data.invoice.dueDate }
+    const due = invoiceDue(item, today)
+    if (due) return { kind: 'due', date: due.dueDate, overdue: due.overdue }
     if (data?.invoice?.invoiceDate) return { kind: 'issued', date: data.invoice.invoiceDate }
   }
   const method = data?.payment?.method
@@ -253,9 +258,12 @@ export function focusDecision(
     companion?: InkorgItem | null
     /** The company can have documents read (the ai capability): a document nobody read can be read now. */
     canRead?: boolean
+    /** The Stockholm calendar day (yyyy-MM-dd) a due date is judged against; today when left out. */
+    today?: string
   } = {},
 ): FocusDecision {
   const stage = itemStage(item)
+  const today = context.today ?? todayIsoStockholm()
   const startable = context.startable ?? ALL_STARTABLE
 
   if (stage === 'booked') {
@@ -396,7 +404,7 @@ export function focusDecision(
         : ['turn_on_supplier_invoices', 'match_purchase']
       return {
         question: 'invoice_paid',
-        evidence: firstDecisionEvidence(item, kind),
+        evidence: firstDecisionEvidence(item, kind, today),
         actions,
         quietActions: ['not_underlag'],
         editorEscape: true,
@@ -404,7 +412,7 @@ export function focusDecision(
     }
     return {
       question: 'invoice_paid',
-      evidence: firstDecisionEvidence(item, kind),
+      evidence: firstDecisionEvidence(item, kind, today),
       actions: ['register_invoice', 'pay_in_bank', 'match_purchase'],
       quietActions: ['not_underlag'],
       editorEscape: true,
@@ -413,7 +421,7 @@ export function focusDecision(
   // A receipt, a letter or an unread document: who paid decides the booking.
   return {
     question: 'who_paid',
-    evidence: firstDecisionEvidence(item, kind),
+    evidence: firstDecisionEvidence(item, kind, today),
     actions: ['match_purchase', privatelyPaid(startable), 'not_underlag'],
     quietActions: [],
     editorEscape: true,
@@ -445,7 +453,8 @@ export function canUndo(action: DecisionAction): boolean {
  *     its bank row for the whole page at once;
  *   - paid_by_receipt: an invoice the receipt it came with says is paid,
  *     no bank row found for it yet;
- *   - to_pay: an invoice with a due date that nothing says is paid;
+ *   - to_pay: an invoice with a due date that nothing says is paid, and
+ *     whether that date has passed (overdue);
  *   - unreadable, reading, linked: its stage;
  *   - booked_with: the other half of the purchase is booked already, on
  *     this verifikat;
@@ -453,12 +462,13 @@ export function canUndo(action: DecisionAction): boolean {
  *   - done: booked or registered.
  * `bankMatch` is what a later read said (the focus view reads the item again
  * when it opens): it wins, null included (the row was booked or claimed
- * since). Undefined leaves the list's own.
+ * since). Undefined leaves the list's own. `today` is the Stockholm calendar
+ * day (yyyy-MM-dd) the due date is judged against.
  */
 export type RowStatus =
   | { kind: 'looks_paid' }
   | { kind: 'paid_by_receipt' }
-  | { kind: 'to_pay'; dueDate: string }
+  | { kind: 'to_pay'; dueDate: string; overdue: boolean }
   | { kind: 'unreadable' }
   | { kind: 'reading' }
   | { kind: 'linked' }
@@ -466,7 +476,11 @@ export type RowStatus =
   | { kind: 'done' }
   | { kind: 'booked_with'; voucher: string | null }
 
-export function rowStatus(item: InkorgItem, bankMatch: BankMatch | null | undefined = item.bank_match): RowStatus {
+export function rowStatus(
+  item: InkorgItem,
+  bankMatch: BankMatch | null | undefined = item.bank_match,
+  today: string = todayIsoStockholm(),
+): RowStatus {
   const stage = itemStage(item)
   if (stage === 'booked') return { kind: 'done' }
   if (stage === 'processing') return { kind: 'reading' }
@@ -474,12 +488,43 @@ export function rowStatus(item: InkorgItem, bankMatch: BankMatch | null | undefi
   if (item.pairing?.role === 'booked_companion') return { kind: 'booked_with', voucher: item.pairing.voucher ?? null }
   if (stage === 'error') return { kind: 'unreadable' }
   if (stage === 'linked') return { kind: 'linked' }
-  const kind = itemHeadline(item).kind
+  const headline = itemHeadline(item)
+  const kind = headline.kind
   if (bankMatch && kind !== 'credit_note') return { kind: 'looks_paid' }
   if (paidByReceipt(item)) return { kind: 'paid_by_receipt' }
-  const due = item.extracted_data?.invoice?.dueDate
-  if (kind === 'supplier_invoice' && due) return { kind: 'to_pay', dueDate: due }
+  const due = kind === 'supplier_invoice' ? invoiceDue(item, today) : null
+  if (due) return { kind: 'to_pay', ...due }
   return { kind: 'waiting' }
+}
+
+/** Paid at the till, as the reading says: nothing is left to fall due. */
+const PAID_AT_PURCHASE: ReadonlySet<ExtractedPaymentMethod> = new Set(['card', 'swish', 'cash'])
+
+/**
+ * A supplier invoice's due date as the list and the opened document both
+ * show it, and whether it has passed: the one Inkorg reading of "Förfallen".
+ * The date is read as the extraction's other readers read it (normalizeDate:
+ * yyyy-MM-dd, a timestamp, d/m/yyyy, "15 sep 2026"); one it cannot read is
+ * shown as written and never called overdue. Overdue by the date rule a
+ * registered supplier invoice's nightly flip uses (isPastDue), and only while
+ * something is owed: the amount due is the total less what was settled
+ * before (prepaidDeduction, the reading's own amount due), an amount not
+ * read yet counts as owed, as "Att betala" already does, and an invoice the
+ * reading says was paid by card, Swish or cash owes nothing. The date rule
+ * sits in lib/dates because the inbox may not import the supplier-invoices
+ * block (module boundary).
+ */
+function invoiceDue(item: InkorgItem, today: string): { dueDate: string; overdue: boolean } | null {
+  const data = item.extracted_data
+  const written = data?.invoice?.dueDate
+  if (!written) return null
+  const dueDate = normalizeDate(written)
+  if (!dueDate) return { dueDate: written, overdue: false }
+  const method = data?.payment?.method
+  if (method && PAID_AT_PURCHASE.has(method)) return { dueDate, overdue: false }
+  const total = itemHeadline(item).amount
+  if (total !== null && roundOre(total - prepaidDeduction(data?.totals)) <= 0) return { dueDate, overdue: false }
+  return { dueDate, overdue: isPastDue(dueDate, today) }
 }
 
 /** A journal line as a booking proposal carries it. */
