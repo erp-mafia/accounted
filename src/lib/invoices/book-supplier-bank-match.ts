@@ -200,7 +200,7 @@ export async function bookSupplierBankMatch(
 
   // A storno cannot be taken back, so every refusal the payment can still
   // meet runs before it: the account the generated rows credit must be in the
-  // chart (custom lines name their own accounts; the engine checks those).
+  // chart (custom lines name their own accounts, checked with their balance).
   if (replaced && !customLines) {
     const missingAccounts = await findUnresolvableAccounts(supabase, companyId, [paymentAccount])
     if (missingAccounts.length > 0) {
@@ -241,7 +241,9 @@ export async function bookSupplierBankMatch(
     }
   }
 
-  // User-edited lines must balance: refused before the registration below.
+  // User-edited lines must balance and name accounts the engine can resolve:
+  // both refused before the registration and the storno below, which the
+  // engine's own account refusal at posting would otherwise leave standing.
   if (customLines) {
     const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
     const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
@@ -251,6 +253,14 @@ export async function bookSupplierBankMatch(
         code: 'INVOICE_PAID_LINES_UNBALANCED',
         details: { totalDebit, totalCredit },
       }
+    }
+    const unresolvable = await findUnresolvableAccounts(
+      supabase,
+      companyId,
+      customLines.map((l) => l.account_number),
+    )
+    if (unresolvable.length > 0) {
+      return { ok: false, code: 'ACCOUNTS_NOT_IN_CHART', error: new AccountsNotInChartError(unresolvable) }
     }
   }
 

@@ -1,0 +1,1 @@
+[2026-10-31] A changing glued billing reference ("Microsoft-G194") is folded in counterparty matching and learning only, not in the persisted key: a key change needs the SQL mirror, a template merge and party alias_keys rework, too risky unattended (crm#1552).

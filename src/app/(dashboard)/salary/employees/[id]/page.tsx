@@ -43,6 +43,7 @@ import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel
 import { EmployeeRecurringLinesPanel } from '@/components/salary/EmployeeRecurringLinesPanel'
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
+import SemestertillaggRateInput from '@/components/salary/SemestertillaggRateInput'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import { extraTaxPatch } from '@/lib/salary/extra-tax'
 import { clearableField } from '@/lib/salary/clearable-field'
@@ -95,6 +96,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  // Controlled so the below-0,43 % warning follows the typed value. crm#1529
+  const [semestertillaggInput, setSemestertillaggInput] = useState('')
   // The typed sysselsättningsgrad, watched so a change on a sammalöneregeln
   // employee offers its two ways out before the save (semesterlagen 16 §).
   const [degreeInput, setDegreeInput] = useState('')
@@ -120,6 +123,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     setPersonnelCategory(data.personnel_category || 'tjansteman')
     setSalaryType(data.salary_type || 'monthly')
     setVacationRule(data.vacation_rule || 'procentregeln')
+    setSemestertillaggInput(String(semestertillaggRateToPercent(data.semestertillagg_rate)))
     setDegreeInput(String(data.employment_degree ?? 100))
     setKollektivavtalConfirmed(false)
     setClearing(data.clearing_number || '')
@@ -956,18 +960,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                     {vacationRule === 'sammaloneregeln' && (
                       <div className="space-y-2">
                         <Label htmlFor="semestertillagg_rate">{t('form_semestertillagg_rate')}</Label>
-                        <Input
-                          id="semestertillagg_rate"
-                          name="semestertillagg_rate"
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          max="5"
-                          placeholder="0.43"
-                          defaultValue={semestertillaggRateToPercent(employee.semestertillagg_rate)}
+                        <SemestertillaggRateInput
+                          value={semestertillaggInput}
+                          onChange={setSemestertillaggInput}
                           disabled={!canWrite}
                         />
-                        <p className="text-xs text-muted-foreground">{t('form_semestertillagg_rate_hint')}</p>
                       </div>
                     )}
                   </div>

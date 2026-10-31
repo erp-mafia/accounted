@@ -95,6 +95,17 @@ export function semestertillaggRateToPercent(rate: number | null | undefined): n
 }
 
 /**
+ * True when a semestertillägg is below the statutory 0,43 % (Semesterlagen
+ * 16 a §). The forms warn, they do not refuse: the API keeps 0..0.05, so a
+ * deviating agreement stays enterable. Compared in thousandths of a percent,
+ * the precision the form keeps, so 0,43 entered is never "below" 0.0043.
+ */
+export function isBelowStatutorySemestertillagg(rate: number | null | undefined): boolean {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return false
+  return Math.round(rate * 100000) < Math.round(STATUTORY_SEMESTERTILLAGG_RATE * 100000)
+}
+
+/**
  * Form helper for "Semesterdagar per år": 0 is a real value (vacation_rule
  * none, e.g. a company owner outside semesterlagen), so only an empty or
  * unparseable field reads as null (callers pick their default).

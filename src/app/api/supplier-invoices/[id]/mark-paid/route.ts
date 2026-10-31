@@ -13,7 +13,8 @@ import {
 import { postingPort } from '@/lib/posting/port'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import {
   resolveSupplierPaymentSek,
   supplierPaymentSekInputIssue,
@@ -218,8 +219,9 @@ export const POST = withRouteContext(
       exchangeRateDifference = sek.exchangeRateDifference
     }
 
-    // Edited rows must balance and the payment date needs an open period:
-    // both refused before the registration below is booked.
+    // Edited rows must balance and name accounts the engine can resolve, and
+    // the payment date needs an open period: all refused before the
+    // registration below is booked.
     let customLinesPeriodId: string | null = null
     if (body.lines) {
       const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
@@ -229,6 +231,14 @@ export const POST = withRouteContext(
           requestId,
           details: { totalDebit, totalCredit },
         })
+      }
+      const unresolvable = await findUnresolvableAccounts(
+        supabase,
+        companyId!,
+        body.lines.map((l) => l.account_number),
+      )
+      if (unresolvable.length > 0) {
+        return errorResponse(new AccountsNotInChartError(unresolvable), opLog, { requestId })
       }
       customLinesPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
       if (!customLinesPeriodId) {

@@ -1,0 +1,1 @@
+[2026-10-31] Semestertillägg below 0,43 % warns in the employee forms, it is not refused: the API/MCP bound stays 0..0.05 so a deviating agreement remains enterable, and no prod row is below the floor (crm#1529).

@@ -18,6 +18,7 @@ import {
   populateTemplatesFromSieVouchers,
   patternDirection,
   patternReplayPlan,
+  referenceFreeKey,
 } from '../counterparty-templates'
 import { buildTransactionEntryLines } from '../transaction-entries'
 import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
@@ -3148,5 +3149,106 @@ describe('reverse-charge basis pair in a learned line pattern', () => {
       { account: '5420', debit: 400, credit: 0 },
       { account: '1930', debit: 0, credit: 1250 },
     ])
+  })
+})
+
+describe('a billing reference glued onto the name (crm#1552)', () => {
+  const learnedFrom = (raw: string, overrides: Partial<CategorizationTemplate> = {}) =>
+    makeCategorizationTemplate({
+      id: 'tmpl-ms',
+      counterparty_name: normalizeCounterpartyName(raw),
+      counterparty_aliases: [raw.toLowerCase()],
+      debit_account: '5420',
+      credit_account: '1930',
+      occurrence_count: 1,
+      confidence: calculateConfidence(1),
+      ...overrides,
+    })
+  const row = (raw: string) => makeTransaction({ merchant_name: null, description: raw, original_description: raw, amount: -351.28 })
+
+  describe('referenceFreeKey', () => {
+    it('drops a hyphen or hash glued reference that changes every charge', () => {
+      expect(referenceFreeKey('Microsoft-G194')).toBe('microsoft')
+      expect(referenceFreeKey('Microsoft-G187')).toBe('microsoft')
+      expect(referenceFreeKey('MICROSOFT#G148769733,MSBILL.INFO,IE Kortköp'))
+        .toBe(referenceFreeKey('MICROSOFT#G172227015,MSBILL.INFO,IE Kortköp'))
+    })
+
+    it('keeps names whose short code is identity, and names without one', () => {
+      expect(referenceFreeKey('OK-Q8 BANK')).toBe(normalizeCounterpartyName('OK-Q8 BANK'))
+      expect(referenceFreeKey('7-Eleven')).toBe(normalizeCounterpartyName('7-Eleven'))
+      expect(referenceFreeKey('Telia Sverige AB')).toBe('telia sverige')
+    })
+
+    it('leaves the persisted key as it was', () => {
+      expect(normalizeCounterpartyName('Microsoft-G194')).toBe('microsoftg194')
+    })
+  })
+
+  describe('findCounterpartyTemplate', () => {
+    it('finds the template learned from the name without a reference', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [learnedFrom('Microsoft AB')] })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', row('Microsoft-G194'))
+      expect(match?.template.id).toBe('tmpl-ms')
+      expect(match?.matchMethod).toBe('exact_normalized')
+    })
+
+    it('finds the template learned from another month\'s reference', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [learnedFrom('Microsoft-G140021900')] })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', row('Microsoft-G146870342'))
+      expect(match?.template.id).toBe('tmpl-ms')
+      expect(match?.matchMethod).toBe('exact_normalized')
+    })
+
+    it('finds a referenced template for the same name without a reference', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [learnedFrom('Microsoft-G140021900')] })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', row('MICROSOFT'))
+      expect(match?.template.id).toBe('tmpl-ms')
+    })
+
+    it('never ties two names by the reference they share the shape of', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [learnedFrom('Adobe-G1234567')] })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', row('Microsoft-G7654321'))
+      expect(match).toBeNull()
+    })
+  })
+
+  describe('upsertCounterpartyTemplate', () => {
+    const booked = {
+      rule: null,
+      debit_account: '5420',
+      credit_account: '1930',
+      risk_level: 'NONE' as const,
+      confidence: 0.9,
+      requires_review: false,
+      default_private: false,
+      vat_lines: [],
+      description: 'Test',
+    }
+
+    it('counts next month\'s row on the template instead of starting a new one', async () => {
+      const old = learnedFrom('Microsoft-G140021900')
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: null }) // by the row's key
+      enqueue({ data: null }) // by the row's key as an alias
+      enqueue({ data: null }) // by the reference-free key
+      enqueue({ data: null }) // by the reference-free key as an alias
+      enqueue({ data: [old] }) // the company's templates
+      enqueue({ data: null }) // the update
+
+      await upsertCounterpartyTemplate(supabase as never, 'company-1', row('Microsoft-G146870342'), booked, 'user_approved')
+
+      expect(findCalls('categorization_templates', 'insert')).toHaveLength(0)
+      const updates = findCalls('categorization_templates', 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0][0]).toMatchObject({
+        occurrence_count: 2,
+        counterparty_aliases: ['microsoft-g140021900', 'microsoftg146870342', 'microsoft-g146870342'],
+      })
+    })
   })
 })

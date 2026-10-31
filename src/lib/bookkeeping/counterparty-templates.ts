@@ -198,6 +198,49 @@ export function counterpartyTokenSet(raw: string): Set<string> {
 }
 
 /**
+ * A billing reference glued onto the name with '-' or '#' that changes with
+ * every charge: "Microsoft-G187" one month, "Microsoft-G194" the next,
+ * "MICROSOFT#G148769733,MSBILL.INFO". The key keeps it (the hyphen goes, the
+ * reference stays: "microsoftg194"), so each month was a new counterpart
+ * that never gathered history (crm#1552). One to three letters and at least
+ * three digits, so a name like "OK-Q8" keeps its digit.
+ */
+const GLUED_REFERENCE = /([A-Za-zÅÄÖåäö])[-#][A-Za-z]{1,3}\d{3,}\b/g
+
+/**
+ * The counterparty key of a descriptor without its glued billing reference.
+ * Matching and learning only: the persisted key (normalizeCounterpartyName,
+ * mirrored in SQL) is unchanged, so stored keys and computed ones still agree.
+ */
+export function referenceFreeKey(raw: string): string {
+  return normalizeCounterpartyName(raw.replace(GLUED_REFERENCE, '$1'))
+}
+
+/** Whether a descriptor carries a glued billing reference (GLUED_REFERENCE). */
+function carriesGluedReference(raw: string): boolean {
+  return raw.replace(GLUED_REFERENCE, '$1') !== raw
+}
+
+/**
+ * Templates by the reference-free key of the bank texts they were learned
+ * from (their raw aliases), for aliases that carried a glued reference. Of
+ * two templates with one such key (one per month, learned before this
+ * fold), the one with the most bookings behind it.
+ */
+function templatesByReferenceFreeAlias(templates: CategorizationTemplate[]): Map<string, CategorizationTemplate> {
+  const byKey = new Map<string, CategorizationTemplate>()
+  for (const tmpl of templates) {
+    for (const alias of tmpl.counterparty_aliases || []) {
+      if (!carriesGluedReference(alias)) continue
+      const key = referenceFreeKey(alias)
+      const held = byKey.get(key)
+      if (key.length >= 2 && (!held || tmpl.occurrence_count > held.occurrence_count)) byKey.set(key, tmpl)
+    }
+  }
+  return byKey
+}
+
+/**
  * Tokens too generic to identify a merchant on their own: month labels,
  * commerce noise, and geo words that ride along on bank descriptors.
  */
@@ -422,6 +465,7 @@ export async function findCounterpartyTemplatesBatch(
       if (!nameMap.has(alias)) nameMap.set(alias, tmpl)
     }
   }
+  const referenceFreeAliasMap = templatesByReferenceFreeAlias(templates)
 
   // Each key split once for the token and fuzzy tiers below.
   const keyed = templates.map((tmpl) => {
@@ -459,8 +503,12 @@ export async function findCounterpartyTemplatesBatch(
       continue
     }
 
-    // 2. Exact normalized name match
-    const exactMatch = nameMap.get(normalized)
+    // 2. Exact normalized name match, also once a glued billing reference is
+    // gone on either side: "Microsoft-G194" is the template learned from
+    // "Microsoft AB" or from "Microsoft-G187" (crm#1552).
+    const referenceFree = referenceFreeKey(rawName)
+    const exactMatch =
+      nameMap.get(normalized) ?? nameMap.get(referenceFree) ?? referenceFreeAliasMap.get(referenceFree)
     if (exactMatch) {
       result.set(tx.id, {
         template: exactMatch,
@@ -1210,6 +1258,24 @@ async function findTemplateByKey(
 }
 
 /**
+ * The template a row with a glued billing reference belongs to: the one
+ * keyed by the reference-free name ("microsoft", learned from "Microsoft
+ * AB"), else the one learned from the same name with another reference, as
+ * the matcher finds it (templatesByReferenceFreeAlias).
+ */
+async function findTemplateByReferenceFreeKey(
+  supabase: SupabaseClient,
+  companyId: string,
+  referenceFree: string,
+): Promise<CategorizationTemplate | null> {
+  if (referenceFree.length < 2) return null
+  const byKey = await findTemplateByKey(supabase, companyId, referenceFree)
+  if (byKey) return byKey
+  const templates = await fetchActiveTemplates(supabase, companyId)
+  return templatesByReferenceFreeAlias(templates).get(referenceFree) ?? null
+}
+
+/**
  * Whether a booking teaches the same pair the template already holds. Which
  * of the company's cash ledgers the money settled on is a fact of the
  * transaction, not of the counterparty (applySettlementAccount books the bank
@@ -1505,6 +1571,13 @@ export async function upsertCounterpartyTemplate(
 
   let existing = await findTemplateByKey(supabase, companyId, normalized)
   const aliases = [rawName.toLowerCase()]
+  // A row whose only difference is its glued billing reference is the same
+  // counterpart (referenceFreeKey): its key joins that template's aliases
+  // instead of starting a new template each month (crm#1552).
+  if (!existing && carriesGluedReference(rawName)) {
+    existing = await findTemplateByReferenceFreeKey(supabase, companyId, referenceFreeKey(rawName))
+    if (existing) aliases.unshift(normalized)
+  }
   if (!existing && options.bookedOnTemplateId) {
     const chosen = await bookedOnTemplate(supabase, companyId, options.bookedOnTemplateId)
     if (chosen && samePairButBankLedger(chosen, learned.debit_account, learned.credit_account, moneyLedgers)) {

@@ -11617,6 +11617,7 @@
     "form_vacation_pay_rate_hint": "Leave empty for the statutory 12 % (14.4 % at 30 days). Enter the collective agreement rate, e.g. 13.5. The statutory rate always applies as a floor.",
     "form_semestertillagg_rate": "Vacation supplement percentage",
     "form_semestertillagg_rate_hint": "Percent of the monthly salary per paid vacation day. Leave empty for the statutory 0.43 % (semesterlagen 16 a §); many collective agreements set 0.8 %. Drives both the vacation supplement on the payslip and the day value in the vacation pay liability.",
+    "form_semestertillagg_rate_below_statutory": "Below the statutory minimum of 0.43 % (semesterlagen 16 a §). Check the employment or collective agreement before saving.",
     "form_bank_account": "Bank account",
     "form_clearing_number": "Clearing number",
     "form_account_number": "Account number",
