@@ -61,7 +61,7 @@ describe('output VAT accounts', () => {
     expect(outputVatRate('2611')).toBe(25)
     expect(outputVatRate('2621')).toBe(12)
     expect(outputVatRate('2631')).toBe(6)
-    expect(outputVatRate('2618')).toBe(25)
+    expect(outputVatRate('2618')).toBeNull() // vilande: in no ruta until moved (crm#1562)
     expect(outputVatRate('2614')).toBeNull() // reverse charge, ruta 30
     expect(outputVatRate('2641')).toBeNull()
     expect(outputVatRate('3001')).toBeNull()

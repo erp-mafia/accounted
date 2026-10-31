@@ -94,6 +94,12 @@ const basis = (box: MomsBox, kind: VatBasisKind, rate: VatBasisRate): VatAccount
  * A company's OWN class 3 accounts marked with a moms-sats join ruta 05 on
  * top of this list (fetchDynamicRuta05Accounts, #1261): this table only
  * covers the accounts Accounted itself seeds. Pure data, safe in the client.
+ *
+ * The vilande accounts (VILANDE_VAT_ACCOUNTS) are deliberately absent: their
+ * moms is reported once it is moved to the ordinary account, never while it
+ * rests (the reference above, §8: ruta "Transferred"). Mapped to the same
+ * ruta as that account, the move nets to zero and the moms never reaches a
+ * declaration (crm#1562).
  */
 export const VAT_ACCOUNT_TABLE: Readonly<Record<string, VatAccount>> = {
   // Output VAT 25% → ruta 10
@@ -102,21 +108,18 @@ export const VAT_ACCOUNT_TABLE: Readonly<Record<string, VatAccount>> = {
   '2612': credit('10'),  // Egna uttag
   '2613': credit('10'),  // Uthyrning (frivillig skattskyldighet)
   '2616': credit('10'),  // Vinstmarginalbeskattning
-  '2618': credit('10'),  // Vilande utgående moms 25%
   // Output VAT 12% → ruta 11
   '2620': credit('11'),  // Utgående moms 12% (summary/parent)
   '2621': credit('11'),
   '2622': credit('11'),  // Egna uttag
   '2623': credit('11'),  // Uthyrning
   '2626': credit('11'),  // VMB
-  '2628': credit('11'),  // Vilande utgående moms 12%
   // Output VAT 6% → ruta 12
   '2630': credit('12'),  // Utgående moms 6% (summary/parent)
   '2631': credit('12'),
   '2632': credit('12'),  // Egna uttag
   '2633': credit('12'),  // Uthyrning
   '2636': credit('12'),  // VMB
-  '2638': credit('12'),  // Vilande utgående moms 6%
   // Reverse charge output VAT → ruta 30/31/32
   '2614': credit('30'),
   '2624': credit('31'),
@@ -128,7 +131,6 @@ export const VAT_ACCOUNT_TABLE: Readonly<Record<string, VatAccount>> = {
   '2645': debit('48'),   // Förvärv utlandet (EU/non-EU RC)
   '2646': debit('48'),   // Uthyrning
   '2647': debit('48'),   // Omvänd skattskyldighet i Sverige
-  '2648': debit('48'),   // Vilande ingående moms vid bokslut
   '2649': debit('48'),   // Blandad verksamhet
   // Import VAT (since 2015, via momsdeklaration) → ruta 60/61/62
   '2615': credit('60'),  // Import 25%
@@ -262,8 +264,19 @@ export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
 }
 
 /**
+ * BAS vilande moms: 2618/2628/2638 utgående, 2648 ingående. Moms that rests
+ * until a later event (payment under kontantmetoden, a jämkning or
+ * frivillig skattskyldighet being granted) and is declared when moved to
+ * 2611/2621/2631/2641. No ruta reads the vilande account itself, so it is
+ * not in VAT_ACCOUNT_TABLE and isDeclarationVatAccount leaves it out: a
+ * period's flow on it is not moms the declaration misses.
+ */
+export const VILANDE_VAT_ACCOUNTS: ReadonlySet<string> = new Set(['2618', '2628', '2638', '2648'])
+
+/**
  * The BAS moms accounts proper, the range a momsdeklaration ruta reads:
- * utgående moms 2610-2639 and ingående moms 2640-2649. The rest of 26xx is
+ * utgående moms 2610-2639 and ingående moms 2640-2649, less the vilande
+ * accounts (VILANDE_VAT_ACCOUNTS). The rest of 26xx is
  * the redovisningskonto (2650-2659), punktskatter (2660-2669) and OSS
  * (2670-2679), which no ruta of the Swedish declaration reads. An account in
  * this range that is neither in VAT_ACCOUNT_TABLE nor given a momsruta of the
@@ -272,7 +285,7 @@ export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
  * chart that predates BAS 2026.
  */
 export function isDeclarationVatAccount(accountNumber: string): boolean {
-  return /^26[1-4]\d$/.test(accountNumber)
+  return /^26[1-4]\d$/.test(accountNumber) && !VILANDE_VAT_ACCOUNTS.has(accountNumber)
 }
 
 /**
