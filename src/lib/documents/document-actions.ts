@@ -25,7 +25,7 @@
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { deleteDocument } from '@/lib/core/documents/document-service'
-import { canDeleteDocument, documentDeleteRefusal, readDocumentDeletePins } from '@/lib/documents/deletion'
+import { canDeleteDocument, documentDeleteRefusal, inboxItemsLeftEmpty, readDocumentDeletePins } from '@/lib/documents/deletion'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import type { DocumentDetail, DocumentDetailPart, readDocumentDetail } from '@/lib/documents/read/document-detail'
@@ -269,7 +269,8 @@ export async function getDocumentMetadata(
  * 7 kap 2 § explanation; the underlag of a registered supplier invoice or
  * utlägg, the file or received Peppol XML of a booked inbox item and a bank
  * transaction's underlag each answer their own code. The dry run reads the
- * same row and pins and applies the same rule.
+ * same row and pins and applies the same rule, and names the inbox items
+ * that go with the document (inboxItemsLeftEmpty) so the approver sees them.
  */
 export async function removeDocument(
   ctx: OperationContext,
@@ -289,17 +290,23 @@ export async function removeDocument(
     if (!canDeleteDocument(row)) {
       return { ok: false, code: 'DOC_DELETE_LINKED', details: { journal_entry_id: row.journal_entry_id, journal_entry_line_id: row.journal_entry_line_id } }
     }
-    let refusal: ReturnType<typeof documentDeleteRefusal>
+    let pins: Awaited<ReturnType<typeof readDocumentDeletePins>>
     try {
-      refusal = documentDeleteRefusal(row, await readDocumentDeletePins(ctx.supabase, ctx.companyId, documentId))
+      pins = await readDocumentDeletePins(ctx.supabase, ctx.companyId, documentId)
     } catch (err) {
       return failed(err)
     }
+    const refusal = documentDeleteRefusal(row, pins)
     if (refusal) return { ok: false, code: refusal.code, details: { blocked_by: refusal.block } }
     return {
       ok: true,
       dryRun: true,
-      preview: { document_id: row.id, file_name: row.file_name, would_delete: true },
+      preview: {
+        document_id: row.id,
+        file_name: row.file_name,
+        would_delete: true,
+        inbox_item_ids_deleted_too: inboxItemsLeftEmpty(documentId, pins.inboxItems),
+      },
     }
   }
 

@@ -294,7 +294,7 @@ describe('DELETE /api/v1/companies/:companyId/documents/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
-    expect(body.data.preview).toEqual({ document_id: DOC_ID, file_name: 'kvitto.pdf', would_delete: true })
+    expect(body.data.preview).toEqual({ document_id: DOC_ID, file_name: 'kvitto.pdf', would_delete: true, inbox_item_ids_deleted_too: [] })
     expect(wrote(free)).toBe(false)
   })
 
@@ -318,6 +318,35 @@ describe('DELETE /api/v1/companies/:companyId/documents/:id', () => {
       expect((await res.json()).error.code).toBe(code)
       expect(wrote(client)).toBe(false)
     }
+  })
+
+  // crm#1565: the MCP tool behind this operation deleted the document and
+  // left its inbox item waiting in Behöver dig with no underlag.
+  it('takes the unbooked inbox item the document alone stood for, and the dry run names it', async () => {
+    const INBOX_ID = '11111111-1111-4111-8111-111111111111'
+    const item = { id: INBOX_ID, document_id: DOC_ID, peppol_xml_document_id: null, matched_transaction_id: null, created_journal_entry_id: null, created_supplier_invoice_id: null }
+    const inboxReads = [{ data: [item], error: null }, { data: [], error: null }]
+
+    const preview = makeClient({ company_members: MEMBER, document_attachments: { data: docRow(), error: null }, invoice_inbox_items: inboxReads })
+    mockServiceClient.mockReturnValue(preview)
+    const dry = await del('?dry_run=true')
+    expect(dry.status).toBe(200)
+    expect((await dry.json()).data.preview.inbox_item_ids_deleted_too).toEqual([INBOX_ID])
+    expect(wrote(preview)).toBe(false)
+
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: [{ data: docRow(), error: null }, { data: null, error: null }],
+      invoice_inbox_items: [...inboxReads, { data: null, error: null }],
+      storage: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await del()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ document_id: DOC_ID, deleted: true })
+    const writes = client.calls.filter((c) => WRITES.has(c.method) && (c.table === 'document_attachments' || c.table === 'invoice_inbox_items'))
+    expect(writes.map((c) => c.table)).toEqual(['document_attachments', 'invoice_inbox_items'])
+    expect(client.calls).toContainEqual({ table: 'invoice_inbox_items', method: 'in', args: ['id', [INBOX_ID]] })
   })
 
   it('deletes an unlinked document and its stored file', async () => {
