@@ -650,6 +650,13 @@ describe('planOneClick: the company and the rule ask for a review (accounted#130
     const review = { rules: [blockRule({ amount_from_sek: 1_000_000 })], counterpartyKey: 'wispr', amountSek: null } as never
     expect(planOneClick(input({ ...wispr, bookingReview: review })).ask).toBe('editor')
   })
+
+  it('judges the matched supplier card too, by whose name the database keys a registered invoice', () => {
+    const review = (supplierKey: string) =>
+      ({ rules: [blockRule({ counterparty_key: 'wispr flow' })], counterpartyKey: 'wispr', supplierKey, amountSek: -150 }) as never
+    expect(planOneClick(input({ ...wispr, bookingReview: review('wispr flow') })).ask).toBe('editor')
+    expect(planOneClick(input({ ...wispr, bookingReview: review('') })).ask).toBeNull()
+  })
 })
 
 describe('oneClickOutcome', () => {

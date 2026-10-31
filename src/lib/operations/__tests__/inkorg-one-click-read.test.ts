@@ -157,10 +157,10 @@ describe('readOneClickInput', () => {
       { data: ITEM },
       { data: TX },
       { data: { vat_registered: true, accounting_method: 'accrual' } },
-      { data: { id: 'sup-1', supplier_type: 'non_eu_business', default_expense_account: null, default_payment_terms: 10, archived_at: null } },
+      { data: { id: 'sup-1', name: 'Wispr Flow Inc', supplier_type: 'non_eu_business', default_expense_account: null, default_payment_terms: 10, archived_at: null } },
     ])
     const result = await read()
-    expect(result.ok && result.input.supplier).toEqual({ id: 'sup-1', supplierType: 'non_eu_business', defaultExpenseAccount: null, paymentTermsDays: 10 })
+    expect(result.ok && result.input.supplier).toEqual({ id: 'sup-1', name: 'Wispr Flow Inc', supplierType: 'non_eu_business', defaultExpenseAccount: null, paymentTermsDays: 10 })
     expect(result.ok && result.input.counterpartyAccount).toBe('6540')
     expect(result.ok && result.input.counterpartyAlwaysReview).toBe(false)
   })

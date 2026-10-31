@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { BookingBlockNotice } from '@/components/rules/BookingBlockNotice'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
@@ -333,6 +334,11 @@ export function SupplierInvoiceReviewContent({
           </div>
         )}
       </div>
+
+      {/* A block (Spärr) this registration meets: the confirm is its review. */}
+      {showsVoucher && (
+        <BookingBlockNotice lines={journalLines} counterparty={supplier.name} amountSek={total * fxRate} />
+      )}
 
       {/* Verifikation preview */}
       {showsVoucher ? (

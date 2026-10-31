@@ -28,6 +28,11 @@ import { eventBus } from '@/lib/events/bus'
 import { makeCustomer, makeJournalEntry, makeSupplierInvoice } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
 
+// The hard-block gate reads the company's blocks before the claim; this company has none.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/currency/riksbanken', async () => {
   const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>(
     '@/lib/currency/riksbanken',

@@ -281,6 +281,34 @@ describe('loadOpenPaymentOrders', () => {
   })
 })
 
+describe('settleOrderWithDebit: a block (Spärr) on what the settlement books (accounted#145)', () => {
+  const block = (overrides: Record<string, unknown>) => ({
+    id: 'r-1', rule_id: 'r-1', version: 1, accounts: null, counterparty_key: null, counterparty_label: null,
+    amount_from_sek: null, vat_treatment: null, note: null, valid_from: '2026-10-29T00:00:00Z', created_by: 'u-1',
+    created_at: '2026-10-29T00:00:00Z', revoked_at: null, revoked_by: null, revoked_reason: null, ...overrides,
+  })
+
+  it('leaves an unbooked invoice a block may hold to a person, without drafting a verifikat', async () => {
+    db.setTable('booking_review_rules', { data: [block({ counterparty_key: 'exempel systems', counterparty_label: 'Exempel Systems AB' })] })
+    db.setTable('supplier_invoices', { data: arcimInvoice({ registration_journal_entry_id: null }) })
+    expect(await settle()).toEqual({ ok: false, reason: 'booking_review_rule' })
+    seed()
+    db.setTable('booking_review_rules', { data: [block({ accounts: ['6540'] })] })
+    db.setTable('supplier_invoices', { data: arcimInvoice({ registration_journal_entry_id: null }) })
+    expect(await settle()).toEqual({ ok: false, reason: 'booking_review_rule' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('settles as before when the invoice is booked already, or no block names it', async () => {
+    db.setTable('booking_review_rules', { data: [block({ accounts: ['6540'] })] })
+    expect((await settle()).ok).toBe(true)
+    seed()
+    db.setTable('booking_review_rules', { data: [block({ accounts: ['5410'] })] })
+    db.setTable('supplier_invoices', [{ data: arcimInvoice({ registration_journal_entry_id: null }) }, { data: [{ id: ARCIM.invoiceId }] }])
+    expect(await settle()).not.toEqual({ ok: false, reason: 'booking_review_rule' })
+  })
+})
+
 describe('settleOrderWithDebit: a deferring company whose invoice is not booked yet', () => {
   const requiredPlan = {
     ok: true as const,

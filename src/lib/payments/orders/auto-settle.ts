@@ -36,6 +36,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { bookSupplierBankMatch } from '@/lib/invoices/book-supplier-bank-match'
+import { unattendedSettlementMayMatch } from '@/lib/booking-review/check'
 import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupplierInvoice, Transaction } from '@/types'
 import {
@@ -130,6 +131,8 @@ export type SettleRefusal =
   | 'transaction_not_open'
   | 'amount_mismatch'
   | 'invoice_not_matchable'
+  /** A block (Spärr) may hold what the settlement books: a person books it (accounted#145). */
+  | 'booking_review_rule'
   | 'booking_failed'
 
 export type SettleOrderWithDebitResult =
@@ -234,6 +237,13 @@ export async function settleOrderWithDebit(
         reason: 'invoice_not_matchable',
         details: { invoice_status: invoice?.status ?? null, remaining_amount: invoice ? remaining : null },
       }
+    }
+
+    // A settlement that books the purchase itself (kontantmetoden, a
+    // deferred invoice) a block may hold waits for a person: the database
+    // would refuse it without one, on every run of the sweep.
+    if (await unattendedSettlementMayMatch(supabase, companyId, invoice, transaction)) {
+      return { ok: false, reason: 'booking_review_rule' }
     }
 
     const booked = await bookSupplierBankMatch(supabase, {

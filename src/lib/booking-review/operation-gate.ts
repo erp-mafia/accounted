@@ -1,13 +1,19 @@
 /**
- * Hard blocks at the approval doors (accounted#130 step 2).
+ * Hard blocks at the approval doors (accounted#130 step 2, #145).
  *
- * A staged booking of a bank row (categorize_transaction) that a booking
+ * A staged booking of a bank row (categorize_transaction) or a supplier
+ * invoice from the Inkorg (create_supplier_invoice_from_inbox) that a booking
  * review rule matches is approved only by a person in the app, one at a
  * time: never through v1, MCP, a grant or a bulk approval. When the company
  * has set booking_review limits (company_attest_limits), the person also
- * needs one that covers the bank row's amount. Both refusals come before the
- * operation is claimed, so it stays pending for the person who may approve
- * it. commit_journal_entry holds the same line in SQL whatever the doors do.
+ * needs one that covers the amount. Both refusals come before the operation
+ * is claimed (and, for an invoice, before an ankomstnummer is drawn), so it
+ * stays pending for the person who may approve it. commit_journal_entry
+ * holds the same line in SQL whatever the doors do, and an operation it
+ * refuses goes back to pending too (commitPendingOperation). The supplier
+ * invoice's judge lives with the doors that ask
+ * (lib/pending-operations/staged-booking-review.ts): a bank-row module does
+ * not reach into supplier invoices.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PendingOperation } from '@/types'
@@ -18,8 +24,9 @@ import { loadActiveBookingReviewRules } from './rules'
 export const BOOKING_REVIEW_OPERATION_TYPES: ReadonlySet<string> = new Set(['categorize_transaction'])
 
 export interface OperationBookingReview {
+  /** The rules that match; empty when what it books could not be judged and the company has rules. */
   matched: MatchedBookingReviewRule[]
-  /** The bank row's amount in SEK: what a booking_review limit is judged on. */
+  /** The bank row's (or the invoice's) amount in SEK: what a booking_review limit is judged on. */
   amountSek: number
 }
 

@@ -181,13 +181,20 @@ import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/struct
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
-import { bookingReviewLimitCovers, operationBookingReview } from '@/lib/booking-review/operation-gate'
+import { bookingReviewLimitCovers } from '@/lib/booking-review/operation-gate'
+import { stagedBookingReview } from '@/lib/pending-operations/staged-booking-review'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { SIEJobDatabaseError, SIEJobValidationError, submitSIEJob } from '@/lib/import/sie-jobs'
 import { userFacingCode } from '@/lib/errors/user-facing'
 import type { AccountMapping } from '@/lib/import/types'
-import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
+import {
+  AccountsNotInChartError,
+  BookingReviewLimitError,
+  BookingReviewRequiredError,
+  isBookkeepingError,
+  ACCOUNTS_NOT_IN_CHART,
+} from '@/lib/bookkeeping/errors'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import {
@@ -7470,7 +7477,7 @@ async function commitPendingOperationInner(
   //    through a key, MCP, a grant or a bulk approval; with booking_review
   //    limits set, by a person whose limit covers the amount. Refused before
   //    the claim, so the op stays 'pending' for that person.
-  const bookingReview = await operationBookingReview(supabase, companyId, pendingOp)
+  const bookingReview = await stagedBookingReview(supabase, companyId, pendingOp)
   if (bookingReview) {
     if (!(opts.commitMethod === 'user_accept' && opts.actor?.type === 'user')) {
       return {
@@ -7999,6 +8006,27 @@ async function commitPendingOperationInner(
         operation_status: 'pending',
       }
     }
+    // A hard block (accounted#130, #145): commit_journal_entry refused the
+    // booking before a voucher number was drawn, because a booking review
+    // rule matches it and this approval is no person's review in the app (or
+    // the person's booking_review limit does not cover it). Nothing is
+    // posted and the executors roll back what they wrote before it, so the
+    // operation goes back to 'pending' for a person who may approve it,
+    // whatever operation type booked it.
+    if (err instanceof BookingReviewRequiredError || err instanceof BookingReviewLimitError) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      const code = err instanceof BookingReviewLimitError ? 'BOOKING_REVIEW_LIMIT' : 'BOOKING_REVIEW_WEB_ONLY'
+      return {
+        status: 'failed',
+        error: getErrorEntry(code)?.message_sv ?? err.message,
+        http_status: 403,
+        code,
+        operation_status: 'pending',
+      }
+    }
     const isBkErr = isBookkeepingError(err)
     const message = err instanceof Error ? err.message : (isBkErr ? 'Bookkeeping error' : 'Executor failed')
     // Release the claim by transitioning to 'rejected' so the row never gets
@@ -8062,7 +8090,15 @@ async function commitPendingOperationInner(
     // samlingsverifikat were consumed this way and the user believed they
     // had been approved. An executor may ask for the same release for a
     // transient, side-effect-free refusal (returnToPending).
-    if (result.status === 401 || result.status === 403 || result.returnToPending) {
+    if (
+      result.status === 401 ||
+      result.status === 403 ||
+      result.returnToPending ||
+      result.errorCode === 'BOOKING_REVIEW_REQUIRED' ||
+      result.errorCode === 'BOOKING_REVIEW_LIMIT' ||
+      // The categorize core's word for the same database refusal.
+      result.errorCode === 'TX_CATEGORIZE_REVIEW_REQUIRED'
+    ) {
       await supabase
         .from('pending_operations')
         .update({ status: 'pending' })

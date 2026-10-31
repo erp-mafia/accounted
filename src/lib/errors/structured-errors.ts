@@ -239,7 +239,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool stages already) and tell the user it waits for their review in Accounted, under Att godkänna. The blocks are listed under Regler, Spärrar.',
+        'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool and gnubok_create_supplier_invoice_from_inbox stage already) and tell the user it waits for their review in Accounted, under Att godkänna, or, for a supplier invoice or a document, in the Inkorg, where a person registers it. Blocks hold bank rows, supplier invoices (registered, or paid under kontantmetoden) and Inkorg documents; they are listed under Regler, Spärrar.',
     },
   },
   BOOKING_REVIEW_WEB_ONLY: {
@@ -263,7 +263,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Nothing was posted. details.amount_sek is the bank amount and details.limit_sek the reviewer limit (null: the reviewer has none while the company has set limits). Ask an owner or admin, or a person whose booking_review limit covers it, to book it.',
+        'Nothing was posted. details.amount_sek is the amount judged (the bank rows, else the supplier invoice total in SEK) and details.limit_sek the reviewer limit (null: the reviewer has none while the company has set limits). Ask an owner or admin, or a person whose booking_review limit covers it, to book it.',
     },
   },
   BOOKING_REVIEW_BULK_REFUSED: {
