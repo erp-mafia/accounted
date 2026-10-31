@@ -2,7 +2,7 @@
  * The audit log names the person a service-role write was made for, end to
  * end over HTTP: the production client constructor (createServiceRoleClient),
  * a real supabase-js, a real PostgREST and the audit triggers of migration
- * 20261031120000. The pg-real test (tests/pg/audit-actor-from-request.pg.test.ts)
+ * 20261031202000. The pg-real test (tests/pg/audit-actor-from-request.pg.test.ts)
  * sets request.headers by hand; this one proves that the header the client
  * sends inside an actor scope is the one PostgREST hands the transaction.
  */

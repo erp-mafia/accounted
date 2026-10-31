@@ -1,7 +1,7 @@
 /**
  * The x-accounted-actor header: what every service-role PostgREST request
  * tells the database about who acts, so the audit triggers can name a person
- * a service-role transaction has no session for (migration 20261031120000).
+ * a service-role transaction has no session for (migration 20261031202000).
  *
  * The clients here are the production constructors over a real supabase-js,
  * with only the network replaced by a capturing fetch: what reaches the fetch

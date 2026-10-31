@@ -14,7 +14,7 @@
  * This fetch adds that actor to each PostgREST request as one header,
  * x-accounted-actor. PostgREST hands request headers to the transaction
  * (current_setting('request.headers')), where public.service_request_actor()
- * reads it for the triggers (migration 20261031120000). The database honours
+ * reads it for the triggers (migration 20261031202000). The database honours
  * it only on a service-role request: only the server holds that key, and a
  * user's own request is named by its JWT.
  *
