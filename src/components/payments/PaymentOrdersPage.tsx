@@ -487,6 +487,10 @@ export function PaymentOrdersPage() {
                 )}
               </div>
               {isToSign && anchor && toSign.some((o) => !selectable(o)) && <AttnLine>{t('mixed_accounts_hint')}</AttnLine>}
+              {/* What Väntar på andra firmatecknare asks for, for whoever closed the signing before reading it. */}
+              {section === 'in_progress' && rows.some((o) => o.sign_second) && (
+                <p className="text-[12.5px] text-muted-foreground">{t('second_signer_hint', { count: rows.filter((o) => o.sign_second).length })}</p>
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
@@ -679,7 +683,6 @@ export function PaymentOrdersPage() {
           resume={resume}
           pendingBatchId={signAgainBatch}
           secondSignatureBatchId={secondSignatureBatch}
-          onRequestLink={() => setRequesting(signing)}
           onOpenChange={(open) => {
             if (!open) {
               setSigning(null)
