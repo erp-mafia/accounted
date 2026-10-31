@@ -35,7 +35,10 @@
  * unlinked: the year-2 payment then booked revenue and moms again, and the
  * same moms was declared in both years. Periods that hold such a legacy
  * cut-off (self-hosted only; production never posted one) keep their posted
- * figures and are judged by the legacy inspector below, unchanged.
+ * figures and are judged by the legacy inspector below, unchanged. Its
+ * vilande moms lines no longer reach a ruta (crm#1562: no ruta reads a
+ * vilande account), so such a year's last momsdeklaration recomputes without
+ * them.
  *
  * What a cut-off IS lives in kontantmetod_cutoff_entries (kind
  * receivable_invoice / payable_invoice with the invoice id), written together

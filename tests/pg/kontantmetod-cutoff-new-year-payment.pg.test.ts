@@ -1020,24 +1020,27 @@ async function seedLegacyScenario(): Promise<CashCompany> {
   return company
 }
 
-describe('legacy vändning shape: posted figures are unchanged by the fix', () => {
-  // The fix does not touch the VAT RPCs, so an installation that filed with a
-  // legacy cut-off keeps exactly the figures it filed. These are the numbers
-  // #3440 measured on main (the double declaration); the byrå decides on an
+describe('legacy vändning shape: the posted verifikat are unchanged by the fix', () => {
+  // The fix does not touch the VAT RPCs or the posted verifikat. #3440
+  // measured the double declaration on main; the byrå decides on an
   // ändringsdeklaration, and readiness and the VAT check warn
-  // LEGACY_KONTANTMETOD_VANDNING ("never storno the vändningar").
-  it('keeps the year-1 and year-2 figures of the legacy shape', async () => {
+  // LEGACY_KONTANTMETOD_VANDNING ("never storno the vändningar"). Since
+  // crm#1562 no ruta reads a vilande account, so the legacy cut-off's moms
+  // on 2618/2648 leaves the year-1 rutor: the moms is declared once, by the
+  // year-2 payment, and the vilande accounts are never swept to 2650.
+  it('keeps the legacy sale in year 1 and declares its moms once, in year 2', async () => {
     const company = await seedLegacyScenario()
     const q4 = await rutor(company.companyId, YEAR1_FINAL_PERIOD)
-    expect([q4.ruta05, q4.ruta10, q4.ruta48]).toEqual([CUSTOMER_NET, CUSTOMER_VAT, SUPPLIER_VAT])
+    expect([q4.ruta05, q4.ruta10, q4.ruta48]).toEqual([CUSTOMER_NET, 0, 0])
     expect(await sumOver(company.companyId, YEAR2_QUARTERS, 'ruta10')).toBe(CUSTOMER_VAT)
     expect(await sumOver(company.companyId, YEAR2_QUARTERS, 'ruta05')).toBe(CUSTOMER_NET)
     expect(await sumOver(company.companyId, YEAR2_QUARTERS, 'ruta48')).toBe(SUPPLIER_VAT)
 
     await postSettlement(company, company.fiscalPeriodId, YEAR1_FINAL_PERIOD)
     for (const period of YEAR2_QUARTERS) await postSettlement(company, company.nextPeriodId, period)
-    expect(await ledgerBalance(company.companyId, '2618', '2027-12-31')).toBe(CUSTOMER_VAT)
-    expect(await ledgerBalance(company.companyId, '2648', '2027-12-31')).toBe(-SUPPLIER_VAT)
-    expect(await ledgerBalance(company.companyId, '2650', '2027-12-31')).toBe(-2 * (CUSTOMER_VAT - SUPPLIER_VAT))
+    // The cut-off and its vändning net the vilande accounts to zero.
+    expect(await ledgerBalance(company.companyId, '2618', '2027-12-31')).toBe(0)
+    expect(await ledgerBalance(company.companyId, '2648', '2027-12-31')).toBe(0)
+    expect(await ledgerBalance(company.companyId, '2650', '2027-12-31')).toBe(-(CUSTOMER_VAT - SUPPLIER_VAT))
   })
 })

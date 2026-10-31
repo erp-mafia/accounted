@@ -141,6 +141,17 @@ describe('voucherVatDeclarationImpact', () => {
     expect(result.summary).toBe('Påverkar ingen ruta i momsdeklarationen.')
   })
 
+  it('shows moving vilande moms from 2648 to 2641 as a ruta 48 deduction (crm#1562)', () => {
+    const result = impact([['2641', 321.75, 0], ['2648', 0, 321.75]])
+    expect(result).toMatchObject({ counted: true, excluded_as: null, rutor_change: { ruta48: 321.75, ruta49: -321.75 } })
+    expect(result.summary).toBe(`Ändrar momsdeklarationen för Oktober 2026: ruta 48 +${formatCurrency(321.75)}, ruta 49 -${formatCurrency(321.75)}.`)
+  })
+
+  it('moves no ruta while moms rests on 2648', () => {
+    const result = impact([['6210', 1287.25, 0], ['2648', 321.75, 0], ['1930', 0, 1609]])
+    expect(result).toMatchObject({ counted: true, rutor_change: {} })
+  })
+
   it('keeps an opening balance on the VAT period\'s first day out, and is never a shape', () => {
     const lines: Line[] = [['2641', 300, 0], ['2650', 0, 300]]
     expect(impact(lines, { isOpeningBalance: true, entryDate: '2026-10-01' })).toMatchObject({

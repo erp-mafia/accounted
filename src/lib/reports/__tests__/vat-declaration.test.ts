@@ -107,6 +107,8 @@ import {
   revenueAccountsWithoutRuta,
   rutorFromTotals,
   vatAccountsWithoutRuta,
+  VAT_INPUT_ACCOUNTS,
+  VAT_OUTPUT_ACCOUNTS,
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import { fetchDynamicVatAccounts } from '../vat-revenue-accounts'
@@ -904,9 +906,9 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
     expect(result.rutor.ruta12).toBe(180)
   })
 
-  it('maps vilande output VAT (2618/2628/2638) to ruta10/11/12', async () => {
-    // Vilande accounts hold output VAT for invoices that have been sent but not
-    // yet paid, used by cash-method bookkeepers per BFNAR 2006:1.
+  it('keeps vilande output VAT (2618/2628/2638) out of ruta10/11/12 while it rests', async () => {
+    // Vilande accounts hold output VAT not yet due (an invoice sent but not
+    // paid under kontantmetoden): declared once moved to 2611/2621/2631.
     seedLedger([
       { account_number: '2618', debit_amount: 0, credit_amount: 500 },
       { account_number: '2628', debit_amount: 0, credit_amount: 120 },
@@ -915,9 +917,23 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
+    expect(result.rutor.ruta10).toBe(0)
+    expect(result.rutor.ruta11).toBe(0)
+    expect(result.rutor.ruta12).toBe(0)
+    expect(result.rutor.ruta49).toBe(0)
+  })
+
+  it('declares vilande output VAT in the period it moves to 2611 (crm#1562)', async () => {
+    // Payment under kontantmetoden: 2618 D / 2611 K.
+    seedLedger([
+      { account_number: '2618', debit_amount: 500, credit_amount: 0 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 500 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
     expect(result.rutor.ruta10).toBe(500)
-    expect(result.rutor.ruta11).toBe(120)
-    expect(result.rutor.ruta12).toBe(60)
+    expect(result.rutor.ruta49).toBe(500)
   })
 
   it('sums parent and sub-account balances on the same ruta', async () => {
@@ -945,12 +961,52 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
     expect(result.rutor.ruta49).toBe(-200) // refund
   })
 
-  it('maps year-end input VAT on 2648 to ruta48', async () => {
+  it('keeps vilande input VAT on 2648 out of ruta48 while it rests', async () => {
     seedLedger([{ account_number: '2648', debit_amount: 250, credit_amount: 0 }])
 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
-    expect(result.rutor.ruta48).toBe(250)
+    expect(result.rutor.ruta48).toBe(0)
+    expect(result.rutor.ruta49).toBe(0)
+  })
+
+  it('raises ruta48 by the amount moved from 2648 to 2641 (crm#1562)', async () => {
+    // A 2641 D / 2648 K move used to net to zero because both accounts fed
+    // ruta 48: the deduction reached no declaration at all.
+    seedLedger([
+      { account_number: '2641', debit_amount: 321.75, credit_amount: 0 },
+      { account_number: '2648', debit_amount: 0, credit_amount: 321.75 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta48).toBe(321.75)
+    expect(result.rutor.ruta49).toBe(-321.75)
+  })
+
+  it('leaves a plain 2641 booking next to a 2648 one unchanged', async () => {
+    seedLedger([
+      { account_number: '2641', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2648', debit_amount: 250, credit_amount: 0 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta48).toBe(1000)
+  })
+
+  it('never sums the vilande accounts nor reads them as settlement shape', async () => {
+    seedLedger([{ account_number: '2641', debit_amount: 100, credit_amount: 0 }])
+
+    await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    const [, args] = supabase.rpc.mock.calls[0]
+    for (const account of ['2618', '2628', '2638', '2648']) {
+      expect(args.p_accounts).not.toContain(account)
+      expect(args.p_ruta_accounts).not.toContain(account)
+    }
+    expect(VAT_INPUT_ACCOUNTS).not.toContain('2648')
+    expect(VAT_OUTPUT_ACCOUNTS).not.toContain('2618')
   })
 
   it('reproduces the user-reported bug: 2610 balance now reaches ruta10', async () => {
