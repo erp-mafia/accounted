@@ -336,6 +336,10 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   })
 
   const tools = await collectIntentTools(intent, args.readOnly === true)
+  // Only a tool offered this turn may run. The model can name any registered
+  // tool (text planted in a document can steer it), and a read-only turn must
+  // not reach a write tool by name.
+  const offeredToolNames = new Set(tools.map((t) => t.name))
 
   // 3: assemble Anthropic messages: prior history + new user turn.
   const history = await loadConversationMessages(supabase, conversationId)
@@ -598,6 +602,21 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           name: tu.name,
           input: tu.input as Record<string, unknown>,
         })
+      }
+
+      if (!offeredToolNames.has(tu.name)) {
+        log.warn('model named a tool not offered this turn', {
+          tool: tu.name,
+          intent: intent.id,
+          readOnly: args.readOnly === true,
+        })
+        toolResultBlocks.push({
+          type: 'tool_result',
+          tool_use_id: tu.id,
+          is_error: true,
+          content: `Verktyget ${tu.name} är inte tillgängligt i den här konversationen.`,
+        })
+        continue
       }
 
       const tool = await agentToolRegistry.get(tu.name)

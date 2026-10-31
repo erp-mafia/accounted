@@ -73,7 +73,7 @@ describe('extension dispatcher: permission shadow', () => {
     delete process.env.PERMISSIONS_SHADOW
   })
 
-  it("answers the same and logs the documented viewer exception as expected", async () => {
+  it('refuses a viewer on an ungated write route by default, where decide() agrees, and answers the same', async () => {
     state.role = 'viewer'
     extensionRegistry.register({
       id: 'cloud-backup',
@@ -83,19 +83,8 @@ describe('extension dispatcher: permission shadow', () => {
     })
     const { off, on } = await callTwice('cloud-backup', ['connect'])
     expect(on).toEqual(off)
-    expect(on.status).toBe(200)
-    expect(insertShadowRow).toHaveBeenCalledTimes(1)
-    expect(insertShadowRow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        door: 'ext:cloud-backup/connect',
-        method: 'POST',
-        today_outcome: 'allow',
-        decide_outcome: 'deny',
-        permission: 'bookkeeping.write',
-        expected: true,
-        expected_reason: 'EXTENSION_ROUTE_WITHOUT_ROLE_GATE',
-      }),
-    )
+    expect(on.status).toBe(403)
+    expect(insertShadowRow).not.toHaveBeenCalled()
   })
 
   it('logs nothing where the gate and decide() agree, and answers the same', async () => {

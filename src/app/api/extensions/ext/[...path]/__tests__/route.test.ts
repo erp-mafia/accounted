@@ -64,7 +64,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { requireCompanyId } from '@/lib/company/context'
-import { GET, POST } from '../route'
+import { DELETE, GET, PATCH, POST, PUT } from '../route'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
@@ -90,6 +90,8 @@ describe('Extension Catch-All Route', () => {
     // Default: extension requires no capability, so the gate is a no-op and
     // existing dispatch tests behave as before. Paywall tests override this.
     mockRequiredCapabilityForExtensionId.mockReturnValue(undefined)
+    // Default: the caller may write. The viewer cases below override this.
+    mockRequireWritePermission.mockResolvedValue({ ok: true })
     extensionRegistry.clear()
   })
 
@@ -436,16 +438,140 @@ describe('Extension Catch-All Route', () => {
       expect(handler).toHaveBeenCalled()
     })
 
-    it('runs no role check on an undeclared route', async () => {
-      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
-      register({ handler })
-      signIn()
+  })
 
-      const response = await call()
+  // A write method refuses viewers unless the route declares viewerMay, so a
+  // route that forgets its gate is closed, not open. The real write check
+  // runs here, fed the role the company resolver reports.
+  describe('default viewer refusal on write methods', () => {
+    const handlers = { GET, POST, PUT, PATCH, DELETE }
+    type Method = keyof typeof handlers
+
+    function signIn() {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+    }
+
+    async function asRole(role: string) {
+      const actual = await vi.importActual<typeof import('@/lib/auth/require-write')>('@/lib/auth/require-write')
+      mockRequireWritePermission.mockImplementation(actual.requireWritePermission)
+      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+        if (facts) facts.role = role as never
+        return 'company-1'
+      })
+    }
+
+    function register(method: Method, route: Record<string, unknown>) {
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method, path: '/thing', ...route } as never],
+      })
+    }
+
+    const call = (method: Method) =>
+      handlers[method](
+        createMockRequest('/api/extensions/ext/test-ext/thing', method === 'GET' ? undefined : { method, body: {} }),
+        createPathParams(['test-ext', 'thing']),
+      )
+
+    it.each(['POST', 'PUT', 'PATCH', 'DELETE'] as const)(
+      'refuses a viewer on an undeclared %s route before the handler runs',
+      async (method) => {
+        const handler = vi.fn()
+        register(method, { handler })
+        signIn()
+        await asRole('viewer')
+
+        const response = await call(method)
+        const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+        expect(status).toBe(403)
+        expect(body.error).toBe('Du har endast läsbehörighet i detta företag.')
+        expect(handler).not.toHaveBeenCalled()
+      },
+    )
+
+    it('lets a member through on an undeclared write route', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { handler })
+      signIn()
+      await asRole('member')
+
+      const response = await call('POST')
 
       expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ userId: 'user-1' }))
+    })
+
+    it('lets a viewer through on a write route that declares viewerMay', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { viewerMay: true, handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('still refuses a viewer on a requireWrite route that also says viewerMay', async () => {
+      const handler = vi.fn()
+      register('POST', { requireWrite: true, viewerMay: true, handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(403)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('runs no role check on an undeclared GET route, so a viewer reads', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('GET', { handler })
+      signIn()
+      await asRole('viewer')
+
+      const response = await call('GET')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
       expect(mockRequireWritePermission).not.toHaveBeenCalled()
       expect(mockIsCompanyAdmin).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a skipAuth write route (a webhook) without a session or a role check', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ received: true }))
+      register('POST', { skipAuth: true, handler })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: { message: 'no session' } })
+      mockCreateClient.mockResolvedValue(supabase as never)
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(supabase.auth.getUser).not.toHaveBeenCalled()
+      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a skipCompanyContext write route (onboarding) without a role check', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register('POST', { skipCompanyContext: true, handler })
+      signIn()
+
+      const response = await call('POST')
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(requireCompanyId).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
     })
   })
 })

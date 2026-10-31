@@ -2381,6 +2381,8 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/suggest-booking',
+      // Computes a proposal from reads only; nothing is written.
+      viewerMay: true,
       handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')

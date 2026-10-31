@@ -322,13 +322,15 @@ async function handleRequest(
 
   // Role gates the route declares, checked as withRouteContext checks them,
   // so a handler never repeats them: requireAdmin asks the database's own
-  // owner/admin predicate, requireWrite refuses viewers.
+  // owner/admin predicate, requireWrite refuses viewers. A write method
+  // refuses viewers by default: only a route that declares viewerMay
+  // (lib/extensions/types.ts) lets one through.
   if (route.requireAdmin) {
     if (!(await isCompanyAdmin(supabase, companyId))) {
       recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
       return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
     }
-  } else if (route.requireWrite) {
+  } else if (route.requireWrite || (route.method !== 'GET' && route.viewerMay !== true)) {
     const writeCheck = await requireWritePermission(supabase, user.id, { companyId, role: resolved.role })
     if (!writeCheck.ok) {
       log.warn('extension call blocked: write permission denied', { userId: user.id })

@@ -116,12 +116,15 @@ describe('permission shadow', () => {
   })
 
   it('marks the differences the plan intends as expected', async () => {
-    // A documented preset exception: a viewer passes an ungated route today.
+    // A documented preset exception: requireWrite refuses a viewer managing
+    // their own agent key today, and agents.connect lets them.
     shadowPermission(
       personObs({
         role: 'viewer',
-        doorRule: { ...DOOR_SPECS.BOOK_RECORD, stageable: false },
-        request: { method: 'POST', pathname: '/api/parties/aliases' },
+        method: 'PATCH',
+        doorRule: { ...DOOR_SPECS.CONNECT, stageable: false },
+        today: { outcome: 'deny', code: 'WRITE_REQUIRED', by: 'gate' },
+        request: { method: 'PATCH', pathname: '/api/settings/api-keys/key-1' },
       }),
     )
     // An agent never holds settings.
@@ -144,7 +147,7 @@ describe('permission shadow', () => {
     await flush()
     const rows = vi.mocked(insertShadowRow).mock.calls.map(([row]) => [row.door, row.expected, row.expected_reason])
     expect(rows).toEqual([
-      ['session:test.route', true, 'VIEWER_PASSES_UNGATED_ROUTE'],
+      ['session:test.route', true, 'OWN_AGENT_KEYS'],
       ['v1:settings.update', true, 'AGENT_NEVER_HOLDS'],
       ['session:api_keys.revoke', true, 'HANDLER_CHECK'],
     ])

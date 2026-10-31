@@ -787,6 +787,8 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/extensions/ext/skatteverket': TAX,
     // Validates against Skatteverket and files nothing (exempt from requireSkvWriteRole).
     'POST /api/extensions/ext/skatteverket/declaration/validate': READ,
+    // Deletes only the caller's own Skatteverket token.
+    'POST /api/extensions/ext/skatteverket/disconnect': OUTSIDE.personal,
     '/api/extensions/ext/skatteverket/skattekonto': BOOK,
     'POST /api/extensions/ext/skatteverket/skattekonto/sync': BOOK_HOUSE,
     'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/group-match-candidates': READ,
