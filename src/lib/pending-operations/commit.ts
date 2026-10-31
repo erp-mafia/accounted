@@ -7427,10 +7427,13 @@ export async function commitPendingOperation(
   // runs without it: the engine's own check (lib/bookkeeping/unattended-ceiling.ts)
   // would refuse inside the claim, where a throw consumes the operation.
   const { unattendedCommitLimit: _priced, ...dispatchActor } = opts.actor
+  // The approver is the person the dispatch acts for: the audit log names
+  // them for its service-role writes (lib/supabase/actor-header.ts).
+  const actor = { ...dispatchActor, userId: dispatchActor.userId ?? userId }
   // Only a person's single approval in the app is a review of the booking:
   // a bulk approval, a key or an agent never stamps one (accounted#130).
   return runWithActor(
-    opts.commitMethod && opts.commitMethod !== 'user_accept' ? { ...dispatchActor, withoutReview: true } : dispatchActor,
+    opts.commitMethod && opts.commitMethod !== 'user_accept' ? { ...actor, withoutReview: true } : actor,
     run,
   )
 }

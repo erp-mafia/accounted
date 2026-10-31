@@ -274,6 +274,8 @@ import { listOpenSuggestions } from '@/lib/suggestions/list'
 import { loadGrantReview } from '@/lib/grants/review'
 import { grantsEnabled } from '@/lib/grants/flag'
 import { applyGrantDoor } from './grant-door'
+import { mcpCommitActorType, mcpToolCallActor } from './commit-actor'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
@@ -4875,15 +4877,9 @@ async function commitStagedOperation(params: {
   // display name ('Claude (Anthropic)'); comparing the label here made every
   // claude.ai and ChatGPT commit say api_key. Named here, on the commit
   // actor, and not on the connection's ActorContext, whose type 'api_key'
-  // decides company access and limits.
-  const commitActorType =
-    actor?.type !== 'api_key'
-      ? 'user'
-      : actor.serviceAccountId
-        ? 'service_account'
-        : actor.oauthKey === true
-          ? 'mcp_oauth'
-          : 'api_key'
+  // decides company access and limits. The same definition names the actor
+  // scope of every tool call (./commit-actor.ts).
+  const commitActorType = mcpCommitActorType(actor)
 
   const result = await commitPendingOperation(supabase, userId, companyId, operation, {
     commitMethod,
@@ -29175,6 +29171,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         canApprove: hasScope(keyScopes, 'pending_operations:approve'),
         ...(agentIdentityId ? { agentIdentityId } : {}),
       }
+  // The actor scope a tool call runs in (./commit-actor.ts): the credential
+  // and the person it acts for, so what the call writes names them, the
+  // audit rows of its service-role writes included. v1 binds the same scope
+  // for every route (withApiV1).
+  const toolCallActor = mcpToolCallActor(actor, userId)
+  const inToolCallScope = <T>(fn: () => Promise<T>): Promise<T> =>
+    toolCallActor ? runWithActor(toolCallActor, fn) : fn()
 
   // ── Simple company mode ──
   // A key that reaches at most one company gets the single-company face: no
@@ -30092,10 +30095,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             const simpleModeLookup = companyEcho ? resolveSimpleCompanyMode() : null
             // A staged write a company grant matches exactly is booked at once
             // (./grant-door.ts); the tool itself only staged it.
-            const rawResult = await applyGrantDoor(
+            const rawResult = await inToolCallScope(async () => applyGrantDoor(
               await withSIEExternalReport(supabase,tenantId,toolName,()=>runWithAgentReason(agentReason,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))),
               { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
-            )
+            ))
             const canonicalResult = effectiveCompanyId
               ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
               : rawResult
@@ -30221,10 +30224,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const simpleModeLookup = companyEcho ? resolveSimpleCompanyMode() : null
         // A staged write a company grant matches exactly is booked at once
             // (./grant-door.ts); the tool itself only staged it.
-            const rawResult = await applyGrantDoor(
+            const rawResult = await inToolCallScope(async () => applyGrantDoor(
               await withSIEExternalReport(supabase,tenantId,toolName,()=>runWithAgentReason(agentReason,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))),
               { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
-            )
+            ))
         shadow?.settled((toolArgs as Record<string, unknown>).dry_run === true)
         const canonicalResult = effectiveCompanyId
           ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)

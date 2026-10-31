@@ -64,6 +64,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { requireCompanyId } from '@/lib/company/context'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 import { DELETE, GET, PATCH, POST, PUT } from '../route'
 
 const mockCreateClient = vi.mocked(createClient)
@@ -226,6 +227,35 @@ describe('Extension Catch-All Route', () => {
     expect(handler).toHaveBeenCalledWith(request, expect.objectContaining({
       extensionId: 'test-ext',
     }))
+  })
+
+  it('runs the handler as the signed-in user, named by id for the audit log of its service-role writes', async () => {
+    let seen: ReturnType<typeof getActor>
+    const handler = vi.fn(async () => {
+      seen = getActor()
+      return NextResponse.json({ ok: true })
+    })
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'POST', path: '/book', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/book', { method: 'POST', body: {} })
+    const response = await POST(request, createPathParams(['test-ext', 'book']))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
+    expect(getActor()).toBeUndefined()
   })
 
   it('dispatches POST requests correctly', async () => {

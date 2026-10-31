@@ -29,6 +29,14 @@ export interface CommitActor {
   /** Human-readable credential label, e.g. the API key name. */
   label?: string
   /**
+   * The person the credential acts for: the signed-in user, the key's owner,
+   * a service account's sponsor, the approver of a pending operation. Absent
+   * for a cron run. The database records it as the actor of every write the
+   * scope makes through a service-role client (lib/supabase/actor-header.ts),
+   * where the transaction has no session to read the person from.
+   */
+  userId?: string
+  /**
    * SEK ceiling on what this credential may commit WITHOUT human approval,
    * or null/undefined for no limit. Read from api_keys by
    * validate_and_increment_api_key, which is the one place the database itself

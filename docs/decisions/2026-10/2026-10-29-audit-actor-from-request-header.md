@@ -1,0 +1,1 @@
+[2026-10-29] A service-role write is audited under the person and credential of the request actor scope, sent as the x-accounted-actor header and trusted only for service_role: the triggers had no session to read them from. MCP tool calls now bind that scope, without the key ceiling.

@@ -216,16 +216,20 @@ export type ApiKeyRefusalCode = 'AGENT_PAUSED' | 'SERVICE_ACCOUNT_SUSPENDED'
  * carry its sponsor as user_id, the person it acts for), every other key as
  * `api_key` labelled with its own name. The key's unattended ceiling rides
  * along when it has one: the engine and the attest service read it off the
- * actor of the request's scope (lib/bookkeeping/unattended-ceiling.ts).
+ * actor of the request's scope (lib/bookkeeping/unattended-ceiling.ts). So
+ * does the key's user, the person it acts for (a service account's sponsor):
+ * the audit log names them for the request's writes (lib/supabase/actor-header.ts).
  */
 export function apiKeyCommitActor(auth: {
+  userId?: string
   apiKeyName?: string
   serviceAccount: ApiKeyServiceAccount | null
   unattendedCommitLimit?: number | null
-}): { type: 'service_account' | 'api_key'; label: string; unattendedCommitLimit?: number } {
+}): { type: 'service_account' | 'api_key'; label: string; userId?: string; unattendedCommitLimit?: number } {
   const ceiling = typeof auth.unattendedCommitLimit === 'number' ? { unattendedCommitLimit: auth.unattendedCommitLimit } : {}
-  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name, ...ceiling }
-  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key', ...ceiling }
+  const person = auth.userId ? { userId: auth.userId } : {}
+  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name, ...person, ...ceiling }
+  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key', ...person, ...ceiling }
 }
 
 export async function validateApiKey(

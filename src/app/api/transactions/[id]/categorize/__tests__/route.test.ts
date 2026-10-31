@@ -522,7 +522,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
 
     expect(response.status).toBe(200)
-    expect(seen).toEqual({ type: 'user' })
+    expect(seen).toEqual({ type: 'user', userId: 'user-1' })
     expect(defaultCommitMethod(seen)).toBe('user_accept')
   })
 

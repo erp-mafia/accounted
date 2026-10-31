@@ -5,6 +5,7 @@ import {
   supabaseAuthCookieOptions,
 } from '@/lib/supabase/cookie-options'
 import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { withActorHeader } from '@/lib/supabase/actor-header'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // replaced at runtime by docker-entrypoint.sh.
@@ -93,9 +94,11 @@ export function createServiceClient() {
   // service role key and re-enables RLS. A cookie-less client
   // ensures the service role key is used for authorization,
   // properly bypassing RLS on every query.
+  // Without a session the audit log reads who acts from the request's
+  // actor header (lib/supabase/actor-header.ts).
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } }
+    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withActorHeader() } }
   )
 }

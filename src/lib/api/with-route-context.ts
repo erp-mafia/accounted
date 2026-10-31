@@ -280,7 +280,10 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // with the signed-in user as its actor (and, through commitEntry, the
       // commit method that implies). A route that relays someone else, such
       // as an approval, opens its own runWithActor scope inside this one.
-      const response = await runWithActor({ type: 'user' }, () =>
+      // The user's id rides along so a write the handler makes through a
+      // service-role client (the invoicer role's scoped client, a service
+      // client) is audited as theirs, not the row creator's.
+      const response = await runWithActor({ type: 'user', userId: user.id }, () =>
         requireCompleteLedger
           ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
           : handler(request, ctx, params))
