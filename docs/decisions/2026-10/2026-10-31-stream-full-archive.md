@@ -1,0 +1,1 @@
+[2026-10-31] Komplett arkiv streams its ZIP (underlag read as written, ZIP64 past 4 GiB) with no size cap, instead of a stored copy behind a signed link: memory, not response size, set the 80 MB cap, and a stored copy needs a job table, cleanup and a resumable upload client (#142).

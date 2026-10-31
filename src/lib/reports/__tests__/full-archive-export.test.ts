@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import JSZip from 'jszip'
 import {
   generateFullArchive,
+  streamFullArchive,
   generateBaseDataArchive,
   estimateArchiveSize,
   MASTER_DATA_DUMP_TABLES,
@@ -547,6 +548,91 @@ describe('generateFullArchive', () => {
       // Newest first, matching getAuditLog's output order.
       expect(ids[0]).toBe('audit-3')
       expect(ids[2]).toBe('audit-1')
+    })
+  })
+
+  // #142: the archive used to be built whole in memory, which is why the
+  // routes capped it at 80 MB. Streamed, it holds a handful of underlag.
+  describe('streamFullArchive', () => {
+    const DOC_COUNT = 20
+
+    function enqueueDocuments() {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+        {
+          data: Array.from({ length: DOC_COUNT }, (_, i) => ({
+            id: `doc-${i}`,
+            file_name: `kvitto-${i}.pdf`,
+            storage_path: `company-1/doc-${i}.pdf`,
+            journal_entry_id: 'entry-1',
+            journal_entries: { voucher_number: i + 1, voucher_series: 'A', entry_date: '2024-03-15' },
+          })),
+        },
+        { data: [{ id: 'entry-1', fiscal_period_id: PERIOD_2024.id }] },
+      ])
+    }
+
+    it('writes the first bytes before reading any underlag, then reads them a few at a time after the ledger lease', async () => {
+      enqueueDocuments()
+      let started = 0
+      let inFlight = 0
+      let maxInFlight = 0
+      let readInsideLease = false
+      supabase.storage.from = vi.fn().mockReturnValue({
+        download: vi.fn(async (path: string) => {
+          started++
+          inFlight++
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          if (!supabase.rpc.mock.calls.some(([name]) => name === 'finish_sie_period_read')) readInsideLease = true
+          await new Promise((r) => setTimeout(r, 1))
+          inFlight--
+          return { data: new Blob([path]), error: null }
+        }),
+      })
+
+      const zip = streamFullArchive(supabase as any, 'company-1', { scope: 'period', period_id: PERIOD_2024.id })
+      const first = await zip.next()
+      expect(first.done).toBe(false)
+      expect(started).toBe(0)
+
+      const chunks: Uint8Array[] = [first.value as Uint8Array]
+      let sawPartialRead = false
+      for await (const chunk of zip) {
+        chunks.push(chunk)
+        if (started > 0 && started < DOC_COUNT) sawPartialRead = true
+      }
+
+      expect(sawPartialRead).toBe(true)
+      expect(readInsideLease).toBe(false)
+      expect(maxInFlight).toBeLessThanOrEqual(7)
+      const archive = await JSZip.loadAsync(Buffer.concat(chunks))
+      expect(await archive.file('dokument/2024/A20_kvitto-19.pdf')!.async('text')).toBe('company-1/doc-19.pdf')
+      const manifest = JSON.parse(await archive.file('dokument/manifest.json')!.async('text'))
+      expect(manifest.map((m: { document_id: string }) => m.document_id)).toEqual(
+        Array.from({ length: DOC_COUNT }, (_, i) => `doc-${i}`),
+      )
+      expect(manifest.every((m: { status: string }) => m.status === 'downloaded')).toBe(true)
+    })
+
+    it('records a failed read in the manifest, in document order, and leaves the file out', async () => {
+      enqueueDocuments()
+      supabase.storage.from = vi.fn().mockReturnValue({
+        download: vi.fn(async (path: string) => path === 'company-1/doc-3.pdf'
+          ? { data: null, error: { message: 'Object not found' } }
+          : { data: new Blob([path]), error: null }),
+      })
+
+      const archive = await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id,
+      }))
+
+      const manifest = JSON.parse(await archive.file('dokument/manifest.json')!.async('text'))
+      expect(manifest).toHaveLength(DOC_COUNT)
+      expect(manifest[3]).toMatchObject({ document_id: 'doc-3', status: 'error', error: 'Object not found' })
+      expect(manifest[4]).toMatchObject({ document_id: 'doc-4', status: 'downloaded' })
+      expect(archive.file('dokument/2024/A4_kvitto-3.pdf')).toBeNull()
+      expect(archive.file('dokument/2024/A5_kvitto-4.pdf')).not.toBeNull()
     })
   })
 

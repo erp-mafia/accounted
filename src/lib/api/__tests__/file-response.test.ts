@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileResponse } from '../file-response'
+import { fileResponse, streamedBody } from '../file-response'
 
 describe('fileResponse', () => {
   it('answers 200 with the type and an RFC 6266 attachment header', async () => {
@@ -33,5 +33,61 @@ describe('fileResponse', () => {
 
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('X-Request-Id')).toBe('req-1')
+  })
+})
+
+describe('streamedBody', () => {
+  async function* source(log: string[], parts: string[]): AsyncGenerator<Uint8Array> {
+    try {
+      for (const part of parts) {
+        log.push(`read ${part}`)
+        yield new TextEncoder().encode(part)
+      }
+    } finally {
+      log.push('closed')
+    }
+  }
+
+  it('sends every chunk and reports the size at the end', async () => {
+    const log: string[] = []
+    let ended = -1
+    const body = streamedBody(source(log, ['ab', 'cde']), { onEnd: (bytes) => { ended = bytes } })
+
+    await expect(new Response(body).text()).resolves.toBe('abcde')
+    expect(ended).toBe(5)
+    expect(log.at(-1)).toBe('closed')
+  })
+
+  it('reads the source only as fast as the client takes it', async () => {
+    const log: string[] = []
+    const reader = streamedBody(source(log, ['a', 'b', 'c', 'd', 'e'])).getReader()
+
+    await reader.read()
+    // One chunk handed over, at most one queued behind it.
+    expect(log.filter((l) => l.startsWith('read')).length).toBeLessThanOrEqual(2)
+  })
+
+  it('ends the source when the client goes away', async () => {
+    const log: string[] = []
+    let cancelledAt = -1
+    const reader = streamedBody(source(log, ['a', 'b', 'c']), { onCancel: (bytes) => { cancelledAt = bytes } }).getReader()
+
+    await reader.read()
+    await reader.cancel()
+    expect(log.at(-1)).toBe('closed')
+    expect(cancelledAt).toBeGreaterThanOrEqual(1)
+  })
+
+  it('errors the body and reports it when the source fails part way', async () => {
+    const failure = new Error('storage unavailable')
+    let reported: { error: unknown; bytes: number } | null = null
+    async function* failing(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array(3)
+      throw failure
+    }
+    const body = streamedBody(failing(), { onError: (error, bytes) => { reported = { error, bytes } } })
+
+    await expect(new Response(body).arrayBuffer()).rejects.toThrow('storage unavailable')
+    expect(reported).toEqual({ error: failure, bytes: 3 })
   })
 })

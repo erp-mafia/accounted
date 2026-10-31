@@ -2,7 +2,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import type JSZip from 'jszip'
+import { ArchiveFolder, collectBytes, readAhead, type ArchiveRead } from './archive-folder'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -49,11 +49,44 @@ export type FullArchiveOptions =
 
 export type ArchiveScope = FullArchiveOptions['scope']
 
-// jszip loads when an archive is built, not with every route that reaches
-// this module through the cloud-backup extension.
-async function newZip(): Promise<JSZip> {
-  const { default: JSZipCtor } = await import('jszip')
-  return new JSZipCtor()
+/**
+ * Storage reads kept in flight ahead of the ZIP writer. A document is at most
+ * MAX_DOCUMENT_SIZE (10 MB; a few older ones reach 20 MB), so this holds well
+ * under 200 MB while the round trips overlap.
+ */
+const STORAGE_READ_AHEAD = 6
+
+/**
+ * A storage object that goes into the archive when the writer reaches it. A
+ * failed read leaves the file out and is reported to `failed` for the
+ * manifest; it never aborts the archive.
+ */
+function storageRead(
+  download: () => Promise<{ data: Blob | null; error: { message?: string } | null }>,
+  failed: (message: string) => void,
+  verify?: (bytes: ArrayBuffer) => void,
+): ArchiveRead {
+  return async () => {
+    try {
+      const { data, error } = await download()
+      if (error || !data) {
+        failed(error?.message || 'Download returned no data')
+        return null
+      }
+      const bytes = await data.arrayBuffer()
+      verify?.(bytes)
+      return bytes
+    } catch (err) {
+      failed(err instanceof Error ? err.message : 'Unknown error')
+      return null
+    }
+  }
+}
+
+/** Add deferred files in their order, the reads overlapping a few ahead of the writer. */
+function addStorageFiles(folder: ArchiveFolder, files: { path: string; read: ArchiveRead }[]): void {
+  const reads = readAhead(files.map((f) => f.read), STORAGE_READ_AHEAD)
+  files.forEach((f, i) => folder.file(f.path, reads[i]))
 }
 
 interface DocumentManifestEntry {
@@ -139,21 +172,46 @@ type DocumentMode = ArchiveScope | 'unlinked'
  * history: one SIE4 file per period under `sie/`, per-period `rapporter/`
  * subfolders, a flat `dokument/` with manifest tagged by fiscal_period_id,
  * and an unfiltered `revision/behandlingshistorik.json`.
+ *
+ * The whole ZIP is held in memory: for callers with their own size cap
+ * (cloud backup, the MCP audit package). Downloads use streamFullArchive.
  */
 export async function generateFullArchive(
   supabase: SupabaseClient,
   companyId: string,
   options: FullArchiveOptions
 ): Promise<ArrayBuffer> {
-  return withSIEPeriodRead(supabase, companyId, 'report_export', () =>
+  return collectBytes(streamFullArchive(supabase, companyId, options))
+}
+
+/**
+ * The full archive as ZIP bytes, produced while they are read: what the
+ * download routes send, so an archive has no size ceiling but time.
+ *
+ * The ledger part (SIE, reports, master data, behandlingshistorik,
+ * systemdokumentation, and which underlag exist) is read inside one SIE read
+ * lease before the first byte. The underlag files are read from storage after
+ * the lease, when the writer reaches them and a few ahead of it, so memory
+ * holds a handful of files rather than the archive. The lease guards the
+ * ledger against a half-run SIE import; an import never rewrites a stored
+ * file, and one gone by the time it is read lands in the manifest as a failed
+ * read, as before.
+ */
+export async function* streamFullArchive(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: FullArchiveOptions
+): AsyncGenerator<Uint8Array> {
+  const archive = await withSIEPeriodRead(supabase, companyId, 'report_export', () =>
     buildFullArchive(supabase, companyId, options))
+  yield* archive.zip()
 }
 
 async function buildFullArchive(
   supabase: SupabaseClient,
   companyId: string,
   options: FullArchiveOptions
-): Promise<ArrayBuffer> {
+): Promise<ArchiveFolder> {
   const company = await fetchCompany(supabase, companyId)
   const periods =
     options.scope === 'all'
@@ -163,11 +221,11 @@ async function buildFullArchive(
   // A retained source can have documents and company history before its first
   // fiscal year. An all-company archive must keep that material accessible too.
 
-  const zip = await newZip()
+  const zip = ArchiveFolder.root()
 
   if (options.scope === 'all') {
-    const sieFolder = zip.folder('sie')!
-    const rapporterFolder = zip.folder('rapporter')!
+    const sieFolder = zip.folder('sie')
+    const rapporterFolder = zip.folder('rapporter')
 
     for (let i = 0; i < periods.length; i += REPORT_CONCURRENCY) {
       const batch = periods.slice(i, i + REPORT_CONCURRENCY)
@@ -181,7 +239,7 @@ async function buildFullArchive(
           sieFolder.file(`${periodLabel(period)}.se`, sie)
 
           const reports = await generatePeriodReports(supabase, companyId, period)
-          const periodFolder = rapporterFolder.folder(periodLabel(period))!
+          const periodFolder = rapporterFolder.folder(periodLabel(period))
           writeReports(periodFolder, reports)
           await writeBokslutsbilagor(periodFolder, supabase, companyId, period.id)
         })
@@ -197,7 +255,7 @@ async function buildFullArchive(
     zip.file('bokforing.se', sie)
 
     const reports = await generatePeriodReports(supabase, companyId, period)
-    const rapporter = zip.folder('rapporter')!
+    const rapporter = zip.folder('rapporter')
     writeReports(rapporter, reports)
     await writeBokslutsbilagor(rapporter, supabase, companyId, period.id)
   }
@@ -212,7 +270,7 @@ async function buildFullArchive(
     await writeMasterData(zip, supabase, companyId)
   }
 
-  const revision = zip.folder('revision')!
+  const revision = zip.folder('revision')
 
   const auditEntries =
     options.scope === 'period'
@@ -241,7 +299,7 @@ async function buildFullArchive(
     })
   )
 
-  return zip.generateAsync({ type: 'arraybuffer' })
+  return zip
 }
 
 /**
@@ -257,20 +315,21 @@ export async function generateBaseDataArchive(
   companyId: string,
   options: { include_documents?: boolean } = {}
 ): Promise<ArrayBuffer> {
-  return withSIEPeriodRead(supabase, companyId, 'report_export', () =>
+  const archive = await withSIEPeriodRead(supabase, companyId, 'report_export', () =>
     buildBaseDataArchive(supabase, companyId, options))
+  return collectBytes(archive.zip())
 }
 
 async function buildBaseDataArchive(
   supabase: SupabaseClient,
   companyId: string,
   options: { include_documents?: boolean }
-): Promise<ArrayBuffer> {
+): Promise<ArchiveFolder> {
   const company = await fetchCompany(supabase, companyId)
   const periods = await fetchAllPeriods(supabase, companyId)
   const includeDocuments = options.include_documents !== false
 
-  const zip = await newZip()
+  const zip = ArchiveFolder.root()
 
   if (includeDocuments) {
     await writeDocuments(zip, supabase, companyId, periods, 'unlinked')
@@ -278,7 +337,7 @@ async function buildBaseDataArchive(
   await writeSieSourceFiles(zip, supabase, companyId, includeDocuments)
   await writeMasterData(zip, supabase, companyId)
 
-  const revision = zip.folder('revision')!
+  const revision = zip.folder('revision')
   const auditEntries = await fetchAllAuditEntries(supabase, companyId, {})
   revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, 'all')
@@ -294,16 +353,16 @@ async function buildBaseDataArchive(
     })
   )
 
-  return zip.generateAsync({ type: 'arraybuffer' })
+  return zip
 }
 
 /**
  * Estimate the uncompressed size of the archive in bytes.
  *
  * Sums `file_size_bytes` across all documents in scope plus a fixed overhead
- * for SIE, reports, audit trail, and system documentation. Used by the API
- * route to short-circuit generation when the payload would exceed the
- * platform's response-size ceiling.
+ * for SIE, reports, audit trail, and system documentation. Shown before a
+ * download, and the cap for callers that hold the whole ZIP in memory (cloud
+ * backup, the MCP audit package).
  */
 export async function estimateArchiveSize(
   supabase: SupabaseClient,
@@ -453,7 +512,7 @@ async function generatePeriodReports(
   return { trialBalance, incomeStatement, balanceSheet, generalLedger, journalRegister, vatDeclaration }
 }
 
-function writeReports(folder: JSZip, reports: PeriodReports): void {
+function writeReports(folder: ArchiveFolder, reports: PeriodReports): void {
   folder.file('saldobalans.json', JSON.stringify(reports.trialBalance, null, 2))
   folder.file('resultatrakning.json', JSON.stringify(reports.incomeStatement, null, 2))
   folder.file('balansrakning.json', JSON.stringify(reports.balanceSheet, null, 2))
@@ -483,14 +542,15 @@ function writeReports(folder: JSZip, reports: PeriodReports): void {
 }
 
 async function writeDocuments(
-  zip: JSZip,
+  zip: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string,
   periods: FiscalPeriodRow[],
   scope: DocumentMode
 ): Promise<void> {
-  const dokument = zip.folder('dokument')!
+  const dokument = zip.folder('dokument')
   const manifest: DocumentManifestEntry[] = []
+  const files: { path: string; read: ArchiveRead }[] = []
 
   try {
     const documents = await fetchAllRows<DocumentRow>(({ from, to }) => {
@@ -561,48 +621,36 @@ async function writeDocuments(
           zip_path: zipPath,
         }
 
-        try {
+        // Entered as downloaded and replaced if the read fails: the manifest
+        // is written after every document, so it holds the outcome.
+        const index = manifest.push({ ...baseManifest, status: 'downloaded' }) - 1
+        files.push({
+          // zipPath is fully qualified (`dokument/<year>/<voucher>_<file>` etc.),
+          // so it is added at the archive root: `dokument.file(zipPath)`
+          // would double-prefix to `dokument/dokument/...`.
+          path: zipPath,
           // Dual-layout download: the document batch is snapshotted up
           // front, and a concurrent Phase B backfill can re-home an object
           // (legacy uploader-scoped -> company-scoped) and later remove the
           // source mid-run, leaving the stored pointer stale. The helper
           // tries the stored pointer first, then the alternate layout, so a
           // healthy document never lands in the manifest as an error.
-          const { blob: fileData, error } = await downloadDocumentObject(
-            supabase,
-            doc.storage_path,
-            companyId
-          )
-
-          if (error || !fileData) {
-            manifest.push({
-              ...baseManifest,
-              status: 'error',
-              error: error?.message || 'Download returned no data',
-            })
-            continue
-          }
-
-          const buffer = await fileData.arrayBuffer()
-          // zipPath is fully qualified (`dokument/<year>/<voucher>_<file>` etc.),
-          // so write at the archive root: calling `dokument.file(zipPath)`
-          // would double-prefix to `dokument/dokument/...`.
-          zip.file(zipPath, buffer)
-          manifest.push({ ...baseManifest, status: 'downloaded' })
-        } catch (err) {
-          manifest.push({
-            ...baseManifest,
-            status: 'error',
-            error: err instanceof Error ? err.message : 'Unknown error',
-          })
-        }
+          read: storageRead(
+            async () => {
+              const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, companyId)
+              return { data: blob, error }
+            },
+            (error) => { manifest[index] = { ...baseManifest, status: 'error', error } },
+          ),
+        })
       }
     }
   } catch {
     // Document fetch failed: archive will still contain reports and audit trail
   }
 
-  dokument.file('manifest.json', JSON.stringify(manifest, null, 2))
+  addStorageFiles(zip, files)
+  dokument.file('manifest.json', async () => JSON.stringify(manifest, null, 2))
 }
 
 /**
@@ -617,7 +665,7 @@ async function writeDocuments(
  * a failure leaves an .error.txt beside the other files, like the pärm.
  */
 async function writeSystemdokumentation(
-  revision: JSZip,
+  revision: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string,
   period: FiscalPeriodRow
@@ -644,7 +692,7 @@ async function writeSystemdokumentation(
 }
 
 async function writeBokslutsbilagor(
-  folder: JSZip,
+  folder: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string,
   periodId: string
@@ -695,12 +743,13 @@ interface ReconciliationAttachmentManifestEntry {
  * archive, like writeDocuments.
  */
 async function writeReconciliationAttachments(
-  zip: JSZip,
+  zip: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string,
   periods: FiscalPeriodRow[]
 ): Promise<void> {
   const manifest: ReconciliationAttachmentManifestEntry[] = []
+  const files: { path: string; read: ArchiveRead }[] = []
   const usedPaths = new Set<string>()
   const sorted = [...periods].sort((a, b) => a.period_start.localeCompare(b.period_start))
   const from = sorted[0].period_start
@@ -736,23 +785,22 @@ async function writeReconciliationAttachments(
         zipPath = dot > zipPath.lastIndexOf('/') ? `${zipPath.slice(0, dot)}${suffix}${zipPath.slice(dot)}` : `${zipPath}${suffix}`
       }
       usedPaths.add(zipPath)
-      try {
-        const { data, error } = await supabase.storage.from(row.storage_bucket).download(row.storage_path)
-        if (error || !data) {
-          manifest.push({ ...base, zip_path: null, status: 'error', error: error?.message || 'Download returned no data' })
-          continue
-        }
-        zip.file(zipPath, await data.arrayBuffer())
-        manifest.push({ ...base, zip_path: zipPath, status: 'downloaded' })
-      } catch (err) {
-        manifest.push({ ...base, zip_path: null, status: 'error', error: err instanceof Error ? err.message : 'Unknown error' })
-      }
+      // Entered as downloaded and replaced if the read fails (writeDocuments).
+      const index = manifest.push({ ...base, zip_path: zipPath, status: 'downloaded' }) - 1
+      files.push({
+        path: zipPath,
+        read: storageRead(
+          () => supabase.storage.from(row.storage_bucket).download(row.storage_path),
+          (error) => { manifest[index] = { ...base, zip_path: null, status: 'error', error } },
+        ),
+      })
     }
   } catch {
     // Attachment listing failed: the archive still carries everything else.
   }
 
-  zip.folder('bilagor')!.file('manifest.json', JSON.stringify(manifest, null, 2))
+  addStorageFiles(zip, files)
+  zip.folder('bilagor').file('manifest.json', async () => JSON.stringify(manifest, null, 2))
 }
 
 /**
@@ -857,12 +905,12 @@ interface SieSourceManifestEntry {
  * large and share the documents opt-out.
  */
 async function writeSieSourceFiles(
-  zip: JSZip,
+  zip: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string,
   includeFiles: boolean
 ): Promise<void> {
-  const sieFolder = zip.folder('sie')!
+  const sieFolder = zip.folder('sie')
 
   try {
     const imports = await fetchAllRows<SieImportRow>(({ from, to }) =>
@@ -879,9 +927,10 @@ async function writeSieSourceFiles(
     sieFolder.file('imports.json', JSON.stringify(imports, null, 2))
 
     const manifest: SieSourceManifestEntry[] = []
+    const files: { path: string; read: ArchiveRead }[] = []
 
     if (includeFiles && imports.length > 0) {
-      const originalFolder = sieFolder.folder('original')!
+      const originalFolder = sieFolder.folder('original')
 
       for (const imp of imports) {
         const original = imp.manifest?.originalSource
@@ -905,81 +954,59 @@ async function writeSieSourceFiles(
         }
 
         const zipFileName = `${imp.id}_${sanitizeFileName(imp.filename || `${imp.id}.se`)}`
-
-        try {
-          if (original?.format === 'original_bytes' &&
-            (!sourceHash || !/^[a-f0-9]{64}$/.test(sourceHash) ||
-              storagePath !== `${companyId}/sie-originals/${sourceHash}.se`)) {
-            throw new Error('Invalid original SIE source reference')
-          }
-          // Archive generation uses a service-role client. Both legacy rows
-          // and submitted job manifests can contain caller-supplied paths.
-          // Accept only the object identities our import writers generate.
-          // Before multi-tenancy, the writer used the persisted user id as
-          // its prefix. Keep that exact path bound to this retained import id.
-          if (original?.format !== 'original_bytes' &&
-            storagePath !== `${companyId}/${imp.id}.se` &&
-            (!imp.user_id || storagePath !== `${imp.user_id}/${imp.id}.se`) &&
-            (!imp.file_hash || !/^[a-f0-9]{64}$/.test(imp.file_hash) ||
-              storagePath !== `${companyId}/sie-jobs/${imp.file_hash}.se`)) {
-            throw new Error('Invalid SIE source reference')
-          }
-          const { data: fileData, error } = await supabase.storage
-            .from('sie-files')
-            .download(storagePath!)
-
-          if (error || !fileData) {
-            manifest.push({
-              import_id: imp.id,
-              filename: imp.filename,
-              storage_path: storagePath ?? null,
-              sha256_hash: sourceHash ?? null,
-              sie_type: imp.sie_type,
-              fiscal_year_start: imp.fiscal_year_start,
-              fiscal_year_end: imp.fiscal_year_end,
-              imported_at: imp.imported_at,
-              status: 'missing',
-              zip_file_name: null,
-              error: error?.message || 'Download returned no data',
-            })
-            continue
-          }
-
-          const buffer = await fileData.arrayBuffer()
-          if (original?.format === 'original_bytes' && createHash('sha256').update(Buffer.from(buffer)).digest('hex') !== sourceHash) {
-            throw new Error('Original SIE source checksum mismatch')
-          }
-          originalFolder.file(zipFileName, buffer)
-          manifest.push({
-            import_id: imp.id,
-            filename: imp.filename,
-            storage_path: storagePath ?? null,
-            sha256_hash: sourceHash ?? null,
-            sie_type: imp.sie_type,
-            fiscal_year_start: imp.fiscal_year_start,
-            fiscal_year_end: imp.fiscal_year_end,
-            imported_at: imp.imported_at,
-            status: 'downloaded',
-            zip_file_name: zipFileName,
-          })
-        } catch (err) {
-          manifest.push({
-            import_id: imp.id,
-            filename: imp.filename,
-            storage_path: storagePath ?? null,
-            sha256_hash: sourceHash ?? null,
-            sie_type: imp.sie_type,
-            fiscal_year_start: imp.fiscal_year_start,
-            fiscal_year_end: imp.fiscal_year_end,
-            imported_at: imp.imported_at,
-            status: 'missing',
-            zip_file_name: null,
-            error: err instanceof Error ? err.message : 'Unknown error',
-          })
+        const source = {
+          import_id: imp.id,
+          filename: imp.filename,
+          storage_path: storagePath ?? null,
+          sha256_hash: sourceHash ?? null,
+          sie_type: imp.sie_type,
+          fiscal_year_start: imp.fiscal_year_start,
+          fiscal_year_end: imp.fiscal_year_end,
+          imported_at: imp.imported_at,
         }
+        const missing = (error: string): SieSourceManifestEntry =>
+          ({ ...source, status: 'missing', zip_file_name: null, error })
+
+        if (original?.format === 'original_bytes' &&
+          (!sourceHash || !/^[a-f0-9]{64}$/.test(sourceHash) ||
+            storagePath !== `${companyId}/sie-originals/${sourceHash}.se`)) {
+          manifest.push(missing('Invalid original SIE source reference'))
+          continue
+        }
+        // Archive generation uses a service-role client. Both legacy rows
+        // and submitted job manifests can contain caller-supplied paths.
+        // Accept only the object identities our import writers generate.
+        // Before multi-tenancy, the writer used the persisted user id as
+        // its prefix. Keep that exact path bound to this retained import id.
+        if (original?.format !== 'original_bytes' &&
+          storagePath !== `${companyId}/${imp.id}.se` &&
+          (!imp.user_id || storagePath !== `${imp.user_id}/${imp.id}.se`) &&
+          (!imp.file_hash || !/^[a-f0-9]{64}$/.test(imp.file_hash) ||
+            storagePath !== `${companyId}/sie-jobs/${imp.file_hash}.se`)) {
+          manifest.push(missing('Invalid SIE source reference'))
+          continue
+        }
+
+        // Entered as downloaded and replaced if the read fails (writeDocuments).
+        const index = manifest.push({ ...source, status: 'downloaded', zip_file_name: zipFileName }) - 1
+        files.push({
+          path: zipFileName,
+          read: storageRead(
+            () => supabase.storage.from('sie-files').download(storagePath!),
+            (error) => { manifest[index] = missing(error) },
+            original?.format === 'original_bytes'
+              ? (bytes) => {
+                if (createHash('sha256').update(Buffer.from(bytes)).digest('hex') !== sourceHash) {
+                  throw new Error('Original SIE source checksum mismatch')
+                }
+              }
+              : undefined,
+          ),
+        })
       }
 
-      originalFolder.file('manifest.json', JSON.stringify(manifest, null, 2))
+      addStorageFiles(originalFolder, files)
+      originalFolder.file('manifest.json', async () => JSON.stringify(manifest, null, 2))
     }
 
     // Paged on a unique order: without one a page boundary can repeat or
@@ -1733,11 +1760,11 @@ async function fetchChildTableRows(
  * without this dump, critical for disaster recovery of a company's state.
  */
 async function writeMasterData(
-  zip: JSZip,
+  zip: ArchiveFolder,
   supabase: SupabaseClient,
   companyId: string
 ): Promise<void> {
-  const data = zip.folder('data')!
+  const data = zip.folder('data')
 
   // Sequential on purpose: ~50 fast queries in series are gentler on
   // PostgREST than 50 concurrent ones, and the deterministic order keeps the

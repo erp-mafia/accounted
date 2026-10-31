@@ -32,7 +32,6 @@
     "src/app/api/pending-operations/bulk-commit/__tests__/route.test.ts": 11,
     "src/app/api/pending-operations/bulk-reject/__tests__/route.test.ts": 10,
     "src/app/api/reports/bokslutsbilagor/__tests__/route.test.ts": 8,
-    "src/app/api/reports/full-archive/__tests__/route.test.ts": 11,
     "src/app/api/rot-rut/__tests__/routes.test.ts": 13,
     "src/app/api/rot-rut/beslut/__tests__/route.test.ts": 4,
     "src/app/api/settings/api-keys/__tests__/route.test.ts": 6,
