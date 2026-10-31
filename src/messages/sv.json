@@ -3639,7 +3639,9 @@
     "printed_iban_other_account": "Fakturor visar IBAN …{last4} på {account}, men det är kontot {other}.",
     "printed_iban_use_own": "Använd kontots egen IBAN",
     "printed_iban_edit": "Redigera kontot",
-    "printed_iban_more": "+{count} till"
+    "printed_iban_more": "+{count} till",
+    "printed_account_number_other_account": "Fakturor visar kontonummer …{last4} på {account}, men det är kontot {other}.",
+    "printed_account_number_use_own": "Använd kontots eget kontonummer"
   },
   "settings_period_locking": {
     "heading": "Periodlåsning",

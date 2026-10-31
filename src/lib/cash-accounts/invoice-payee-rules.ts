@@ -11,6 +11,8 @@ import {
   summarizeInvoicePaymentAccount,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { paymentDetailsPointAt } from '@/lib/cash-accounts/ledger-slots'
+import { resolveDomesticBankAccount } from '@/lib/bankgiro/domestic-account'
 
 /** A cash account's payee columns: the InvoicePaymentAccount keys, with the printed IBAN in payee_iban. */
 export type CashAccountPayeeSource = Omit<CashAccountPayeeFields, 'iban'> & { payee_iban: string | null }
@@ -124,6 +126,64 @@ export function accountsPrintingOtherAccountIban(accounts: readonly CashAccount[
     if (!other) return []
     return [{ account, other, printedIban, ownIban: ownIdentity && IBAN_SHAPE.test(ownIdentity) ? ownIdentity : null }]
   })
+}
+
+/** An account whose invoices print another of the company's accounts' clearing and account number. */
+export interface PrintedNumberOfOtherAccount {
+  account: CashAccount
+  /** The account whose bank identity (IBAN or BBAN) the printed number is. */
+  other: CashAccount
+  /** The printed account number, digits only. */
+  printedAccountNumber: string
+  /**
+   * The account's own account number when its BBAN is the printed clearing
+   * number followed by a payable account number: printing it is the
+   * one-click fix. Null when only editing the account can fix it (a BBAN
+   * without the clearing number, or with another clearing number).
+   */
+  ownAccountNumber: string | null
+}
+
+/**
+ * The accounts shown on invoices whose clearing and account number point at
+ * another of the company's accounts and not at their own, in list order: the
+ * same fault as accountsPrintingOtherAccountIban, for the domestic number.
+ * Two accounts the bank names alike get each other's numbers typed in, and
+ * customers then pay into the wrong one. Computed from the rows the page
+ * already loads; nothing is stored.
+ */
+export function accountsPrintingOtherAccountNumber(accounts: readonly CashAccount[]): PrintedNumberOfOtherAccount[] {
+  return accounts.flatMap((account) => {
+    if (!account.invoice_payee) return []
+    const printed = { clearing_number: account.clearing_number, account_number: account.account_number }
+    if (paymentDetailsPointAt(printed, account)) return []
+    const other = accounts.find((candidate) => candidate.id !== account.id && paymentDetailsPointAt(printed, candidate))
+    if (!other) return []
+    return [{
+      account,
+      other,
+      printedAccountNumber: digitsOf(account.account_number),
+      ownAccountNumber: ownAccountNumberFromBban(account),
+    }]
+  })
+}
+
+/**
+ * The account number in the account's BBAN after the printed clearing
+ * number, when the two together name a payable account. Swedish BBANs come
+ * as clearing plus account number, as the account number alone, or padded,
+ * so anything else is left to the user.
+ */
+function ownAccountNumberFromBban(account: Pick<CashAccount, 'bban' | 'clearing_number'>): string | null {
+  const bban = digitsOf(account.bban)
+  const clearing = digitsOf(account.clearing_number)
+  if (!clearing || !bban.startsWith(clearing)) return null
+  const accountNumber = bban.slice(clearing.length)
+  return resolveDomesticBankAccount(clearing, accountNumber).ok ? accountNumber : null
+}
+
+function digitsOf(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D/g, '')
 }
 
 function compactIban(value: string | null | undefined): string | null {
