@@ -30,3 +30,48 @@ export function fileResponse(body: BodyInit, options: FileResponseOptions): Next
   }
   return new NextResponse(body, { status: 200, headers })
 }
+
+export interface StreamedBodyHooks {
+  /** The last byte went out. */
+  onEnd?: (bytes: number) => void
+  /** The source failed part way: the response is cut off and the client sees a failed download. */
+  onError?: (error: unknown, bytes: number) => void
+  /** The client went away before the end. */
+  onCancel?: (bytes: number) => void
+}
+
+/**
+ * A response body read from `chunks` only as fast as the client takes it,
+ * for a file too large to build in memory first (the complete archive). The
+ * next chunk is asked for once the previous one has been handed on, so a slow
+ * client holds the source back instead of filling memory, and a client that
+ * leaves ends the source.
+ */
+export function streamedBody(
+  chunks: AsyncIterable<Uint8Array>,
+  hooks: StreamedBodyHooks = {},
+): ReadableStream<Uint8Array> {
+  const source = chunks[Symbol.asyncIterator]()
+  let bytes = 0
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await source.next()
+        if (next.done) {
+          controller.close()
+          hooks.onEnd?.(bytes)
+          return
+        }
+        bytes += next.value.byteLength
+        controller.enqueue(next.value)
+      } catch (error) {
+        hooks.onError?.(error, bytes)
+        controller.error(error)
+      }
+    },
+    async cancel() {
+      hooks.onCancel?.(bytes)
+      await source.return?.(undefined)
+    },
+  })
+}

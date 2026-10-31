@@ -2214,8 +2214,6 @@ export interface ArchiveEstimate {
   total_bytes: number
   document_bytes: number
   document_count: number
-  size_limit_bytes: number
-  within_limit: boolean
 }
 
 // VAT validation response

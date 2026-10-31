@@ -34,8 +34,11 @@ vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+// generateFullArchive is mocked too, so the case below that pins #142 runs
+// unchanged against the route before streaming (where it answered 413).
 vi.mock('@/lib/reports/full-archive-export', () => ({
   generateFullArchive: vi.fn(),
+  streamFullArchive: vi.fn(),
   estimateArchiveSize: vi.fn(),
 }))
 
@@ -45,12 +48,21 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import {
   generateFullArchive,
+  streamFullArchive,
   estimateArchiveSize,
 } from '@/lib/reports/full-archive-export'
-import { GET } from '../route'
+import { GET as routeGET } from '../route'
 
+const GET = (request: Request) => routeGET(request, { params: Promise.resolve({}) })
 const mockGenerate = vi.mocked(generateFullArchive)
+const mockStream = vi.mocked(streamFullArchive)
 const mockEstimate = vi.mocked(estimateArchiveSize)
+
+const GIB = 1024 * 1024 * 1024
+
+async function* chunks(...parts: string[]): AsyncGenerator<Uint8Array> {
+  for (const part of parts) yield new TextEncoder().encode(part)
+}
 
 function authed() {
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
@@ -100,7 +112,7 @@ describe('GET /api/reports/full-archive', () => {
     })
     expect(createServiceClientMock).not.toHaveBeenCalled()
     expect(mockEstimate).not.toHaveBeenCalled()
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockStream).not.toHaveBeenCalled()
   })
 
   it('rejects when the verified user is not a member of the selected company', async () => {
@@ -116,7 +128,7 @@ describe('GET /api/reports/full-archive', () => {
     expect(status).toBe(403)
     expect(body.error.code).toBe('FORBIDDEN')
     expect(mockEstimate).not.toHaveBeenCalled()
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockStream).not.toHaveBeenCalled()
   })
 
   it('returns 500 when the service-role membership verification fails', async () => {
@@ -132,10 +144,10 @@ describe('GET /api/reports/full-archive', () => {
     expect(status).toBe(500)
     expect(body.error.code).toBe('INTERNAL_ERROR')
     expect(mockEstimate).not.toHaveBeenCalled()
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockStream).not.toHaveBeenCalled()
   })
 
-  it('returns estimate-only response when ?estimate=1', async () => {
+  it('returns the size estimate alone when ?estimate=1', async () => {
     mockEstimate.mockResolvedValue({
       total_bytes: 10_000_000,
       document_bytes: 5_000_000,
@@ -147,55 +159,64 @@ describe('GET /api/reports/full-archive', () => {
         searchParams: { estimate: '1', scope: 'all' },
       }),
     )
-    const { status, body } = await parseJsonResponse<{
-      data: {
-        total_bytes: number
-        size_limit_bytes: number
-        within_limit: boolean
-      }
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, number> }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.total_bytes).toBe(10_000_000)
-    expect(body.data.within_limit).toBe(true)
+    // No size limit to report: the download streams.
+    expect(body.data).toEqual({ total_bytes: 10_000_000, document_bytes: 5_000_000, document_count: 7 })
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockEstimate).toHaveBeenCalledWith(archiveSupabase, 'company-1', 'all', undefined)
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockStream).not.toHaveBeenCalled()
   })
 
-  it('returns 413 archive_too_large when estimate exceeds limit', async () => {
-    mockEstimate.mockResolvedValue({
-      total_bytes: 200 * 1024 * 1024,
-      document_bytes: 195 * 1024 * 1024,
-      document_count: 200,
-    })
+  it('answers a failed estimate with the error envelope', async () => {
+    mockEstimate.mockRejectedValue(new Error('database unavailable'))
 
     const response = await GET(
-      createMockRequest('/api/reports/full-archive', {
-        searchParams: { scope: 'all' },
-      })
+      createMockRequest('/api/reports/full-archive', { searchParams: { estimate: '1' } }),
     )
-    const { status, body } = await parseJsonResponse<{
-      error: string
-      size_bytes: number
-      size_limit_bytes: number
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(413)
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    expect(body.error).toBe('archive_too_large')
-    expect(body.size_bytes).toBe(200 * 1024 * 1024)
-    expect(body.size_limit_bytes).toBe(80 * 1024 * 1024)
-    expect(mockGenerate).not.toHaveBeenCalled()
   })
 
-  it('skips 413 when include_documents=false', async () => {
+  // #142: five years of underlag is gigabytes, and the 80 MB cap answered 413
+  // to the one export meant to hold everything.
+  it('streams the archive of a company with gigabytes of underlag instead of refusing it', async () => {
     mockEstimate.mockResolvedValue({
-      total_bytes: 200 * 1024 * 1024,
-      document_bytes: 195 * 1024 * 1024,
-      document_count: 200,
+      total_bytes: 4 * GIB,
+      document_bytes: 4 * GIB - 8 * 1024 * 1024,
+      document_count: 4400,
     })
-    mockGenerate.mockResolvedValue(new ArrayBuffer(1024))
+    mockStream.mockReturnValue(chunks('PK', '-zip-', 'bytes'))
+    mockGenerate.mockResolvedValue(new TextEncoder().encode('PK-zip-bytes').buffer)
+
+    const response = await GET(
+      createMockRequest('/api/reports/full-archive', { searchParams: { scope: 'all' } }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe('application/zip')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(response.headers.get('Content-Disposition')).toMatch(/arkiv_full_company-1_\d{8}\.zip/)
+    expect(await response.text()).toBe('PK-zip-bytes')
+    expect(mockStream).toHaveBeenCalledWith(
+      archiveSupabase,
+      'company-1',
+      { scope: 'all', include_documents: true },
+    )
+    // The download needs no estimate: nothing is refused on size.
+    expect(mockEstimate).not.toHaveBeenCalled()
+    expect(mockLogInfo).toHaveBeenCalledWith('full archive generated', expect.objectContaining({
+      filename: expect.stringMatching(/^arkiv_full_company-1_\d{8}\.zip$/),
+      sizeBytes: 12,
+    }))
+  })
+
+  it('passes include_documents=false through', async () => {
+    mockStream.mockReturnValue(chunks('PK'))
 
     const response = await GET(
       createMockRequest('/api/reports/full-archive', {
@@ -204,13 +225,8 @@ describe('GET /api/reports/full-archive', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(mockLogInfo).toHaveBeenCalledWith('full archive generated', expect.objectContaining({
-      filename: expect.stringMatching(/^arkiv_full_company-1_\d{8}\.zip$/),
-      sizeBytes: 1024,
-    }))
-    expect(response.headers.get('Content-Type')).toBe('application/zip')
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    expect(mockGenerate).toHaveBeenCalledWith(
+    await response.arrayBuffer()
+    expect(mockStream).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       expect.objectContaining({ scope: 'all', include_documents: false })
@@ -218,17 +234,12 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('defaults to scope=all when no params given', async () => {
-    mockEstimate.mockResolvedValue({
-      total_bytes: 1_000_000,
-      document_bytes: 500_000,
-      document_count: 2,
-    })
-    mockGenerate.mockResolvedValue(new ArrayBuffer(1024))
+    mockStream.mockReturnValue(chunks('PK'))
 
     const response = await GET(createMockRequest('/api/reports/full-archive'))
 
     expect(response.status).toBe(200)
-    expect(mockGenerate).toHaveBeenCalledWith(
+    expect(mockStream).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       expect.objectContaining({ scope: 'all' })
@@ -236,12 +247,7 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('uses scope=period when period_id is provided without explicit scope', async () => {
-    mockEstimate.mockResolvedValue({
-      total_bytes: 1_000_000,
-      document_bytes: 500_000,
-      document_count: 2,
-    })
-    mockGenerate.mockResolvedValue(new ArrayBuffer(1024))
+    mockStream.mockReturnValue(chunks('PK'))
 
     const response = await GET(
       createMockRequest('/api/reports/full-archive', {
@@ -250,7 +256,8 @@ describe('GET /api/reports/full-archive', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(mockGenerate).toHaveBeenCalledWith(
+    expect(response.headers.get('Content-Disposition')).toContain('arkiv_period-1.zip')
+    expect(mockStream).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       expect.objectContaining({ scope: 'period', period_id: 'period-1' })
@@ -267,26 +274,58 @@ describe('GET /api/reports/full-archive', () => {
     expect(status).toBe(400)
     expect(body).toEqual({ error: 'period_id is required when scope=period' })
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockStream).not.toHaveBeenCalled()
     expect(mockEstimate).not.toHaveBeenCalled()
   })
 
-  it('returns 404 when generate throws "not found"', async () => {
-    mockEstimate.mockResolvedValue({
-      total_bytes: 1_000_000,
-      document_bytes: 500_000,
-      document_count: 2,
-    })
-    mockGenerate.mockRejectedValue(new Error('Fiscal period not found'))
+  it('cuts the download off and logs it when the archive fails part way', async () => {
+    mockStream.mockReturnValue((async function* () {
+      yield new TextEncoder().encode('PK')
+      throw new Error('Fiscal period not found')
+    })())
 
     const response = await GET(
       createMockRequest('/api/reports/full-archive', {
         searchParams: { scope: 'period', period_id: 'nope' },
       }),
     )
-    const { status, body } = await parseJsonResponse(response)
-    expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+
+    // The headers went out first; the failure can only end the body early,
+    // which the browser reports as a failed download.
+    expect(response.status).toBe(200)
+    await expect(response.arrayBuffer()).rejects.toThrow('Fiscal period not found')
+    expect(mockLogError).toHaveBeenCalledWith(
+      'full archive generation failed',
+      expect.objectContaining({ message: 'Fiscal period not found' }),
+      expect.objectContaining({ companyId: 'company-1', scope: 'period', bytesSent: 2 }),
+    )
+    expect(mockLogInfo).not.toHaveBeenCalledWith('full archive generated', expect.anything())
+  })
+
+  it('stops reading the archive when the client goes away', async () => {
+    let closed = false
+    let reads = 0
+    mockStream.mockReturnValue((async function* () {
+      try {
+        for (;;) {
+          reads++
+          yield new Uint8Array(1024)
+        }
+      } finally {
+        closed = true
+      }
+    })())
+
+    const response = await GET(createMockRequest('/api/reports/full-archive'))
+    const reader = response.body!.getReader()
+    await reader.read()
+    await reader.cancel()
+
+    expect(closed).toBe(true)
+    // Read only as far as the client took it, one chunk ahead at most.
+    expect(reads).toBeLessThanOrEqual(3)
+    expect(mockLogInfo).toHaveBeenCalledWith('full archive download cancelled', expect.objectContaining({
+      companyId: 'company-1',
+    }))
   })
 })

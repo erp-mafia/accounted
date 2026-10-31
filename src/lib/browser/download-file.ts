@@ -130,6 +130,25 @@ export function saveBlobToDisk(blob: Blob, filename: string): void {
   }
 }
 
+/**
+ * Hand a same-origin URL to the browser's own download manager instead of
+ * reading it into the tab: for a streamed file too large to hold in memory
+ * (the complete archive runs to gigabytes). The browser writes it straight to
+ * disk, shows the progress and keeps the server's filename. What it cannot do
+ * is hand a refusal back to the page, so callers learn about access first
+ * (the archive dialog's size request answers the same authorization).
+ */
+export function startBrowserDownload(url: string): void {
+  const a = document.createElement('a')
+  a.href = url
+  // Empty: save under the name the response's Content-Disposition gives.
+  a.download = ''
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 export async function downloadFile({
   url,
   filename,
