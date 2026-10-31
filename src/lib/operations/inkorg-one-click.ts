@@ -102,9 +102,10 @@ import { factsFromLines, matchBookingReviewRules, type BookingReviewRule } from 
 /** Whether a booking review rule matches the plan's lines and its bank row (or supplier). */
 function planBlocked(lines: readonly OneClickLine[], review: OneClickInput['bookingReview']): boolean {
   if (!review || review.rules.length === 0) return false
-  const facts = factsFromLines(lines, [
-    { counterpartyKey: review.counterpartyKey, amountSek: review.amountSek === null ? Number.POSITIVE_INFINITY : Math.abs(review.amountSek) },
-  ])
+  const amountSek = review.amountSek === null ? Number.POSITIVE_INFINITY : Math.abs(review.amountSek)
+  // The supplier card's name too: the database keys a registered invoice by it.
+  const keys = new Set([review.counterpartyKey, review.supplierKey || review.counterpartyKey])
+  const facts = factsFromLines(lines, [...keys].map((counterpartyKey) => ({ counterpartyKey, amountSek })))
   return matchBookingReviewRules(review.rules, facts).length > 0
 }
 
@@ -172,6 +173,8 @@ export interface OneClickBankRow {
 /** The supplier card the item is matched to, by the item or by its identity. */
 export interface OneClickSupplier {
   id: string
+  /** The card's name: what a booking review rule keys a registered invoice by. */
+  name?: string | null
   supplierType: string | null
   defaultExpenseAccount: string | null
   paymentTermsDays: number | null
@@ -205,11 +208,11 @@ export interface OneClickInput {
   /**
    * The company's booking review rules (accounted#130 step 2) and what they
    * judge besides the plan's lines: the counterparty of the bank row (else
-   * of the supplier the document names) and the bank row's kronor amount
-   * (null when unknown, which meets any amount criterion). A match opens
-   * the editor.
+   * of the supplier the document names), the matched supplier card's name
+   * (supplierKey, accounted#145) and the bank row's kronor amount (null when
+   * unknown, which meets any amount criterion). A match opens the editor.
    */
-  bookingReview?: { rules: BookingReviewRule[]; counterpartyKey: string; amountSek: number | null }
+  bookingReview?: { rules: BookingReviewRule[]; counterpartyKey: string; supplierKey?: string; amountSek: number | null }
   /** Where the seller is, as the person answered; read only when the document names no country. */
   sellerRegionAnswer: SellerRegion | null
   /** SEK per unit of the invoice's currency on its date (a register path in a foreign currency). */

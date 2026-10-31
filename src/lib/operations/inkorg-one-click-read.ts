@@ -81,15 +81,16 @@ async function readTransaction(supabase: SupabaseClient, companyId: string, id: 
 async function readSupplier(supabase: SupabaseClient, companyId: string, id: string): Promise<OneClickSupplier | null> {
   const { data, error } = await supabase
     .from('suppliers')
-    .select('id, supplier_type, default_expense_account, default_payment_terms, archived_at')
+    .select('id, name, supplier_type, default_expense_account, default_payment_terms, archived_at')
     .eq('id', id)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw error
-  const row = data as { id: string; supplier_type: string | null; default_expense_account: string | null; default_payment_terms: number | null; archived_at: string | null } | null
+  const row = data as { id: string; name?: string | null; supplier_type: string | null; default_expense_account: string | null; default_payment_terms: number | null; archived_at: string | null } | null
   if (!row || row.archived_at) return null
   return {
     id: row.id,
+    name: row.name ?? null,
     supplierType: row.supplier_type ?? null,
     defaultExpenseAccount: row.default_expense_account ?? null,
     paymentTermsDays:
@@ -265,6 +266,8 @@ export async function readOneClickInput(
         counterpartyKey:
           (transaction ? grantCounterpartyKey(transaction.merchant_name, transaction.original_description, transaction.description) : '') ||
           grantCounterpartyKey(supplierName, null, null),
+        // The card the invoice is registered on: the matched one, else the one the plan creates from the reading.
+        supplierKey: grantCounterpartyKey(supplier?.name || supplierName, null, null),
         amountSek: bank?.amountSek ?? null,
       },
       sellerRegionAnswer: answers.sellerRegion ?? null,

@@ -14,6 +14,11 @@ import type { PendingOperation, SupplierInvoice, SupplierInvoiceItem } from '@/t
 
 // suggestion_log records each inbox decision; its reads and writes are
 // covered in lib/suggestion-log, not by this file's queued client.
+// The hard-block gate reads the company's blocks before the claim; this company has none.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
 vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
   snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({

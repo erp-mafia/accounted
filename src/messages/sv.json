@@ -10413,7 +10413,8 @@
       "toast_always_review_off": "Regeln kan bokföras med ett klick",
       "blocks": {
         "title": "Spärrar",
-        "lead": "En bokning som en spärr träffar bokförs aldrig med ett klick, i en massbokning, av en regel för automatisk bokföring eller av en agent. En person bokför den från granskningen.",
+        "lead": "Spärrar gäller bankrader, leverantörsfakturor och underlag i inkorgen. En bokning som en spärr träffar bokförs aldrig med ett klick, i en massbokning, av en regel för automatisk bokföring eller av en agent. En person bokför den från granskningen.",
+        "notice_registration": "Fakturan träffar spärren {block}{others, plural, =0 {} one { och en spärr till} other { och # spärrar till}}, så den bokförs bara när en person bekräftar den, som du gör här.",
         "add": "Lägg till spärr",
         "th_block": "Spärr",
         "th_added": "Tillagd",

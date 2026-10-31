@@ -53,7 +53,7 @@ import type { PendingOperation } from '@/types'
 import { grantsEnabled } from './flag'
 import { SILENT_GRANT_REFUSALS } from './types'
 import { toError } from '@/lib/errors/to-error'
-import { operationBookingReview } from '@/lib/booking-review/operation-gate'
+import { stagedBookingReview } from '@/lib/pending-operations/staged-booking-review'
 
 /** The credential that staged the operation, as the staging door validated it. */
 export interface GrantCredential {
@@ -145,7 +145,7 @@ export async function applyCompanyGrant(
     .eq('id', operationId)
     .eq('company_id', companyId)
     .maybeSingle()
-  if (staged && (await operationBookingReview(supabase, companyId, staged as Pick<PendingOperation, 'operation_type' | 'params' | 'preview_data'>))) {
+  if (staged && (await stagedBookingReview(supabase, companyId, staged as Pick<PendingOperation, 'operation_type' | 'params' | 'preview_data'>))) {
     log.info('grant did not apply: a booking review rule matches', { operationId })
     return { applied: false, reason: 'booking_review_rule' }
   }

@@ -21,12 +21,12 @@ import { isAccountNumber } from '@/lib/invariants'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { BOOKING_REVIEW_VAT_CLASSES, type BookingReviewRule, type BookingReviewVatClass } from '@/lib/booking-review/match'
 
-interface BlocksPayload {
+export interface BlocksPayload {
   rules: BookingReviewRule[]
   canManage: boolean
 }
 
-async function fetchBlocks(url: string): Promise<BlocksPayload> {
+export async function fetchBlocks(url: string): Promise<BlocksPayload> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`${url} ${res.status}`)
   const json = (await res.json()) as { data?: BookingReviewRule[]; can_manage?: boolean }

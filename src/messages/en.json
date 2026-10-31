@@ -10413,7 +10413,8 @@
       "toast_always_review_off": "The rule can book with one click",
       "blocks": {
         "title": "Blocks",
-        "lead": "A booking a block matches is never booked with one click, in a bulk booking, by a rule for automatic booking or by an agent. A person books it from its review.",
+        "lead": "Blocks apply to bank rows, supplier invoices and documents in the inbox. A booking a block matches is never booked with one click, in a bulk booking, by a rule for automatic booking or by an agent. A person books it from its review.",
+        "notice_registration": "This invoice meets the block {block}{others, plural, =0 {} one { and one more block} other { and # more blocks}}, so it is booked only when a person confirms it, as you do here.",
         "add": "Add block",
         "th_block": "Block",
         "th_added": "Added",

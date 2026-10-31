@@ -7,7 +7,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { Transaction } from '@/types'
-import { bankRowFacts, factsFromLines, matchBookingReviewRules, type BookingReviewRule, type MatchedBookingReviewRule } from './match'
+import {
+  bankRowFacts,
+  factsFromLines,
+  grantCounterpartyKey,
+  matchBookingReviewRules,
+  type BookingReviewRule,
+  type MatchedBookingReviewRule,
+} from './match'
 import { loadActiveBookingReviewRules } from './rules'
 
 type BankRow = Pick<Transaction, 'merchant_name' | 'description' | 'amount' | 'amount_sek'> & { original_description?: string | null }
@@ -29,4 +36,46 @@ export async function matchBookingOfRows(
 /** Whether the commit actor is a person booking from the review: what a matched booking needs. */
 export function isPersonReview(actor: CommitActor | undefined): boolean {
   return actor?.type === 'user' && !actor.withoutReview
+}
+
+/** A supplier invoice as a settlement without a person reads it, with its supplier and items. */
+type SettledInvoice = {
+  registration_journal_entry_id?: string | null
+  total: number | string
+  total_sek?: number | string | null
+  exchange_rate?: number | string | null
+  supplier?: { name?: string | null } | null
+  items?: ReadonlyArray<{ account_number?: string | null; accrual_balance_account?: string | null }> | null
+}
+
+/**
+ * Whether settling this supplier invoice without a person may book what a
+ * block holds (accounted#145). Only a settlement that books the purchase
+ * itself can: an invoice with no registration verifikat (kontantmetoden, or
+ * deferred booking registered first). Judged on the supplier and the bank
+ * row, the invoice amount and the items' accounts, with its VAT unknown, so
+ * any VAT criterion counts as met. A door that runs without a person (a bank
+ * payment order's own debit) leaves such a settlement to a person instead of
+ * drafting a verifikat commit_journal_entry refuses on every run.
+ */
+export async function unattendedSettlementMayMatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SettledInvoice,
+  row: BankRow,
+): Promise<boolean> {
+  if (invoice.registration_journal_entry_id) return false
+  const rules = await loadActiveBookingReviewRules(supabase, companyId)
+  if (rules.length === 0) return false
+  const amountSek = Math.abs(Number(invoice.total_sek ?? Number(invoice.total) * (Number(invoice.exchange_rate) || 1)) || 0)
+  const accounts = new Set<string>()
+  for (const item of invoice.items ?? []) {
+    for (const account of [item.account_number, item.accrual_balance_account]) if (account) accounts.add(account)
+  }
+  const matched = matchBookingReviewRules(rules, {
+    accounts: [...accounts],
+    bankRows: [bankRowFacts(row), { counterpartyKey: grantCounterpartyKey(invoice.supplier?.name, null, null), amountSek }],
+    vatClasses: null,
+  })
+  return matched.length > 0
 }

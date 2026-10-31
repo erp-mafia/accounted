@@ -4,15 +4,17 @@
  * A booking review rule (booking_review_rules, migration 20261031150000)
  * names what a person always reviews before it is booked: accounts, a
  * counterparty, an amount from, a VAT treatment, or any mix. A booking of a
- * bank row matches when every criterion the rule sets matches:
+ * purchase (BOOKING_REVIEW_SOURCES: a bank row, a supplier invoice, an
+ * Inkorg underlag) matches when every criterion the rule sets matches:
  *
  *   accounts         the verifikat touches any of them;
- *   counterparty     a bank row it books has this counterparty identity
+ *   counterparty     a party it books (a bank row, the supplier invoice's
+ *                    supplier, the underlag's seller) has this identity
  *                    (grantCounterpartyKey, the identity grants are keyed by);
- *   amount from      that same bank row moves at least this much, in SEK;
+ *   amount from      that same party moves at least this much, in SEK;
  *   VAT treatment    the verifikat's VAT lines carry it (vatClassesFromLines).
  *
- * The counterparty and the amount are judged on one bank row together, so a
+ * The counterparty and the amount are judged on one party together, so a
  * samlingsverifikat matches when one of its rows does.
  *
  * Pure and isomorphic. Mirrored in SQL by booking_review_entry_matches and
@@ -21,7 +23,7 @@
  * tests/pg/booking-review-rules.pg.test.ts pins the two together.
  */
 import { namesCounterparty, normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import type { VatTreatment } from '@/types'
+import type { JournalEntrySourceType, VatTreatment } from '@/types'
 import { bookingVatRole } from '@/lib/vat/moms-box-mapping'
 import { roundOre } from '@/lib/money'
 
@@ -46,6 +48,74 @@ export interface BookingReviewRule {
   revoked_at: string | null
   revoked_by: string | null
   revoked_reason: 'archived' | 'superseded' | null
+}
+
+/**
+ * What a rule judges a journal entry by, per source type: the parties it
+ * books, besides its lines (mirror of booking_review_entry_matches and
+ * booking_review_entry_parties, migration 20261031231512):
+ *
+ *   bank_rows         the bank rows it books (bank_booking_context); a draft
+ *                     that books none is never matched;
+ *   supplier_invoice  the supplier invoice it registers, or under
+ *                     kontantmetoden pays (then also its bank rows): the
+ *                     supplier card's name and the invoice total in SEK;
+ *   inbox_item        the Inkorg underlag booked without a bank row: its
+ *                     matched supplier and the reading's seller, and the
+ *                     verifikat's gross;
+ *   null              never matched (the reason beside each).
+ *
+ * A Record over every source type: a new one does not compile until someone
+ * decides whether a block holds it.
+ */
+export type BookingReviewSource = 'bank_rows' | 'supplier_invoice' | 'inbox_item'
+
+export const BOOKING_REVIEW_SOURCES: Readonly<Record<JournalEntrySourceType, BookingReviewSource | null>> = {
+  bank_transaction: 'bank_rows',
+  manual: 'bank_rows',
+  supplier_invoice_registered: 'supplier_invoice',
+  supplier_invoice_cash_payment: 'supplier_invoice',
+  inbox_item: 'inbox_item',
+  // The payment of a registered invoice settles a purchase judged when it was
+  // registered: 2440 against the bank, no VAT. Attest governs paying it, and
+  // match_batch_allocate posts it in SQL, where no person's review can stamp.
+  supplier_invoice_paid: null,
+  // The invoice's own registration lines on the other side, judged with it.
+  supplier_credit_note: null,
+  // The company's own issued documents and their payments: the booking follows
+  // the invoice 1:1, and refusing it leaves an issued invoice outside the books.
+  invoice_created: null,
+  invoice_paid: null,
+  invoice_cash_payment: null,
+  credit_note: null,
+  reminder_fee: null,
+  rot_rut_payout: null,
+  rot_rut_reclaim: null,
+  rot_rut_reclassification: null,
+  customer_loss: null,
+  counterparty_setoff: null,
+  collection_settlement: null,
+  stripe_payout: null,
+  webshop_order: null,
+  pos_daily_sales: null,
+  // An utlägg (a supplier invoice paid privately books one too): the claim a
+  // person files, keyed to them, never to a seller.
+  expense_claim: null,
+  supplier_invoice_privately_paid: null,
+  expense_payout: null,
+  salary_payment: null,
+  // Corrections and history: storno and rättelse (BFL 5 kap 5 §), imports.
+  storno: null,
+  correction: null,
+  import: null,
+  opening_balance: null,
+  // Period and year-end mechanics, posted from what is already booked.
+  year_end: null,
+  result_appropriation: null,
+  vat_settlement: null,
+  currency_revaluation: null,
+  accrual: null,
+  system: null,
 }
 
 /** A matched rule as a decision records it. */

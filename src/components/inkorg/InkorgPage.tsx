@@ -352,10 +352,12 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
           setFocusId(id)
           const code = json?.error?.code ?? ''
           // A plan the voucher guard questions opens in the editor too: the
-          // person sees the lines and confirms or corrects them there.
+          // person sees the lines and confirms or corrects them there. So
+          // does a booking a block (Spärr) holds: a person books it there.
           if (
             PERIOD_REFUSALS.has(code) ||
             code === 'VOUCHER_NEEDS_CONFIRMATION' ||
+            code === 'BOOKING_REVIEW_REQUIRED' ||
             (code === 'INKORG_BOOKING_NEEDS_ANSWER' && json?.error?.details?.ask === 'editor')
           ) {
             setEditorRequest({ itemId: id, nonce: Date.now() })

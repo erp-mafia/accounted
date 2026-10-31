@@ -346,7 +346,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     // supplier invoices, so a company never has one without the other).
     dependsOn: ['bank-feed'],
     layer: 'integration',
-    uses: ['deadlines', 'skatteverket', 'vat'],
+    // A payment order's own debit asks whether a block (Spärr) holds what it would book.
+    uses: ['deadlines', 'skatteverket', 'transactions', 'vat'],
     libFolders: ['payments'],
     operationPrefixes: [
       'payments',
