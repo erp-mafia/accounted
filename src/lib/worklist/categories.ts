@@ -51,6 +51,7 @@ import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord }
 import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
+import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import type {
   BankSwitchDue,
@@ -58,6 +59,7 @@ import type {
   ExpensePayoutDue,
   InvoiceSetAllocation,
   OverdueInvoicesDue,
+  PaymentFailedDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -1562,6 +1564,25 @@ export async function listSupplierPayeeChangesDue(
 /** How many supplier invoices wait for a decision on their bank details (see listSupplierPayeeChangesDue). */
 export async function countSupplierPayeeChangesDue(supabase: SupabaseClient, companyId: string): Promise<number> {
   return (await listSupplierPayeeChangesDue(supabase, companyId)).length
+}
+
+/**
+ * Supplier invoices whose newest bank payment the bank rejected or that
+ * failed, still to pay (see lib/worklist/types.ts payment_failed): one row
+ * each, most pressing due date first. Soft-fails to none.
+ */
+export async function listPaymentsFailedDue(supabase: SupabaseClient, companyId: string): Promise<PaymentFailedDue[]> {
+  try {
+    return await listInvoicesAfterFailedPayment(supabase, companyId)
+  } catch (err) {
+    logAndZero('payment_failed', companyId, err)
+    return []
+  }
+}
+
+/** How many supplier invoices wait to be paid again after their bank payment did not go through (see listPaymentsFailedDue). */
+export async function countPaymentsFailedDue(supabase: SupabaseClient, companyId: string): Promise<number> {
+  return (await listPaymentsFailedDue(supabase, companyId)).length
 }
 
 /** How many of one person's pending signer rows a list reads; nobody has more open at once. */

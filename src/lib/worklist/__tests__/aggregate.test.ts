@@ -35,6 +35,7 @@ vi.mock('../categories', () => ({
   countPaymentsVerificationDue: vi.fn().mockResolvedValue(0),
   countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
   countDocumentsToSign: vi.fn().mockResolvedValue(0),
+  countPaymentsFailedDue: vi.fn().mockResolvedValue(0),
 }))
 
 vi.mock('@/lib/suggestions/list', () => ({
@@ -93,7 +94,22 @@ describe('getWorklistCounts', () => {
       payments_verification_renewal: 0,
       supplier_payee_change: 0,
       documents_to_sign: 0,
+      payment_failed: 0,
     })
+  })
+
+  it('counts the invoices whose bank payment did not go through into the total, and takes the count from a caller-supplied list', async () => {
+    const { countPaymentsFailedDue } = await import('../categories')
+    vi.mocked(countPaymentsFailedDue).mockResolvedValueOnce(2)
+    const first = await getWorklistCounts(supabase, 'company-1')
+    expect(first.counts.payment_failed).toBe(2)
+    expect(first.total).toBe(33)
+    expect(countPaymentsFailedDue).toHaveBeenCalledWith(supabase, 'company-1')
+    vi.mocked(countPaymentsFailedDue).mockClear()
+    const second = await getWorklistCounts(supabase, 'company-1', { paymentsFailedDue: Promise.resolve([{ payment_order_id: 'o1' }] as never[]) })
+    expect(second.counts.payment_failed).toBe(1)
+    expect(second.total).toBe(32)
+    expect(countPaymentsFailedDue).not.toHaveBeenCalled()
   })
 
   it('says where the company\'s inbox lives: the new Inkorg in the rollout, else the workspace', async () => {

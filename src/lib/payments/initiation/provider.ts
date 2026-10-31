@@ -93,6 +93,12 @@ export interface ProviderPaymentState {
    * PSU-ID, not in its online bank. Absent when the bank does not say so.
    */
   secondSignatureViaApi?: boolean
+  /**
+   * Why the bank refused the payment, as a code (PSU_RIGHTS_MISSING), when
+   * the status is rejected or failed and the provider said. Kept on the order
+   * as provider_error_code. Absent otherwise.
+   */
+  refusalCode?: string
 }
 
 export interface CreatedPayment extends ProviderPaymentState {

@@ -111,3 +111,38 @@ export async function resolveCompanyAdminEmails(supabase: SupabaseClient, compan
   }
   return [...emails]
 }
+
+/**
+ * The emails of several people, each only while an active member of the
+ * company: resolveMemberEmail for a batch (the payment failed mail tells
+ * everyone behind one payment). Keyed by user id; someone who is not a
+ * member, whose account is deleted or who has no profile email is left out.
+ * Same two-query shape and service-role requirement. Best-effort: a failed
+ * read logs and resolves to nobody.
+ */
+export async function resolveMemberEmails(supabase: SupabaseClient, companyId: string, userIds: readonly string[]): Promise<Map<string, string>> {
+  const emails = new Map<string, string>()
+  if (userIds.length === 0) return emails
+  const { data: members, error: memberError } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .in('user_id', [...userIds])
+  if (memberError) {
+    log.warn('could not read company members for notification recipients', { companyId, error: memberError.message })
+    return emails
+  }
+  const memberIds = [...new Set(((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id))]
+  if (memberIds.length === 0) return emails
+
+  const { data: profiles, error: profileError } = await supabase.from('profiles').select('id, email, deleted_at').in('id', memberIds)
+  if (profileError) {
+    log.warn('could not read profile emails for notification recipients', { companyId, error: profileError.message })
+    return emails
+  }
+  for (const profile of (profiles ?? []) as Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    const email = profile.email?.trim()
+    if (!profile.deleted_at && email) emails.set(profile.id, email)
+  }
+  return emails
+}

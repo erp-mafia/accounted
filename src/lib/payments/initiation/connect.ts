@@ -143,13 +143,19 @@ const UNSIGNED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['RCVD', 'PDNG']
  */
 const SECOND_SIGNATURE_VIA_API = 'AUTHORISATION_PENDING_API'
 
-/** The port's state of a payment: the provider's messages, and what they say about a second signature. */
+/**
+ * The port's state of a payment: the provider's messages, what they say
+ * about a second signature, and, for a refused payment, the first of them as
+ * the reason (Open Payments answers RJCT with the reason code as its message).
+ */
 function paymentState(state: { providerStatus: string; status: ProviderPaymentState['status']; messages: string[] }): ProviderPaymentState {
+  const refused = state.status === 'rejected' || state.status === 'failed'
   return {
     providerStatus: state.providerStatus,
     status: state.status,
     messages: state.messages,
     ...(state.messages.includes(SECOND_SIGNATURE_VIA_API) ? { secondSignatureViaApi: true } : {}),
+    ...(refused && state.messages[0] ? { refusalCode: state.messages[0] } : {}),
   }
 }
 

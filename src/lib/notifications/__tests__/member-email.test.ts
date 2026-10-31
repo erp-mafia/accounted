@@ -140,3 +140,53 @@ describe('resolveMemberEmail', () => {
     expect(warnedWith('could not read profile email')).toBe(true)
   })
 })
+
+describe('resolveMemberEmails', () => {
+  function batchSupabase(memberIds: string[], profiles: Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    const asked: Record<string, unknown[]> = {}
+    const chain = (table: string) => {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        in: (_column: string, ids: unknown[]) => {
+          asked[table] = ids
+          return builder
+        },
+        then: (resolve: (v: unknown) => void) =>
+          resolve(
+            table === 'company_members'
+              ? { data: memberIds.map((user_id) => ({ user_id })), error: null }
+              : { data: profiles.filter((p) => (asked.profiles ?? []).includes(p.id)), error: null },
+          ),
+      }
+      return builder
+    }
+    return { supabase: { from: chain } as unknown as SupabaseClient, asked }
+  }
+
+  it('keys each active member to their address, leaving out non-members, deleted accounts and empty addresses', async () => {
+    const { resolveMemberEmails } = await import('../member-email')
+    const { supabase, asked } = batchSupabase(
+      ['u-member', 'u-deleted', 'u-blank'],
+      [
+        { id: 'u-member', email: ' anna@example.se ', deleted_at: null },
+        { id: 'u-deleted', email: 'gone@example.se', deleted_at: '2026-10-01T00:00:00Z' },
+        { id: 'u-blank', email: '  ', deleted_at: null },
+        { id: 'u-former', email: 'former@example.se', deleted_at: null },
+      ],
+    )
+
+    const emails = await resolveMemberEmails(supabase, 'company-1', ['u-member', 'u-deleted', 'u-blank', 'u-former'])
+
+    expect([...emails]).toEqual([['u-member', 'anna@example.se']])
+    // Only members' profiles are read.
+    expect(asked.profiles).toEqual(['u-member', 'u-deleted', 'u-blank'])
+  })
+
+  it('reads nothing for nobody', async () => {
+    const { resolveMemberEmails } = await import('../member-email')
+    const from = vi.fn()
+    expect((await resolveMemberEmails({ from } as unknown as SupabaseClient, 'company-1', [])).size).toBe(0)
+    expect(from).not.toHaveBeenCalled()
+  })
+})

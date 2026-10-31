@@ -11,6 +11,7 @@ import {
   listBankSwitchDue,
   listDocumentsToSign,
   listExpensePayoutsDue,
+  listPaymentsFailedDue,
   listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
@@ -288,6 +289,9 @@ export async function HemPanesSection({
   // And for supplier invoices with bank details nobody approved: one row per
   // invoice, the count is the list's length.
   const supplierPayeeChangesPromise = listSupplierPayeeChangesDue(supabase, companyId)
+  // And for supplier invoices whose bank payment did not go through: one row
+  // per invoice, the count is the list's length.
+  const paymentsFailedPromise = listPaymentsFailedDue(supabase, companyId)
   // And the open suggestions: one Förslag card each (at most three); the
   // count is the list's length.
   const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
@@ -311,6 +315,7 @@ export async function HemPanesSection({
     attestsDue,
     suggestedMatches,
     documentsToSign,
+    paymentsFailed,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -323,6 +328,7 @@ export async function HemPanesSection({
         bankSwitchDue: bankSwitchPromise,
         paymentsVerificationDue: paymentsVerificationPromise,
         supplierPayeeChangesDue: supplierPayeeChangesPromise,
+        paymentsFailedDue: paymentsFailedPromise,
         openSuggestions: openSuggestionsPromise,
         documentsToSign: documentsToSignPromise,
       }),
@@ -344,6 +350,7 @@ export async function HemPanesSection({
       // The several-invoice payments among them get rows of their own.
       suggestedMatchesPromise,
       documentsToSignPromise,
+      paymentsFailedPromise,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -378,6 +385,7 @@ export async function HemPanesSection({
           bankSwitches={bankSwitches}
           paymentsVerification={paymentsVerification}
           supplierPayeeChanges={supplierPayeeChanges}
+          paymentsFailed={paymentsFailed}
           invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
           suggestions={openSuggestions}
           grantReview={grantReview}

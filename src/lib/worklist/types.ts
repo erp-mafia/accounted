@@ -361,9 +361,48 @@ export const WORKLIST_CATEGORIES = [
    * through the mailed link.
    */
   'documents_to_sign',
+  /**
+   * Supplier invoices whose bank payment did not go through ("Betalningen
+   * till {mottagare} gick inte igenom"), one item per invoice, opening the
+   * invoice, where it is paid again. Shown in the Nu band: the supplier is
+   * not paid.
+   * Pending:  the invoice's newest payment_orders row (by created_at) has
+   *           status 'rejected' or 'failed' and the invoice is still payable
+   *           (registered, approved, partially paid or overdue):
+   *           lib/payments/orders/failed-payments.ts
+   *           listInvoicesAfterFailedPayment.
+   * Done:     a newer payment order of the invoice (a new attempt, whatever
+   *           became of it), or the invoice is paid, credited or otherwise
+   *           settled.
+   * The people behind the payment are also mailed once
+   * (lib/payments/orders/outcome-notify.ts).
+   */
+  'payment_failed',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * One supplier invoice whose newest bank payment the bank rejected or that
+ * failed: the Att göra row "Betalningen till {mottagare} gick inte igenom",
+ * opening the invoice.
+ */
+export interface PaymentFailedDue {
+  payment_order_id: string
+  supplier_invoice_id: string
+  /** Who the payment was to (payment_orders.payee_name). */
+  payee_name: string
+  supplier_invoice_number: string | null
+  arrival_number: number | null
+  due_date: string | null
+  amount: number
+  currency: string
+  status: 'rejected' | 'failed'
+  /** The bank's reason code (payment_orders.provider_error_code); null when it gave none. */
+  reason_code: string | null
+  /** When the bank answered (provider_status_at, ISO); null when unknown. */
+  ended_at: string | null
+}
 
 /**
  * One supplier invoice whose stated bank details wait for a person: the Att

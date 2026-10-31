@@ -39,6 +39,9 @@ export async function applyProviderState(
       status: moves ? next : undefined,
       signed_at: moves && (next === 'accepted' || next === 'awaiting_second_signer') ? now : undefined,
       executed_at: moves && next === 'executed' ? now : undefined,
+      // The bank's reason for a refusal is kept on the order, as a refused
+      // create's is (failOrder): Betalningar, Att göra and the mail read it there.
+      provider_error_code: moves ? state.refusalCode : undefined,
     })
     .eq('id', order.id)
     .eq('company_id', order.company_id)
