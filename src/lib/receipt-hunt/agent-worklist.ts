@@ -27,6 +27,7 @@ import { fetchCandidateTransactions } from './hunt'
 import { resolvePortal, type CompanyPortal } from './company-portals'
 import { readCompanyPortals } from './company-portals-read'
 import { FETCH_DATE_WINDOW_DAYS, canHaveEmailReceipt } from './select'
+import { resolveUnderlagElsewhere, type UnderlagElsewhere } from './underlag-elsewhere'
 
 export type AgentWorklistKind = 'verifikat' | 'transaction'
 
@@ -74,6 +75,13 @@ export interface AgentWorklistItem {
    * what was tried.
    */
   next_step: string
+  /**
+   * Set when the verifikat pays an invoice whose underlag is already on the
+   * invoice's own verifikat: stage `document_id` on this one with copy: true
+   * instead of searching mail. A mail search only finds the same invoice
+   * again (crm#1584). Null otherwise, and always for a transaction.
+   */
+  underlag_on: UnderlagElsewhere | null
 }
 
 export interface AgentWorklist {
@@ -218,30 +226,47 @@ function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): stri
 function withSearchHints(
   base: Omit<
     AgentWorklistItem,
-    'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step'
+    'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step' | 'underlag_on'
   >,
   companyPortals: readonly CompanyPortal[],
   lines?: readonly BookedLine[],
+  underlagOn: UnderlagElsewhere | null = null,
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
-  const kind = nextStepKind(descriptor, companyPortals, lines)
-  const mailSearchable = kind !== 'not_mail' && kind !== 'no_purchase'
-  // The company's own portal for the supplier first, then the directory's.
-  const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
   // A payment that settles an invoice opens the window earlier: the invoice was
   // mailed when it was issued, the payment happens on the due date. The window
   // never closes later, because a document dated well after the charge belongs
   // to the next period, not this purchase.
   const settlesInvoice = Boolean(base.invoice_number) || INVOICE_DESCRIPTOR.test(descriptor ?? '')
+  const searchWindow = {
+    search_from: shiftDate(base.date, -(settlesInvoice ? INVOICE_DAYS_BEFORE : FETCH_DATE_WINDOW_DAYS)),
+    search_to: shiftDate(base.date, FETCH_DATE_WINDOW_DAYS),
+  }
+  // The invoice is already in the books: the errand is a copy, not a search.
+  if (underlagOn) {
+    return {
+      ...base,
+      ...searchWindow,
+      mail_searchable: false,
+      portal: null,
+      tip_possible: false,
+      next_step: `Fakturan finns redan på ${underlagOn.voucher} (${underlagOn.entry_date}): koppla en kopia av den till det här verifikatet.`,
+      underlag_on: underlagOn,
+    }
+  }
+  const kind = nextStepKind(descriptor, companyPortals, lines)
+  const mailSearchable = kind !== 'not_mail' && kind !== 'no_purchase'
+  // The company's own portal for the supplier first, then the directory's.
+  const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
   const portalHint = portal ? { vendor: portal.vendor, url: portal.url, note: portal.note } : null
   return {
     ...base,
-    search_from: shiftDate(base.date, -(settlesInvoice ? INVOICE_DAYS_BEFORE : FETCH_DATE_WINDOW_DAYS)),
-    search_to: shiftDate(base.date, FETCH_DATE_WINDOW_DAYS),
+    ...searchWindow,
     mail_searchable: mailSearchable,
     portal: portalHint,
     tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
     next_step: nextStep(kind, portalHint),
+    underlag_on: null,
   }
 }
 
@@ -405,19 +430,21 @@ export async function resolveAgentWorklist(
   const verifikatIds = verifikat.map((v) => v.journal_entry_id)
   const [context, lines] = await Promise.all([
     fetchVerifikatContext(supabase, companyId, verifikatIds),
-    // What each verifikat booked: whether it bought anything at all.
-    fetchLinesByEntryIds<BookedLine & { id: string; journal_entry_id: string }>(
+    // What each verifikat booked: whether it bought anything at all, and
+    // whether it pays an invoice (the credit side of kundfordringar).
+    fetchLinesByEntryIds<PlausibilityLine & { id: string; journal_entry_id: string }>(
       supabase,
       verifikatIds,
-      'account_number, debit_amount',
+      'account_number, debit_amount, credit_amount',
     ),
   ])
-  const linesByEntry = new Map<string, BookedLine[]>()
+  const linesByEntry = new Map<string, PlausibilityLine[]>()
   for (const line of lines) {
     const entryLines = linesByEntry.get(line.journal_entry_id)
     if (entryLines) entryLines.push(line)
     else linesByEntry.set(line.journal_entry_id, [line])
   }
+  const underlagElsewhere = await resolveUnderlagElsewhere(supabase, companyId, verifikat, linesByEntry)
 
   // Ranked on the SEK value: `amount` is in the row's own currency, and a
   // USD 90 subscription must not sort under a 100 kr parking receipt.
@@ -437,7 +464,7 @@ export async function resolveAgentWorklist(
         counterparty: ctx?.counterparty ?? null,
         description: v.description,
         invoice_number: ctx?.invoice_number ?? null,
-      }, companyPortals, linesByEntry.get(v.journal_entry_id)),
+      }, companyPortals, linesByEntry.get(v.journal_entry_id), underlagElsewhere.get(v.journal_entry_id) ?? null),
     })
   }
   for (const tx of transactions) {
