@@ -261,6 +261,11 @@
  *      a coded refusal instead (codedRefusal, badArgument or
  *      fieldValidationError from lib/errors/refusal, with a registry code).
  *      Tracked as a count.
+ *   32. one-definition: a line that writes a business rule by hand when the
+ *      rule already has one definition. One file per rule in
+ *      scripts/checks/one-definition/, each naming its home and why it has
+ *      one. Implementation and rationale in one-definition.mjs. Allowed
+ *      sites may only shrink.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -288,6 +293,7 @@ import { findHandBuiltVoucherRefs } from './hand-built-voucher-ref.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findClientServerOnlyReachers } from './client-server-only.mjs'
 import { findConsentTokenAccess, CONSENT_TOKEN_HINT } from './consent-token-access.mjs'
+import { findOneDefinitionFindings, loadOneDefinitionRules, ONE_DEFINITION_HINT } from './one-definition.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
@@ -1608,6 +1614,23 @@ if (current.clientNodeBuiltins.length) {
 // 1b3a. consent-token-access: provider_consent_tokens read or written outside
 // lib/providers/consent-tokens.ts, the one module that seals the tokens
 // (accounted#58). No baseline: 0 today, any finding is a hard failure.
+const oneDefinition = findOneDefinitionFindings(SOURCE_ROOT, await loadOneDefinitionRules())
+if (oneDefinition.findings.length) {
+  failed = true
+  console.error(`\n✗ one-definition: ${oneDefinition.findings.length} line(s) write a rule that has one definition:`)
+  for (const f of oneDefinition.findings) {
+    console.error(`    ${f.file}:${f.line} (${f.rule})\n      use ${f.home}\n      ${f.why}`)
+  }
+  console.error(ONE_DEFINITION_HINT)
+}
+if (oneDefinition.stale.length) {
+  console.log(
+    `\n✓ one-definition progress: ${oneDefinition.stale.length} allowed site(s) no longer match.` +
+      ' Remove them from `allowed` in the rule file to lock it in:',
+  )
+  oneDefinition.stale.forEach((s) => console.log(`    ${s.rule}: ${s.file}`))
+}
+
 if (current.consentTokenAccess.length) {
   failed = true
   console.error(
