@@ -184,9 +184,10 @@ function linkRefusal(
         },
       }
     default:
-      // NOT_SETTLED (and TRANSACTION_OTHER_ACCOUNT, which cannot happen on
-      // the row's own account): the answer the bank-anchor guard gives the
-      // same pair at the write.
+      // NOT_SETTLED, BANK_ANCHOR_REFUSED (a verifikat that books nothing in
+      // the row's direction, booksDirection) and TRANSACTION_OTHER_ACCOUNT
+      // (which cannot happen on the row's own account): the answer the
+      // bank-anchor guard gives the same pair at the write.
       return { ok: false, code: 'BANK_ANCHOR_SETTLEMENT_CHANGED', details: { reason: prepared.error } }
   }
 }

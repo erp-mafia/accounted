@@ -71,7 +71,7 @@ describe('linkTransactionToJournalEntry: junction-row guard (#1553)', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: base, error: null })
     enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, -800)
     enqueue({ data: null, error: { code, message: 'bank link rejected' } })
     expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
       transactionId: 'tx-1', journalEntryId: 'je-1',
@@ -81,11 +81,24 @@ describe('linkTransactionToJournalEntry: junction-row guard (#1553)', () => {
     expect(supabase.from).not.toHaveBeenCalledWith('payment_match_log')
   })
 
-  it('names a voucher that books the bank ledger the wrong way instead of a generic conflict', async () => {
+  it('names a voucher that books the bank ledger the wrong way before the write, with the way through (crm#1583)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: base, error: null })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueueBankLinkLeg(enqueue) // in debet only, for a payout of 800
+    const outcome = await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-1', journalEntryId: 'je-1',
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'BANK_ANCHOR_SETTLEMENT_CHANGED' })
+    expect(JSON.stringify(outcome)).toContain('bokför inget uttag (kredit) på 1930')
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('names the guard refusing at the write (the verifikat changed since the read) instead of a generic conflict', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: base, error: null })
     enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
-    enqueueBankLinkLeg(enqueue)
+    enqueueBankLinkLeg(enqueue, -800)
     enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
     expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
       transactionId: 'tx-1', journalEntryId: 'je-1',

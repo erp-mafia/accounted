@@ -24,8 +24,11 @@
  * verifikat that moves the account both ways (a day booked as one
  * verifikat) can then take its rows in any order, which a net figure would
  * refuse for whichever row came first. A verifikat that books nothing in
- * the row's direction is not this module's refusal: the bank-anchor guard
- * refuses that link at the write, with its own code.
+ * the row's direction cannot take the row at all: the bank-anchor guard
+ * refuses that write (assert_bank_anchor_journal), and booksDirection asks
+ * the guard's question before it, so a dry run refuses what the write would
+ * (crm#1583: a net-booked Stripe verifikat staged its fee rows, and the
+ * approval refused all six).
  *
  * Every door that links a row to a posted verifikat measures here, so they
  * agree on what is free: the bank link core (prepareBankLink), the 1:N split
@@ -182,6 +185,10 @@ export interface BankLegRoom {
   heldOut: number
   /** false when a line carries no amount in the currency (a foreign account, a line without a rate). */
   measurable: boolean
+  /** A line on the account is in debet (SEK column, whatever the currency): the guard's test for money in. */
+  debits: boolean
+  /** A line on the account is in kredit: the guard's test for money out. */
+  credits: boolean
 }
 
 /**
@@ -197,7 +204,11 @@ export function bankLegRoom(
   let bookedIn = 0
   let bookedOut = 0
   let measurable = true
+  let debits = false
+  let credits = false
   for (const line of lines) {
+    if (Number(line.debit_amount) > 0) debits = true
+    if (Number(line.credit_amount) > 0) credits = true
     const amount = ledgerLineAmountIn(line, currency)
     if (amount === null) {
       measurable = false
@@ -218,7 +229,36 @@ export function bankLegRoom(
     heldIn: roundOre(heldIn),
     heldOut: roundOre(heldOut),
     measurable,
+    debits,
+    credits,
   }
+}
+
+/**
+ * Does the verifikat book anything on the account in the row's direction?
+ * The bank-anchor guard's question (assert_bank_anchor_journal, 20260921183218):
+ * a deposit needs a line in debet, a payout a line in kredit, a zero row any
+ * line. A row it answers no for is refused at the write whatever the room,
+ * so every door asks it first and refuses with BANK_ANCHOR_REFUSED. The rows
+ * of an N:1 link are judged one by one, as the guard judges them: a group
+ * whose net matches a verifikat booked net (a Stripe payout less its fees)
+ * links only once the verifikat books the deposits in debet and the fees in
+ * kredit on the account (bankLegDirectionMessage says so).
+ */
+export function booksDirection(room: Pick<BankLegRoom, 'debits' | 'credits'>, amount: number): boolean {
+  if (!Number.isFinite(amount)) return true
+  const x = roundOre(amount)
+  if (x > 0) return room.debits
+  if (x < 0) return room.credits
+  return room.debits || room.credits
+}
+
+/** The Swedish refusal for a row the verifikat books nothing for in its direction (booksDirection). */
+export function bankLegDirectionMessage(args: { voucherLabel: string; accountNumber: string; amount: number }): string {
+  const { voucherLabel, accountNumber } = args
+  const amount = roundOre(args.amount)
+  const side = amount > 0 ? 'ingen insättning (debet)' : 'inget uttag (kredit)'
+  return `Verifikat ${voucherLabel} bokför ${side} på ${accountNumber}, så transaktionen på ${amount} kan inte kopplas dit: en insättning ska stå i debet på bankkontot och ett uttag i kredit. Är den en egen affärshändelse, bokför den som ett eget verifikat. Bokför verifikatet flera transaktioner netto (till exempel en Stripe-utbetalning med avgifter), rätta det så att insättningarna står i debet och uttagen i kredit på ${accountNumber}; då ryms alla transaktionerna.`
 }
 
 export type BankLegVerdict =
@@ -245,8 +285,8 @@ export type BankLegVerdict =
  * öresavrundning, links and the difference shows on the status card; prod
  * had five such links in the 30 days before this check, against eighteen
  * second rows on an already-held leg); a verifikat that books nothing in the
- * row's direction (the bank-anchor guard refuses that pair at the write, by
- * its own code); a row no larger than what other rows leave, within
+ * row's direction (booksDirection refuses that row first, by its own code);
+ * a row no larger than what other rows leave, within
  * BANK_LEG_ROOM_TOLERANCE. A verifikat whose amounts cannot be expressed in
  * the row's currency takes its first row and refuses the next one in the
  * same direction: its room cannot be verified, so a second row is never

@@ -7,7 +7,9 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   BANK_LEG_ROOM_TOLERANCE,
   bankLegConsumedMessage,
+  bankLegDirectionMessage,
   bankLegRoom,
+  booksDirection,
   fitsBankLeg,
   holdersOnAccount,
   readBankLegHolders,
@@ -26,7 +28,15 @@ const holder = (amount: number, over: Partial<BankLegHolder> = {}): BankLegHolde
 describe('bankLegRoom', () => {
   it('splits what the verifikat books and what the holders take by direction', () => {
     const room = bankLegRoom([sek(3000, 0), sek(0, 200)], [holder(2800), holder(-200)], 'SEK')
-    expect(room).toEqual({ bookedIn: 3000, bookedOut: -200, heldIn: 2800, heldOut: -200, measurable: true })
+    expect(room).toEqual({
+      bookedIn: 3000,
+      bookedOut: -200,
+      heldIn: 2800,
+      heldOut: -200,
+      measurable: true,
+      debits: true,
+      credits: true,
+    })
   })
 
   it('measures a foreign account in amount_in_currency, never the SEK column', () => {
@@ -98,6 +108,43 @@ describe('fitsBankLeg', () => {
 
   it('lets a zero row through', () => {
     expect(fitsBankLeg(bankLegRoom([sek(2800, 0)], [holder(2800)], 'SEK'), 0).fits).toBe(true)
+  })
+})
+
+describe('booksDirection: the bank-anchor guard asked before the write (crm#1583)', () => {
+  // A2: a Stripe balance moved over net, 639.31 in debet on 1686 and nothing in kredit.
+  const net = bankLegRoom([sek(639.31, 0)], [], 'SEK')
+
+  it('takes a deposit on a verifikat in debet and refuses a fee row it books nothing in kredit for', () => {
+    expect(booksDirection(net, 595)).toBe(true)
+    expect(booksDirection(net, -64.5)).toBe(false)
+  })
+
+  it('takes the fees once the verifikat books them in kredit on the account', () => {
+    const gross = bankLegRoom([sek(724, 0), sek(0, 84.69)], [], 'SEK')
+    expect(booksDirection(gross, 129)).toBe(true)
+    expect(booksDirection(gross, -64.5)).toBe(true)
+  })
+
+  it('reads the SEK columns, so an unmeasurable foreign line still answers', () => {
+    const eur = bankLegRoom([sek(11500, 0)], [], 'EUR')
+    expect(eur.measurable).toBe(false)
+    expect(booksDirection(eur, 1000)).toBe(true)
+    expect(booksDirection(eur, -1000)).toBe(false)
+  })
+
+  it('takes a zero row on any line', () => {
+    expect(booksDirection(net, 0)).toBe(true)
+  })
+
+  it('names the verifikat, the missing side and the way through, in Swedish', () => {
+    const message = bankLegDirectionMessage({ voucherLabel: 'A2', accountNumber: '1686', amount: -64.5 })
+    expect(message).toContain('Verifikat A2 bokför inget uttag (kredit) på 1686')
+    expect(message).toContain('-64.5')
+    expect(message).toContain('insättningarna står i debet och uttagen i kredit på 1686')
+    expect(bankLegDirectionMessage({ voucherLabel: 'A2', accountNumber: '1686', amount: 129 })).toContain(
+      'ingen insättning (debet)',
+    )
   })
 })
 
