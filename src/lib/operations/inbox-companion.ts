@@ -15,9 +15,10 @@
  *     (Registrera och koppla till betalningen): the same, on the payment's
  *     verifikat, where the payment it proves is booked;
  *   - the invoice was booked on a verifikat of its own with no bank row (an
- *     utlägg, the owner's own money): the receipt's document is linked to
- *     that verifikat and the receipt stamped with it
- *     (lib/transactions/inbox-underlag.ts completeInboxItemOnEntry).
+ *     utlägg, the owner's own money), stamped or because that verifikat holds
+ *     its document: the receipt's document is linked to that verifikat and
+ *     the receipt stamped with it (lib/transactions/inbox-underlag.ts
+ *     completeInboxItemOnEntry).
  * Anything else waits, and the receipt stays in the inbox for a person:
  * the invoice not booked yet, registered but unpaid (the payment the receipt
  * proves is not in the books), or settled by several rows.
@@ -41,8 +42,9 @@
  * longer paired, is left alone, and the page's own call
  * (POST /api/inkorg/items/:id/companion) then answers already_done.
  */
+import { isInboxItemUnbooked } from '@/lib/documents/inbox-item-state'
 import { pairInboxItems, type PairBasis } from '@/lib/inkorg/pairs'
-import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
+import { readDeliverySiblings, readPairableItem, type PairableRow } from '@/lib/inkorg/pairs-read'
 import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
 import { completeInboxItemOnEntry, lockedJournalEntryIds, resolveBookedJournalEntryIds } from '@/lib/transactions/inbox-underlag'
 import type { OperationContext, OperationOutcome } from './types'
@@ -68,17 +70,6 @@ export type CompanionResult =
       /** The receipt was already handled: nothing to do. */
       status: 'already_done'
     }
-
-async function readItem(ctx: OperationContext, id: string): Promise<PairableRow | null> {
-  const { data, error } = await ctx.supabase
-    .from('invoice_inbox_items')
-    .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
-    .eq('id', id)
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (error) throw error
-  return (data as unknown as PairableRow | null) ?? null
-}
 
 /** The one bank row a supplier invoice's payments were made from, or why there is none. */
 async function settlingRow(
@@ -114,7 +105,7 @@ async function followOntoRow(
   const matched = await matchInboxItemTransaction(ctx, receipt.id, transactionId)
   if (!matched.ok) return matched
   // The match completes the receipt on the row's verifikat, best effort: say so only when it did.
-  const after = await readItem(ctx, receipt.id)
+  const after = await readPairableItem(ctx.supabase, ctx.companyId, receipt.id)
   if (after?.created_journal_entry_id !== journalEntryId) {
     return { ok: true, data: { status: 'waiting', reason: 'receipt_not_linked' } }
   }
@@ -141,8 +132,9 @@ async function followPair(
     return await followOntoRow(ctx, open, row.transactionId)
   }
 
-  if (booked.created_journal_entry_id) {
-    const journalEntryId = booked.created_journal_entry_id
+  // The same verifikat the list names (lib/operations/inbox-pairings.ts).
+  const journalEntryId = booked.created_journal_entry_id ?? booked.document_journal_entry_id
+  if (journalEntryId) {
     if (await entryLocked(ctx, journalEntryId)) return { ok: true, data: { status: 'waiting', reason: 'entry_locked' } }
     const outcome = await completeInboxItemOnEntry(ctx.supabase, ctx.companyId, open, journalEntryId, {
       // A person booked the purchase with the receipt shown as part of it; the pairing rule is the evidence.
@@ -154,11 +146,6 @@ async function followPair(
   }
 
   return { ok: true, data: { status: 'waiting', reason: 'invoice_not_booked' } }
-}
-
-/** Not handled yet: no verifikat, no supplier invoice, not in Arkiv. */
-function stillOpen(item: PairableRow): boolean {
-  return !item.created_journal_entry_id && !item.created_supplier_invoice_id && !item.routed_to_arkiv_at
 }
 
 /**
@@ -174,10 +161,13 @@ export async function followInvoiceWithReceipt(
   receiptItemId: string,
 ): Promise<OperationOutcome<CompanionResult>> {
   try {
-    const [invoice, receipt] = await Promise.all([readItem(ctx, invoiceItemId), readItem(ctx, receiptItemId)])
+    const [invoice, receipt] = await Promise.all([
+      readPairableItem(ctx.supabase, ctx.companyId, invoiceItemId),
+      readPairableItem(ctx.supabase, ctx.companyId, receiptItemId),
+    ])
     if (!invoice || !receipt) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
-    const receiptOpen = stillOpen(receipt)
-    if (!receiptOpen && !stillOpen(invoice)) return { ok: true, data: { status: 'already_done' } }
+    const receiptOpen = isInboxItemUnbooked(receipt)
+    if (!receiptOpen && !isInboxItemUnbooked(invoice)) return { ok: true, data: { status: 'already_done' } }
     // The receipt follows the invoice; a receipt booked first takes the open invoice along.
     const [booked, open] = receiptOpen ? [invoice, receipt] : [receipt, invoice]
 
@@ -209,7 +199,7 @@ export type PairedReceiptFollow = CompanionResult | { status: 'no_receipt' } | {
  */
 export async function followPairedReceipt(ctx: OperationContext, invoiceItemId: string): Promise<PairedReceiptFollow> {
   try {
-    const booked = await readItem(ctx, invoiceItemId)
+    const booked = await readPairableItem(ctx.supabase, ctx.companyId, invoiceItemId)
     if (!booked) return { status: 'no_receipt' }
     const { items, arrivalIds } = await readDeliverySiblings(ctx.supabase, ctx.companyId, booked)
     if (items.length < 2) return { status: 'no_receipt' }

@@ -75,6 +75,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { AccountingMethod, InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
+import { isUnderlagDivergent, itemStage } from '@/lib/documents/inbox-item-state'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import {
   resolveInboxKind,
@@ -223,6 +224,9 @@ interface InboxItem {
   // (no booked matched transaction, or the item is stamped). Absent on
   // client-side placeholders.
   underlag_status?: UnderlagStatus | null
+  // The verifikat that holds its document and still books it, stamp or not.
+  // Server-derived by GET /items (lib/documents/inbox-item-state.ts withDocumentHold).
+  document_journal_entry_id?: string | null
   error_message: string | null
   // What the underlag bought, computed by GET /items/:id (null when
   // ambiguous). Absent on list rows and client-side placeholders.
@@ -409,20 +413,6 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // payment still needs booking (a document attached to a transaction is not
 // the same as a booked one). An extraction failure is "error"; everything
 // else needs a first action.
-type InboxStatus = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
-
-// A matched transaction that is booked while this item's own underlag is not
-// on its verifikat: not "booked" for the inbox, and not bookable either (the
-// book routes 409 on an already-booked transaction). The rail explains it
-// instead of offering a bridge that can only fail.
-function isUnderlagDivergent(item: InboxItem): boolean {
-  return (
-    !!item.matched_transaction_journal_entry_id &&
-    !!item.underlag_status &&
-    item.underlag_status !== 'anchored'
-  )
-}
-
 // One explanatory line per non-anchored status (#1548). 'unlinked' is the
 // only one the daily reconcile can heal on its own; the others say what
 // stands in the way instead of promising an automatic link.
@@ -431,19 +421,6 @@ const UNDERLAG_STATUS_MESSAGE_KEY: Record<Exclude<UnderlagStatus, 'anchored'>, s
   unlinked_locked: 'underlag_unlinked_locked',
   anchored_elsewhere: 'underlag_anchored_elsewhere',
   unknown: 'underlag_unknown',
-}
-
-function deriveInboxStatus(item: InboxItem): InboxStatus {
-  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
-  if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
-  // Staged upload mid-extraction. Outranks 'linked': a transaction-anchored
-  // upload is matched from birth, but offering the booking bridge before the
-  // fields exist would book from empty data. Transient (seconds): stays in
-  // "Att göra" via the todo bucket rather than earning its own pill.
-  if (item.status === 'processing') return 'processing'
-  if (item.matched_transaction_id) return 'linked'
-  if (item.status === 'error') return 'error'
-  return 'needs_action'
 }
 
 // The routed line names what went to Arkiv only while the names fit in the
@@ -844,7 +821,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const statusCounts = useMemo(() => {
     const counts = { todo: 0, linked: 0, booked: 0, error: 0, all: items.length }
     for (const item of items) {
-      const status = deriveInboxStatus(item)
+      const status = itemStage(item)
       if (status !== 'booked') counts.todo += 1
       if (status === 'linked') counts.linked += 1
       if (status === 'booked') counts.booked += 1
@@ -923,7 +900,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     if (filter === 'missing' || filter === 'portal') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
-      const status = deriveInboxStatus(item)
+      const status = itemStage(item)
       if (filter === 'todo' && status === 'booked') return false
       if (filter === 'linked' && status !== 'linked') return false
       if (filter === 'booked' && status !== 'booked') return false
@@ -2299,7 +2276,7 @@ function InboxRow({
   const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
   const kind = resolveInboxKind(item)
-  const status = deriveInboxStatus(item)
+  const status = itemStage(item)
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
   const isLinkedToTransaction = status === 'linked'
@@ -2913,6 +2890,7 @@ function FieldsRail({
   const bookedEntryId =
     item.created_journal_entry_id ??
     (underlagDivergent ? null : item.matched_transaction_journal_entry_id) ??
+    (item.matched_transaction_id ? null : item.document_journal_entry_id) ??
     null
   const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone

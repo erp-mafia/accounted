@@ -64,6 +64,11 @@ describe('pairSiblingAlreadyBooked', () => {
     expect(await pairSiblingAlreadyBooked(supabase as unknown as SupabaseClient, COMPANY, 'receipt')).toMatchObject({ sibling_item_id: 'invoice', sibling_kind: 'invoice', voucher: 'A66' })
   })
 
+  it('the invoice held by a verifikat with no stamp: the receipt is refused the same way, naming it', async () => {
+    const { supabase } = db([row('invoice', INVOICE_READ, { document_hold: { journal_entry_id: 'je-66', entry: { status: 'posted' } } }), row('receipt', RECEIPT_READ)])
+    expect(await pairSiblingAlreadyBooked(supabase as unknown as SupabaseClient, COMPANY, 'receipt')).toMatchObject({ sibling_item_id: 'invoice', sibling_kind: 'invoice', journal_entry_id: 'je-66', voucher: 'A66' })
+  })
+
   it('a receipt whose invoice is registered as a supplier invoice, still unpaid, is refused: the payment books it', async () => {
     const { supabase } = db([row('invoice', INVOICE_READ, { created_supplier_invoice_id: 'si-1' }), row('receipt', RECEIPT_READ)], {
       supplier_invoices: { data: [{ id: 'si-1', status: 'registered', payment_journal_entry_id: null }] },

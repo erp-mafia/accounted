@@ -10,6 +10,7 @@
 import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import type { PairableItem } from './pairs'
 
 /** Ids per `.in()` filter, so the request line stays well inside URL limits. */
@@ -17,15 +18,30 @@ const ID_CHUNK = 100
 /** The items one delivery may hold: a mail carries a handful of attachments. */
 const SIBLINGS_READ = 50
 
-/**
- * An item as the pairing and the doors acting on a pair read it. Each read
- * spells its columns out (a literal select, so the schema guard can check
- * them): id, status, source, document_id, resend_email_id, channel_context,
- * kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id,
- * created_supplier_invoice_id, created_journal_entry_id.
- */
+/** An item as the pairing and the doors acting on a pair read it: ITEM_COLUMNS, through heldRows. */
 export interface PairableRow extends PairableItem {
   document_id: string | null
+}
+
+/**
+ * Every read of a pair takes the document's hold: a half a verifikat holds is
+ * booked, stamp or not, for the guard and the action as for the list, so a
+ * pair never stands one way on the screen and another at the door.
+ */
+const ITEM_COLUMNS = `id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, ${INBOX_ITEM_DOCUMENT_HOLD}`
+
+const heldRows = (data: unknown[] | null): PairableRow[] => ((data ?? []) as unknown as Array<PairableRow & DocumentHoldRow>).map(withDocumentHold)
+
+/** One item as the doors acting on a pair read it, or null. Throws on a failed read. */
+export async function readPairableItem(supabase: SupabaseClient, companyId: string, itemId: string): Promise<PairableRow | null> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select(ITEM_COLUMNS)
+    .eq('id', itemId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw error
+  return data ? (heldRows([data])[0] ?? null) : null
 }
 
 function fail(what: string, error: { message: string }): never {
@@ -149,17 +165,17 @@ export async function readDeliveriesOf(
   ]
   const rows = new Map<string, PairableRow>(items.map((item) => [item.id, item]))
   const add = (data: unknown[] | null) => {
-    for (const row of (data ?? []) as unknown as PairableRow[]) if (!rows.has(row.id)) rows.set(row.id, row)
+    for (const row of heldRows(data)) if (!rows.has(row.id)) rows.set(row.id, row)
   }
   for (const ids of chunked(mailIds, ID_CHUNK)) {
-    const { data, error } = await supabase.from('invoice_inbox_items').select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id').eq('company_id', companyId).in('resend_email_id', ids)
+    const { data, error } = await supabase.from('invoice_inbox_items').select(ITEM_COLUMNS).eq('company_id', companyId).in('resend_email_id', ids)
     if (error) fail('mail siblings read', error)
     add(data)
   }
   for (const ids of chunked(messageIds, ID_CHUNK)) {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
+      .select(ITEM_COLUMNS)
       .eq('company_id', companyId)
       .in('channel_context->>mail_message_id', ids)
     if (error) fail('message siblings read', error)
@@ -167,7 +183,7 @@ export async function readDeliveriesOf(
   }
   const missing = [...arrivalOutputs.keys()].filter((id) => !rows.has(id))
   for (const ids of chunked(missing, ID_CHUNK)) {
-    const { data, error } = await supabase.from('invoice_inbox_items').select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id').eq('company_id', companyId).in('id', ids)
+    const { data, error } = await supabase.from('invoice_inbox_items').select(ITEM_COLUMNS).eq('company_id', companyId).in('id', ids)
     if (error) fail('arrival siblings read', error)
     add(data)
   }
@@ -232,23 +248,23 @@ export async function readDeliverySiblings(
   if (mailId) {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
+      .select(ITEM_COLUMNS)
       .eq('company_id', companyId)
       .eq('resend_email_id', mailId)
       .limit(SIBLINGS_READ)
     if (error) fail('mail siblings read', error)
-    byKey.push(...((data ?? []) as unknown as PairableRow[]))
+    byKey.push(...heldRows(data))
   }
   const messageId = (item.channel_context as { mail_message_id?: unknown } | null)?.mail_message_id
   if (typeof messageId === 'string' && messageId) {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
+      .select(ITEM_COLUMNS)
       .eq('company_id', companyId)
       .eq('channel_context->>mail_message_id', messageId)
       .limit(SIBLINGS_READ)
     if (error) fail('message siblings read', error)
-    byKey.push(...((data ?? []) as unknown as PairableRow[]))
+    byKey.push(...heldRows(data))
   }
 
   const known = new Set([item.id, ...byKey.map((row) => row.id)])
@@ -257,11 +273,11 @@ export async function readDeliverySiblings(
   if (missing.length > 0) {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
+      .select(ITEM_COLUMNS)
       .eq('company_id', companyId)
       .in('id', missing)
     if (error) fail('arrival siblings read', error)
-    byArrival.push(...((data ?? []) as unknown as PairableRow[]))
+    byArrival.push(...heldRows(data))
   }
 
   const seen = new Set<string>()

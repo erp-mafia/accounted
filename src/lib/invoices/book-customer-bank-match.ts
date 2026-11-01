@@ -18,7 +18,8 @@
  * the sale a deferring company books first, the payment verifikat through the
  * engine, the bank row claimed behind a compare-and-set, the invoice behind a
  * status compare-and-set, the invoice_payments row, then the retired
- * suggestions, the invoice PDF on the verifikat, the match log and the events.
+ * suggestions, the invoice PDF and the row's own underlag on the verifikat
+ * (propagateUnderlagForBookedTransaction), the match log and the events.
  *
  * A bank row that is already booked or ignored is refused, for every caller:
  * the founders chose refusal over silent replacement on the supplier side
@@ -70,6 +71,7 @@ import { roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { postingPort } from '@/lib/posting/port'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Invoice, Transaction } from '@/types'
 
@@ -730,6 +732,11 @@ export async function bookCustomerBankMatch(
       log.warn('failed to attach invoice PDF to payment journal entry', err as Error)
     }
   }
+
+  // The bank row's own underlag, as on every booking of a row (BFL 5 kap 6-7 §).
+  // After the last step that can unwind: anchoring cannot be undone, so a
+  // verifikat this match cancels must never get it. Never throws.
+  await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, paymentEntryId)
 
   // The override was acted on: a durable behandlingshistorik record
   // (BFNAR 2013:2 p. 9.16), same event the categorize guard writes.

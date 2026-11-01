@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { whereInboxItemFree } from '@/lib/documents/inbox-item-state'
 
 /**
  * A document's reading, carried onto the Underlag item filed for it before
@@ -29,16 +30,15 @@ export async function carryReadingToQueuedItems(
   input: { companyId: string; documentId: string; reading: Record<string, unknown> },
   options: { supplierFor?: () => Promise<string | null> } = {},
 ): Promise<string[]> {
-  const { data: waiting, error: waitingError } = await supabase
-    .from('invoice_inbox_items')
-    .select('id')
-    .eq('company_id', input.companyId)
-    .eq('document_id', input.documentId)
-    .eq('status', 'received')
-    .is('extracted_data', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
+  const { data: waiting, error: waitingError } = await whereInboxItemFree(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id')
+      .eq('company_id', input.companyId)
+      .eq('document_id', input.documentId)
+      .eq('status', 'received')
+      .is('extracted_data', null),
+  )
   if (waitingError) throw new Error(`queued item select failed: ${waitingError.message}`)
   const ids = ((waiting as Array<{ id: string }> | null) ?? []).map((row) => row.id)
   if (ids.length === 0) return []
@@ -46,17 +46,15 @@ export async function carryReadingToQueuedItems(
   const { data: doc } = await supabase.from('document_attachments').select('doc_type').eq('id', input.documentId).eq('company_id', input.companyId).maybeSingle()
   const reading = (doc as { doc_type?: string | null } | null)?.doc_type === 'credit_note' ? { ...input.reading, documentKind: 'credit_note' } : input.reading
 
-  const { data: filled, error } = await supabase
-    .from('invoice_inbox_items')
-    .update({ extracted_data: reading, extraction_skipped: false })
-    .in('id', ids)
-    .eq('company_id', input.companyId)
-    .eq('status', 'received')
-    .is('extracted_data', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .select('id, matched_supplier_id')
+  const { data: filled, error } = await whereInboxItemFree(
+    supabase
+      .from('invoice_inbox_items')
+      .update({ extracted_data: reading, extraction_skipped: false })
+      .in('id', ids)
+      .eq('company_id', input.companyId)
+      .eq('status', 'received')
+      .is('extracted_data', null),
+  ).select('id, matched_supplier_id')
   if (error) throw new Error(`queued item fill failed: ${error.message}`)
   const rows = (filled as Array<{ id: string; matched_supplier_id: string | null }> | null) ?? []
 

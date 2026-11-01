@@ -17,6 +17,7 @@ import {
   type BankMatchRefreshRules,
 } from '@/lib/documents/bank-match/refresh'
 import { BANK_MATCH_RULES_VERSION, bankMatchRulesOf } from '@/lib/documents/inbox-bank-match'
+import { isOpenInboxItem, whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
@@ -120,10 +121,7 @@ export function neverChecked(row: NeverCheckedRow): boolean {
     (row.bank_match_checked_at === null || checkedUnderOlderRules(row)) &&
     row.status === 'received' &&
     !!row.document_id &&
-    !row.matched_transaction_id &&
-    !row.created_supplier_invoice_id &&
-    !row.created_journal_entry_id &&
-    !row.routed_to_arkiv_at
+    isOpenInboxItem(row)
   )
 }
 
@@ -171,20 +169,17 @@ export async function checkNeverCheckedInboxItems(
   if (ids.length === 0) return []
   let claimed: string[]
   try {
-    const { data, error } = await supabase
-      .from('invoice_inbox_items')
-      .update({ bank_match_checked_at: new Date().toISOString(), bank_match_source_key: null })
-      .eq('company_id', companyId)
-      .in('id', ids)
-      // Never checked, or a key the rules in force (-r2, BANK_MATCH_RULES_VERSION)
-      // did not write; spelled out so the phantom-column guard can read it. A
-      // claimed item's null key is neither: NULL NOT LIKE is not true.
-      .or('bank_match_checked_at.is.null,bank_match_source_key.not.like.*-r2')
-      .is('created_supplier_invoice_id', null)
-      .is('created_journal_entry_id', null)
-      .is('matched_transaction_id', null)
-      .is('routed_to_arkiv_at', null)
-      .select('id')
+    const { data, error } = await whereInboxItemOpen(
+      supabase
+        .from('invoice_inbox_items')
+        .update({ bank_match_checked_at: new Date().toISOString(), bank_match_source_key: null })
+        .eq('company_id', companyId)
+        .in('id', ids)
+        // Never checked, or a key the rules in force (-r2, BANK_MATCH_RULES_VERSION)
+        // did not write; spelled out so the phantom-column guard can read it. A
+        // claimed item's null key is neither: NULL NOT LIKE is not true.
+        .or('bank_match_checked_at.is.null,bank_match_source_key.not.like.*-r2'),
+    ).select('id')
     if (error) throw new Error(error.message)
     claimed = ((data ?? []) as Array<{ id: string }>).map((row) => row.id)
   } catch (err) {

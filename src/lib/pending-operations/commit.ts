@@ -22,17 +22,6 @@ import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
-import {
-  resolveSupplierInvoiceExchangeRate,
-  supplierInvoiceSekAmounts,
-} from '@/lib/currency/supplier-invoice-rate'
-import { roundOre } from '@/lib/money'
-import {
-  exceedsSupplierInvoiceTotalsTolerance,
-  supplierInvoiceLinesInclVat,
-  supplierInvoiceTotalsGap,
-} from '@/lib/bookkeeping/supplier-invoice-line-totals'
-import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseChargeKind } from '@/lib/supplier-invoices/create'
 import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
@@ -42,10 +31,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createCustomer, PERSONAL_NUMBER_CIPHERTEXT_RE, updateCustomer } from '@/lib/customers/customer-commands'
 import { toCustomerRecord } from '@/lib/customers/customer-record'
 import {
-  normalizeVatRateToDecimal,
-  treatmentDeductsInputVat,
-} from '@/lib/vat/supplier-invoice-line-checks'
-import {
   archiveIssuedInvoicePdf,
   issueAndBookInvoice,
   markInvoiceSentAndBook,
@@ -54,7 +39,6 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
-import { supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
@@ -62,12 +46,9 @@ import { postingPort } from '@/lib/posting/port'
 import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoices/attest-service'
 import type { AttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
-import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { claimInboxItemOrReverseEntry, readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
-import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
-import { foldSellerVatIntoCost, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -131,7 +112,6 @@ import {
   checkCreateAssetGates,
   checkUpdateAssetGates,
 } from '@/lib/bokslut/assets/asset-api'
-import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/invoices/voucher-matching'
 import { RegisterBookedInvoiceParamsSchema, registerBookedInvoice } from '@/lib/invoices/register-booked-invoice'
 import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
@@ -230,9 +210,6 @@ import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schema
 import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
-import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
-import { passed as checkPassed, warned as checkWarned } from '@/lib/suggestion-log/checks'
-import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import {
   CreateInvoiceFromSalesOrderParamsSchema,
   CreateSalesOrderParamsSchema,
@@ -287,12 +264,10 @@ import {
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { followPairedReceipt } from '@/lib/operations/inbox-companion'
+import { convertInboxItemToSupplierInvoice, stagedConversion } from '@/lib/operations/inbox-convert'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { startPackageForPendingType } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
-import { rejectSupersededInboxConversions } from './supersede'
-import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
-import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
 import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
@@ -305,8 +280,6 @@ import type {
   Currency,
   Invoice,
   Customer,
-  SupplierInvoice,
-  SupplierInvoiceItem,
   PendingOperation,
   CompanySettings,
   InvoiceItem,
@@ -4332,647 +4305,82 @@ function describeSupplierInvoiceInputViolation(
   return null
 }
 
+/** A refused conversion as the approval's failure, or the invoice a re-fired commit already made. */
+function inboxConversionFailure(
+  outcome: Extract<OperationOutcome<unknown>, { ok: false }>,
+  inboxItemId: string,
+): ExecutorResult {
+  // Idempotency: a re-fired commit (a retry, a double click on the approval, a
+  // racy MCP call) must not make a second leverantörsfaktura for the same row.
+  if (outcome.code === 'INBOX_ITEM_ALREADY_CONVERTED') {
+    return { data: { supplier_invoice_id: outcome.details?.supplier_invoice_id, inbox_item_id: inboxItemId, idempotent: true } }
+  }
+  if (outcome.code === ACCOUNTING_METHOD_UNREADABLE || outcome.code === ACCOUNTING_METHOD_MISSING) {
+    return accountingMethodRefusal({ code: outcome.code })
+  }
+  // Resolved before an ankomstnummer is drawn, so a temporary Riksbanken
+  // refusal leaves the operation approvable.
+  if (outcome.details?.temporary) return exchangeRateRetryLater()
+  if (isBookkeepingError(outcome.error)) throw outcome.error
+
+  const invalidColumn = describeSupplierInvoiceInputViolation(outcome.error as { code?: string; message?: string } | null)
+  if (invalidColumn) {
+    return {
+      error: `${getErrorEntry('SI_CREATE_INVALID_INPUT')?.message_sv ?? 'Ogiltig kombination av fakturafält.'} ${invalidColumn}`,
+      errorCode: 'SI_CREATE_INVALID_INPUT',
+      status: 400,
+    }
+  }
+  const entry = getErrorEntry(outcome.code)
+  if (outcome.code === 'UNKNOWN_ERROR' || !entry) {
+    log.error('Failed to register a supplier invoice from the inbox', { inboxItemId, error: outcome.error })
+    return { error: 'Failed to create supplier invoice', status: 500 }
+  }
+  return {
+    error: outcome.messageSv ?? siCreateInvalidInputMessages(outcome.details)?.message_en ?? entry.message_sv,
+    errorCode: outcome.code,
+    status: entry.httpStatus,
+    ...(outcome.details ? { data: outcome.details } : {}),
+  }
+}
+
+/**
+ * The approval of a staged conversion: convertInboxItemToSupplierInvoice, the
+ * door the dashboard and v1 use, on what was staged. A staged line stays as
+ * the approver saw it (stagedConversion).
+ */
 async function commitCreateSupplierInvoiceFromInbox(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const inboxItemId = params.inbox_item_id as string
-  const supplierId = params.supplier_id as string
-  const documentId = (params.document_id as string | null) ?? null
-  const supplierInvoiceNumber = params.supplier_invoice_number as string
-  const invoiceDate = params.invoice_date as string
-  const dueDate = (params.due_date as string | null) ?? null
-  const currency = (params.currency as string) || 'SEK'
-  const notes = (params.notes as string | null) ?? null
-  // Absent on ops staged before the MCP door carried it: null, as before.
-  const paymentReference =
-    typeof params.payment_reference === 'string' ? params.payment_reference.trim() || null : null
-  const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
-  // Dimensions PR7: resolved at staging time; coerce is the drift/tamper gate.
-  const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
-
-  // due_date is NOT NULL on supplier_invoices: a null here used to reach the
-  // INSERT and surface as a bare 500 (feedback 395405). Staging defaults it
-  // now; this guard catches a stale or tampered op before an ankomstnummer
-  // is burnt. A blank number is refused the same way: the column refuses it
-  // (supplier_invoices_number_not_blank), and this door still needs one.
-  if (
-    !inboxItemId ||
-    !supplierId ||
-    typeof supplierInvoiceNumber !== 'string' ||
-    !supplierInvoiceNumber.trim() ||
-    !invoiceDate ||
-    !dueDate ||
-    rawItems.length === 0
-  ) {
+  const staged = stagedConversion(params)
+  if (!staged.ok) {
+    const entry = staged.code ? getErrorEntry(staged.code) : undefined
     return {
-      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, due_date, and items are required',
-      errorCode: 'SI_CREATE_INVALID_INPUT',
-      status: 400,
-    }
-  }
-
-  // Reject tampered financial fields: Number(x) || 0 silently turns string
-  // junk and undefined into a zero-value invoice. Require a finite number on
-  // every monetary field, including the optional exchange_rate when present.
-  const finite = (raw: unknown): number | null =>
-    typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-  const subtotal = finite(params.subtotal)
-  const vatAmount = finite(params.vat_amount)
-  const total = finite(params.total)
-  if (subtotal === null || vatAmount === null || total === null) {
-    return {
-      error: 'subtotal, vat_amount, and total must be finite numbers',
-      status: 400,
-    }
-  }
-  const exchangeRate = params.exchange_rate === null || params.exchange_rate === undefined
-    ? null
-    : finite(params.exchange_rate)
-  if (params.exchange_rate !== null && params.exchange_rate !== undefined && exchangeRate === null) {
-    return { error: 'exchange_rate must be a finite number when provided', status: 400 }
-  }
-
-  // Every item carries its own account, under the rule the create routes
-  // hold (CreateSupplierInvoiceItemSchema: four digits). Staging resolves
-  // and checks it, so a miss here is a stale or tampered op: refuse it
-  // before an ankomstnummer is drawn instead of guessing one.
-  if (rawItems.some((item) => typeof item.account_number !== 'string' || !ACCOUNT_NUMBER_RE.test(item.account_number))) {
-    const entry = getErrorEntry('SI_CREATE_ITEM_ACCOUNT_MISSING')
-    return {
-      error: entry?.message_sv ?? 'En eller flera fakturarader saknar konto.',
-      errorCode: 'SI_CREATE_ITEM_ACCOUNT_MISSING',
+      error: staged.error ?? entry?.message_sv ?? 'Invalid staged conversion',
+      ...(staged.code ? { errorCode: staged.code } : {}),
       status: entry?.httpStatus ?? 400,
     }
   }
 
-  // Särskild löneskatt (SLP): staged params must respect the same rule the
-  // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
-  // premiums, so a flag on any other account is tampered or mis-staged.
-  const slpInvalid = rawItems.some(
-    (item) => item.apply_slp === true && !isSlpPensionAccount(String(item.account_number ?? '')),
+  const outcome = await convertInboxItemToSupplierInvoice(
+    { supabase, companyId, userId, log },
+    staged.inboxItemId,
+    staged.body,
+    { approvedTotal: staged.approvedTotal },
   )
-  if (slpInvalid) {
-    return {
-      error:
-        getErrorEntry('SI_CREATE_SLP_INVALID_ACCOUNT')?.message_sv ??
-        'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419.',
-      status: 400,
-    }
-  }
-
-  // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
-  // UI, racy MCP call) must not create a second leverantörsfaktura for the
-  // same inbox row. The DB FK on invoice_inbox_items.created_supplier_invoice_id
-  // is the source of truth.
-  const { data: inbox, error: inboxErr } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, created_supplier_invoice_id, status, kind_hint, extracted_data')
-    .eq('id', inboxItemId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (inboxErr || !inbox) return { error: 'Inbox item not found', status: 404 }
-  if (inbox.created_supplier_invoice_id) {
-    return {
-      data: {
-        supplier_invoice_id: inbox.created_supplier_invoice_id,
-        inbox_item_id: inboxItemId,
-        idempotent: true,
-      },
-    }
-  }
-
-  // A credit note is never a payable of its own (issue #2980): an operation
-  // staged before the item read as one, or with negative amounts, is refused
-  // here; the credit goes through gnubok_credit_supplier_invoice.
-  if (resolveInboxKind(inbox) === 'credit_note' || total < 0 || subtotal < 0) {
-    const entry = getErrorEntry('INBOX_ITEM_IS_CREDIT_NOTE')
-    return {
-      error: entry?.message_sv ?? 'Posten är en kreditfaktura.',
-      errorCode: 'INBOX_ITEM_IS_CREDIT_NOTE',
-      status: entry?.httpStatus ?? 409,
-    }
-  }
-
-  // Defense in depth: the staging-time supplier lookup may be stale by the
-  // time the human approves. RLS would block a cross-company supplier too,
-  // but a 404 here is a cleaner error than an RLS denial later.
-  const { data: supplier, error: supplierErr } = await supabase
-    .from('suppliers')
-    .select('id, name, org_number, supplier_type')
-    .eq('id', supplierId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (supplierErr || !supplier) return { error: 'Supplier not found', status: 404 }
-
-  // Fourth and last supplier-invoice write path to adopt the shared resolver
-  // (POST /api/supplier-invoices, POST /api/v1/.../supplier-invoices and the
-  // inbox convert route went first). It took `params.exchange_rate` verbatim
-  // with no fetch, so an inbox conversion whose staging-time lookup failed
-  // (the MCP tool stages `exchange_rate: null` + `exchange_rate_source:
-  // 'lookup_failed'` in that case) persisted a foreign invoice with
-  // exchange_rate = NULL. createSupplierInvoiceRegistrationEntry then refuses
-  // it with SI_FX_RATE_MISSING further down, after the ankomstnummer has
-  // already been burnt, and a NULL rate that does reach a lenient reader
-  // understates the fiktiv moms on 2614/2645, i.e. rutorna 20-24 + 30-32.
-  //
-  // Sharing the resolver is what keeps the four paths in agreement: the
-  // currency policy, the SEK arithmetic and the refusal are defined once. A
-  // caller-supplied positive rate is still trusted verbatim, which is what
-  // makes the approved preview number the number written; only a missing rate
-  // triggers the Riksbanken fetch, anchored on invoice_date with the supabase
-  // client passed so `exchange_rates` serves as the read-through cache.
-  //
-  // Resolved BEFORE get_next_arrival_number so a refusal never burns an
-  // ankomstnummer: same ordering as app/api/supplier-invoices/route.ts.
-  const fx = await resolveSupplierInvoiceExchangeRate(supabase, {
-    currency,
-    invoiceDate,
-    suppliedRate: exchangeRate,
-  })
-  if (!fx.ok) {
-    // Resolved before the ankomstnummer is drawn (see above), so a temporary
-    // Riksbanken refusal leaves the operation approvable.
-    if (fx.temporary) return exchangeRateRetryLater()
-    return {
-      error:
-        getErrorEntry('SI_FX_RATE_MISSING')?.message_sv ??
-        'Leverantörsfakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs.',
-      status: 400,
-    }
-  }
-
-  // Booking mode for the registration verifikat, and the VAT registration
-  // the item rows depend on: read once, before an ankomstnummer is drawn.
-  // Fail closed (accounted#58): an unreadable row used to mean "accrual,
-  // VAT-registered", so a kontantmetod company's invoice was booked at
-  // registration with moms it may not deduct.
-  const settingsRead = await supabase
-    .from('company_settings')
-    .select('accounting_method, defer_invoice_booking, vat_registered')
-    .eq('company_id', companyId)
-    .single()
-  const method = checkAccountingMethod(settingsRead)
-  if (!method.ok) return accountingMethodRefusal(method)
-  const settings = settingsRead.data
-
-  // The treatment and the reverse-charge flag, resolved by the function the
-  // dashboard and v1 doors use (accounted#58: this executor defaulted a
-  // missing treatment to standard_25 whatever the supplier). The staged
-  // treatment is what the approver saw and the caller's word, as an explicit
-  // reverse_charge flag is on those doors, so the flag follows it and can
-  // never disagree with it; an op without one gets the supplier's default,
-  // omvänd skattskyldighet for an EU or non-EU supplier.
-  const stagedTreatment =
-    typeof params.vat_treatment === 'string' && params.vat_treatment ? params.vat_treatment : undefined
-  const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(
-    supplier.supplier_type as string | null,
-    stagedTreatment ? { reverse_charge: stagedTreatment === 'reverse_charge', vat_treatment: stagedTreatment } : {},
-  )
-  // Goods or services under an EU supplier's reverse charge (crm#1323): the
-  // staged word, checked again by the rule every door shares, so an op
-  // staged against another supplier or a tampered one is refused.
-  const rawKind = params.reverse_charge_kind ?? null
-  const stagedKind = rawKind === 'eu_goods' || rawKind === 'eu_services' ? rawKind : null
-  const reverseChargeKind = rawKind !== null && stagedKind === null
-    ? null
-    : resolveSupplierInvoiceReverseChargeKind(supplier.supplier_type as string | null, reverseCharge, stagedKind)
-  if (!reverseChargeKind?.ok) {
-    return {
-      error: siCreateInvalidInputMessages(reverseChargeKind?.details)?.message_en ?? 'reverse_charge_kind must be eu_goods or eu_services',
-      errorCode: 'SI_CREATE_INVALID_INPUT',
-      status: 400,
-    }
-  }
-  // Icke momsregistrerad (feedback seq 708521): the seller's moms is part of
-  // the cost, never 2641. Staging folds it into the lines; an op staged
-  // before that fix (net lines plus 25 %) or a tampered one is folded here
-  // too, so no op can book input VAT the company can never reclaim.
-  const vatIsCost = sellerVatIsCost(settings?.vat_registered, reverseCharge)
-  // Treatments under which no seller VAT may reach the books: reverse charge
-  // (the buyer self-assesses on 2614/2645) and exempt / export, where the
-  // supplier charged no Swedish moms at all so there is nothing deductible
-  // (issue #2553). Both take the same header and item treatment below.
-  const noDeductibleSellerVat = !vatIsCost && (reverseCharge || !treatmentDeductsInputVat(vatTreatment))
-
-  // RC invariant: a reverse-charge supplier invoice never shows output VAT
-  // from the supplier. Zero any per-line VAT that slipped through staging so
-  // the registration JE's 2614/2645 self-assessed leg lines up with rutor
-  // 20-24 / 48 instead of double-counting input VAT into 2641. Tampered
-  // params can't smuggle non-zero VAT into the items table.
-  //
-  // Exempt and export invoices take the same zeroing (issue #2553): the
-  // supplier charged no Swedish moms, so a rate that came from OCR, from a
-  // stale staged op or from the column's own 0.25 default has nothing to
-  // deduct behind it. The engine refuses to book 2641 for these treatments
-  // either way; storing 0 keeps the row honest about what the underlag says.
-  const itemRows = rawItems.map((item, idx) => {
-    // Normalize percent-shaped rates (25 -> 0.25) and snap to the statutory
-    // set: rows staged before the issue #310 fix (or tampered params) carry
-    // percent integers, and inserting one books 2500 % VAT downstream.
-    const vatRate = noDeductibleSellerVat ? 0 : (typeof item.vat_rate === 'number' ? normalizeVatRateToDecimal(item.vat_rate) : 0)
-    const vatAmt = noDeductibleSellerVat ? 0 : (typeof item.vat_amount === 'number' && Number.isFinite(item.vat_amount) ? item.vat_amount : 0)
-    return {
-      sort_order: idx,
-      description: String(item.description ?? `Position ${idx + 1}`),
-      quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : 1,
-      unit: (item.unit as string | undefined) ?? 'st',
-      unit_price: typeof item.unit_price === 'number' && Number.isFinite(item.unit_price) ? item.unit_price : 0,
-      line_total: typeof item.line_total === 'number' && Number.isFinite(item.line_total) ? item.line_total : 0,
-      account_number: item.account_number as string,
-      vat_code: null,
-      vat_rate: vatRate,
-      vat_amount: vatAmt,
-      // For reverse charge the buyer self-assesses VAT; carry an explicit
-      // statutory rate when staged, else null (engine defaults to 25%).
-      reverse_charge_rate: reverseCharge
-        ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
-        : null,
-      // Särskild löneskatt (SLP): booking injects the self-balancing
-      // 7533/2514 pair for this line. Validated above (741x accounts only).
-      apply_slp: item.apply_slp === true,
-      dimensions: coerceDimensionsBag(item.dimensions) ?? {},
-    }
-  })
-  const items = vatIsCost ? foldSellerVatIntoCost(itemRows).lines : itemRows
-
-  // Omvänd skattskyldighet: the registration entry credits 2440 with the sum
-  // of the line nets (the fiktiv 2614/2645 pair nets to zero), so that sum is
-  // the only payable the reskontra can carry. Staging registers the net since
-  // feedback seq 366701, but an op staged before that fix, or a tampered one,
-  // still carries the document's gross (919.20 + 229.80 = 1149.00 on the
-  // reported invoice) and would leave remaining_amount 1149 against 919.20 in
-  // the GL: never trust a staged header under reverse charge. VAT the seller
-  // charged on a reverse-charge invoice is not deductible and is not booked.
-  // An exempt or export op is the same shape: the items below carry no VAT,
-  // so a staged header that still carries some would leave the reskontra
-  // above what the registration entry credits on 2440. A non-registered
-  // company's rows carry the seller's moms as cost, so their sum is its
-  // payable for the same reason.
-  const headerFromItems = noDeductibleSellerVat || vatIsCost
-  const itemNetSum = items.reduce((sum, item) => sum + item.line_total, 0)
-  const subtotalRounded = headerFromItems ? roundOre(itemNetSum) : Math.round(subtotal * 100) / 100
-  const vatAmountRounded = headerFromItems ? 0 : Math.round(vatAmount * 100) / 100
-  const totalRounded = headerFromItems ? subtotalRounded : Math.round(total * 100) / 100
-  // Fed the already-rounded figures so a SEK invoice (rate 1) gets
-  // total_sek === total to the öre instead of the two roundings disagreeing on
-  // an exact-half value. The old `exchangeRate ? … : null` guard left all three
-  // SEK columns NULL on every ordinary Swedish invoice, which is what blanked
-  // the SEK-reporting readers (the KPI "Största leverantörer" panel among them).
-  const {
-    subtotal_sek: subtotalSek,
-    vat_amount_sek: vatAmountSek,
-    total_sek: totalSek,
-  } = supplierInvoiceSekAmounts(fx.rate, {
-    subtotal: subtotalRounded,
-    vatAmount: vatAmountRounded,
-    total: totalRounded,
-  })
-
-  // Hard gate (feedback seq 983757): the registration verifikat credits 2440
-  // with the item rows plus their VAT, while the reskontra row keeps the
-  // staged total. Where the header is the document's own total (not derived
-  // from the items above), the two must agree within öresavrundning and
-  // per-line VAT rounding (supplierInvoiceTotalsTolerance), or the books
-  // carry a leverantörsskuld the supplier never billed. Staging refuses
-  // the mismatch since the same fix; this catches an op staged before it, or
-  // a tampered one, before an ankomstnummer is drawn.
-  if (!headerFromItems) {
-    const gap = supplierInvoiceTotalsGap(totalRounded, items)
-    if (exceedsSupplierInvoiceTotalsTolerance(gap, items.length)) {
-      const entry = getErrorEntry('SI_CREATE_TOTALS_MISMATCH')
-      log.warn('Refused a staged inbox supplier invoice whose lines do not add up to its total', {
-        companyId,
-        inboxItemId,
-        gap,
-      })
-      return {
-        error:
-          `${entry?.message_sv ?? 'Fakturaraderna inklusive moms stämmer inte med fakturans totalbelopp.'} `
-          + `Raderna inklusive moms: ${supplierInvoiceLinesInclVat(items)}, totalbelopp: ${totalRounded}.`,
-        errorCode: 'SI_CREATE_TOTALS_MISMATCH',
-        status: entry?.httpStatus ?? 400,
-      }
-    }
-  }
-
-  // The model's original reading of the underlag, taken before anything is written.
-  const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, {
-    id: inboxItemId,
-    document_id: (inbox.document_id as string | null) ?? documentId,
-    extracted_data: inbox.extracted_data,
-  })
-
-  // What the invoice states it is paid to, read from the item's extraction
-  // the same way as the dashboard and v1 doors, and compared with the
-  // supplier card before the card is touched (lib/payments/payee-alerts.ts).
-  // Never the staged supplier_payment_details (ops staged before accounted#15):
-  // that held only what the card lacked, so an account that differs from the
-  // card was dropped and its payment went to the card's account unchecked.
-  const paymentDetails = inboxStatedPaymentDetails(inbox.extracted_data)
-  const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplierId, paymentDetails)
-  if (payeeAssessment.alert) {
-    log.info('Inbox invoice states bank details the supplier card lacks', { companyId, supplierId, alert: payeeAssessment.alert })
-  }
-
-  const { data: arrivalNum, error: arrivalErr } = await supabase
-    .rpc('get_next_arrival_number', { p_company_id: companyId })
-
-  if (arrivalErr) {
-    return { error: `Failed to generate arrival number: ${arrivalErr.message}`, status: 500 }
-  }
-
-  const { data: invoice, error: invoiceErr } = await supabase
-    .from('supplier_invoices')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      supplier_id: supplierId,
-      arrival_number: arrivalNum,
-      supplier_invoice_number: supplierInvoiceNumber,
-      invoice_date: invoiceDate,
-      due_date: dueDate,
-      status: 'registered',
-      currency: fx.rate.currency,
-      exchange_rate: fx.rate.exchangeRate,
-      // Which day's kurs the SEK amounts were translated at: the audit trail
-      // that makes them verifiable under BFL 5 kap.
-      exchange_rate_date: fx.rate.exchangeRateDate,
-      vat_treatment: vatTreatment,
-      reverse_charge: reverseCharge,
-      reverse_charge_kind: reverseChargeKind.kind,
-      paid_with_private_funds: false,
-      subtotal: subtotalRounded,
-      subtotal_sek: subtotalSek,
-      vat_amount: vatAmountRounded,
-      vat_amount_sek: vatAmountSek,
-      total: totalRounded,
-      total_sek: totalSek,
-      paid_amount: 0,
-      remaining_amount: totalRounded,
-      document_id: documentId,
-      // The OCR the extraction read (feedback seq 869949): a betalfil
-      // references the payment by it.
-      payment_reference: paymentReference,
-      // What the document itself says to pay to, validated.
-      payee_bankgiro: payeeAssessment.stated.payee_bankgiro,
-      payee_plusgiro: payeeAssessment.stated.payee_plusgiro,
-      payee_iban: payeeAssessment.stated.payee_iban,
-      payee_bic: payeeAssessment.stated.payee_bic,
-      notes,
-      default_dimensions: defaultDimensions ?? {},
-    })
-    .select()
-    .single()
-
-  if (invoiceErr || !invoice) {
-    const pgErr = invoiceErr as { code?: string; message?: string } | null
-    const isDuplicate = pgErr?.code === '23505'
-    if (isDuplicate) {
-      // Generic 409: supplier_invoice_number alone is already in the staged
-      // params the caller submitted; we just don't echo back the supplier's
-      // name or row id. The UI surface uses the supplier-side ledger, not
-      // this error.
-      log.warn('Duplicate supplier invoice number on inbox conversion', {
-        companyId,
-        supplierId,
-        supplierInvoiceNumber,
-      })
-      return {
-        error: `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad.`,
-        status: 409,
-      }
-    }
-    // 23502 / 23514 are input problems, not infrastructure: the staged params
-    // carried a null or an out-of-range value that the column refused. Name
-    // the column or constraint so the caller can fix the extraction and
-    // re-stage, instead of reading "Failed to create supplier invoice" and
-    // retrying the identical op (feedback 395405: two retries on a null
-    // due_date, both logged only server-side).
-    const invalidInput = describeSupplierInvoiceInputViolation(pgErr)
-    if (invalidInput) {
-      log.warn('Supplier invoice insert from inbox refused by a column constraint', {
-        companyId,
-        inboxItemId,
-        supplierId,
-        code: pgErr?.code,
-        error: pgErr?.message ?? 'unknown',
-      })
-      return {
-        error: `${getErrorEntry('SI_CREATE_INVALID_INPUT')?.message_sv ?? 'Ogiltig kombination av fakturafält.'} ${invalidInput}`,
-        errorCode: 'SI_CREATE_INVALID_INPUT',
-        status: 400,
-      }
-    }
-    log.error('Failed to insert supplier invoice from inbox', {
-      companyId,
-      inboxItemId,
-      supplierId,
-      error: pgErr?.message ?? 'unknown',
-    })
-    return { error: 'Failed to create supplier invoice', status: 500 }
-  }
-
-  const itemInserts = items.map((item) => ({ supplier_invoice_id: invoice.id, ...item }))
-
-  const { error: itemsErr } = await supabase
-    .from('supplier_invoice_items')
-    .insert(itemInserts)
-
-  if (itemsErr) {
-    // Roll back the parent to avoid orphan supplier_invoices rows. Without
-    // line items the registration JE can't be built and the invoice would
-    // be invisible in the supplier ledger anyway.
-    await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
-    log.error('Failed to insert supplier invoice items, rolled back parent', {
-      companyId,
-      invoiceId: invoice.id,
-      error: itemsErr.message,
-    })
-    return { error: 'Failed to insert supplier invoice items', status: 500 }
-  }
-
-  let registrationJournalEntryId: string | null = null
-
-  // #967: deferred companies register WITHOUT booking (same gate as
-  // POST /api/supplier-invoices); ekonomi books later via the Bokför step.
-  // Kontantmetoden books at payment, except an EU goods acquisition (ML
-  // 7 kap. 26 §, supplierInvoiceBookingMoment).
-  if (supplierInvoiceBooksOnRegistration(
-    settings,
-    { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
-    supplier.supplier_type as string | null,
-  )) {
-    try {
-      const journalEntry = await createSupplierInvoiceRegistrationEntry(
-        supabase,
-        companyId,
-        userId,
-        invoice as SupplierInvoice,
-        itemInserts as unknown as SupplierInvoiceItem[],
-        supplier.supplier_type,
-        supplier.name,
-        // The posting port's event, while POSTING_EVENTS is on: registered
-        // from this inbox item inside the operation's approval.
-        () => ({ linkBasis: linkBasisColumns('user_created'), inboxItemId }),
-      )
-
-      if (journalEntry) {
-        registrationJournalEntryId = journalEntry.id
-        await supabase
-          .from('supplier_invoices')
-          .update({ registration_journal_entry_id: journalEntry.id })
-          .eq('id', invoice.id)
-
-        // Attach the OCR'd source document to the verifikat so the
-        // registration JE has its underlag per BFL 5 kap 6 §. Linking failure
-        // is non-fatal: the JE is already posted and immutable; we log and
-        // continue so the supplier invoice stays usable.
-        if (documentId) {
-          try {
-            await linkToJournalEntry(supabase, companyId, documentId, journalEntry.id, linkBasisColumns('user_created'))
-          } catch (linkErr) {
-            log.warn('Failed to link inbox document to registration JE', {
-              documentId,
-              journalEntryId: journalEntry.id,
-              error: linkErr instanceof Error ? linkErr.message : String(linkErr),
-            })
-          }
-        }
-      } else {
-        // createSupplierInvoiceRegistrationEntry returns null ONLY when no
-        // fiscal period covers invoice_date (every other failure throws into
-        // the catch below). Without this branch the inbox item gets linked to
-        // an unbooked supplier invoice: the same 2440/2641 orphan the catch
-        // guards against. Roll back (items first, see FK note below) and return
-        // an actionable error instead of silently "succeeding".
-        await supabase
-          .from('supplier_invoice_items')
-          .delete()
-          .eq('supplier_invoice_id', invoice.id)
-        await supabase
-          .from('supplier_invoices')
-          .delete()
-          .eq('id', invoice.id)
-          .eq('company_id', companyId)
-        return {
-          error:
-            'Det finns inget räkenskapsår som täcker fakturadatumet. Lägg upp räkenskapsåret först, eller ändra fakturadatumet.',
-          status: 400,
-        }
-      }
-    } catch (err) {
-      // Roll back: orphan supplier_invoices row without its registration JE
-      // understates leverantörsskuld (2440) + ingående moms (2641) on the
-      // momsdeklaration. Items must be deleted BEFORE the parent: the FK
-      // on supplier_invoice_items.supplier_invoice_id is ON DELETE NO ACTION
-      // (default), so a parent-first delete would be silently blocked and
-      // leave the doomed invoice in the supplier ledger.
-      await supabase
-        .from('supplier_invoice_items')
-        .delete()
-        .eq('supplier_invoice_id', invoice.id)
-      const { error: parentDeleteErr } = await supabase
-        .from('supplier_invoices')
-        .delete()
-        .eq('id', invoice.id)
-        .eq('company_id', companyId)
-      if (parentDeleteErr) {
-        // Hard inconsistency: items gone but parent stuck. Log loudly so an
-        // operator can clean up; this should not happen in practice.
-        log.error('Rollback partial: parent supplier_invoices delete failed after JE failure', {
-          companyId,
-          invoiceId: invoice.id,
-          parentDeleteError: parentDeleteErr.message,
-          originalError: err instanceof Error ? err.message : String(err),
-        })
-      }
-      if (isBookkeepingError(err)) throw err
-      log.error('Failed to create registration journal entry; supplier invoice rolled back', {
-        companyId,
-        inboxItemId,
-        invoiceId: invoice.id,
-        error: err instanceof Error ? err.message : 'unknown',
-      })
-      return {
-        error: 'Failed to create registration journal entry',
-        status: 500,
-      }
-    }
-  }
-
-  // Terminal state for the inbox row: created_supplier_invoice_id is the
-  // dedup key for next time this inbox item is touched, and it's what the UI
-  // and list_unmatched_documents use to drop the row out of "needs action".
-  // Do NOT write status here: the status CHECK only allows received|error
-  // (migration 20260504180000); writing 'confirmed' makes Postgres reject the
-  // whole UPDATE, so the link column never lands and the item stays unresolved.
-  const { error: linkInboxErr } = await supabase
-    .from('invoice_inbox_items')
-    .update({ created_supplier_invoice_id: invoice.id })
-    .eq('id', inboxItemId)
-    .eq('company_id', companyId)
-
-  if (linkInboxErr) {
-    log.warn('Failed to link inbox item to new supplier invoice (invoice still created)', {
-      inboxItemId,
-      supplierInvoiceId: invoice.id,
-      error: linkInboxErr.message,
-    })
-  }
-  // The same item staged twice: this operation is 'committing', so only its
-  // still-pending twins are rejected (crm#1074).
-  await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
-
-  // The same details written to the card now, after approval and once the
-  // invoice exists, and only into columns the supplier still lacks; never
-  // when the invoice names an account the card does not have (a person
-  // approves that one first). Never throws.
-  if (paymentDetails && payeeAssessment.backfill) {
-    await backfillSupplierPaymentDetails(supabase, companyId, supplierId, paymentDetails)
-  }
-
-  await recordInboxDecision(supabase, extractionSnapshot, {
-    supplier_invoice_id: invoice.id as string,
-    journal_entry_id: registrationJournalEntryId,
-    fields: {
-      supplier_name: (supplier.name as string | null) ?? null,
-      supplier_org_number: (supplier.org_number as string | null) ?? null,
-      invoice_number: supplierInvoiceNumber,
-      invoice_date: invoiceDate,
-      due_date: dueDate,
-      payment_reference: paymentReference,
-      currency,
-      total,
-      vat_amount: vatAmount,
-      accounts: resultAccounts(items.map((line) => line.account_number)),
-    },
-    lines: await loadEntryLines(supabase, companyId, registrationJournalEntryId),
-  }, userId, [
-    // The item was not converted yet, and the payee was compared with the supplier card.
-    checkPassed('already_booked'),
-    payeeAssessment.alert ? checkWarned('payee_alert', payeeAlertWarning(payeeAssessment.alert).code) : checkPassed('payee_alert'),
-  ])
-
-  try {
-    await eventBus.emit({
-      type: 'supplier_invoice.registered',
-      payload: { supplierInvoice: invoice as SupplierInvoice, companyId, userId },
-    })
-  } catch { /* non-blocking */ }
-
+  if (!outcome.ok) return inboxConversionFailure(outcome, staged.inboxItemId)
+  if (outcome.dryRun) return { data: outcome.preview }
   return {
     data: {
-      supplier_invoice_id: invoice.id,
-      inbox_item_id: inboxItemId,
-      registration_journal_entry_id: registrationJournalEntryId,
-      arrival_number: arrivalNum,
+      supplier_invoice_id: outcome.data.invoice.id,
+      inbox_item_id: staged.inboxItemId,
+      registration_journal_entry_id: outcome.data.registration_journal_entry_id,
+      arrival_number: outcome.data.invoice.arrival_number,
       // Why a payment of it waits, as the dashboard and v1 doors say it.
-      ...(payeeAssessment.alert ? { warnings: [payeeAlertWarning(payeeAssessment.alert)] } : {}),
+      ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
     },
   }
 }

@@ -38,6 +38,7 @@ vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
   findCashMethodUnbookedAllocations: vi.fn(async () => ({ ok: true, unbooked: [] })),
 }))
 vi.mock('@/lib/transactions/batch-allocation-events', () => ({ emitBatchAllocationEvents: vi.fn() }))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({ propagateUnderlagForBookedTransaction: vi.fn(async () => undefined) }))
 vi.mock('@/lib/invoices/clear-settled-batch-allocations', () => ({
   clearSettledBatchAllocationSuggestions: vi.fn(),
 }))

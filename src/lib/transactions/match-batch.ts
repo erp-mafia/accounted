@@ -60,6 +60,7 @@ import type { z } from 'zod'
 import type { MatchBatchSchema } from '@/lib/api/schemas'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import {
   alreadyExplainedDetails,
@@ -434,6 +435,10 @@ export async function matchTransactionBatch(
   // Every allocation settled in full retires its suggestion pointer from the
   // company's OTHER transactions (issue #1259).
   await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations, transactionId)
+
+  // The bank row's own underlag, as on every booking of a row: one row, one
+  // samlingsverifikat, so its document has one verifikat to land on. Never throws.
+  await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, result.journal_entry_id)
 
   // The override was acted on: durable behandlingshistorik record.
   if (explained.status === 'overridden') {

@@ -305,6 +305,17 @@ describe('propagateUnderlagForBookedTransaction', () => {
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('never anchors a superseded version of a pinned document', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-old' } }) // the row's pin
+    enqueue({ data: { journal_entry_id: null, is_current_version: false } }) // the document
+    enqueue({ data: [] }) // matched items
+
+    await propagateUnderlagForBookedTransaction(supabase as unknown as SupabaseClient, COMPANY, TX1, JE1)
+
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('still processes inbox items when the pinned-document link fails', async () => {
     vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period locked'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()

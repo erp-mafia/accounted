@@ -32,6 +32,7 @@ import {
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { roundOre } from '@/lib/money'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
@@ -251,9 +252,10 @@ export function scoreUnderlagCandidates(
  * Find probable underlag for a transaction among the company's unconsumed
  * inbox items.
  *
- * Only unconsumed items are considered: one already booked, already turned into
- * a supplier invoice, or already matched elsewhere belongs to a different
- * economic event, and proposing it here would invite a double booking.
+ * Only open items are considered (lib/documents/inbox-item-state.ts): one already booked,
+ * already turned into a supplier invoice, already matched elsewhere or taken
+ * by Arkiv belongs to a different economic event, and proposing it here would
+ * invite a double booking.
  */
 export async function findUnderlagCandidates(
   supabase: SupabaseClient,
@@ -262,14 +264,17 @@ export async function findUnderlagCandidates(
 ): Promise<UnderlagCandidate[]> {
   if (tx.amount == null || !tx.date) return []
 
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, extracted_data, channel_context')
-    .eq('company_id', companyId)
-    .is('matched_transaction_id', null)
-    .is('created_journal_entry_id', null)
-    .is('created_supplier_invoice_id', null)
-    .not('document_id', 'is', null)
+  // A link is permanent, so a document on any verifikat cannot go on this
+  // transaction's, a reversed one's included: the same bar as
+  // gnubok_list_unmatched_documents and the attach picker.
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id, extracted_data, channel_context, document_attachments!inner(journal_entry_id)')
+      .eq('company_id', companyId)
+      .not('document_id', 'is', null),
+  )
+    .is('document_attachments.journal_entry_id', null)
     .order('created_at', { ascending: false })
     .limit(CANDIDATE_SCAN_LIMIT)
 

@@ -63,7 +63,8 @@ import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 import { prepaidDeduction } from '@/lib/documents/reading/assemble'
 import { normalizeDate } from '@/lib/documents/extract/fields'
 import { roundOre } from '@/lib/money'
-import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type ReadingRetry, type UnderlagStatus } from './items'
+import { isUnderlagDivergent, itemStage } from '@/lib/documents/inbox-item-state'
+import { itemHeadline, type InkorgItem, type ReadingRetry, type UnderlagStatus } from './items'
 
 export type DecisionAction =
   | 'accept_bank_match'

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
+import { isInboxItemTaken, isOpenInboxItem, whereInboxItemFree, whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
@@ -105,8 +106,6 @@ interface ItemRow {
   matched_transaction_id: string | null
 }
 
-const consumed = (i: ItemRow) => !!(i.created_supplier_invoice_id || i.created_journal_entry_id || i.matched_transaction_id)
-
 export async function routeClassifiedDocument(
   supabase: SupabaseClient,
   input: { documentId: string; companyId: string; userId: string | null; docType: string; admission: 'admitted' | 'held'; decidedBy?: 'model' | 'human' },
@@ -130,8 +129,8 @@ export async function routeClassifiedDocument(
   const now = new Date().toISOString()
 
   if (VOUCHER_TYPES.has(input.docType) && input.admission === 'admitted') {
-    if (d.journal_entry_id || items.some(consumed)) return 'booked'
-    const open = items.find((i) => !consumed(i))
+    if (d.journal_entry_id || items.some(isInboxItemTaken)) return 'booked'
+    const open = items.find((i) => !isInboxItemTaken(i))
     if (open) {
       // Only a person's type is written on the item: a model's type never overrides the inbox reader, since where
       // the two readers disagree a person decides (inboxSawABill). Retyping in Dokument is the only place a person
@@ -141,20 +140,18 @@ export async function routeClassifiedDocument(
       // Guarded on the open-item predicate like the duplicate-upload hint (upload-and-extract.ts): an item booked
       // or matched since it was read keeps what it was booked as. A voucher type belongs in Underlag, so the
       // routing is cleared either way; undefined is dropped by supabase-js, so only what the answer changes moves.
-      const { data: updated, error } = await supabase
-        .from('invoice_inbox_items')
-        .update({
-          routed_to_arkiv_at: null,
-          routed_doc_type: null,
-          kind_hint: answer?.kind_hint,
-          extracted_data: answer?.extracted_data,
-        })
-        .eq('id', open.id)
-        .eq('company_id', input.companyId)
-        .is('created_supplier_invoice_id', null)
-        .is('created_journal_entry_id', null)
-        .is('matched_transaction_id', null)
-        .select('id')
+      const { data: updated, error } = await whereInboxItemFree(
+        supabase
+          .from('invoice_inbox_items')
+          .update({
+            routed_to_arkiv_at: null,
+            routed_doc_type: null,
+            kind_hint: answer?.kind_hint,
+            extracted_data: answer?.extracted_data,
+          })
+          .eq('id', open.id)
+          .eq('company_id', input.companyId),
+      ).select('id')
       if (error) throw new Error(`inbox item update failed: ${error.message}`)
       if (((updated as Array<{ id: string }> | null) ?? []).length === 0) return 'booked'
       return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
@@ -190,7 +187,7 @@ export async function routeClassifiedDocument(
   }
 
   if (!isArkivSectionEnabled(input.companyId)) return 'left'
-  const waiting = items.filter((i) => !consumed(i) && !i.routed_to_arkiv_at && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
+  const waiting = items.filter((i) => isOpenInboxItem(i) && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
   if (waiting.length === 0) return 'left'
   const { error } = await supabase
     .from('invoice_inbox_items')
@@ -265,14 +262,12 @@ async function fillIfReadSince(supabase: SupabaseClient, companyId: string, docu
 export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<number> {
   const section = arkivSectionRollout()
   if (section !== 'all' && section.length === 0) return 0
-  let query = supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
-    .is('routed_to_arkiv_at', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .not('document_id', 'is', null)
+  let query = whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
+      .not('document_id', 'is', null),
+  )
   if (section !== 'all') query = query.in('company_id', section)
   const { data, error } = await query.limit(500)
   if (error) throw new Error(`stale queue select failed: ${error.message}`)

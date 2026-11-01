@@ -114,7 +114,8 @@ describe('gnubok_list_inbox_items', () => {
     }
 
     const select = findCall('invoice_inbox_items', 'select')?.[0]
-    expect(select).toContain('document_attachments(file_name, journal_entry_id')
+    expect(select).toContain('document_attachments(file_name, upload_source)')
+    expect(select).toContain('document_hold:document_attachments(journal_entry_id')
     expect(result.items.map((item) => item.file_name)).toEqual([
       'leverantor-export-2026-07.pdf',
       null,
@@ -131,12 +132,14 @@ describe('gnubok_list_inbox_items', () => {
         makeInboxItem({
           id: 'inbox-linked',
           created_at: '2026-07-31T12:00:00Z',
-          document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: 'je-a30' },
+          document_attachments: { file_name: 'kvitto.pdf' },
+          document_hold: { journal_entry_id: 'je-a30', entry: { status: 'posted' } },
         }),
         makeInboxItem({
           id: 'inbox-open',
           created_at: '2026-07-30T12:00:00Z',
-          document_attachments: { file_name: 'oppen.pdf', journal_entry_id: null },
+          document_attachments: { file_name: 'oppen.pdf' },
+          document_hold: { journal_entry_id: null, entry: null },
         }),
       ],
       error: null,
@@ -155,8 +158,8 @@ describe('gnubok_list_inbox_items', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        makeInboxItem({ id: 'inbox-linked', document_attachments: { file_name: 'a.pdf', journal_entry_id: 'je-a30' } }),
-        makeInboxItem({ id: 'inbox-open', document_attachments: { file_name: 'b.pdf', journal_entry_id: null } }),
+        makeInboxItem({ id: 'inbox-linked', document_hold: { journal_entry_id: 'je-a30', entry: { status: 'posted' } } }),
+        makeInboxItem({ id: 'inbox-open', document_hold: { journal_entry_id: null, entry: null } }),
       ],
       error: null,
     })
@@ -165,6 +168,25 @@ describe('gnubok_list_inbox_items', () => {
       items: Array<{ id: string }>
     }
     expect(open.items.map((i) => i.id)).toEqual(['inbox-open'])
+  })
+
+  it('reads the one open reading: Arkiv took it is processed, a document on a reversed verifikat is not', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-routed', routed_to_arkiv_at: '2026-07-31T12:00:00Z' }),
+        makeInboxItem({ id: 'inbox-reversed', document_hold: { journal_entry_id: 'je-a30', entry: { status: 'reversed' } } }),
+      ],
+      error: null,
+    })
+
+    const all = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; processed: boolean }>
+    }
+    expect(all.items.map((i) => [i.id, i.processed])).toEqual([
+      ['inbox-routed', true],
+      ['inbox-reversed', false],
+    ])
   })
 
   it('carries the inbox address the listed mail arrived at (crm#1174)', async () => {

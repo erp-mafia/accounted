@@ -61,6 +61,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -92,12 +93,12 @@ import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * The transactions row as the doors read it (`select('*')`): the fields the
- * plan, the generators and the document propagation read are required, the
- * rest travels into the match_confirmed event's payload.
+ * plan and the generators read are required, the rest travels into the
+ * match_confirmed event's payload.
  */
 export type SupplierBankMatchTransactionRow = Pick<
   Transaction,
-  'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'cash_account_id' | 'document_id' | 'journal_entry_id'
+  'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'cash_account_id' | 'journal_entry_id'
 > &
   Partial<Transaction>
 
@@ -624,35 +625,11 @@ export async function bookSupplierBankMatch(
     )
   }
 
-  // Propagate a document pinned to the transaction (via /attach-document or
-  // MCP) onto the payment verifikat, mirroring the categorize route (BFL
-  // 5 kap 6 §: the verifikation must reference its underlag). Guarded to
-  // unlinked current-version docs only: a doc already serving another
-  // verifikat (e.g. the supplier invoice's own document on the registration
-  // entry) must not move. Non-fatal: the match is already committed.
-  if (transaction.document_id) {
-    const { error: docLinkError } = await supabase
-      .from('document_attachments')
-      .update({
-        journal_entry_id: journalEntryId,
-        // Follows from the row's pinned document and the match, not chosen as a pair.
-        ...linkBasisColumns('system_derived', { rule_id: 'bank_row_document_pin' }),
-      })
-      .eq('id', transaction.document_id)
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .eq('is_current_version', true)
-    if (docLinkError) {
-      // Structured fields so the half-linked state (doc retained but not
-      // anchored to the payment JE) can be reconstructed without an audit
-      // trail dig.
-      log.warn('failed to link transaction document to payment JE (non-critical)', {
-        error: docLinkError,
-        documentId: transaction.document_id,
-        journalEntryId,
-      })
-    }
-  }
+  // The bank row's own underlag, as on every booking of a row (BFL 5 kap 6-7 §):
+  // a document already on another verifikat (the invoice's own, on its
+  // registration) stays there. After the last step that can unwind: anchoring
+  // cannot be undone. Never throws, the match stands either way.
+  await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
 
   // Same requirement one table over: the SUPPLIER INVOICE's own retained
   // document must sit on a posted verifikat, or the payment verifikat we

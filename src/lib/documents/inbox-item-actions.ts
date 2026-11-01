@@ -33,6 +33,7 @@ import {
 } from '@/lib/transactions/inbox-underlag'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed } from '@/lib/suggestion-log/checks'
 import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
@@ -70,6 +71,8 @@ interface InboxItemSummaryRow {
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
+  routed_to_arkiv_at?: string | null
+  document_journal_entry_id?: string | null
   email_from: string | null
   email_subject: string | null
   email_received_at: string | null
@@ -189,8 +192,8 @@ function toSummary(
     document_id: row.document_id ?? null,
     kind_hint: row.kind_hint ?? null,
     ...readingSummary(row.extracted_data),
-    // Processed = any terminal link, the same semantics gnubok_list_inbox_items uses.
-    processed: !!(row.matched_transaction_id || row.created_supplier_invoice_id || row.created_journal_entry_id),
+    // Unprocessed = open, the one reading (lib/documents/inbox-item-state.ts).
+    processed: !isOpenInboxItem(row),
     matched_supplier_id: row.matched_supplier_id ?? null,
     matched_transaction_id: row.matched_transaction_id ?? null,
     matched_transaction_journal_entry_id: extra?.journalEntryId ?? null,
@@ -213,9 +216,10 @@ export interface ListInboxItemsFilters {
 
 /**
  * One page of inbox items, newest first, keyset on (created_at, id)
- * descending. unprocessed_only keeps items with no terminal link (no
- * transaction match, supplier invoice or verifikat). A cursor that does not
- * decode starts over.
+ * descending. unprocessed_only keeps the open items: its filter reads the
+ * item's own columns and a page then drops the items a verifikat holds the
+ * document of, so a page can run short with a next_cursor to go on from. A
+ * cursor that does not decode starts over.
  */
 export async function listInboxItemsPage(
   ctx: OperationContext,
@@ -225,31 +229,28 @@ export async function listInboxItemsPage(
   const decoded = decodeDefaultCursor(filters.cursor)
   let query = ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, created_at, document_id, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, error_message, kind_hint')
+    .select(`id, status, source, created_at, document_id, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, email_from, email_subject, email_received_at, error_message, kind_hint, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('company_id', ctx.companyId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit + 1)
   if (filters.status) query = query.eq('status', filters.status)
-  if (filters.unprocessed_only === 'true') {
-    query = query
-      .is('matched_transaction_id', null)
-      .is('created_supplier_invoice_id', null)
-      .is('created_journal_entry_id', null)
-  }
+  const openOnly = filters.unprocessed_only === 'true'
+  if (openOnly) query = whereInboxItemOpen(query)
   if (decoded) {
     query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
   }
   const { data, error } = await query
   if (error) return failed(error)
-  const rows = (data ?? []) as unknown as InboxItemSummaryRow[]
+  const rows = ((data ?? []) as unknown as Array<InboxItemSummaryRow & DocumentHoldRow>).map(withDocumentHold)
   const page = rows.slice(0, limit)
-  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, page)
   const last = page[page.length - 1]
+  const listed = openOnly ? page.filter(isOpenInboxItem) : page
+  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, listed)
   return {
     ok: true,
     data: {
-      inbox_items: page.map((row) => toSummary(row, extras.get(row.id))),
+      inbox_items: listed.map((row) => toSummary(row, extras.get(row.id))),
       next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
     },
   }
@@ -297,13 +298,13 @@ export async function getInboxItem(
   if (!UUID_RE.test(inboxItemId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint, channel_context, routed_to_arkiv_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key')
+    .select(`id, status, source, created_at, updated_at, document_id, extracted_data, extraction_skipped, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, email_received_at, email_body_text, error_message, kind_hint, channel_context, routed_to_arkiv_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return NOT_FOUND
-  const row = data as unknown as InboxItemDetailRow
+  const row = withDocumentHold(data as unknown as InboxItemDetailRow & DocumentHoldRow)
   // As stored, before the document's reading stands in below: the reading tells the two apart itself.
   const storedItem = { ...row } as unknown as ReadingItemRow
   // The proposal is read from the row as stored too: it is a hint, so a failed read answers none.

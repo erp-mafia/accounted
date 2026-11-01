@@ -38,7 +38,7 @@
 import type { InvoiceExtractionResult } from '@/types'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
-import { itemStage, type StageFields } from './items'
+import { itemStage, type StageFields } from '@/lib/documents/inbox-item-state'
 
 /** What made the two one purchase. */
 export type PairBasis = 'invoice_number' | 'supplier_amount_date'

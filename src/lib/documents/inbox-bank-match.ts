@@ -30,6 +30,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { RULE_LINK_BASES, type LinkEvidence } from '@/lib/links/link-basis'
 import { isKronorCurrency, resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isOpenInboxItem } from '@/lib/documents/inbox-item-state'
 
 /** How far a proposal can be trusted: never a score, always what agreed. */
 export const BANK_MATCH_EVIDENCE_LEVELS = ['exakt', 'stark', 'trolig'] as const
@@ -87,15 +88,11 @@ export interface BankMatchItemRow {
   created_supplier_invoice_id?: string | null
   created_journal_entry_id?: string | null
   routed_to_arkiv_at?: string | null
+  document_journal_entry_id?: string | null
   bank_match_transaction_id?: string | null
   bank_match_basis?: string | null
   bank_match_evidence_level?: string | null
   bank_match_source_key?: string | null
-}
-
-/** Not yet a supplier invoice, a verifikat, a pairing or an Arkiv document: still waiting in the Inkorg. */
-export function isOpenInboxItem(item: BankMatchItemRow): boolean {
-  return !item.created_supplier_invoice_id && !item.created_journal_entry_id && !item.matched_transaction_id && !item.routed_to_arkiv_at
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

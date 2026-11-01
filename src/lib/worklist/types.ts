@@ -39,13 +39,12 @@ export const WORKLIST_CATEGORIES = [
    */
   'book_skattekonto',
   /**
-   * Unconsumed documents in the inbox ("N st underlag att hantera").
-   * Pending:  invoice_inbox_items with a document and no
-   *           created_supplier_invoice_id / created_journal_entry_id /
-   *           matched_transaction_id, whose document is still unlinked.
-   * Done:     any of those three columns gets stamped (match, book-direct,
-   *           supplier-invoice conversion) or the document is linked to a
-   *           journal entry. Mirrors /api/documents/inbox-available.
+   * Open documents in the inbox ("N st underlag att hantera").
+   * Pending:  invoice_inbox_items with a document that are open
+   *           (isOpenInboxItem, lib/documents/inbox-item-state.ts).
+   * Done:     a link gets stamped (match, book-direct, supplier-invoice
+   *           conversion), Arkiv takes it, or a verifikat comes to hold the
+   *           document.
    */
   'inbox_document',
   /**

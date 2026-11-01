@@ -107,6 +107,34 @@ describe('readInboxItemBookingState', () => {
     })
   })
 
+  it('a live verifikat on its document books the item, stamp or not', async () => {
+    const { sb, enqueue } = client()
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_hold: { journal_entry_id: 'je-held', entry: { status: 'posted' } } } })
+    expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({
+      state: 'booked',
+      journal_entry_id: 'je-held',
+      supplier_invoice_id: null,
+    })
+  })
+
+  it('a reversed verifikat on its document does not', async () => {
+    const { sb, enqueue } = client()
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_hold: { journal_entry_id: 'je-gone', entry: { status: 'reversed' } } } })
+    expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({ state: 'open', replaces: null })
+  })
+
+  it('a stale pointer stays replaceable, unless a live verifikat holds the document', async () => {
+    const stale = client()
+    stale.enqueue({ data: { created_journal_entry_id: 'je-gone', created_supplier_invoice_id: null } })
+    stale.enqueue({ data: { status: 'reversed' } })
+    expect(await readInboxItemBookingState(stale.sb, COMPANY, 'item-1')).toEqual({ state: 'open', replaces: 'je-gone' })
+
+    const held = client()
+    held.enqueue({ data: { created_journal_entry_id: 'je-gone', created_supplier_invoice_id: null, document_hold: { journal_entry_id: 'je-correction', entry: { status: 'posted' } } } })
+    held.enqueue({ data: { status: 'reversed' } })
+    expect(await readInboxItemBookingState(held.sb, COMPANY, 'item-1')).toEqual({ state: 'booked', journal_entry_id: 'je-correction', supplier_invoice_id: null })
+  })
+
   it('a posted verifikat books the item', async () => {
     const { sb, enqueue } = client()
     enqueue({ data: { created_journal_entry_id: 'je-1', created_supplier_invoice_id: null } })

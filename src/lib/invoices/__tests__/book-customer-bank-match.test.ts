@@ -39,6 +39,8 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
 }))
 vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: mockAppendHistory }))
+const mockPropagateUnderlag = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({ propagateUnderlagForBookedTransaction: mockPropagateUnderlag }))
 
 const { cancelOrphanedEntry, createJournalEntry, findFiscalPeriod, reverseEntry } = await import('@/lib/bookkeeping/engine')
 const { logMatchEvent } = await import('@/lib/invoices/match-log')
@@ -222,6 +224,33 @@ describe('bookCustomerBankMatch: a match that stops after the verifikat posted',
       partialPostedIds: { payment_journal_entry_id: PAYMENT_JE },
       details: { posted_ids: { payment_journal_entry_id: PAYMENT_JE } },
     })
+  })
+})
+
+describe('bookCustomerBankMatch: the row\'s own underlag', () => {
+  it('runs the one step on the payment verifikat, once', async () => {
+    const { supabase } = world()
+
+    expect(await book(supabase)).toMatchObject({ ok: true, journalEntryId: PAYMENT_JE })
+
+    expect(mockPropagateUnderlag).toHaveBeenCalledTimes(1)
+    expect(mockPropagateUnderlag).toHaveBeenCalledWith(supabase, COMPANY, TX, PAYMENT_JE)
+  })
+
+  it('anchors nothing on a verifikat the match cancels: anchoring cannot be undone', async () => {
+    const { supabase } = world({ paymentInsert: { error: { code: 'XX000', message: 'boom' } } })
+
+    expect(await book(supabase)).toMatchObject({ ok: false })
+
+    expect(mockPropagateUnderlag).not.toHaveBeenCalled()
+  })
+
+  it('a refused match runs no step', async () => {
+    const { supabase } = world({ row: { journal_entry_id: 'je-other' }, entries: [{ id: 'je-other', status: 'posted', source_type: 'manual', source_id: null, voucher_series: 'A', voucher_number: 1 }] })
+
+    expect(await book(supabase)).toMatchObject({ ok: false })
+
+    expect(mockPropagateUnderlag).not.toHaveBeenCalled()
   })
 })
 

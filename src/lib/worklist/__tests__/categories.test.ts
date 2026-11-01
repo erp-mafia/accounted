@@ -178,56 +178,45 @@ describe('countUnbookedSkattekontoRows', () => {
 })
 
 describe('countInboxDocuments', () => {
-  it('counts only items whose document is still unlinked', async () => {
+  it('counts the open items: not one a live verifikat holds the document of, but one a reversed verifikat left', async () => {
     enqueue({
       data: [
         { id: 'i1', document_id: 'd1' },
-        { id: 'i2', document_id: 'd2' },
-        { id: 'i3', document_id: 'd3' },
+        { id: 'i2', document_id: 'd2', document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } } },
+        { id: 'i3', document_id: 'd3', document_hold: { journal_entry_id: 'je-2', entry: { status: 'reversed' } } },
       ],
     })
-    enqueue({ count: 2 }) // one of the three docs is already linked elsewhere
     await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(2)
-    expect(mockSupabase.from).toHaveBeenCalledWith('invoice_inbox_items')
-    expect(mockSupabase.from).toHaveBeenCalledWith('document_attachments')
+    expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the open filter of the one reading: no link, not in Arkiv', async () => {
+    enqueue({ data: [] })
+    await countInboxDocuments(supabase, COMPANY)
+    expect(findCalls('invoice_inbox_items', 'is').map(([column]) => column)).toEqual([
+      'created_supplier_invoice_id',
+      'created_journal_entry_id',
+      'matched_transaction_id',
+      'routed_to_arkiv_at',
+    ])
+  })
+
+  it('counts a document once, however many items carry it', async () => {
+    enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd1' }] })
+    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(1)
   })
 
   it('leaves out a receipt riding on its invoice and an open half whose other half is booked, as Behöver dig does', async () => {
     const companionIds = vi.fn().mockResolvedValue(new Set(['i2', 'i3']))
     enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }, { id: 'i3', document_id: 'd3' }, { id: 'i4', document_id: 'd4' }] })
-    enqueue({ count: 2 })
     await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
-    // Only the invoice and the lone item are asked about.
-    expect(findCall('document_attachments', 'in')).toEqual(['id', ['d1', 'd4']])
     expect(companionIds).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'i1' })]))
   })
 
   it('counts every item when the pairing cannot be read', async () => {
     const companionIds = vi.fn().mockRejectedValue(new Error('boom'))
     enqueue({ data: [{ id: 'i1', document_id: 'd1' }, { id: 'i2', document_id: 'd2' }] })
-    enqueue({ count: 2 })
     await expect(countInboxDocuments(supabase, COMPANY, { companionIds })).resolves.toBe(2)
-  })
-
-  it('returns 0 without a document query when no unconsumed items exist', async () => {
-    enqueue({ data: [] })
-    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(0)
-    expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
-  })
-
-  it('chunks the document id filter so large inboxes stay under URL limits', async () => {
-    // 200 deduped ids → two .in() chunks of 150 + 50, counts summed.
-    enqueue({
-      data: Array.from({ length: 200 }, (_, i) => ({
-        id: `item-${i}`,
-        document_id: `doc-${i}`,
-      })),
-    })
-    enqueue({ count: 140 })
-    enqueue({ count: 45 })
-    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(185)
-    // 1 inbox query + 2 chunked document queries.
-    expect(mockSupabase.from).toHaveBeenCalledTimes(3)
   })
 
   it('soft-fails to 0 on query error', async () => {

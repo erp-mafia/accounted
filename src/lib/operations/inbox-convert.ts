@@ -2,15 +2,24 @@
  * Turn an invoice-inbox item into a registered supplier invoice (the
  * "Skapa leverantörsfaktura" of the Underlag inbox). One implementation
  * behind the invoice-inbox extension route
- * (POST /api/extensions/ext/invoice-inbox/items/:id/convert) and the v1
+ * (POST /api/extensions/ext/invoice-inbox/items/:id/convert), the v1
  * operation inbox-items.convert-to-supplier-invoice
- * (lib/operations/inbox-items.ts), so both apply the same rules:
+ * (lib/operations/inbox-items.ts) and the approval of a staged conversion
+ * (gnubok_create_supplier_invoice_from_inbox, stagedConversion below), so
+ * all three apply the same rules, keep the same notes and emit the same
+ * events:
  *
  *   - the item and the supplier must belong to the company; an item already
- *     converted is refused;
- *   - a credit note is refused (issue #2980): it credits the invoice it
- *     references (lib/supplier-invoices/credit.ts), it is never a payable of
- *     its own, and the refusal says which invoice that is;
+ *     converted is refused, and so is one a live verifikat books already,
+ *     when the conversion would post a verifikat of its own: the second
+ *     booking of the purchase (lib/documents/inbox-item-claim.ts). A
+ *     conversion that posts nothing passes: a company fills its reskontra that
+ *     way and settles the invoice against the verifikat. The next step reads
+ *     no hold, so a deferring company's Bokför, or a bank match the duplicate
+ *     check lets through, can still book the purchase a second time;
+ *   - a credit note, or a total below zero, is refused (issue #2980): it
+ *     credits the invoice it references (lib/supplier-invoices/credit.ts), it
+ *     is never a payable of its own, and the refusal says which invoice that is;
  *   - särskild löneskatt only on 741x pension lines and never with
  *     periodisering; periodisering never with reverse charge and only under
  *     faktureringsmetoden;
@@ -35,7 +44,7 @@
  *
  * A dry run resolves the item, the supplier, the rules and the rate, and
  * computes the invoice; it allocates no ankomstnummer and writes no invoice,
- * verifikat or supplier payment details.
+ * verifikat or supplier payment details. A refusal writes none of them either.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
@@ -44,13 +53,13 @@ import type { z } from 'zod'
 import type { CoreEvent } from '@/lib/events/types'
 import { eventBus } from '@/lib/events'
 import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
-import { assessRegisteredPayee, payeeAlertWarning, type RegisteredPayeeAssessment } from '@/lib/payments/payee-registration'
+import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
-import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
+import { defaultVatRateForTreatment, normalizeVatRateToDecimal, treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
 import { allocateDocumentVat } from '@/lib/vat/document-vat'
 import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { netVat } from '@/lib/bookkeeping/gross-split'
@@ -84,6 +93,17 @@ import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierIn
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseWhenPairBooked } from './inbox-pair-guard'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { bookingStateOfItem } from '@/lib/documents/inbox-item-claim'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import {
+  exceedsSupplierInvoiceTotalsTolerance,
+  supplierInvoiceLinesInclVat,
+  supplierInvoiceTotalsGap,
+} from '@/lib/bookkeeping/supplier-invoice-line-totals'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
 
 export type ConvertInboxItemInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -100,11 +120,131 @@ function failed(error: unknown): Failure {
   return { ok: false, code: 'UNKNOWN_ERROR', error }
 }
 
+/** A staged conversion as the service takes it, or why it cannot be. */
+export type StagedConversion =
+  | { ok: true; inboxItemId: string; body: ConvertInboxItemInput; approvedTotal: number }
+  /** `error` is said in the door's own words when there is no registered code, or the code's text says too little. */
+  | { ok: false; code?: string; error?: string }
+
+const finite = (raw: unknown): number | null => (typeof raw === 'number' && Number.isFinite(raw) ? raw : null)
+
+/**
+ * What gnubok_create_supplier_invoice_from_inbox staged, as the input of the
+ * one conversion. Staging read the document and priced the lines, and those
+ * lines are what the approver saw, so they go in as they are: each with its
+ * own VAT, and with its quantity and price when they make up its amount. A
+ * stale or tampered op is refused here, before an ankomstnummer is drawn: a
+ * field missing, an amount that is no number, a line with no account. Where
+ * the staged treatment carries no seller VAT its lines carry none either,
+ * whatever an op staged before the rule still says.
+ */
+export function stagedConversion(params: Record<string, unknown>): StagedConversion {
+  const inboxItemId = params.inbox_item_id as string
+  const supplierId = params.supplier_id as string
+  const supplierInvoiceNumber = params.supplier_invoice_number
+  const invoiceDate = params.invoice_date as string
+  const dueDate = params.due_date as string | null | undefined
+  const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
+  if (
+    !inboxItemId ||
+    !supplierId ||
+    typeof supplierInvoiceNumber !== 'string' ||
+    !supplierInvoiceNumber.trim() ||
+    !invoiceDate ||
+    !dueDate ||
+    rawItems.length === 0
+  ) {
+    return {
+      ok: false,
+      code: 'SI_CREATE_INVALID_INPUT',
+      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, due_date, and items are required',
+    }
+  }
+
+  const total = finite(params.total)
+  if (finite(params.subtotal) === null || finite(params.vat_amount) === null || total === null) {
+    return { ok: false, error: 'subtotal, vat_amount, and total must be finite numbers' }
+  }
+  const stagedRate = params.exchange_rate ?? null
+  if (stagedRate !== null && finite(stagedRate) === null) {
+    return { ok: false, error: 'exchange_rate must be a finite number when provided' }
+  }
+  if (rawItems.some((item) => typeof item.account_number !== 'string' || !ACCOUNT_NUMBER_RE.test(item.account_number))) {
+    return { ok: false, code: 'SI_CREATE_ITEM_ACCOUNT_MISSING' }
+  }
+
+  const kind = params.reverse_charge_kind ?? null
+  if (kind !== null && !(SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS as readonly unknown[]).includes(kind)) {
+    return { ok: false, code: 'SI_CREATE_INVALID_INPUT', error: 'reverse_charge_kind must be eu_goods or eu_services' }
+  }
+
+  // The staged treatment is what the approver saw and the caller's word, as an
+  // explicit reverse_charge flag is on the other doors, so the flag follows it.
+  // An op without one gets the supplier's default.
+  const treatment = typeof params.vat_treatment === 'string' && params.vat_treatment ? params.vat_treatment : undefined
+  const reverseCharge = treatment === 'reverse_charge'
+  const noSellerVat = reverseCharge || !treatmentDeductsInputVat(treatment)
+
+  const items = rawItems.map((item, index) => {
+    const lineTotal = finite(item.line_total) ?? 0
+    const quantity = finite(item.quantity) ?? 1
+    const unitPrice = finite(item.unit_price) ?? 0
+    const reverseChargeRate = Number(item.reverse_charge_rate)
+    return {
+      description: String(item.description || `Position ${index + 1}`),
+      ...(roundOre(quantity * unitPrice) === roundOre(lineTotal)
+        ? { quantity, unit: (item.unit as string | undefined) ?? 'st', unit_price: unitPrice }
+        : { amount: lineTotal }),
+      account_number: item.account_number as string,
+      // Percent-shaped rates (25) are snapped to the statutory set: rows staged
+      // before issue #310 carry them, and one books 2500 % VAT downstream.
+      vat_rate: noSellerVat || typeof item.vat_rate !== 'number' ? 0 : normalizeVatRateToDecimal(item.vat_rate),
+      vat_amount: noSellerVat ? 0 : (finite(item.vat_amount) ?? 0),
+      ...(reverseCharge && [0.06, 0.12, 0.25].includes(reverseChargeRate) ? { reverse_charge_rate: reverseChargeRate } : {}),
+      apply_slp: item.apply_slp === true,
+      dimensions: item.dimensions,
+    }
+  }) as ConvertInboxItemInput['items']
+
+  return {
+    ok: true,
+    inboxItemId,
+    approvedTotal: total,
+    body: {
+      supplier_id: supplierId,
+      supplier_invoice_number: supplierInvoiceNumber,
+      invoice_date: invoiceDate,
+      due_date: dueDate,
+      currency: ((params.currency as string) || 'SEK') as ConvertInboxItemInput['currency'],
+      exchange_rate: stagedRate === null ? undefined : (stagedRate as number),
+      ...(treatment ? { vat_treatment: treatment as ConvertInboxItemInput['vat_treatment'], reverse_charge: reverseCharge } : {}),
+      reverse_charge_kind: kind === null ? undefined : (kind as ConvertInboxItemInput['reverse_charge_kind']),
+      payment_reference: typeof params.payment_reference === 'string' ? params.payment_reference.trim() || undefined : undefined,
+      // Null is no notes staged: the item's channel context goes in, as on every door.
+      notes: typeof params.notes === 'string' ? params.notes : undefined,
+      // Resolved at staging; a bag that does not parse any more is none. Not
+      // omitted: an omitted bag takes the supplier's default, and the approver
+      // saw none.
+      default_dimensions: (coerceDimensionsBag(params.default_dimensions) ?? {}) as ConvertInboxItemInput['default_dimensions'],
+      items,
+    },
+  }
+}
+
 export async function convertInboxItemToSupplierInvoice(
   ctx: OperationContext,
   inboxItemId: string,
   body: ConvertInboxItemInput,
-  options: { dryRun?: boolean; emit?: (event: CoreEvent) => Promise<void> } = {},
+  options: {
+    dryRun?: boolean
+    emit?: (event: CoreEvent) => Promise<void>
+    /**
+     * The total the approver of a staged conversion was shown. The header is
+     * the lines' on every door; this only stops an approval whose lines do
+     * not add up to what was approved.
+     */
+    approvedTotal?: number
+  } = {},
 ): Promise<OperationOutcome<ConvertInboxItemResult>> {
   const { supabase, companyId, userId, log } = ctx
   const emit = options.emit ?? ((event: CoreEvent) => eventBus.emit(event))
@@ -115,20 +255,23 @@ export async function convertInboxItemToSupplierInvoice(
     return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: 'inbox_item_id' } }
   }
 
-  const { data: item, error: fetchError } = await supabase
+  const { data: stored, error: fetchError } = await supabase
     .from('invoice_inbox_items')
-    .select('*')
+    .select(`*, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .single()
-  if (fetchError || !item) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
+  if (fetchError || !stored) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
+  const item = withDocumentHold(stored as unknown as InvoiceInboxItem & DocumentHoldRow)
   if (item.created_supplier_invoice_id) {
     return { ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED', details: { supplier_invoice_id: item.created_supplier_invoice_id } }
   }
-  if (resolveInboxKind(item) === 'credit_note') {
-    const creditTarget = await resolveInboxCreditTarget(supabase, companyId, item, { supplierId: body.supplier_id })
-    return { ok: false, code: 'INBOX_ITEM_IS_CREDIT_NOTE', details: { credit_target: creditTarget } }
-  }
+  const creditNoteRefusal = async (): Promise<Failure> => ({
+    ok: false,
+    code: 'INBOX_ITEM_IS_CREDIT_NOTE',
+    details: { credit_target: await resolveInboxCreditTarget(supabase, companyId, item, { supplierId: body.supplier_id }) },
+  })
+  if (resolveInboxKind(item) === 'credit_note') return creditNoteRefusal()
   // The other half of this purchase is booked already: registering it would book the purchase twice.
   const pairBooked = await refuseWhenPairBooked(supabase, companyId, inboxItemId)
   if (pairBooked) return { ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv }
@@ -154,25 +297,6 @@ export async function convertInboxItemToSupplierInvoice(
     supplier.supplier_type as string | null, reverseCharge, body.reverse_charge_kind,
   )
   if (!reverseChargeKind.ok) return reverseChargeKind
-
-  // The scan (or Peppol's PaymentMeans) read the supplier's giro or IBAN with
-  // everything else. The invoice keeps what it states (payee_*), compared
-  // with the supplier card before the card is touched: a card that lacks
-  // them takes them now, so the invoice can go into a betalfil without a
-  // detour to the supplier card, unless the invoice names an account the
-  // card does not have, which waits for a person (lib/payments/payee-alerts.ts).
-  // A write: commit only.
-  const scannedSupplier = inboxStatedPaymentDetails(item.extracted_data)
-  let payeeAssessment: RegisteredPayeeAssessment | null = null
-  if (!options.dryRun) {
-    payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)
-    if (payeeAssessment.alert) {
-      log.info('inbox invoice states bank details the supplier card lacks', { supplierId: supplier.id, alert: payeeAssessment.alert })
-    }
-    if (scannedSupplier && payeeAssessment.backfill) {
-      await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
-    }
-  }
 
   // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on 741x
   // pension premiums and cannot be combined with periodisering on the row.
@@ -224,7 +348,11 @@ export async function convertInboxItemToSupplierInvoice(
     suppliedRate: body.exchange_rate,
   })
   if (!fx.ok) {
-    return { ok: false, code: 'SI_FX_RATE_MISSING', details: { currency: fx.currency, invoice_date: fx.invoiceDate } }
+    return {
+      ok: false,
+      code: 'SI_FX_RATE_MISSING',
+      details: { currency: fx.currency, invoice_date: fx.invoiceDate, ...(fx.temporary ? { temporary: true } : {}) },
+    }
   }
 
   // Kostnadsställe/projekt (dimensions PR7): the invoice-level bag lands on
@@ -332,6 +460,10 @@ export async function convertInboxItemToSupplierInvoice(
       ? renderChannelContextNotes((item as { channel_context?: InboxChannelContext | null }).channel_context)
       : body.notes.trim() || null
 
+  // Below zero it credits something, however the document was read: a credit
+  // note is never a payable of its own (issue #2980).
+  if (total < 0 || subtotal < 0 || (options.approvedTotal ?? 0) < 0) return creditNoteRefusal()
+
   // Whether confirming posts the registration verifikat: the dry run says
   // what the commit below does.
   const booksOnRegistration = supplierInvoiceBooksOnRegistration(
@@ -339,6 +471,36 @@ export async function convertInboxItemToSupplierInvoice(
     { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
     supplier.supplier_type as string | null,
   )
+
+  // The item is booked already, by its stamp or by the verifikat its document
+  // sits on: a verifikat of its own here books the purchase a second time.
+  if (booksOnRegistration) {
+    const booking = await bookingStateOfItem(supabase, companyId, item)
+    if (booking.state === 'error') return failed(booking.error)
+    if (booking.state === 'booked') {
+      return { ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED', details: { inbox_item_id: inboxItemId, journal_entry_id: booking.journal_entry_id } }
+    }
+  }
+
+  // An approval: the registration credits 2440 with the lines plus their VAT,
+  // so a total the approver saw that they do not reach stops here, before an
+  // ankomstnummer is drawn. Where nothing is deductible, or the company has no
+  // avdragsrätt, the lines are the payable by rule and nothing can disagree.
+  const payableIsTheLines = reverseCharge || !!sellerVatFold || !treatmentDeductsInputVat(vatTreatment)
+  if (options.approvedTotal !== undefined && !payableIsTheLines) {
+    const gap = supplierInvoiceTotalsGap(options.approvedTotal, items)
+    if (exceedsSupplierInvoiceTotalsTolerance(gap, items.length)) {
+      log.warn('refused a staged inbox supplier invoice whose lines do not add up to its total', { inboxItemId, gap })
+      return {
+        ok: false,
+        code: 'SI_CREATE_TOTALS_MISMATCH',
+        details: { gap },
+        messageSv:
+          `${getErrorEntry('SI_CREATE_TOTALS_MISMATCH')?.message_sv} `
+          + `Raderna inklusive moms: ${supplierInvoiceLinesInclVat(items)}, totalbelopp: ${roundOre(options.approvedTotal)}.`,
+      }
+    }
+  }
 
   if (options.dryRun) {
     return {
@@ -383,6 +545,15 @@ export async function convertInboxItemToSupplierInvoice(
   // The model's original reading of the underlag, taken before anything is written.
   const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, item)
 
+  // The scan (or Peppol's PaymentMeans) read the supplier's giro or IBAN with
+  // everything else. The invoice keeps what it states (payee_*), compared
+  // with the supplier card before the card is touched (the backfill below).
+  const scannedSupplier = inboxStatedPaymentDetails(item.extracted_data)
+  const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)
+  if (payeeAssessment.alert) {
+    log.info('inbox invoice states bank details the supplier card lacks', { supplierId: supplier.id, alert: payeeAssessment.alert })
+  }
+
   const { data: arrivalNum, error: arrivalError } = await supabase.rpc('get_next_arrival_number', {
     p_company_id: companyId,
   })
@@ -413,10 +584,10 @@ export async function convertInboxItemToSupplierInvoice(
       payment_reference: body.payment_reference || null,
       // What the document itself says to pay to, validated: a payment
       // compares it with the supplier card instead of trusting either.
-      payee_bankgiro: payeeAssessment?.stated.payee_bankgiro ?? null,
-      payee_plusgiro: payeeAssessment?.stated.payee_plusgiro ?? null,
-      payee_iban: payeeAssessment?.stated.payee_iban ?? null,
-      payee_bic: payeeAssessment?.stated.payee_bic ?? null,
+      payee_bankgiro: payeeAssessment.stated.payee_bankgiro,
+      payee_plusgiro: payeeAssessment.stated.payee_plusgiro,
+      payee_iban: payeeAssessment.stated.payee_iban,
+      payee_bic: payeeAssessment.stated.payee_bic,
       subtotal: roundOre(subtotal),
       subtotal_sek: subtotalSek,
       vat_amount: roundOre(totalVat),
@@ -480,13 +651,20 @@ export async function convertInboxItemToSupplierInvoice(
     return failed(invoiceError ?? new Error('Failed to create invoice'))
   }
 
+  // Taken out again when the invoice cannot stand: its items go with it
+  // (ON DELETE CASCADE), and the item is never marked converted against it.
+  const removeInvoice = async () => {
+    const { error } = await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+    if (error) log.error('inbox convert: invoice left behind after a failed registration', error, { supplierInvoiceId: invoice.id })
+  }
+
   const itemInserts = items.map((line) => ({ supplier_invoice_id: invoice.id, ...line }))
   const { data: insertedItems, error: itemsError } = await supabase
     .from('supplier_invoice_items')
     .insert(itemInserts)
     .select('id, sort_order')
   if (itemsError) {
-    await supabase.from('supplier_invoices').delete().eq('id', invoice.id)
+    await removeInvoice()
     return failed(itemsError)
   }
 
@@ -519,16 +697,19 @@ export async function convertInboxItemToSupplierInvoice(
           .update({ registration_journal_entry_id: journalEntry.id })
           .eq('id', invoice.id)
 
+        // The verifikat has its underlag (BFL 5 kap 6 §). It was booked from
+        // this document. A failed link fails nothing: the verifikat is posted
+        // and immutable, and the invoice stays usable.
         if (item.document_id) {
-          await supabase
-            .from('document_attachments')
-            .update({
-              journal_entry_id: journalEntry.id,
-              // The registration verifikat was booked from this document.
-              ...linkBasisColumns('user_created'),
+          try {
+            await linkToJournalEntry(supabase, companyId, item.document_id, journalEntry.id, linkBasisColumns('user_created'))
+          } catch (linkError) {
+            log.warn('inbox convert: document not linked to the registration verifikat', {
+              documentId: item.document_id,
+              journalEntryId: journalEntry.id,
+              error: linkError instanceof Error ? linkError.message : String(linkError),
             })
-            .eq('id', item.document_id)
-            .eq('company_id', companyId)
+          }
         }
 
         if (hasAccrualItems) {
@@ -559,7 +740,7 @@ export async function convertInboxItemToSupplierInvoice(
         // null means no fiscal period covers invoice_date (every other
         // failure throws). Roll back so the item is never marked converted
         // against an unbooked invoice (an orphan understating 2440/2641).
-        await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+        await removeInvoice()
         return {
           ok: false,
           code: 'SI_CREATE_NO_FISCAL_PERIOD',
@@ -569,7 +750,7 @@ export async function convertInboxItemToSupplierInvoice(
     } catch (err) {
       // The engine threw (period lock, unbalanced entry, ...): roll back the
       // invoice for the same reason, then surface the engine's error.
-      await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+      await removeInvoice()
       if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREATE_FAILED', error: err }
       return {
         ok: false,
@@ -579,22 +760,24 @@ export async function convertInboxItemToSupplierInvoice(
     }
   }
 
-  try {
-    await emit({
-      type: 'supplier_invoice.registered',
-      payload: { supplierInvoice: invoice as SupplierInvoice, companyId, userId },
-    })
-  } catch {
-    /* non-blocking */
-  }
-
-  await supabase
+  const { error: stampError } = await supabase
     .from('invoice_inbox_items')
     .update({ created_supplier_invoice_id: invoice.id })
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
+  if (stampError) {
+    log.warn('inbox convert: item not marked converted (the invoice stands)', { inboxItemId, supplierInvoiceId: invoice.id, error: stampError.message })
+  }
   // An agent's staged registration of the same item is now moot (crm#1074).
   await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
+
+  // What the document states goes onto the card now the invoice exists, and
+  // only what the card lacks, so the invoice can go into a betalfil without a
+  // detour to the supplier card; an account the card does not have waits for
+  // a person (lib/payments/payee-alerts.ts). Never throws.
+  if (scannedSupplier && payeeAssessment.backfill) {
+    await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
+  }
 
   await recordInboxDecision(supabase, extractionSnapshot, {
     supplier_invoice_id: invoice.id as string,
@@ -615,9 +798,18 @@ export async function convertInboxItemToSupplierInvoice(
   }, userId, [
     // The item was not converted yet, and the payee was compared with the supplier card.
     passed('already_booked'),
-    payeeAssessment?.alert ? warned('payee_alert', payeeAlertWarning(payeeAssessment.alert).code) : passed('payee_alert'),
+    payeeAssessment.alert ? warned('payee_alert', payeeAlertWarning(payeeAssessment.alert).code) : passed('payee_alert'),
   ])
 
+  // After every write: the detectors behind these count this registration too.
+  try {
+    await emit({
+      type: 'supplier_invoice.registered',
+      payload: { supplierInvoice: invoice as SupplierInvoice, companyId, userId },
+    })
+  } catch {
+    /* non-blocking */
+  }
   try {
     await emit({
       type: 'supplier_invoice.confirmed',
@@ -641,10 +833,10 @@ export async function convertInboxItemToSupplierInvoice(
       registration_journal_entry_id: registrationJournalEntryId,
       inbox_item_id: inboxItemId,
     },
-    ...(payeeAssessment?.alert || releaseFailed
+    ...(payeeAssessment.alert || releaseFailed
       ? {
           warnings: [
-            ...(payeeAssessment?.alert ? [payeeAlertWarning(payeeAssessment.alert)] : []),
+            ...(payeeAssessment.alert ? [payeeAlertWarning(payeeAssessment.alert)] : []),
             ...(releaseFailed ? [{ ...ACCRUAL_RELEASE_FAILED_WARNING }] : []),
           ],
         }

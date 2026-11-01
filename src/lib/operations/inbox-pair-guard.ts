@@ -23,7 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import type { PairableRow } from '@/lib/inkorg/pairs-read'
+import { readPairableItem } from '@/lib/inkorg/pairs-read'
 import { readInboxPairings } from './inbox-pairings'
 
 const log = createLogger('operations/inbox-pair-guard')
@@ -71,17 +71,6 @@ export function pairAlreadyBookedMessages(found: PairAlreadyBooked): { messageSv
   }
 }
 
-async function readItem(supabase: SupabaseClient, companyId: string, inboxItemId: string): Promise<PairableRow | null> {
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
-    .eq('id', inboxItemId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error) throw error
-  return (data as unknown as PairableRow | null) ?? null
-}
-
 /**
  * The other half that already books this item's purchase, or null when there
  * is none (or the pairing could not be read). Read only.
@@ -92,7 +81,7 @@ export async function pairSiblingAlreadyBooked(
   inboxItemId: string,
 ): Promise<PairAlreadyBooked | null> {
   try {
-    const item = await readItem(supabase, companyId, inboxItemId)
+    const item = await readPairableItem(supabase, companyId, inboxItemId)
     if (!item) return null
     const pairing = (await readInboxPairings(supabase, companyId, [item], { readDeliveries: true })).get(item.id)
     if (pairing?.role === 'booked_companion') {
@@ -106,7 +95,7 @@ export async function pairSiblingAlreadyBooked(
     }
     if (pairing?.role === 'receipt') {
       // Its invoice still in the inbox is no booking; one registered as a supplier invoice is.
-      const invoice = await readItem(supabase, companyId, pairing.invoice_item_id)
+      const invoice = await readPairableItem(supabase, companyId, pairing.invoice_item_id)
       if (invoice?.created_supplier_invoice_id) {
         return {
           sibling_item_id: invoice.id,

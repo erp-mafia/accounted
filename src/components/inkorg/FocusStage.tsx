@@ -203,7 +203,7 @@ export function FocusStage({
 
   // The verifikat that says why: the item's own, or the one that books its matched
   // transaction (also when this underlag has not reached it yet, which is why it is here).
-  const whyEntryId = item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+  const whyEntryId = item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? item.document_journal_entry_id ?? null
   // Each part stays whole when the line wraps: a date never breaks inside.
   const metaParts = [
     headline.kind ? tWork(`doc_kind_${headline.kind}`) : null,

@@ -24,6 +24,7 @@ import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import type { InboxPairing } from '@/lib/inkorg/pairs'
 import { nothingRead } from '@/lib/inkorg/decision'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
 import { readingRetryOf } from './lib/provider-retry'
 import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
@@ -562,7 +563,7 @@ export const invoiceInboxExtension: Extension = {
               resend_email_id, extraction_skipped, channel_context, kind_hint,
               routed_to_arkiv_at, routed_doc_type,
               bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key,
-              bank_match_checked_at
+              bank_match_checked_at, ${INBOX_ITEM_DOCUMENT_HOLD}
             `)
             .eq('company_id', ctx.companyId)
             .order('created_at', { ascending: false })
@@ -587,7 +588,7 @@ export const invoiceInboxExtension: Extension = {
         // Matched-but-unstamped items carry the verifikat that books their
         // transaction, and whether this item's underlag reached it: the same
         // enrichment as v1 (resolveInboxBookedState in inbox-item-actions).
-        type ItemRow = {
+        type ItemRow = DocumentHoldRow & {
           id: string
           document_id: string | null
           matched_transaction_id: string | null
@@ -597,7 +598,7 @@ export const invoiceInboxExtension: Extension = {
           extraction_skipped: boolean | null
           created_at: string
         }
-        const rows = (data ?? []) as ItemRow[]
+        const rows = ((data ?? []) as ItemRow[]).map(withDocumentHold)
         const bookedState = await resolveInboxBookedState(ctx.supabase, ctx.companyId, rows)
 
         // Match on arrival, for the whole list in a few reads (never one per
@@ -781,19 +782,20 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        const { data, error } = await ctx.supabase
+        const { data: stored, error } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('*')
+          .select(`*, ${INBOX_ITEM_DOCUMENT_HOLD}`)
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .single()
 
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        if (!stored) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        const data = withDocumentHold(stored as unknown as DocumentHoldRow) as Record<string, unknown>
 
         // Same enrichment as the list: the detail rail must not offer to
         // book a matched transaction that is already booked.
-        const row = data as {
+        const row = data as unknown as {
           id: string
           document_id: string | null
           matched_transaction_id: string | null
@@ -812,7 +814,7 @@ export const invoiceInboxExtension: Extension = {
         let documentReading: DocumentReading | null = null
         if (url.searchParams.get('include') === 'reading') {
           try {
-            documentReading = await loadDocumentReading(ctx.supabase, ctx.companyId, { item: { ...(data as ReadingItemRow) } }, peppolReader)
+            documentReading = await loadDocumentReading(ctx.supabase, ctx.companyId, { item: { ...(data as unknown as ReadingItemRow) } }, peppolReader)
           } catch (err) {
             extensionLog.warn('inbox item reading failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
             return NextResponse.json({ error: 'Kunde inte läsa underlagets fält' }, { status: 500 })
@@ -825,7 +827,7 @@ export const invoiceInboxExtension: Extension = {
         // An item the bank was never checked for is checked now, before the
         // read below, so the focus view opens with what the bank says. Once:
         // the check stamps bank_match_checked_at whatever it finds.
-        if (neverChecked(data as Parameters<typeof neverChecked>[0])) {
+        if (neverChecked(data as unknown as Parameters<typeof neverChecked>[0])) {
           const checked = await checkNeverCheckedInboxItems(ctx.supabase, ctx.companyId, [id], extensionLog)
           if (checked.includes(id)) {
             const { data: fresh } = await ctx.supabase
@@ -840,7 +842,7 @@ export const invoiceInboxExtension: Extension = {
 
         let bankMatch: BankMatch | null = null
         try {
-          bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...(data as BankMatchItemRow) })
+          bankMatch = await readInboxBankMatch(ctx.supabase, ctx.companyId, { ...(data as unknown as BankMatchItemRow) })
         } catch (err) {
           extensionLog.warn('inbox item bank match read failed', { inboxItemId: id, err: err instanceof Error ? err.message : String(err) })
         }

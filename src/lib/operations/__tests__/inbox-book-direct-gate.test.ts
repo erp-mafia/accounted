@@ -15,6 +15,8 @@ vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   createJournalEntry: mockCreateEntry,
 }))
 vi.mock('../inbox-pair-guard', () => ({ refuseWhenPairBooked: vi.fn(async () => null) }))
+const mockPropagateUnderlag = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({ propagateUnderlagForBookedTransaction: mockPropagateUnderlag }))
 
 import { bookInboxItemDirectly, type BookDirectContext } from '../inbox-book-direct'
 
@@ -45,6 +47,22 @@ async function refusalCode(outcome: Awaited<ReturnType<typeof book>>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+describe('bookInboxItemDirectly: an item a verifikat books already', () => {
+  function bookHeld(hold: unknown) {
+    const { supabase } = createTableMockSupabase({
+      invoice_inbox_items: { data: { id: 'item-1', matched_transaction_id: null, extracted_data: null, document_hold: hold }, error: null },
+    })
+    const ctx = { supabase: supabase as unknown as SupabaseClient, companyId: 'company-1', userId: 'user-1', log } as BookDirectContext
+    return bookInboxItemDirectly(ctx, 'item-1', {} as Parameters<typeof bookInboxItemDirectly>[2])
+  }
+
+  it('refuses when a live verifikat holds the document, stamp or not, before anything posts', async () => {
+    const outcome = await bookHeld({ journal_entry_id: ENTRY_ID, entry: { status: 'posted' } })
+    expect(await refusalCode(outcome)).toEqual({ status: 409, code: 'INBOX_ITEM_ALREADY_BOOKED' })
+    expect(mockCreateEntry).not.toHaveBeenCalled()
+  })
 })
 
 describe('bookInboxItemDirectly: the bank row gate', () => {

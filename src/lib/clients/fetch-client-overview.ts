@@ -11,8 +11,8 @@
  *   3. display names/org numbers (company_settings) and the byrå's own
  *      customer numbers (companies.byra_client_number)
  *   4. unbooked transactions (canonical lib/worklist book_transaction predicate)
- *   5. unconsumed inbox documents (lib/worklist inbox_document predicate,
- *      including the document_attachments backstop)
+ *   5. the documents of the open inbox items (lib/documents/inbox-item-state.ts), as the
+ *      worklist counts them
  *   6. open deadlines (status-engine semantics)
  *   7. latest posted verifikat per company (embedded order+limit, one query)
  *
@@ -26,6 +26,7 @@ import { chunk as chunked } from '@/lib/utils'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { createLogger } from '@/lib/logger'
 import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
 import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
@@ -224,44 +225,24 @@ export async function fetchOverviewRowsForCompanies(
   }
   const unbookedByCompany = countByCompany(unbookedRows)
 
-  // 5. Unconsumed inbox documents (lib/worklist inbox_document): items with a
-  // file that became nothing yet, whose document is still unlinked.
-  const inboxRows: Array<{ company_id: string; document_id: string | null }> = []
+  // 5. The documents of the open inbox items, each once, as the worklist
+  // counts them (lib/worklist inbox_document).
+  const openDocuments = new Map<string, { company_id: string }>()
   for (const chunk of idChunks) {
-    const rows = await fetchAllRows<{
-      id: string
-      company_id: string
-      document_id: string | null
-    }>(({ from, to }) =>
-      supabase
-        .from('invoice_inbox_items')
-        .select('id, company_id, document_id')
-        .in('company_id', chunk)
-        .not('document_id', 'is', null)
-        .is('created_supplier_invoice_id', null)
-        .is('created_journal_entry_id', null)
-        .is('matched_transaction_id', null)
+    const rows = await fetchAllRows<DocumentHoldRow & { id: string; company_id: string; document_id: string }>(({ from, to }) =>
+      whereInboxItemOpen(
+        supabase
+          .from('invoice_inbox_items')
+          .select(`id, company_id, document_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+          .in('company_id', chunk)
+          .not('document_id', 'is', null),
+      )
         .order('id', { ascending: true })
         .range(from, to),
     )
-    inboxRows.push(...rows)
+    for (const row of rows.map(withDocumentHold).filter(isOpenInboxItem)) openDocuments.set(row.document_id, row)
   }
-
-  const docIds = [
-    ...new Set(inboxRows.map((r) => r.document_id).filter((id): id is string => !!id)),
-  ]
-  const unlinkedDocRows: Array<{ company_id: string }> = []
-  for (const chunk of chunked(docIds, IN_CLAUSE_CHUNK)) {
-    const { data, error } = await supabase
-      .from('document_attachments')
-      .select('id, company_id')
-      .in('id', chunk)
-      .is('journal_entry_id', null)
-      .eq('is_current_version', true)
-    if (error) throw new Error(error.message)
-    unlinkedDocRows.push(...(data ?? []))
-  }
-  const inboxByCompany = countByCompany(unlinkedDocRows)
+  const inboxByCompany = countByCompany([...openDocuments.values()])
 
   // 6. Open deadlines across all clients, then the earliest per company with
   // the 14-day ACTION_NEEDED semantics (lib/deadlines/status-engine.ts).

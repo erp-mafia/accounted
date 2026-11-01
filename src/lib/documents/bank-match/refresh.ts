@@ -26,7 +26,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateMerchantSimilarity, CONVERTED_AMOUNT_TOLERANCE_PERCENT } from '@/lib/documents/core-receipt-matcher'
 import {
   bankMatchCheckKey,
-  isOpenInboxItem,
   searchProposableBankRows,
   type BankMatchItemRow,
   type ProposableBankRow,
@@ -39,6 +38,7 @@ import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult } from '@/types'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { pairInboxItems } from '@/lib/inkorg/pairs'
 import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
 import { normaliseCardLast4 } from './card-token'
@@ -80,8 +80,10 @@ export type BankMatchRefreshOutcome =
       others?: { checked: number; failed: number }
     }
 
+const ITEM_COLUMNS = 'id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, resend_email_id, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key'
+
 /** An open inbox item as a check reads it: the reading's columns, the proposal's, and whether it is open. */
-export interface OpenInboxItemRow extends BankMatchItemRow, ReadingItemRow {
+export interface OpenInboxItemRow extends BankMatchItemRow, ReadingItemRow, DocumentHoldRow {
   status: string | null
   created_at: string
   bank_match_checked_at: string | null
@@ -206,20 +208,18 @@ export const OTHERS_RECHECKED = 5
 
 /** The open queue: received, with a document, not yet converted, booked, paired or archived. */
 async function readOpenItems(supabase: SupabaseClient, companyId: string): Promise<OpenInboxItemRow[]> {
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, resend_email_id, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
-    .eq('company_id', companyId)
-    .eq('status', 'received')
-    .not('document_id', 'is', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select(`${ITEM_COLUMNS}, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+      .eq('company_id', companyId)
+      .eq('status', 'received')
+      .not('document_id', 'is', null),
+  )
     .order('created_at', { ascending: false })
     .limit(OPEN_ITEMS_SCANNED)
   if (error) fail('open inbox item read', error)
-  return (data ?? []) as unknown as OpenInboxItemRow[]
+  return ((data ?? []) as unknown as OpenInboxItemRow[]).filter((item) => isOpenInboxItem(withDocumentHold(item)))
 }
 
 /**
@@ -265,17 +265,14 @@ async function lookAgainAtOthers(
   rules: BankMatchRefreshRules,
   deps: BankMatchRefreshDeps,
 ): Promise<{ checked: number; failed: number }> {
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id')
-    .eq('company_id', companyId)
-    .in('bank_match_transaction_id', rowIds.slice(0, 100))
-    .neq('id', itemId)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
-    .limit(OTHERS_RECHECKED)
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('bank_match_transaction_id', rowIds.slice(0, 100))
+      .neq('id', itemId),
+  ).limit(OTHERS_RECHECKED)
   if (error) return { checked: 0, failed: 1 }
   const ids = ((data ?? []) as Array<{ id: string }>).map((row) => row.id)
   let failed = 0
@@ -304,7 +301,7 @@ export async function refreshInboxItemBankMatch(
 ): Promise<BankMatchRefreshOutcome> {
   const { data, error } = await supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, resend_email_id, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
+    .select(`${ITEM_COLUMNS}, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -312,7 +309,7 @@ export async function refreshInboxItemBankMatch(
   const item = data as unknown as OpenInboxItemRow | null
   if (!item) return { status: 'not_found' }
   if (item.status === 'processing') return { status: 'pending' }
-  if (!isOpenInboxItem(item)) return { status: 'closed' }
+  if (!isOpenInboxItem(withDocumentHold(item))) return { status: 'closed' }
 
   const today = deps.today ?? todayIsoStockholm()
   const own = await itemFacts(supabase, companyId, item, rules, deps, today)
@@ -360,21 +357,19 @@ export async function refreshInboxItemBankMatch(
 
   // Only while the item is still open: a booking or a pairing that landed
   // since the read wins, and its item keeps no proposal.
-  const { error: updateError } = await supabase
-    .from('invoice_inbox_items')
-    .update({
-      bank_match_transaction_id: decision?.transactionId ?? null,
-      bank_match_basis: decision?.basis ?? null,
-      bank_match_evidence_level: decision?.evidenceLevel ?? null,
-      bank_match_checked_at: new Date().toISOString(),
-      bank_match_source_key: sourceKey,
-    })
-    .eq('id', item.id)
-    .eq('company_id', companyId)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
+  const { error: updateError } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .update({
+        bank_match_transaction_id: decision?.transactionId ?? null,
+        bank_match_basis: decision?.basis ?? null,
+        bank_match_evidence_level: decision?.evidenceLevel ?? null,
+        bank_match_checked_at: new Date().toISOString(),
+        bank_match_source_key: sourceKey,
+      })
+      .eq('id', item.id)
+      .eq('company_id', companyId),
+  )
   if (updateError) fail('proposal write', updateError)
 
   if (deps.recheckOthers === false || claimable.length === 0) return { status: 'updated', decision }

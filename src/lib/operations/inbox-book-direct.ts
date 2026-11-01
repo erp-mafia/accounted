@@ -43,6 +43,7 @@ import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes
 import { bankMatchLinkEvidence, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import { claimInboxItemOrReverseEntry } from '@/lib/documents/inbox-item-claim'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { createLogger } from '@/lib/logger'
 import { postingPort } from '@/lib/posting/port'
@@ -50,6 +51,7 @@ import { passed, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import type { InboxChannelContext, JournalEntry, Transaction } from '@/types'
 import { followPairedReceipt } from './inbox-companion'
@@ -77,7 +79,7 @@ export async function bookInboxItemDirectly(
 ): Promise<BookDirectOutcome> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context, extracted_data, bank_match_transaction_id, bank_match_basis')
+    .select(`id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context, extracted_data, bank_match_transaction_id, bank_match_basis, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -106,6 +108,14 @@ export async function bookInboxItemDirectly(
       { error: 'Posten är redan bokförd.' },
       { status: 409 }
     ))
+  }
+  // No stamp, and a live verifikat holds the document: the purchase is booked.
+  const heldBy = withDocumentHold(item as DocumentHoldRow).document_journal_entry_id
+  if (heldBy) {
+    return refused(errorResponseFromCode('INBOX_ITEM_ALREADY_BOOKED', ctx.log, {
+      requestId: ctx.requestId,
+      details: { inbox_item_id: id, journal_entry_id: heldBy },
+    }))
   }
   // The other half of this purchase (the invoice or the receipt it came
   // with) is booked already: refused before anything is posted, naming
@@ -379,6 +389,12 @@ export async function bookInboxItemDirectly(
     } catch (err) {
       ctx.log.error('[invoice-inbox/book-direct] Document link failed', err)
     }
+  }
+
+  // The bank row's own underlag, as on every booking of a row: its pinned
+  // document and any other item matched to it. Never throws.
+  if (transaction) {
+    await propagateUnderlagForBookedTransaction(ctx.supabase, ctx.companyId, transaction.id, journalEntry.id)
   }
 
   // The guards this booking ran: the item and its bank row unbooked,

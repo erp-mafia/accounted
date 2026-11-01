@@ -20,6 +20,7 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { isOpenInboxItem } from '@/lib/documents/inbox-item-state'
 import { summarizeUnderlagTotals } from './bulk-book-inbox-totals'
 
 // Minimal shape the dialog needs from the workspace's inbox items.
@@ -109,7 +110,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
   const notMatched = useMemo(
-    () => items.filter((it) => !it.matched_transaction_id && !it.created_journal_entry_id && !it.created_supplier_invoice_id).length,
+    () => items.filter(isOpenInboxItem).length,
     [items],
   )
   const alreadyBooked = useMemo(
