@@ -35,6 +35,7 @@ import type {
   IxbrlSigner,
   Resultatdisposition,
 } from './types'
+import { isFirstFiscalPeriod } from '@/lib/bookkeeping/validate-period-duration'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
@@ -137,11 +138,12 @@ export async function buildIxbrlInput(
   // PDF rows are oldest-first; iXBRL columns newest-first. Each row needs the
   // matching fiscal-period range so the document can declare period2/3 +
   // balans2/3 contexts explicitly.
-  const { data: allPeriods } = await supabase
+  const { data: allPeriods, error: allPeriodsError } = await supabase
     .from('fiscal_periods')
     .select('id, name, period_start, period_end')
     .eq('company_id', companyId)
     .order('period_start', { ascending: false })
+  if (allPeriodsError) throw new Error(`Failed to read fiscal periods: ${allPeriodsError.message}`)
   const periodByName = new Map(
     ((allPeriods ?? []) as Array<{ name: string; period_start: string; period_end: string }>).map(
       (p) => [p.name, p],
@@ -356,7 +358,10 @@ export async function buildIxbrlInput(
     },
     period: { start: period.period_start, end: period.period_end },
     previousPeriod,
-    isFirstFiscalYear: previousPeriod === null,
+    isFirstFiscalYear: isFirstFiscalPeriod(
+      period.period_start,
+      ((allPeriods ?? []) as Array<{ period_start: string }>).map((p) => p.period_start),
+    ),
     rr: mapping.rr,
     br: mapping.br,
     totals: mapping.totals,

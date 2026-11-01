@@ -50,7 +50,8 @@ interface TableResp {
 /** Per-table queue mock that also records every (table, method, args). */
 function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
   const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
+  const tables = { companies: { data: { entity_type: 'aktiebolag' }, error: null }, ...byTable }
+  for (const [t, val] of Object.entries(tables)) queues.set(t, Array.isArray(val) ? [...val] : [val])
   const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   const buildChain = (key: string): unknown =>
     new Proxy(
@@ -226,6 +227,24 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods', () => {
     const json = await res.json()
     expect(json.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
     expect(json.error.details.months).toBe(24)
+  })
+
+  it('400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR for an enskild firma outside the calendar year', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await createPeriod(
+      request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2027-01-01","period_end":"2027-06-30"}' }),
+      companyParams,
+    )
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+    expect(json.error.details.rule).toBe('end_31_december')
+    expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
   })
 
   it('409 FISCAL_PERIOD_OVERLAP', async () => {

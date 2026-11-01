@@ -114,12 +114,13 @@ describe('previousYearHasBookkeeping (PH 193)', () => {
   beforeEach(() => queued.reset())
 
   it('is true when the year before holds a posted verifikat that is not a storno (imported again)', async () => {
-    queued.enqueue({ data: [{ id: 'previous-year' }] })
+    queued.enqueue({ data: { id: 'previous-year', period_end: '2025-12-31' } })
     queued.enqueue({ data: [{ id: 'entry-1' }] })
     expect(await previousYearHasBookkeeping(queued.supabase as never, 'company-1', '2026-01-01')).toBe(true)
-    expect(queued.findCalls('fiscal_periods', 'eq')).toEqual([['company_id', 'company-1']])
-    expect(queued.findCall('fiscal_periods', 'lt')).toEqual(['period_end', '2026-01-01'])
-    expect(queued.findCall('fiscal_periods', 'order')).toEqual(['period_end', { ascending: false }])
+    expect(queued.findCalls('fiscal_periods', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['period_end', '2025-12-31'],
+    ])
     expect(queued.findCalls('journal_entries', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['fiscal_period_id', 'previous-year'],
@@ -129,13 +130,13 @@ describe('previousYearHasBookkeeping (PH 193)', () => {
   })
 
   it('is false when the undone year has only reversed originals and stornos left (crm#1099)', async () => {
-    queued.enqueue({ data: [{ id: 'previous-year' }] })
+    queued.enqueue({ data: { id: 'previous-year', period_end: '2025-12-31' } })
     queued.enqueue({ data: [] })
     expect(await previousYearHasBookkeeping(queued.supabase as never, 'company-1', '2026-01-01')).toBe(false)
   })
 
   it('is false for the first year of the company without reading entries', async () => {
-    queued.enqueue({ data: [] })
+    queued.enqueue({ data: null })
     expect(await previousYearHasBookkeeping(queued.supabase as never, 'company-1', '2026-01-01')).toBe(false)
     expect(queued.findCalls('journal_entries', 'eq')).toEqual([])
   })

@@ -91,6 +91,15 @@ type ParseResponse = {
   >
 }
 
+/** The file's year is not recorded: the chart, no year around it, no other year, the legal form. */
+function enqueueNewYear() {
+  enqueue({ data: [] })
+  enqueue({ data: null })
+  enqueue({ data: [] })
+  enqueue({ data: [] })
+  enqueue({ data: { entity_type: 'aktiebolag' } })
+}
+
 describe('POST /api/import/sie/parse', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -124,6 +133,7 @@ describe('POST /api/import/sie/parse', () => {
   })
 
   it('keeps unused non-four-digit definitions visible as archive-only and out of target mappings', async () => {
+    enqueueNewYear()
     const response = await POST(fileRequest(CLEAN_SIE + '\n#KONTO 999 "Unused"\n#KONTO 193000 "Unused subaccount"'), emptyParams)
     const body = await response.json()
     expect(response.status).toBe(200)
@@ -192,6 +202,7 @@ describe('POST /api/import/sie/parse', () => {
   })
 
   it('adds a mojibake warning to the preview issues without blocking the parse', async () => {
+    enqueueNewYear()
     const response = await POST(fileRequest(MOJIBAKE_SIE), emptyParams)
     const body = (await response.json()) as ParseResponse
 
@@ -209,6 +220,7 @@ describe('POST /api/import/sie/parse', () => {
   })
 
   it('adds no mojibake warning for a clean file', async () => {
+    enqueueNewYear()
     const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
     const body = (await response.json()) as ParseResponse
 
@@ -317,9 +329,7 @@ describe('POST /api/import/sie/parse', () => {
     })
 
     it('reports create when no period overlaps the file year', async () => {
-      enqueue({ data: [] })
-      enqueue({ data: null })
-      enqueue({ data: [] })
+      enqueueNewYear()
 
       const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
       const body = (await response.json()) as ParseResponse

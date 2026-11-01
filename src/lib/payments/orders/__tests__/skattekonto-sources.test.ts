@@ -87,6 +87,11 @@ describe('resolveSkattekontoSource: momsdeklaration', () => {
     vat.computeVatDeclaration.mockResolvedValue(declaration({ ruta10: 5000 }, '2026-12-31'))
     result = await resolveSkattekontoSource(db.supabase as never, COMPANY, { ...VAT_Q3, period: 4 }, TODAY)
     expect(result).toMatchObject({ ok: true, due: { declared: 5000, payable: null, nothing_due: 'period_not_ended' } })
+
+    // On its last day a period has not ended either.
+    vat.computeVatDeclaration.mockResolvedValue(declaration({ ruta10: 5000 }, TODAY))
+    result = await resolveSkattekontoSource(db.supabase as never, COMPANY, VAT_Q3, TODAY)
+    expect(result).toMatchObject({ ok: true, due: { payable: null, nothing_due: 'period_not_ended' } })
   })
 
   it('says when the period is not on record as filed, and passes a yearly räkenskapsår through', async () => {

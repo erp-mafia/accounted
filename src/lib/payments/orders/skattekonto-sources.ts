@@ -35,6 +35,7 @@ import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { roundOre } from '@/lib/money'
 import { computeVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
+import { hasEnded } from '@/lib/dates/iso'
 import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { vatPeriodDeadline, type VatPeriodDeadline } from '@/lib/vat/filing-record-store'
 
@@ -246,7 +247,7 @@ async function resolveVatDeclaration(
   const periodEnd = computed.declaration.period.end
   // A period that has not ended has no declaration yet: what the books show
   // so far is not what will be filed.
-  const nothingDue = periodEnd >= today ? 'period_not_ended' : nothingDueFor(declared)
+  const nothingDue = !hasEnded(periodEnd, today) ? 'period_not_ended' : nothingDueFor(declared)
   return {
     ok: true,
     due: {

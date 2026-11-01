@@ -41,10 +41,11 @@ import { useVatSettlementProposal } from '@/components/reports/use-vat-settlemen
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
-import { fiscalPeriodForVatYear, resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import { fiscalPeriodForVatYear } from '@/lib/reports/period-dates'
+import { fiscalYearEndMonthIn, fiscalYearEndMonthOn } from '@/lib/tax/deadline-config'
 import {
   indexVatFilings,
-  vatFilingFiscalYearEndMonth,
   vatFilingKey,
   vatFilingTaxPeriod,
   type VatFilingRecord,
@@ -587,7 +588,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // explicit override (and moves `year` along). Monthly/quarterly are
   // calendar periods and need no fiscal year.
   const [pickedFiscalPeriodId, setPickedFiscalPeriodId] = useState('')
-  const { periods: fiscalPeriods } = useFiscalPeriods()
+  const { periods: fiscalPeriods, isLoading: fiscalPeriodsLoading } = useFiscalPeriods()
   const tReports = useTranslations('reports')
   const errorLocale = useLocale() as ErrorLocale
   const tPay = useTranslations('skattekonto_bank_payment')
@@ -671,19 +672,27 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const filingsReady = filings !== null && filings.key === companyKey
   const filedByPeriod = filingsReady ? filings.byPeriod : null
 
-  // Where the räkenskapsår ends: places a yearly period, as on the server.
-  const fiscalYearEndMonth = vatFilingFiscalYearEndMonth(settings)
+  // Where the räkenskapsår ends: places a yearly period, as on the server,
+  // from the recorded years. The seed asks for the year running today, the
+  // filing card for the year selected.
+  const fiscalCalendar = {
+    entity_type: settings?.entity_type,
+    fiscal_year_start_month: settings?.fiscal_year_start_month,
+    fiscal_years: fiscalPeriods.map((p) => ({ start: p.period_start, end: p.period_end })),
+  }
+  const fiscalYearEndMonth = fiscalYearEndMonthIn(year, fiscalCalendar)
+  const runningYearEndMonth = fiscalYearEndMonthOn(todayIsoStockholm(), fiscalCalendar)
 
   // Seeded once settings AND the filing records for the company have
   // settled, so the seed can step past an already-filed period (#2746,
   // helårsmoms included since #2786) instead of reopening it on every visit
   // until the next period ends.
-  if (companyKey !== null && filingsReady && appliedCompany !== companyKey) {
+  if (companyKey !== null && filingsReady && !fiscalPeriodsLoading && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
     const initial = resolveInitialVatPeriodSelection({
       momsPeriod: settings?.moms_period ?? null,
       over40m: settings?.vat_taxable_base_over_40m === true,
-      fiscalYearEndMonth,
+      fiscalYearEndMonth: runningYearEndMonth,
       isFiled: (cadence, y, p) => filings.byPeriod.has(vatFilingKey(cadence, y, p)),
     })
     setPeriodType(initial.periodType)
@@ -713,7 +722,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
     setPeriodType(value)
     const ended = mostRecentEndedVatPeriod(value, new Date(), {
       over40m: settings?.vat_taxable_base_over_40m === true,
-      fiscalYearEndMonth,
+      fiscalYearEndMonth: runningYearEndMonth,
     })
     setYear(ended.year)
     setPeriod(ended.period)

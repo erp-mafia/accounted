@@ -27,7 +27,8 @@
  *     whenever a verifikat, an opening balance, a lock, year-end work, a
  *     filing or an SIE hold would be affected (crm#1010: a year that already
  *     holds verifikat may still move a boundary over days that hold nothing);
- *   - an enskild firma uses the calendar year (BFL 3 kap.);
+ *   - an enskild firma uses the calendar year: every year ends on 31
+ *     December and only the first may start after 1 January (BFL 3 kap.);
  *   - an open prior year is information, never a gate: the create succeeds
  *     with the PRIOR_FISCAL_YEAR_STILL_OPEN warning (BFL 5 kap. 2 § and
  *     6 kap. bind at once, see the comment at the check).
@@ -35,7 +36,13 @@
  * A dry run reads and writes nothing: it is the MCP staging preview.
  */
 import { addDaysIso } from '@/lib/dates/iso'
-import { checkPeriodDuration, parseDateParts, type PeriodDurationIssue } from '@/lib/bookkeeping/validate-period-duration'
+import {
+  checkPeriodDuration,
+  isFirstFiscalPeriod,
+  parseDateParts,
+  type PeriodDurationIssue,
+} from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearLockedToCalendar, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import {
   assertPeriodExternallyClosable,
   markPeriodClosedExternally,
@@ -72,6 +79,20 @@ function durationFailure(issue: PeriodDurationIssue, start: string, end: string)
       return { ok: false, code: 'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH', details: { period_start: start } }
     case 'end_not_month_end':
       return { ok: false, code: 'FISCAL_PERIOD_END_NOT_MONTH_END', details: { period_end: end } }
+    case 'not_calendar_year_end':
+      return {
+        ok: false,
+        code: 'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
+        details: { rule: 'end_31_december', period_end: end },
+        messageSv: 'Enskild firma måste ha slutdatum 31 december enligt BFL 3 kap.',
+      }
+    case 'not_calendar_year_start':
+      return {
+        ok: false,
+        code: 'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
+        details: { rule: 'start_1_january', period_start: start },
+        messageSv: 'Enskild firma måste använda kalenderår (1 januari till 31 december) enligt BFL 3 kap.',
+      }
     case 'exceeds_18_months':
       return {
         ok: false,
@@ -118,16 +139,18 @@ export async function createFiscalPeriod(
     is_closed: boolean
   }>
 
-  // "First" räkenskapsår = no existing period starts earlier, NOT "no period
-  // exists at all". Mirrors the enforce_first_of_month_for_subsequent_periods
-  // trigger: a mid-month start is legal for the company's first year (BFL 3
-  // kap. 3 §, it begins the day bokföringsskyldigheten inträder) and only
-  // subsequent years must start on the 1st (BFL 3 kap. 1 §). A company that
-  // imported 2024+ from Fortnox and now backfills its first year from
-  // 2022-07-22 is creating exactly that first year (issue #2237).
-  const isFirstPeriod = !sortedPeriods.some((p) => p.period_start < input.period_start)
+  // A mid-month start is legal for the company's first year (BFL 3 kap. 3 §, it
+  // begins the day bokföringsskyldigheten inträder) and only subsequent years
+  // must start on the 1st (BFL 3 kap. 1 §). A company that imported 2024+ from
+  // Fortnox and now backfills its first year from 2022-07-22 is creating
+  // exactly that first year (issue #2237).
+  const isFirstPeriod = isFirstFiscalPeriod(input.period_start, sortedPeriods.map((p) => p.period_start))
+  const entityType = await resolveCompanyEntityType(supabase, companyId)
 
-  const durationIssue = checkPeriodDuration(input.period_start, input.period_end, { isFirstPeriod })
+  const durationIssue = checkPeriodDuration(input.period_start, input.period_end, {
+    isFirstPeriod,
+    calendarYearOnly: fiscalYearLockedToCalendar(entityType),
+  })
   if (durationIssue) return durationFailure(durationIssue, input.period_start, input.period_end)
 
   // The new period's immediate neighbours. Fiscal periods never overlap (the
@@ -457,13 +480,12 @@ export async function updateFiscalPeriod(
   // räkenskapsår, max 18 months).
   let isFirstPeriod = false
   if (datesMove) {
-    const { count: earlierCount } = await supabase
+    const { data: others } = await supabase
       .from('fiscal_periods')
-      .select('id', { count: 'exact', head: true })
+      .select('period_start')
       .eq('company_id', companyId)
       .neq('id', fiscalPeriodId)
-      .lt('period_start', newStart)
-    isFirstPeriod = !earlierCount || earlierCount === 0
+    isFirstPeriod = isFirstFiscalPeriod(newStart, ((others ?? []) as { period_start: string }[]).map((p) => p.period_start))
   }
 
   if (period.is_closed || period.locked_at) {
@@ -472,38 +494,11 @@ export async function updateFiscalPeriod(
   }
 
   if (datesMove) {
-
-    // An enskild firma must end on 31 december (BFL 3 kap.); subsequent
-    // years also start on 1 januari. The first year may start any day.
-    const { data: companyRow } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    if (companyRow?.entity_type === 'enskild_firma') {
-      const e = parseDateParts(newEnd)
-      if (e.month !== 12 || e.day !== 31) {
-        return {
-          ok: false,
-          code: 'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
-          details: { rule: 'end_31_december', period_end: newEnd },
-          messageSv: 'Enskild firma måste ha slutdatum 31 december enligt BFL 3 kap.',
-        }
-      }
-      if (!isFirstPeriod) {
-        const s = parseDateParts(newStart)
-        if (s.month !== 1 || s.day !== 1) {
-          return {
-            ok: false,
-            code: 'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
-            details: { rule: 'start_1_january', period_start: newStart },
-            messageSv: 'Enskild firma måste använda kalenderår (1 januari till 31 december) enligt BFL 3 kap.',
-          }
-        }
-      }
-    }
-
-    const durationIssue = checkPeriodDuration(newStart, newEnd, { isFirstPeriod })
+    const entityType = await resolveCompanyEntityType(supabase, companyId)
+    const durationIssue = checkPeriodDuration(newStart, newEnd, {
+      isFirstPeriod,
+      calendarYearOnly: fiscalYearLockedToCalendar(entityType),
+    })
     if (durationIssue) return durationFailure(durationIssue, newStart, newEnd)
 
     const { data: overlapping } = await supabase

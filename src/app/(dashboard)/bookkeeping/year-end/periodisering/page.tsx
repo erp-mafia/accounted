@@ -34,7 +34,7 @@ import type {
   PeriodiseringConfidence,
 } from '@/lib/bokslut/accruals/auto-detect'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
 
@@ -136,7 +136,7 @@ export default function PeriodiseringWizardPage() {
     }
     const today = todayIsoStockholm()
     const eligible = allPeriods.filter(
-      (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
+      (p) => !p.is_closed && !p.closing_entry_id && hasEnded(p.period_end, today),
     )
     eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
     setPeriods(eligible)

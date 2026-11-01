@@ -7,13 +7,19 @@
  * routes, service role for the v1 and MCP doors) and filters every query by
  * company_id, RLS or not.
  *
- * Every entry point reads the company's VAT settings first: the fiscal-year
- * end month places a yearly period (its tax_period label and its dates), and
- * the rest builds a missing deadline row the way the generator would. The
- * three cadences then take one path; nothing below branches on yearly.
+ * Every entry point reads the company's VAT settings and recorded räkenskapsår
+ * first: the fiscal-year end month places a yearly period (its tax_period label
+ * and its dates), and the rest builds a missing deadline row the way the
+ * generator would. The three cadences then take one path; only periodRange
+ * branches on yearly.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
+import {
+  fiscalYearEndMonthIn,
+  fiscalYearsEndingIn,
+  getVatDeadlineForPeriod,
+  type VatDeadlineCalculationSettings,
+} from '@/lib/tax/deadline-config'
 import { createLinkedReportPeriod } from '@/lib/tax/deadline-generator'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatDateISO } from '@/lib/calendar/utils'
@@ -23,7 +29,6 @@ import {
   parseVatFilingReference,
   vatFilingDateProblem,
   vatFilingDeadlineType,
-  vatFilingFiscalYearEndMonth,
   vatFilingLabelFiscalYearEndMonth,
   vatFilingPeriodFromTaxPeriod,
   vatFilingPeriodRange,
@@ -133,8 +138,10 @@ interface FilingSettingsRow {
 
 interface FilingSettings {
   row: FilingSettingsRow | null
-  /** Month (1-12) the räkenskapsår ends: places yearly periods. */
-  fiscalYearEndMonth: number
+  /** Month (1-12) the räkenskapsår ending in a year ends: places yearly periods. */
+  fiscalYearEndMonth: (year: number) => number
+  /** First day of the räkenskapsår ending in that month of that year, when one does. */
+  fiscalYearStart: (year: number, endMonth: number) => string | null
 }
 
 async function loadFilingSettings(
@@ -148,16 +155,52 @@ async function loadFilingSettings(
     .maybeSingle()
   if (error) throw error
   const row = (data as FilingSettingsRow | null) ?? null
-  return { row, fiscalYearEndMonth: vatFilingFiscalYearEndMonth(row) }
+  const { data: years, error: yearsError } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('company_id', companyId)
+  if (yearsError) throw yearsError
+  const calendar = {
+    ...row,
+    fiscal_years: ((years ?? []) as { period_start: string; period_end: string }[]).map((year) => ({
+      start: year.period_start,
+      end: year.period_end,
+    })),
+  }
+  return {
+    row,
+    fiscalYearEndMonth: (year) => fiscalYearEndMonthIn(year, calendar),
+    fiscalYearStart: (year, endMonth) =>
+      fiscalYearsEndingIn([year], calendar).find((fy) => fy.endMonth === endMonth)?.start ?? null,
+  }
 }
 
-function placement(input: VatFilingPeriodInput, fiscalYearEndMonth: number): VatFilingPeriodPlacement {
-  const range = vatFilingPeriodRange(input.periodType, input.year, input.period, fiscalYearEndMonth)
+/**
+ * The period's first and last day. A helårsmoms period is the räkenskapsår
+ * itself, of whatever length (BFL 3 kap.): a change to a filed period is read
+ * over this range (lib/vat/filed-period-changes.ts), so an extended first year
+ * counts from its own first day.
+ */
+function periodRange(
+  periodType: VatFilingPeriodInput['periodType'],
+  year: number,
+  period: number,
+  endMonth: number,
+  settings: FilingSettings,
+): { start: string; end: string } {
+  const range = vatFilingPeriodRange(periodType, year, period, endMonth)
+  if (periodType !== 'yearly') return range
+  return { ...range, start: settings.fiscalYearStart(year, endMonth) ?? range.start }
+}
+
+function placement(input: VatFilingPeriodInput, settings: FilingSettings): VatFilingPeriodPlacement {
+  const endMonth = settings.fiscalYearEndMonth(input.year)
+  const range = periodRange(input.periodType, input.year, input.period, endMonth, settings)
   return {
     period_type: input.periodType,
     year: input.year,
     period: input.period,
-    tax_period: vatFilingTaxPeriod(input.periodType, input.year, input.period, fiscalYearEndMonth),
+    tax_period: vatFilingTaxPeriod(input.periodType, input.year, input.period, endMonth),
     period_start: range.start,
     period_end: range.end,
   }
@@ -172,15 +215,16 @@ function filedOnToCompletedAt(filedOn: string): string {
   return `${filedOn}T12:00:00.000Z`
 }
 
-function toRecord(row: DeadlineRow, fiscalYearEndMonth: number): VatFilingRecord | null {
+function toRecord(row: DeadlineRow, settings: FilingSettings): VatFilingRecord | null {
   const parsed = vatFilingPeriodFromTaxPeriod(row.tax_period)
   if (!parsed || !row.completed_at) return null
   const taxPeriod = row.tax_period as string
-  const range = vatFilingPeriodRange(
+  const range = periodRange(
     parsed.period_type,
     parsed.year,
     parsed.period,
-    vatFilingLabelFiscalYearEndMonth(taxPeriod, fiscalYearEndMonth),
+    vatFilingLabelFiscalYearEndMonth(taxPeriod, settings.fiscalYearEndMonth(parsed.year)),
+    settings,
   )
   return {
     deadline_id: row.id,
@@ -199,8 +243,8 @@ function toRecord(row: DeadlineRow, fiscalYearEndMonth: number): VatFilingRecord
  * null for any other row state. The one state manual actions must not touch;
  * the guarded updates below filter on its exact negation.
  */
-function confirmedRecord(row: DeadlineRow, fiscalYearEndMonth: number): VatFilingRecord | null {
-  return row.is_completed && row.status === 'confirmed' ? toRecord(row, fiscalYearEndMonth) : null
+function confirmedRecord(row: DeadlineRow, settings: FilingSettings): VatFilingRecord | null {
+  return row.is_completed && row.status === 'confirmed' ? toRecord(row, settings) : null
 }
 
 /** Every VAT period the company has on record as filed, newest first. */
@@ -222,7 +266,7 @@ export async function listVatFilings(
   if (error) throw error
   const records: VatFilingRecord[] = []
   for (const row of (data ?? []) as DeadlineRow[]) {
-    const record = toRecord(row, settings.fiscalYearEndMonth)
+    const record = toRecord(row, settings)
     if (record) records.push(record)
   }
   return records
@@ -238,14 +282,14 @@ async function findPeriodRow(
   supabase: SupabaseClient,
   companyId: string,
   input: VatFilingPeriodInput,
-  fiscalYearEndMonth: number,
+  settings: FilingSettings,
 ): Promise<DeadlineRow | null> {
   const { data, error } = await supabase
     .from('deadlines')
     .select('id, tax_deadline_type, tax_period, is_completed, completed_at, status, notes, due_date')
     .eq('company_id', companyId)
     .in('tax_deadline_type', [...VAT_FILING_DEADLINE_TYPES])
-    .eq('tax_period', vatFilingTaxPeriod(input.periodType, input.year, input.period, fiscalYearEndMonth))
+    .eq('tax_period', vatFilingTaxPeriod(input.periodType, input.year, input.period, settings.fiscalYearEndMonth(input.year)))
     .is('dismissed_at', null)
     .order('created_at', { ascending: true })
     .limit(1)
@@ -268,9 +312,9 @@ async function resolveMark(
   | { ok: true; settings: FilingSettings; existing: DeadlineRow | null }
 > {
   const settings = await loadFilingSettings(supabase, companyId)
-  const problem = vatFilingDateProblem(input, today, settings.fiscalYearEndMonth)
+  const problem = vatFilingDateProblem(input, today, settings.fiscalYearEndMonth(input.year))
   if (problem) return { ok: false, code: problem }
-  const existing = await findPeriodRow(supabase, companyId, input, settings.fiscalYearEndMonth)
+  const existing = await findPeriodRow(supabase, companyId, input, settings)
   return { ok: true, settings, existing }
 }
 
@@ -287,16 +331,15 @@ export async function previewMarkVatPeriodFiled(
   const resolved = await resolveMark(supabase, companyId, input, opts.today ?? todayIsoStockholm())
   if (!resolved.ok) return resolved
   const { settings, existing } = resolved
-  const endMonth = settings.fiscalYearEndMonth
-  const current = existing?.is_completed ? toRecord(existing, endMonth) : null
-  const confirmed = existing ? confirmedRecord(existing, endMonth) : null
+  const current = existing?.is_completed ? toRecord(existing, settings) : null
+  const confirmed = existing ? confirmedRecord(existing, settings) : null
   const reference =
     input.reference === undefined
       ? parseVatFilingReference(existing?.notes)
       : input.reference?.trim() || null
   return {
     ok: true,
-    would_mark: { ...placement(input, endMonth), filed_on: input.filedOn, reference },
+    would_mark: { ...placement(input, settings), filed_on: input.filedOn, reference },
     effect: confirmed ? 'unchanged' : existing ? 'update' : 'create',
     current,
   }
@@ -323,11 +366,10 @@ export async function markVatPeriodFiled(
   const resolved = await resolveMark(supabase, companyId, input, opts.today ?? todayIsoStockholm())
   if (!resolved.ok) return resolved
   const { settings, existing } = resolved
-  const endMonth = settings.fiscalYearEndMonth
   const now = new Date().toISOString()
 
   if (existing) {
-    const confirmed = confirmedRecord(existing, endMonth)
+    const confirmed = confirmedRecord(existing, settings)
     if (confirmed) return { ok: true, record: confirmed, created: false, changed: false }
 
     // The "never overwrite a Skatteverket confirmation" rule lives in the
@@ -355,12 +397,12 @@ export async function markVatPeriodFiled(
       // Zero rows: the row changed under us. If Skatteverket confirmed it,
       // that is the answer; anything else (the generator replaced a pending
       // row mid-flight) is a conflict the caller retries.
-      const current = await findPeriodRow(supabase, companyId, input, endMonth)
-      const nowConfirmed = current ? confirmedRecord(current, endMonth) : null
+      const current = await findPeriodRow(supabase, companyId, input, settings)
+      const nowConfirmed = current ? confirmedRecord(current, settings) : null
       if (nowConfirmed) return { ok: true, record: nowConfirmed, created: false, changed: false }
       return { ok: false, code: 'CONFLICT' }
     }
-    const record = toRecord(data as DeadlineRow, endMonth)
+    const record = toRecord(data as DeadlineRow, settings)
     if (!record) throw new Error('vat filing: updated deadline row did not read back as a filing')
     return { ok: true, record, created: false, changed: true }
   }
@@ -372,7 +414,7 @@ export async function markVatPeriodFiled(
     notes: withVatFilingReference(null, input.reference),
     userId: input.userId ?? null,
   })
-  const record = toRecord(created, endMonth)
+  const record = toRecord(created, settings)
   if (!record) throw new Error('vat filing: inserted deadline row did not read back as a filing')
   return { ok: true, record, created: true, changed: true }
 }
@@ -398,12 +440,22 @@ export async function vatPeriodDeadline(
   input: VatFilingPeriodInput,
 ): Promise<VatPeriodDeadline> {
   const settings = await loadFilingSettings(supabase, companyId)
-  const row = await findPeriodRow(supabase, companyId, input, settings.fiscalYearEndMonth)
+  const row = await findPeriodRow(supabase, companyId, input, settings)
   return {
-    ...placement(input, settings.fiscalYearEndMonth),
+    ...placement(input, settings),
     due_date: row?.due_date ?? generatedDueDate(input, settings)?.dueDate ?? null,
     filed: row?.is_completed === true,
   }
+}
+
+/** The deadline generator's tax_period for a period, on the company's own years. */
+export async function vatPeriodTaxLabel(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: VatFilingPeriodInput,
+): Promise<string> {
+  const settings = await loadFilingSettings(supabase, companyId)
+  return placement(input, settings).tax_period
 }
 
 /**
@@ -418,7 +470,7 @@ function generatedDueDate(
   const instance = getVatDeadlineForPeriod(input.periodType, input.year, input.period, {
     vat_taxable_base_over_40m: row?.vat_taxable_base_over_40m === true,
     entity_type: (row?.entity_type ?? null) as VatDeadlineCalculationSettings['entity_type'],
-    fiscal_year_start_month: row?.fiscal_year_start_month ?? null,
+    fiscal_year_start_month: settings.fiscalYearEndMonth(input.year) % 12 + 1,
     vat_has_eu_trade: row?.vat_has_eu_trade ?? null,
     vat_filing_method: (row?.vat_filing_method ?? null) as VatDeadlineCalculationSettings['vat_filing_method'],
   })
@@ -501,11 +553,10 @@ export async function recordVatFilingConfirmed(
 ): Promise<{ record: VatFilingRecord; created: boolean; changed: boolean }> {
   const nowIso = (opts.now ?? new Date()).toISOString()
   const settings = await loadFilingSettings(supabase, companyId)
-  const endMonth = settings.fiscalYearEndMonth
-  const existing = await findPeriodRow(supabase, companyId, input, endMonth)
+  const existing = await findPeriodRow(supabase, companyId, input, settings)
 
   if (existing) {
-    const confirmed = confirmedRecord(existing, endMonth)
+    const confirmed = confirmedRecord(existing, settings)
     if (confirmed) return { record: confirmed, created: false, changed: false }
     // Upgrading a manual 'submitted' mark keeps the user's filed-on date: the
     // kvittens confirms that filing, it does not move when it happened.
@@ -523,7 +574,7 @@ export async function recordVatFilingConfirmed(
       .select('id, tax_deadline_type, tax_period, is_completed, completed_at, status, notes, due_date')
       .single()
     if (error) throw error
-    const record = toRecord(data as DeadlineRow, endMonth)
+    const record = toRecord(data as DeadlineRow, settings)
     if (!record) throw new Error('vat filing: confirmed deadline row did not read back as a filing')
     return { record, created: false, changed: true }
   }
@@ -534,7 +585,7 @@ export async function recordVatFilingConfirmed(
     notes: null,
     userId: opts.userId ?? null,
   })
-  const record = toRecord(created, endMonth)
+  const record = toRecord(created, settings)
   if (!record) throw new Error('vat filing: inserted deadline row did not read back as a filing')
   return { record, created: true, changed: true }
 }
@@ -549,16 +600,16 @@ async function resolveUnmark(
   input: VatFilingPeriodInput,
 ): Promise<
   | { ok: false; code: 'VAT_FILING_NOT_FOUND' | 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' }
-  | { ok: true; endMonth: number; existing: DeadlineRow; record: VatFilingRecord }
+  | { ok: true; settings: FilingSettings; existing: DeadlineRow; record: VatFilingRecord }
 > {
-  const { fiscalYearEndMonth: endMonth } = await loadFilingSettings(supabase, companyId)
-  const existing = await findPeriodRow(supabase, companyId, input, endMonth)
-  const record = existing?.is_completed ? toRecord(existing, endMonth) : null
+  const settings = await loadFilingSettings(supabase, companyId)
+  const existing = await findPeriodRow(supabase, companyId, input, settings)
+  const record = existing?.is_completed ? toRecord(existing, settings) : null
   if (!existing || !record) return { ok: false, code: 'VAT_FILING_NOT_FOUND' }
   if (existing.status === 'confirmed') {
     return { ok: false, code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' }
   }
-  return { ok: true, endMonth, existing, record }
+  return { ok: true, settings, existing, record }
 }
 
 /** What unmarkVatPeriodFiled would do, with the same refusals and no write. */
@@ -569,7 +620,7 @@ export async function previewUnmarkVatPeriodFiled(
 ): Promise<UnmarkVatPeriodFiledPreview> {
   const resolved = await resolveUnmark(supabase, companyId, input)
   if (!resolved.ok) return resolved
-  return { ok: true, would_unmark: placement(input, resolved.endMonth), current: resolved.record }
+  return { ok: true, would_unmark: placement(input, resolved.settings), current: resolved.record }
 }
 
 /**
@@ -585,7 +636,7 @@ export async function unmarkVatPeriodFiled(
 ): Promise<UnmarkVatPeriodFiledResult> {
   const resolved = await resolveUnmark(supabase, companyId, input)
   if (!resolved.ok) return resolved
-  const { endMonth, existing } = resolved
+  const { settings, existing } = resolved
   const today = opts.today ?? todayIsoStockholm()
   // Same atomic guard as marking: only a row that is STILL a completed,
   // unconfirmed filing at write time is put back to pending. Today every
@@ -607,13 +658,15 @@ export async function unmarkVatPeriodFiled(
     .eq('company_id', companyId)
     .eq('is_completed', true)
     .or('status.is.null,status.neq.confirmed')
-    .select('id')
+    // PostgREST applies the or() to the returned row, so its column stays
+    // selected: with `id` alone the update fails on `status`.
+    .select('id, status')
     .maybeSingle()
   if (error) throw error
   if (!data) {
     // Nothing was unmarked, so never report success. Say why instead.
-    const current = await findPeriodRow(supabase, companyId, input, endMonth)
-    return current && confirmedRecord(current, endMonth)
+    const current = await findPeriodRow(supabase, companyId, input, settings)
+    return current && confirmedRecord(current, settings)
       ? { ok: false, code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' }
       : { ok: false, code: 'VAT_FILING_NOT_FOUND' }
   }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome } from '@/lib/operations/types'
@@ -15,6 +16,9 @@ import type { LossCarryforwardSource } from './schemas'
  * What the app already knows about a fiscal year's deficit, offered when the
  * user opens a year in the register. Nothing is written here: the user picks
  * a figure (or types one) and saves it.
+ *
+ * The previous fiscal year is the one ending the day before this one starts:
+ * a deficit from a year across a gap is not last year's.
  *
  *   - computed: the previous fiscal year in the register carries a deficit
  *     forward (the roll-forward).
@@ -51,22 +55,6 @@ export interface LossCarryforwardProposal {
   result_before_deficit: number | null
 }
 
-async function previousFiscalPeriod(
-  supabase: SupabaseClient,
-  companyId: string,
-  period: FiscalPeriodRef,
-): Promise<FiscalPeriodRef | null> {
-  const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('id, name, period_start, period_end')
-    .eq('company_id', companyId)
-    .lt('period_end', period.period_start)
-    .order('period_end', { ascending: false })
-    .limit(1)
-  if (error) throw error
-  return ((data ?? [])[0] as FiscalPeriodRef | undefined) ?? null
-}
-
 /** INK2S figures of a year, or null when the engine cannot produce them (logged). */
 async function ink2Figures(
   supabase: SupabaseClient,
@@ -97,7 +85,12 @@ export async function proposeLossCarryforward(
 
   const period = await loadFiscalPeriod(supabase, companyId, fiscalPeriodId)
   if (!period) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND', details: { fiscal_period_id: fiscalPeriodId } }
-  const previous = await previousFiscalPeriod(supabase, companyId, period)
+  const previous = await resolvePreviousFiscalPeriod<FiscalPeriodRef>(
+    supabase,
+    companyId,
+    period,
+    'id, name, period_start, period_end',
+  )
 
   const listed = await listLossCarryforwards(ctx)
   if (!listed.ok || listed.dryRun) return listed as OperationOutcome<never>

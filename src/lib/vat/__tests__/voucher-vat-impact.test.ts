@@ -184,7 +184,14 @@ describe('previewVoucherVatDeclaration', () => {
     const { supabase, calls } = createTableMockSupabase({
       company_settings: { data: answers.settings?.data ?? null, error: answers.settings?.error ?? null },
       chart_of_accounts: { data: answers.chart ?? [] },
-      fiscal_periods: { data: answers.fiscalPeriod ?? null },
+      // One year by id, or the company's years for the filing records.
+      fiscal_periods: (chain) => ({
+        data: chain.some((call) => call.method === 'maybeSingle' || call.method === 'single')
+          ? (answers.fiscalPeriod ?? null)
+          : answers.fiscalPeriod
+            ? [answers.fiscalPeriod]
+            : [],
+      }),
       deadlines: { data: answers.deadlines ?? [] },
       'rpc:skattekonto_shape_accounts': {
         data: answers.taxAccounts?.data ?? null,

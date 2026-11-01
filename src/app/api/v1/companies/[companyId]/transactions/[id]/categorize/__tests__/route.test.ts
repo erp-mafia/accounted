@@ -139,10 +139,10 @@ function casRaceSupabase() {
     ],
     company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
     fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     journal_entries: {
       data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
@@ -191,10 +191,10 @@ function happyPathSupabase(transactionOverrides: Record<string, unknown> = {}) {
     ],
     company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
     fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
   })
 }
@@ -325,10 +325,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -476,10 +476,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize private marking in a loc
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-2025' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-2025', is_closed: false, locked_at: '2026-01-31T00:00:00Z' }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-2025' }], error: null },
     ],
     })
   }
@@ -550,10 +550,10 @@ describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
         ],
         company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
         fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
       })
       mockServiceClient.mockReturnValue(supabase)
@@ -598,10 +598,10 @@ describe('reverse-charge basis pair (#2919)', () => {
       ],
       company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
       // The override row first (when there is one), then the momskoder
       // reconcileRcBasisWithChart reads.
@@ -706,10 +706,10 @@ describe('counterparty template with a learned bag', () => {
         error: null,
       },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     })
   }
@@ -990,10 +990,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
         error: null,
       },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     })
   }
@@ -1044,10 +1044,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
         error: null,
       },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     })
   }
@@ -1157,10 +1157,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize already-booked guard', (
       journal_entries: { data: [{ id: 'je-samling', status: linkedStatus }], error: null },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
     })
   }

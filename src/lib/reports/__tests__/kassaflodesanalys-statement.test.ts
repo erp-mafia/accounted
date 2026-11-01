@@ -81,7 +81,7 @@ function makeClient(periods: PeriodFixture[]) {
     builder.select = () => builder
     builder.eq = (key: string, value: unknown) => { filters.set(key, value); return builder }
     builder.in = (key: string, value: unknown) => { filters.set(key, value); return builder }
-    for (const method of ['neq', 'not', 'order']) builder[method] = () => builder
+    for (const method of ['neq', 'not', 'order', 'limit']) builder[method] = () => builder
     builder.range = (start: number, end: number) => { bounds = [start, end]; return builder }
     builder.single = async () => result()
     builder.maybeSingle = async () => result()

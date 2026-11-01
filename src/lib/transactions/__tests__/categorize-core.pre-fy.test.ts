@@ -130,25 +130,29 @@ describe('ensureFiscalPeriod: pre-FY guard', () => {
   it('still creates the next-year period for a date after the latest period', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    enqueue({ data: [{ period_start: '2026-05-12' }] }) // earliest, before the date
-    enqueue({ data: null }) // upsert
+    enqueue({ data: [{ id: 'first', period_start: '2026-05-12', period_end: '2026-12-31' }] }) // before the date
+    enqueue({ data: [] }) // nothing overlaps
+    enqueue({ data: { id: 'next' } }) // insert
+    enqueue({ data: [] }) // no year after it
 
     const ok = await ensureFiscalPeriod(supabase as never, 'user-1', 'company-1', '2027-03-10', 1)
 
     expect(ok).toBe(true)
-    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(1)
+    expect(findCalls('fiscal_periods', 'insert')).toHaveLength(1)
   })
 
   it('still creates a period when the company has none at all', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    enqueue({ data: [] }) // no earliest period: brand-new company
-    enqueue({ data: null }) // upsert
+    enqueue({ data: [] }) // no recorded year: brand-new company
+    enqueue({ data: [] }) // nothing overlaps
+    enqueue({ data: { id: 'first' } }) // insert
+    enqueue({ data: [] }) // no year after it
 
     const ok = await ensureFiscalPeriod(supabase as never, 'user-1', 'company-1', '2026-03-10', 1)
 
     expect(ok).toBe(true)
-    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(1)
+    expect(findCalls('fiscal_periods', 'insert')).toHaveLength(1)
   })
 })
 

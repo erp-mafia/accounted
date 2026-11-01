@@ -62,6 +62,8 @@ describe('checkSIEImportAdmission', () => {
     enqueueMany([
       { data: null }, // no year contains the file
       { data: [] }, // none overlaps it
+      { data: [] }, // no other year
+      { data: { entity_type: 'aktiebolag' } }, // the legal form
       { data: { reason: 'existing_import', import_id: 'imp-1' } },
     ])
 
@@ -77,7 +79,7 @@ describe('checkSIEImportAdmission', () => {
 
   it('refuses a missing year when the import may not create one, as submitSIEJob does', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
-    enqueueMany([{ data: null }, { data: [] }])
+    enqueueMany([{ data: null }, { data: [] }, { data: [] }, { data: { entity_type: 'aktiebolag' } }])
 
     const admission = await checkSIEImportAdmission(supabase as never, 'company-1', YEAR,
       { importOpeningBalances: true, createFiscalPeriod: false })

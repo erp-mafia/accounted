@@ -256,33 +256,6 @@ export interface PreviousYearFramework {
   reliable: boolean
 }
 
-function dayBefore(iso: string): string {
-  const date = new Date(`${iso}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() - 1)
-  return date.toISOString().slice(0, 10)
-}
-
-/**
- * The framework of the year before `periodStart`, for the first-K3-year check
- * (K3 kap. 35) and the K3 to K2 switch note. Null fields when Accounted holds
- * no adjacent previous year.
- */
-export async function getPreviousYearFramework(
-  supabase: SupabaseClient,
-  companyId: string,
-  period: { id: string; period_start: string },
-): Promise<PreviousYearFramework> {
-  const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('period_end', dayBefore(period.period_start))
-    .neq('id', period.id)
-    .maybeSingle()
-  if (error) throw new Error(`Failed to load the previous fiscal year: ${error.message}`)
-  return previousYearFrameworkOf(supabase, companyId, (data as { id: string } | null)?.id ?? null)
-}
-
 /**
  * The framework record of a known previous year (a caller that already
  * picked the adjacent year, build-data.ts), null fields without one.

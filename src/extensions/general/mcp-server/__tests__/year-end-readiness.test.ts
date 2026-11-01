@@ -66,6 +66,9 @@ describe('gnubok_year_end_readiness: registration', () => {
     // Same reasoning as period_locked: the message says what releases the
     // year (finish or undo the SIE import), and tools/list has no room.
     'sie_import_unfinished',
+    // A year's dates only a person can settle: nothing to pre-check.
+    'next_period_not_calendar_year',
+    'next_period_overlaps',
   ])
 
   it('maps the PERIOD_LOCKED readiness code to the period_locked kind', () => {

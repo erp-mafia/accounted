@@ -88,8 +88,8 @@ export interface IxbrlArsredovisningInput {
   }
   period: { start: string; end: string }
   previousPeriod: { start: string; end: string } | null
-  /** True when this is the company's first fiscal year: jämförelsesiffror
-   *  may then legitimately be absent (3006/3007 exemption). */
+  /** True when this is the company's first fiscal year (isFirstFiscalPeriod):
+   *  jämförelsesiffror may then legitimately be absent (3006/3007 exemption). */
   isFirstFiscalYear: boolean
 
   /** RR concept-keyed amounts (kostnadsslagsindelad, risbs posts). */

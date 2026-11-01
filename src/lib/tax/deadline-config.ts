@@ -5,6 +5,7 @@
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
 import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
+import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getNextBankingDay, isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -55,11 +56,10 @@ export interface CompanySettingsForDeadlines {
   tax_assessment_notices?: TaxAssessmentNoticeForDeadline[]
   /**
    * Derived, NOT a company_settings column: the company's fiscal_periods.
-   * Where they exist they decide which räkenskapsår there are; the
-   * twelve-month schedule from fiscal_year_start_month only fills the years
-   * not created yet (see fiscalYearsEndingIn). Undefined = not resolved (the
-   * generator resolves it); an empty list leaves the schedule to
-   * fiscal_year_start_month alone.
+   * Where they exist they decide which räkenskapsår there are, and the
+   * years not created yet chain from them (see fiscalYearsEndingIn).
+   * Undefined = not resolved (the generator resolves it); an empty list leaves
+   * the schedule to fiscal_year_start_month alone.
    */
   fiscal_years?: FiscalYearForDeadlines[]
 }
@@ -155,6 +155,10 @@ export function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear
     : `${fiscalYearEndYear - 1}/${fiscalYearEndYear}`
 }
 
+function boundToCalendarYear(settings: { entity_type?: EntityType | string | null }): boolean {
+  return isEntityType(settings.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)
+}
+
 /**
  * Month (1-12) the company's räkenskapsår ends, or null when it cannot be
  * known. A form bound to the calendar year (enskild firma, BFL 3 kap 1 §)
@@ -165,13 +169,11 @@ export function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear
  * (SFL 26 kap 10-11 §§), so this month is what places a yearly VAT period:
  * the generator's label, the filing record's key and the period's last day.
  */
-export function fiscalYearEndMonthFor(settings: {
+function fiscalYearEndMonthFor(settings: {
   entity_type?: EntityType | string | null
   fiscal_year_start_month?: number | null
 }): number | null {
-  if (isEntityType(settings.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)) {
-    return 12
-  }
+  if (boundToCalendarYear(settings)) return 12
   const start = settings.fiscal_year_start_month
   if (start == null || !Number.isInteger(start) || start < 1 || start > 12) return null
   return start === 1 ? 12 : start - 1
@@ -201,7 +203,11 @@ function twelveMonthStart(end: string): string {
   return month === 12 ? isoDate(year, 1, 1) : isoDate(year - 1, month + 1, 1)
 }
 
-function recordedFiscalYears(settings: CompanySettingsForDeadlines): FiscalYearForDeadlines[] {
+/** The settings that place a company's räkenskapsår. */
+type FiscalCalendar = Pick<CompanySettingsForDeadlines, 'fiscal_years'> &
+  Parameters<typeof fiscalYearEndMonthFor>[0]
+
+function recordedFiscalYears(settings: FiscalCalendar): FiscalYearForDeadlines[] {
   return (settings.fiscal_years ?? [])
     .filter((fy) => ISO_DATE.test(fy.start) && ISO_DATE.test(fy.end) && fy.start <= fy.end)
     .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
@@ -222,18 +228,18 @@ function recordedFiscalYears(settings: CompanySettingsForDeadlines): FiscalYearF
  *    (BFL 3 kap. 1 and 3 §§), so a first period starting mid-month has no
  *    predecessor. One starting on the 1st may follow years kept elsewhere;
  *    that year's obligations are real and stay.
- * 3. A twelve-month year from fiscal_year_start_month fills in only where
- *    nothing is recorded: after the last recorded period (years not created
- *    yet) or in a gap between two. One that would end inside a recorded
- *    period never existed.
+ * 3. Where nothing is recorded after a recorded year, the next years chain
+ *    from it (nextFiscalYearRange): the years not created yet, and a gap
+ *    between two recorded years. One that would run into a recorded period
+ *    never existed. A year is re-laid by recording it, not by the setting.
  *
- * Without recorded periods this is the twelve-month schedule alone.
+ * Without recorded periods this is the twelve-month schedule from
+ * fiscal_year_start_month alone.
  */
 export function fiscalYearsEndingIn(
   endYears: readonly number[],
-  settings: CompanySettingsForDeadlines,
+  settings: FiscalCalendar,
 ): DeadlineFiscalYear[] {
-  const endMonth = fiscalYearEndMonthFor(settings) ?? 12
   const recorded = recordedFiscalYears(settings)
   const found = new Map<string, DeadlineFiscalYear>()
   const add = (end: string, start: string) => {
@@ -241,6 +247,14 @@ export function fiscalYearsEndingIn(
     const key = end.slice(0, 7)
     if (endYears.includes(year) && !found.has(key)) {
       found.set(key, { endYear: year, endMonth: month, start })
+    }
+  }
+
+  if (recorded.length === 0) {
+    const endMonth = fiscalYearEndMonthFor(settings) ?? 12
+    for (const endYear of endYears) {
+      const end = isoDate(endYear, endMonth, lastDayOfMonth(endYear, endMonth))
+      add(end, twelveMonthStart(end))
     }
   }
 
@@ -252,26 +266,51 @@ export function fiscalYearsEndingIn(
     add(end, twelveMonthStart(end))
   }
 
-  for (const endYear of endYears) {
-    const end = isoDate(endYear, endMonth, lastDayOfMonth(endYear, endMonth))
-    if (first && end < first.start) continue
-    if (recorded.some((fy) => fy.start <= end && end <= fy.end)) continue
-    // The year after a recorded one starts the day after it, even when the
-    // twelve-month schedule would place its start earlier (a re-laid year).
-    const previousEnd = recorded.reduce<string | null>(
-      (latest, fy) => (fy.end < end && (latest === null || fy.end > latest) ? fy.end : latest),
-      null,
-    )
-    const scheduledStart = twelveMonthStart(end)
-    const start = previousEnd !== null && shiftIsoDate(previousEnd, 1) > scheduledStart
-      ? shiftIsoDate(previousEnd, 1)
-      : scheduledStart
-    add(end, start)
-  }
+  const horizon = `${Math.max(...endYears)}-12-31`
+  recorded.forEach((fy, index) => {
+    const nextRecorded = recorded[index + 1]?.start ?? null
+    let year = nextFiscalYearRange(fy.end)
+    while (year.end <= horizon && (nextRecorded === null || year.end < nextRecorded)) {
+      add(year.end, year.start)
+      year = nextFiscalYearRange(year.end)
+    }
+  })
 
   return Array.from(found.values()).sort(
     (a, b) => a.endYear - b.endYear || a.endMonth - b.endMonth,
   )
+}
+
+/**
+ * Month (1-12) the räkenskapsår named by `year` ends, `year` being the
+ * calendar year it ends in: the key of a helårsmoms period. The later one when
+ * an omläggning ends two in one calendar year; the settings month when no year
+ * ends in `year`; December when that is not configured either.
+ *
+ * Always December for a form bound to the calendar year, whatever a stored
+ * year says: the generator labels that form's helårsmoms by the calendar year
+ * (getVatDeadlineForPeriod), so an enskild firma imported on broken years keeps
+ * one key for its filing and its deadline row.
+ */
+export function fiscalYearEndMonthIn(year: number, settings: FiscalCalendar): number {
+  if (boundToCalendarYear(settings)) return 12
+  return fiscalYearsEndingIn([year], settings).at(-1)?.endMonth ?? fiscalYearEndMonthFor(settings) ?? 12
+}
+
+/**
+ * Month (1-12) the räkenskapsår running on `day` (YYYY-MM-DD) ends. Before the
+ * first recorded year and in the rest of a gap no year runs: the settings month,
+ * else December. December for a form bound to the calendar year, as in
+ * fiscalYearEndMonthIn.
+ */
+export function fiscalYearEndMonthOn(day: string, settings: FiscalCalendar): number {
+  if (boundToCalendarYear(settings)) return 12
+  const year = Number(day.slice(0, 4))
+  const running = fiscalYearsEndingIn([year, year + 1, year + 2], settings).find(
+    ({ start, endYear, endMonth }) =>
+      start <= day && day <= isoDate(endYear, endMonth, lastDayOfMonth(endYear, endMonth)),
+  )
+  return running?.endMonth ?? fiscalYearEndMonthFor(settings) ?? 12
 }
 
 /**

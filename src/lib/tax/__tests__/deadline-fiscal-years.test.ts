@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  fiscalYearEndMonthIn,
+  fiscalYearEndMonthOn,
   fiscalYearsEndingIn,
   type CompanySettingsForDeadlines,
   type FiscalYearForDeadlines,
@@ -120,19 +122,53 @@ describe('fiscalYearsEndingIn', () => {
     ])
   })
 
-  it('starts a re-laid year the day after the last recorded one', () => {
-    // Calendar year recorded, settings already moved to a July start: the
-    // transition year runs January-June.
+  it('chains the years after the last recorded one, whatever the settings month says', () => {
+    // A June year on record, a stale January in settings: no short year
+    // July-December appears, the next year runs July-June.
+    const settings = makeSettings({
+      fiscal_year_start_month: 1,
+      fiscal_years: [{ start: '2025-07-01', end: '2026-06-30' }],
+    })
+    expect(fiscalYearsEndingIn([2026, 2027, 2028], settings)).toEqual([
+      { endYear: 2026, endMonth: 6, start: '2025-07-01' },
+      { endYear: 2027, endMonth: 6, start: '2026-07-01' },
+      { endYear: 2028, endMonth: 6, start: '2027-07-01' },
+    ])
+  })
+
+  it('needs a recorded year to re-lay the räkenskapsår, a settings month alone moves nothing', () => {
     const settings = makeSettings({
       fiscal_year_start_month: 7,
       fiscal_years: [{ start: '2025-01-01', end: '2025-12-31' }],
     })
     expect(fiscalYearsEndingIn([2026], settings)).toEqual([
-      { endYear: 2026, endMonth: 6, start: '2026-01-01' },
+      { endYear: 2026, endMonth: 12, start: '2026-01-01' },
+    ])
+    expect(
+      fiscalYearsEndingIn([2026], {
+        ...settings,
+        fiscal_years: [...settings.fiscal_years!, { start: '2026-01-01', end: '2026-06-30' }],
+      }),
+    ).toEqual([{ endYear: 2026, endMonth: 6, start: '2026-01-01' }])
+  })
+
+  it('chains across a gap, and a year that would run into the next one never existed', () => {
+    const settings = makeSettings({
+      fiscal_year_start_month: 1,
+      fiscal_years: [
+        { start: '2023-07-01', end: '2024-06-30' },
+        { start: '2025-07-01', end: '2026-06-30' },
+        { start: '2027-01-01', end: '2027-12-31' },
+      ],
+    })
+    expect(fiscalYearsEndingIn([2024, 2025, 2026], settings)).toEqual([
+      { endYear: 2024, endMonth: 6, start: '2023-07-01' },
+      { endYear: 2025, endMonth: 6, start: '2024-07-01' },
+      { endYear: 2026, endMonth: 6, start: '2025-07-01' },
     ])
   })
 
-  it('fills a gap between recorded years from the schedule', () => {
+  it('fills a gap between recorded years', () => {
     const settings = makeSettings({
       fiscal_years: [
         { start: '2024-01-01', end: '2024-12-31' },
@@ -142,6 +178,87 @@ describe('fiscalYearsEndingIn', () => {
     expect(fiscalYearsEndingIn([2025], settings)).toEqual([
       { endYear: 2025, endMonth: 12, start: '2025-01-01' },
     ])
+  })
+})
+
+// An enskild firma imported on years 1 September to 31 August. The generator
+// labels its helårsmoms by the calendar year, so the key has to as well.
+const BROKEN_ENSKILD_FIRMA = makeSettings({
+  entity_type: 'enskild_firma',
+  fiscal_years: [
+    { start: '2024-09-01', end: '2025-08-31' },
+    { start: '2025-09-01', end: '2026-08-31' },
+  ],
+})
+
+describe('fiscalYearEndMonthIn', () => {
+  const recorded = makeSettings({
+    fiscal_year_start_month: 1,
+    fiscal_years: [{ start: '2025-07-01', end: '2026-06-30' }],
+  })
+
+  it('reads the recorded year over the settings month, and the chain after it', () => {
+    expect(fiscalYearEndMonthIn(2026, recorded)).toBe(6)
+    expect(fiscalYearEndMonthIn(2028, recorded)).toBe(6)
+  })
+
+  it('takes the later year when an omläggning ends two in one calendar year', () => {
+    const relaid = makeSettings({
+      fiscal_years: [
+        { start: '2026-01-01', end: '2026-06-30' },
+        { start: '2026-07-01', end: '2026-12-31' },
+      ],
+    })
+    expect(fiscalYearEndMonthIn(2026, relaid)).toBe(12)
+  })
+
+  it('falls back on the settings month when no year ends in the calendar year', () => {
+    const extended = makeSettings({ fiscal_year_start_month: 7, fiscal_years: [{ start: '2026-10-12', end: '2027-12-31' }] })
+    expect(fiscalYearEndMonthIn(2026, extended)).toBe(6)
+  })
+
+  it('is the settings month alone with nothing recorded, December without one', () => {
+    expect(fiscalYearEndMonthIn(2026, makeSettings({ fiscal_year_start_month: 5, fiscal_years: [] }))).toBe(4)
+    expect(fiscalYearEndMonthIn(2026, {})).toBe(12)
+  })
+
+  it('is December for a form bound to the calendar year, whatever a stored year says', () => {
+    expect(fiscalYearEndMonthIn(2026, BROKEN_ENSKILD_FIRMA)).toBe(12)
+  })
+})
+
+describe('fiscalYearEndMonthOn', () => {
+  const recorded = makeSettings({
+    fiscal_year_start_month: 1,
+    fiscal_years: [
+      { start: '2025-07-01', end: '2026-06-30' },
+      { start: '2026-07-01', end: '2026-12-31' },
+    ],
+  })
+
+  it('reads the year running on the day', () => {
+    expect(fiscalYearEndMonthOn('2026-03-01', recorded)).toBe(6)
+    expect(fiscalYearEndMonthOn('2026-06-30', recorded)).toBe(6)
+    expect(fiscalYearEndMonthOn('2026-07-01', recorded)).toBe(12)
+  })
+
+  it('reads the chain after the last recorded year', () => {
+    const june = makeSettings({ fiscal_year_start_month: 1, fiscal_years: [{ start: '2025-07-01', end: '2026-06-30' }] })
+    expect(fiscalYearEndMonthOn('2026-08-05', june)).toBe(6)
+  })
+
+  it('finds a year of up to 36 months', () => {
+    const long = makeSettings({ fiscal_years: [{ start: '2024-01-01', end: '2026-06-30' }] })
+    expect(fiscalYearEndMonthOn('2024-02-01', long)).toBe(6)
+  })
+
+  it('falls back on the settings month before the first recorded year', () => {
+    const later = makeSettings({ fiscal_year_start_month: 5, fiscal_years: [{ start: '2026-03-14', end: '2026-12-31' }] })
+    expect(fiscalYearEndMonthOn('2025-08-01', later)).toBe(4)
+  })
+
+  it('is December for a form bound to the calendar year, whatever a stored year says', () => {
+    expect(fiscalYearEndMonthOn('2026-03-01', BROKEN_ENSKILD_FIRMA)).toBe(12)
   })
 })
 

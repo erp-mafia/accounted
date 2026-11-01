@@ -72,7 +72,7 @@ function buildMockSupabase(options: {
         return {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              single: vi.fn().mockResolvedValue({ data: { entity_type: entityType }, error: null }),
+              maybeSingle: vi.fn().mockResolvedValue({ data: { entity_type: entityType }, error: null }),
             }),
           }),
         }
@@ -83,7 +83,7 @@ function buildMockSupabase(options: {
         const callNum = fiscalPeriodsCall
 
         return {
-          select: vi.fn().mockImplementation((_sel: string, opts?: { count?: string; head?: boolean }) => {
+          select: vi.fn().mockImplementation((sel: string) => {
             if (callNum === 1) {
               return {
                 eq: vi.fn().mockReturnValue({
@@ -96,11 +96,12 @@ function buildMockSupabase(options: {
                 }),
               }
             }
-            if (opts?.head) {
+            if (sel === 'period_start') {
               return {
                 eq: vi.fn().mockReturnValue({
-                  neq: vi.fn().mockReturnValue({
-                    lt: vi.fn().mockResolvedValue({ count: earlierPeriodCount, error: null }),
+                  neq: vi.fn().mockResolvedValue({
+                    data: Array.from({ length: earlierPeriodCount }, () => ({ period_start: '1900-01-01' })),
+                    error: null,
                   }),
                 }),
               }

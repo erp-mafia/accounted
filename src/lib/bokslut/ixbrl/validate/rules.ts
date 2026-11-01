@@ -15,7 +15,8 @@
 
 import type { IxbrlArsredovisningInput } from '../types'
 import { isOrgNumberShaped, hasInvalidOrgNumberCheckDigit } from '@/lib/invariants/org-number'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { pateckningDatum } from '../revisorspateckning'
 import { runK3PreflightChecks } from './k3-rules'
 
@@ -41,15 +42,23 @@ const issue = (code: string, severity: 'error' | 'warn', message: string): Prefl
   message,
 })
 
-function monthsBetween(startIso: string, endIso: string): number {
-  const start = new Date(`${startIso}T00:00:00Z`)
-  const end = new Date(`${endIso}T00:00:00Z`)
-  return (
-    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
-    (end.getUTCMonth() - start.getUTCMonth()) +
-    (end.getUTCDate() >= start.getUTCDate() ? 0 : -1)
+/**
+ * A year that is not the company's first has no comparison figures: the year
+ * before it is not on record, or it did not load. The refusal names the year
+ * and the only ways to record it. A year in a hole wider than the 18 months
+ * one year may run cannot go through the create door, which demands that a gap
+ * fill ends the day before the next year, so a SIE file or a bank row dated in
+ * that year is what is left.
+ */
+const missingComparatives = (code: string, statement: string, input: IxbrlArsredovisningInput): PreflightIssue =>
+  issue(
+    code,
+    'error',
+    `Jämförelsesiffror saknas i ${statement}. De krävs eftersom det här inte är företagets första räkenskapsår, ` +
+      `och räkenskapsåret som slutar ${addDaysIso(input.period.start, -1)} finns inte i bokföringen eller gick inte att läsa. ` +
+      'Lägg in året genom att importera en SIE-fil för det eller bokföra en bankrad daterad i det. ' +
+      'Saknas högst 18 månader kan du också lägga till det under Inställningar → Bokföring → Räkenskapsår.',
   )
-}
 
 const RULES: Rule[] = [
   // ---- completeness -------------------------------------------------------
@@ -143,11 +152,11 @@ const RULES: Rule[] = [
 
   // ---- date ordering ------------------------------------------------------
   (input, today) =>
-    input.period.end >= today
+    !hasEnded(input.period.end, today)
       ? issue('1015', 'error', `Räkenskapsårets sista dag (${input.period.end}) har inte passerats ännu.`)
       : null,
   (input) =>
-    monthsBetween(input.period.start, input.period.end) >= 18
+    exceedsFiscalYearCap(input.period.start, input.period.end)
       ? issue('1046', 'error', `Räkenskapsåret ${input.period.start}: ${input.period.end} är längre än 18 månader.`)
       : null,
   (input) =>
@@ -210,17 +219,11 @@ const RULES: Rule[] = [
   },
   (input) => {
     if (input.isFirstFiscalYear) return null
-    const prev = input.totals.tillgangar.previous
-    return prev === null
-      ? issue('3006', 'error', 'Jämförelsesiffror saknas i balansräkningen. De behövs om det inte är företagets första räkenskapsår.')
-      : null
+    return input.totals.tillgangar.previous === null ? missingComparatives('3006', 'balansräkningen', input) : null
   },
   (input) => {
     if (input.isFirstFiscalYear) return null
-    const prev = input.totals.aretsResultat.previous
-    return prev === null
-      ? issue('3007', 'error', 'Jämförelsesiffror saknas i resultaträkningen. De behövs om det inte är företagets första räkenskapsår.')
-      : null
+    return input.totals.aretsResultat.previous === null ? missingComparatives('3007', 'resultaträkningen', input) : null
   },
   (input) => {
     const rrResult = input.totals.aretsResultat.current

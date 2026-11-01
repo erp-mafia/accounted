@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { dbError } from '@/lib/errors/db-error'
 
 /**
@@ -20,5 +20,5 @@ export async function reskontraBalanceDate(
     .maybeSingle()
   if (error) throw dbError(error, 'reskontra balance date: fiscal period read failed')
   const periodEnd = (data as { period_end: string } | null)?.period_end
-  return periodEnd && periodEnd < todayIsoStockholm() ? periodEnd : null
+  return periodEnd && hasEnded(periodEnd, todayIsoStockholm()) ? periodEnd : null
 }

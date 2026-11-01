@@ -13,7 +13,8 @@ import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
-import { calculatePeriodDates } from './period-dates'
+import { calculatePeriodDates, fiscalPeriodForVatYear } from './period-dates'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reports/vat-declaration')
 
@@ -149,15 +150,17 @@ export async function resolvePeriodDates(
       // calendar-year assumption would put both the redovisningsperiod and
       // the figures on the wrong period. For calendar-FY companies this
       // resolves to Jan-Dec of `year`, identical to the arithmetic fallback.
-      const { data: fp } = await supabase
+      // The year the picker names (fiscalPeriodForVatYear); one that has not
+      // started only when nothing else ends in `year`.
+      const { data: endingInYear } = await supabase
         .from('fiscal_periods')
         .select('period_start, period_end')
         .eq('company_id', companyId)
         .gte('period_end', `${year}-01-01`)
         .lte('period_end', `${year}-12-31`)
         .order('period_end', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const candidates = (endingInYear ?? []) as { period_start: string; period_end: string }[]
+      const fp = fiscalPeriodForVatYear(candidates, year, todayIsoStockholm()) ?? candidates[0]
       if (fp?.period_start && fp?.period_end) {
         return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
       }

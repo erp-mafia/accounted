@@ -7,7 +7,7 @@
 
 import type { FiscalPeriod } from '@/types'
 import { ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Newest first; optionally drops periods that have not started yet. */
 export function prepareFiscalPeriods(
@@ -50,7 +50,7 @@ export function resolveInitialFiscalScope(
 
   if (options.preferLatestEnded) {
     const today = options.today ?? todayIsoStockholm()
-    const pick = periods.find((p) => p.period_end < today) ?? newest
+    const pick = periods.find((p) => hasEnded(p.period_end, today)) ?? newest
     return pick ? { periodId: pick.id, period: pick } : null
   }
 

@@ -133,6 +133,16 @@ export function endOfDayIsoStockholm(isoDate: string): string {
 }
 
 /**
+ * Whether a year or period has ended: its last day has passed in Sweden, both
+ * dates YYYY-MM-DD and `today` as todayIsoStockholm gives it. The last day
+ * itself is still running: a year cannot be closed, a declaration filed or a
+ * balance read as final on it.
+ */
+export function hasEnded(periodEnd: string, today: string): boolean {
+  return periodEnd < today
+}
+
+/**
  * Whether a due date has passed: it lies before `today` (both YYYY-MM-DD,
  * today as todayIsoStockholm gives it). The due date itself is still on
  * time. The one date rule behind every "Förfallen": customer invoices

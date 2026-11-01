@@ -84,7 +84,7 @@ function routedSupabase(world: World) {
         return { data: world.companies.filter((c) => ids.includes(c.id)).map((c) => ({ id: c.id, org_number: c.org_number })) }
       }
       const company = world.companies.find((c) => c.id === argOf(calls, 'eq', 'id'))
-      return { data: company ? { name: company.name, org_number: company.org_number } : null }
+      return { data: company ? { name: company.name, org_number: company.org_number, entity_type: 'aktiebolag' } : null }
     }),
     company_settings: failing('company_settings', (calls) => {
       if (has(calls, 'in')) {

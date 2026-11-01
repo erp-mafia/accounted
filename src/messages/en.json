@@ -3923,7 +3923,7 @@
     "tax_contact_email_label": "Email",
     "fiscal_year_start_label": "Fiscal year start month",
     "fiscal_year_ef_help": "Enskild firma must use the calendar year (BFL ch. 3).",
-    "fiscal_year_change_help": "The change affects future fiscal years.",
+    "fiscal_year_change_help": "Applies until a fiscal year exists. After that each new year follows the one before.",
     "month_jan": "January",
     "month_feb": "February",
     "month_mar": "March",

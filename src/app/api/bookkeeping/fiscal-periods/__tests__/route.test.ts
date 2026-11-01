@@ -30,6 +30,13 @@ function createMockRequest(body: unknown): Request {
 
 type Period = { id: string; period_start: string; period_end: string; is_closed: boolean; name?: string }
 
+/** The company's legal form, read before the year's shape is judged. */
+const COMPANY_ROW = {
+  select: () => ({
+    eq: () => ({ maybeSingle: async () => ({ data: { entity_type: 'aktiebolag' }, error: null }) }),
+  }),
+}
+
 /**
  * Build a mock supabase that tracks sequential from('fiscal_periods') calls
  * and returns the correct data based on the select() arguments.
@@ -72,6 +79,7 @@ function buildMockSupabase(options: {
           }),
         }
       }
+      if (table === 'companies') return COMPANY_ROW
       fpCallIndex++
       const callNum = fpCallIndex
 
@@ -531,6 +539,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -607,6 +616,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -683,6 +693,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
             }),
           }
         }
+        if (table === 'companies') return COMPANY_ROW
         fpCallIndex++
         const callNum = fpCallIndex
         return {

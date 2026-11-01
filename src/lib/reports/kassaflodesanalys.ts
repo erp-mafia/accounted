@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { generateTrialBalance } from './trial-balance'
 import { calculateCashFlowTax, isCashFlowTaxBridgeAccount } from './cash-flow-tax'
 import { fetchVoucherMovements, type CashFlowEntryScope } from './cash-flow-evidence'
 import type { TrialBalanceRow } from '@/types'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { createLogger } from '@/lib/logger'
-import { addDaysIso } from '@/lib/dates/iso'
 import {
   buildKassaflodesanalysYear,
   hasPeriodActivity,
@@ -322,16 +322,14 @@ async function buildPreviousYear(
   current: CashFlowPeriod,
   definition: LikvidaMedelDefinition,
 ): Promise<{ previous: KassaflodesanalysYear | null; status: KassaflodesanalysPreviousStatus }> {
-  const { data: previousPeriod, error } = await supabase
-    .from('fiscal_periods')
-    .select('id, period_start, period_end, opening_balance_entry_id')
-    .eq('company_id', companyId)
-    .eq('period_end', addDaysIso(current.period_start, -1))
-    .maybeSingle()
-  if (error) return { previous: null, status: 'unavailable' }
-  if (!previousPeriod) return { previous: null, status: 'no_previous_period' }
   try {
-    const period = previousPeriod as CashFlowPeriod
+    const period = await resolvePreviousFiscalPeriod<CashFlowPeriod>(
+      supabase,
+      companyId,
+      current,
+      'id, period_start, period_end, opening_balance_entry_id',
+    )
+    if (!period) return { previous: null, status: 'no_previous_period' }
     const data = await loadCashFlowYear(supabase, companyId, period)
     if (!hasPeriodActivity(data.rows)) return { previous: null, status: 'no_activity' }
     return {
@@ -343,7 +341,7 @@ async function buildPreviousYear(
     // status tells the reader, the log tells us.
     log.warn('previous-year kassaflödesanalys unavailable', {
       companyId,
-      fiscalPeriodId: previousPeriod.id,
+      fiscalPeriodId: current.id,
       error: error instanceof Error ? error.message : String(error),
     })
     return { previous: null, status: 'unavailable' }

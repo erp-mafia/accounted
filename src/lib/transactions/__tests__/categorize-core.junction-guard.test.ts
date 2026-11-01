@@ -112,8 +112,7 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period
-    enqueue({ data: [{ period_start: '2026-01-01' }] })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: 'fy', period_start: '2026-01-01', period_end: '2026-12-31' }] })
     // Open period: the engine runs (and returns null here, so the booking
     // refuses with NO_OPEN_PERIOD_FOR_DATE after it).
     mockCheckPeriodLock.mockResolvedValue({ locked: false })
@@ -132,8 +131,7 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period
-    enqueue({ data: [{ period_start: '2026-01-01' }] })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: 'fy', period_start: '2026-01-01', period_end: '2026-12-31' }] })
     // Open period: the engine runs (and returns null here, so the booking
     // refuses with NO_OPEN_PERIOD_FOR_DATE after it).
     mockCheckPeriodLock.mockResolvedValue({ locked: false })

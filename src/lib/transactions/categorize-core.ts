@@ -28,6 +28,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { fiscalYearStartMonthFor } from '@/lib/company/fiscal-year'
 import { eventBus } from '@/lib/events'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
@@ -55,7 +56,8 @@ import { duplicateCheck, passed, warned, type DecisionCheck, type DuplicateVerdi
 import { reviewReason } from './direct-booking'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
-import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
+import { insertFiscalYearAfter } from '@/lib/core/bookkeeping/period-service'
+import { missingFiscalYears, scheduledFiscalYear } from '@/lib/bookkeeping/suggest-fiscal-period'
 import {
   upsertCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
@@ -345,6 +347,12 @@ export function buildDuplicateBookingClaim(
 // Moved here from lib/pending-operations/commit.ts so the core is
 // self-contained; commit.ts now imports it from this module.
 
+/**
+ * More years than this between a date and the last recorded year is a
+ * mistyped date, not bookkeeping left undone: BFL keeps seven.
+ */
+const MAX_CHAINED_FISCAL_YEARS = 10
+
 export async function ensureFiscalPeriod(
   supabase: SupabaseClient,
   userId: string,
@@ -363,57 +371,48 @@ export async function ensureFiscalPeriod(
 
   if (existing && existing.length > 0) return true
 
+  const { data: recordedRows, error: recordedError } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+  if (recordedError) {
+    log.error('Failed to read fiscal periods:', recordedError)
+    return false
+  }
+  const recorded = (recordedRows ?? []) as { id: string; period_start: string; period_end: string }[]
+
   // Pre-FY guard (issue #1825): a date before the company's first fiscal
-  // period must NEVER mint a calendar-year rakenskapsar. Depending on overlap
-  // with the real first period, the upsert below would either bounce off the
-  // no_overlapping_fiscal_periods exclusion constraint (log noise) or silently
-  // create a pre-registration year (legally wrong). Return true and let the
-  // pre-FY clamp in createTransactionJournalEntry book the event on the first
-  // fiscal year's first day. Dates AFTER the latest period (next-year
-  // auto-creation) pass through unchanged.
-  const earliestStart = await getEarliestFiscalPeriodStart(supabase, companyId)
-  if (earliestStart && date < earliestStart) return true
+  // period must NEVER mint a calendar-year rakenskapsar (a pre-registration
+  // year would be legally wrong). Return true and let the pre-FY clamp in
+  // createTransactionJournalEntry book the event on the first fiscal year's
+  // first day.
+  if (recorded.length > 0 && date < recorded[0].period_start) return true
 
-  const txDate = new Date(date)
-  const txMonth = txDate.getMonth() + 1
-  const txYear = txDate.getFullYear()
+  // A date in a recorded year means that year is closed: nothing to create,
+  // the booking meets its lock.
+  if (recorded.some((year) => year.period_start <= date && date <= year.period_end)) return true
 
-  let periodStartYear: number
-  if (fiscalYearStartMonth === 1) {
-    periodStartYear = txYear
-  } else if (txMonth >= fiscalYearStartMonth) {
-    periodStartYear = txYear
-  } else {
-    periodStartYear = txYear - 1
+  // Recorded years decide the next one and fiscal_year_start_month only fills
+  // what nothing records. A hole wider than a year fills from its left edge,
+  // up to the date: the rest of it stays as it was.
+  const years =
+    recorded.length > 0
+      ? missingFiscalYears(date, recorded, MAX_CHAINED_FISCAL_YEARS)
+      : [scheduledFiscalYear(date, fiscalYearStartMonth)]
+  if (years.length === 0) {
+    log.warn('Date too far past the last fiscal period to chain to', { companyId, date })
+    return false
   }
 
-  const startMonth = String(fiscalYearStartMonth).padStart(2, '0')
-  const periodStart = `${periodStartYear}-${startMonth}-01`
-
-  const endYear = fiscalYearStartMonth === 1 ? periodStartYear : periodStartYear + 1
-  const endMonth = fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1
-  const lastDay = new Date(endYear, endMonth, 0).getDate()
-  const periodEnd = `${endYear}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-
-  const periodName = fiscalYearStartMonth === 1
-    ? `Räkenskapsår ${periodStartYear}`
-    : `Räkenskapsår ${periodStartYear}/${endYear}`
-
-  // The arbiter must name a real unique constraint, or Postgres refuses the
-  // insert (42P10): the key is per company since the multi-tenant refactor.
-  // An existing row with these dates (a closed year the select above skips)
-  // is left as it is; the booking then meets that year's lock.
-  const { error } = await supabase
-    .from('fiscal_periods')
-    .upsert({
-      user_id: userId,
-      company_id: companyId,
-      name: periodName,
-      period_start: periodStart,
-      period_end: periodEnd,
-    }, { onConflict: 'company_id,period_start,period_end', ignoreDuplicates: true })
-
-  if (error) {
+  let previousId = [...recorded].reverse().find((year) => year.period_end < years[0].start)?.id ?? null
+  try {
+    for (const year of years) {
+      previousId = (await insertFiscalYearAfter(supabase, companyId, userId, previousId, year)).id
+    }
+  } catch (error) {
+    // A concurrent booking may have created the year, and the triggers refuse
+    // what the law does: the booking then answers from what is there.
     log.error('Failed to create fiscal period:', error)
     return false
   }
@@ -468,7 +467,7 @@ export async function resolveCategorizeContext(
     context: {
       entityType,
       vatRegistered,
-      fiscalYearStartMonth: settings?.fiscal_year_start_month ?? 1,
+      fiscalYearStartMonth: fiscalYearStartMonthFor({ ...settings, entity_type: entityType }),
       template,
       finalCategory,
     },
@@ -1014,9 +1013,6 @@ export async function categorizeTransaction(
   }
 
   if (wouldBook) {
-    if (!dryRun) {
-      await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, context.fiscalYearStartMonth)
-    }
     // Issue #1661: a private marking books eget uttag/insättning, so a locked
     // period refuses it like any verifikat; its code names the ignore path,
     // since the row is usually no affärshändelse at all.
@@ -1028,6 +1024,11 @@ export async function categorizeTransaction(
         fiscal_period_id: periodLock.fiscal_period_id,
         ...(isBusiness ? {} : { suggested_action: 'ignore' }),
       })
+    }
+    // After the lock: a refused booking leaves no year behind, and a date
+    // without a year is still judged by the company's lock date.
+    if (!dryRun) {
+      await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, context.fiscalYearStartMonth)
     }
     checks.push(passed('period_lock'))
   }

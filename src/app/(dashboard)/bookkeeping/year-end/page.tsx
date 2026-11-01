@@ -30,7 +30,7 @@ import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
 import { StepRail } from '@/components/bokslut/StepRail'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   filesIncomeReturn,
   isEntityType,
@@ -104,7 +104,7 @@ export default function YearEndPage() {
     const all: FiscalPeriod[] = allPeriods
     const today = todayIsoStockholm()
     const eligible: PeriodOption[] = all
-      .filter((p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today)
+      .filter((p) => !p.is_closed && !p.closing_entry_id && hasEnded(p.period_end, today))
       .map((p) => ({ ...p, eligible: true }))
     // Oldest first: accountants close in order.
     eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))

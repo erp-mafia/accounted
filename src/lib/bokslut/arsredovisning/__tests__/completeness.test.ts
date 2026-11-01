@@ -100,6 +100,18 @@ function input(stage: 'draft' | 'signing' | 'filing') {
 }
 
 describe('validateAnnualReportCompleteness', () => {
+  it.each([
+    ['2024-01-31', '2025-07-31', true],
+    ['2024-03-31', '2025-09-30', true],
+    ['2024-03-01', '2025-08-31', false],
+    ['2024-03-15', '2025-08-31', false],
+  ])('counts the 18 months from %s to %s the way every other door does', (start, end, over) => {
+    const value = input('draft')
+    value.report.fiscal_period = { ...value.report.fiscal_period, period_start: start, period_end: end }
+    const issues = validateAnnualReportCompleteness(value).issues
+    expect(issues.some((issue) => issue.code === 'AR-FISCAL-PERIOD-TOO-LONG')).toBe(over)
+  })
+
   it('accepts a complete filing model', () => {
     const result = validateAnnualReportCompleteness(input('filing'))
     expect(result.ok).toBe(true)
