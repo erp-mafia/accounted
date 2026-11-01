@@ -246,6 +246,14 @@ describe('a provider that refuses the connection outside Fortnox (B11)', () => {
     expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
   })
 
+  it('asks Bokio again after a day when the plan has no API access, whichever door read it', async () => {
+    const { work, db } = listingWork('bokio')
+    page.mockRejectedValueOnce(new BokioApiError('Bokio API error: 403 Forbidden', 403, '{"error":"price_plan_feature_required"}'))
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(86_400)
+  })
+
   it('waits a day on a grant the refresh was refused, too', async () => {
     const { work, db } = listingWork('visma')
     resolve.mockRejectedValueOnce(new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'visma', 'refresh refused'))
@@ -322,6 +330,32 @@ describe('an opaque Fortnox 403 is read against the token (#51)', () => {
     expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 1 })
     expect(companyInfo).not.toHaveBeenCalled()
     expect(db.rpc).toHaveBeenCalledWith('block_invoice_completion_work', expect.objectContaining({ p_reason: 'PROVIDER_RESOURCE_FORBIDDEN' }))
+  })
+
+  // The same refusal under Fortnox's other status: fortnoxRefusal reads both.
+  const under400 = () => new FortnoxApiError('Fortnox API error: 400 Bad Request', 400,
+    JSON.stringify({ ErrorInformation: { error: 1, message: 'Saknar behörighet för kundregister.', code: 2001538 } }))
+
+  it('waits a day on a register refused under a 400 too, not an hour, and blocks nothing on undocumented evidence', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    work.next_page = 1
+    rows.forEach(row => { row.source_ref = null as never })
+    page.mockRejectedValueOnce(under400())
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(86_400)
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
+  })
+
+  it('stops the company on a detail refused under a 400, instead of failing it invoice by invoice', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    detail.mockRejectedValue(under400())
+
+    const result = await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(result).toMatchObject({ companiesFailed: 1, failed: 0 })
+    expect(detail).toHaveBeenCalledTimes(1)
+    expect(retrySeconds(db)).toBe(86_400)
+    detail.mockReset()
   })
 
   it('keeps a rate limit retryable with its Retry-After, asking nothing of the token', async () => {

@@ -7,7 +7,7 @@ import type {
   SalesInvoiceDto,
   SupplierInvoiceDto,
 } from './dto';
-import type { BjornLundenResourceConfig, ProviderName } from './types';
+import type { ProviderName } from './types';
 
 import { FortnoxClient } from './fortnox/client';
 import { ISO_DATE_RE } from '@/lib/invariants';
@@ -28,6 +28,7 @@ import { WintClient } from './wint/client';
 import { WINT_RESOURCE_CONFIGS } from './wint/config';
 import { ResourceType } from './dto';
 import type { MigrationResource } from './migration-contract';
+import { isProviderRefusal } from './with-provider-call';
 
 // Singleton clients (they hold rate limiters)
 const fortnoxClient = new FortnoxClient();
@@ -306,24 +307,6 @@ async function blPaginate<T>(
   return allItems;
 }
 
-/**
- * List a Björn Lundén resource the way its endpoint is shaped. The batch
- * endpoints page; the registers (/customer, /supplier) ignore paging and
- * answer the whole register as one bare array, so they take the single-call
- * path. The config's `paginated` flag has said which is which since the
- * provider was added; the fetchers never read it, and paged the registers.
- */
-async function blList<T>(
-  accessToken: string,
-  userKey: string,
-  config: BjornLundenResourceConfig,
-): Promise<T[]> {
-  if (config.paginated === false) {
-    return bjornLundenClient.getAll<T>(accessToken, userKey, config.listEndpoint);
-  }
-  return blPaginate<T>(accessToken, userKey, config.listEndpoint);
-}
-
 // ── Public fetch functions ──────────────────────────────────────────
 
 /**
@@ -393,9 +376,8 @@ export async function fetchCompanyInfoDirect(
  * this consent may not carry, WINT has no supplier register, and Bokio's
  * supplier 404 is swallowed on purpose. So an empty array means "nothing to
  * import", never "the provider answered nothing", and callers must not read a
- * resolved promise as proof that the access token works (see the migration
- * orchestrator's ProviderRunState.grantProven, which counts rows instead).
- * A failed request still throws; only genuinely absent resources return [].
+ * resolved promise as proof that the access token works. A failed request
+ * still throws; only genuinely absent resources return [].
  */
 /**
  * The provider's chart of accounts, with the per-account momskod the SIE
@@ -420,130 +402,6 @@ export async function fetchAccountingAccountsDirect(
     );
     return items.map((item) => config.mapper(item) as AccountingAccountDto);
   }
-
-  return [];
-}
-
-/**
- * The customer register. `detailBudgetMs` bounds the detail pass for a
- * provider that lists a short form (Fortnox, see partyNeedsDetail); a
- * customer the pass does not reach keeps its list form.
- */
-export async function fetchCustomersDirect(
-  provider: ProviderName,
-  accessToken: string,
-  providerCompanyId?: string,
-  options: { detailBudgetMs?: number } = {},
-): Promise<CustomerDto[]> {
-  if (provider === 'fortnox') {
-    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
-    );
-    const listed = items.map((item) => config.mapper(item) as CustomerDto);
-    const { customers } = await hydrateCustomers(provider, accessToken, providerCompanyId, listed, options.detailBudgetMs);
-    return customers;
-  }
-
-  if (provider === 'visma') {
-    const config = VISMA_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await vismaClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'briox') {
-    const config = BRIOX_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await brioxClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint, config.listKey);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'bokio') {
-    const config = BOKIO_RESOURCE_CONFIGS[ResourceType.Customers];
-    if (!config || !providerCompanyId) {
-      console.warn(`[provider-data-fetcher] Bokio customers: skipped, config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
-      return [];
-    }
-    const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
-    if (items.length > 0) {
-      console.log(`[provider-data-fetcher] Bokio customers: first item keys: ${Object.keys(items[0]).join(', ')}`);
-    }
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'bjornlunden') {
-    const config = BL_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'wint') {
-    const config = WINT_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await wintClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  return [];
-}
-
-/**
- * The supplier register. `detailBudgetMs` bounds the detail pass for a
- * provider that lists a short form (Fortnox, see partyNeedsDetail); a
- * supplier the pass does not reach keeps its list form.
- */
-export async function fetchSuppliersDirect(
-  provider: ProviderName,
-  accessToken: string,
-  providerCompanyId?: string,
-  options: { detailBudgetMs?: number } = {},
-): Promise<SupplierDto[]> {
-  if (provider === 'fortnox') {
-    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
-    );
-    const listed = items.map((item) => config.mapper(item) as SupplierDto);
-    const { suppliers } = await hydrateSuppliers(provider, accessToken, providerCompanyId, listed, options.detailBudgetMs);
-    return suppliers;
-  }
-
-  if (provider === 'visma') {
-    const config = VISMA_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await vismaClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  if (provider === 'briox') {
-    const config = BRIOX_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await brioxClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint, config.listKey);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  if (provider === 'bokio') {
-    const config = BOKIO_RESOURCE_CONFIGS[ResourceType.Suppliers];
-    if (!config || !providerCompanyId) return [];
-    try {
-      const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
-      return items.map((item) => config.mapper(item) as SupplierDto);
-    } catch (err) {
-      if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio suppliers endpoint not available (404), skipping');
-        return [];
-      }
-      throw err;
-    }
-  }
-
-  if (provider === 'bjornlunden') {
-    const config = BL_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  // WINT (Tier A): the supplier register lives on the IncomingInvoice surface,
-  // which exists only in WINT's internal Full spec. Deliberately not fetched:
-  // see lib/providers/wint/config.ts.
 
   return [];
 }
@@ -596,7 +454,7 @@ export async function fetchSalesInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
+    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SalesInvoiceDto);
   }
 
@@ -653,7 +511,7 @@ export async function fetchSupplierInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SupplierInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
+    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
 
@@ -1072,7 +930,7 @@ async function hydrateRegister<T extends { id: string }>(
       // remaining invoice. Issuing hundreds more doomed calls would spend the
       // rate-limit budget (shared platform-wide, see acquire()) for nothing
       // and bury the real cause under a wall of identical warnings.
-      if (isAuthFailure(err)) {
+      if (isProviderRefusal(err)) {
         aborted = 'auth';
         authError = err;
         console.warn(
@@ -1100,19 +958,6 @@ async function hydrateRegister<T extends { id: string }>(
   );
 
   return { items: hydrated, report, unhydratedIds, authError };
-}
-
-/**
- * Does this error mean the credential itself is refused?
- *
- * Every provider client throws its own error class carrying `statusCode`, so
- * the shape is read structurally rather than by instanceof across six classes.
- * 401 and 403 are the credential answers; a 404 is about one invoice and must
- * not stop the pass.
- */
-function isAuthFailure(err: unknown): boolean {
-  const status = (err as { statusCode?: unknown } | null)?.statusCode;
-  return status === 401 || status === 403;
 }
 
 /**

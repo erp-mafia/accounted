@@ -801,7 +801,7 @@ export async function runProviderMigrationWorker(options: {
       const code = failed === 'MIGRATION_DEADLINE' && !moved ? 'MIGRATION_STALLED' : failed
       const deferred = code === 'MIGRATION_DEADLINE'
       const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_RESOURCE_FORBIDDEN','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
-        'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
+        'BOKIO_PLAN_NO_API','MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
       await migrationRpc(supabase, job, 'release_provider_migration_job', {
         p_error_code: deferred ? null : code,
         p_retry_seconds: deferred ? 0 : attention ? -1 : migrationRetrySeconds(job.failures + 1),

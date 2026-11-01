@@ -183,7 +183,7 @@ export function migrationIssueKind(code: string | null): 'connection' | 'access'
   // A record with the same number already exists and differs. Resuming
   // repeats the same outcome, so never suggest a retry (23505 = unique_violation).
   if (code === 'MIGRATION_INVOICE_NUMBER_TAKEN' || code === '23505') return 'exists'
-  if (code?.includes('LICENSE') || code?.includes('MODULE') || code === 'MIGRATION_WRITE_FORBIDDEN') return 'access'
+  if (code?.includes('LICENSE') || code?.includes('MODULE') || code === 'BOKIO_PLAN_NO_API' || code === 'MIGRATION_WRITE_FORBIDDEN') return 'access'
   if (code?.includes('AMBIGUOUS') || code?.includes('REVIEW') || code?.includes('CHANGED')) return 'review'
   if (code?.includes('ROWS') || code?.includes('LINES')) return 'lines'
   if (code?.includes('TOO_LARGE')) return 'size'
@@ -360,6 +360,7 @@ export function migrationRefusalMessageKey(resource: MigrationResource, reason: 
 const SUBSCRIPTION_STOP_MESSAGE_KEYS: Readonly<Record<string, string>> = {
   PROVIDER_API_MODULE_INACTIVE: 'ext_arcim_job_error_api_module',
   PROVIDER_LICENSE_MISSING: 'ext_arcim_job_error_api_license',
+  BOKIO_PLAN_NO_API: 'ext_arcim_job_error_bokio_plan',
 }
 
 /**

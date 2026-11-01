@@ -95,20 +95,6 @@ import { providerKeyUse, readProviderKeyUseFacts } from './lib/key-use'
 const moduleLog = createLogger('extensions/arcim-migration')
 
 /**
- * Wall-clock budget for one /migrate run.
- *
- * The dispatcher (app/api/extensions/ext/[...path]/route.ts) runs under
- * maxDuration = 800, and a run that is still going when Vercel terminates
- * the function never writes its terminal NDJSON line: the wizard reports a
- * dropped connection over a job that half-landed. The orchestrator fits its
- * budget-aware steps inside this deadline and keeps the rest of the ceiling
- * for the unbudgeted tail (voucher links, reconciliation, party
- * suggestions, the accept write). Self-hosted has no ceiling; the same
- * budget keeps a run bounded there too.
- */
-const MIGRATE_RUN_BUDGET_MS = 660_000
-
-/**
  * The one answer the unauthenticated OAuth callback gives for every state
  * failure: forged, unknown, expired, replayed, or pointing at a consent that no
  * longer exists. Distinguishing them would turn the callback into a probe for
@@ -1086,7 +1072,8 @@ export const arcimMigrationExtension: Extension = {
             // failures stay soft: the preview is still useful without company
             // info (e.g. SIE-over-API can work with narrower scopes).
             const classified = classifyProviderError(err)
-            if (classified === 'PROVIDER_API_MODULE_INACTIVE' || classified === 'PROVIDER_LICENSE_MISSING') {
+            if (classified === 'PROVIDER_API_MODULE_INACTIVE' || classified === 'PROVIDER_LICENSE_MISSING'
+              || classified === 'BOKIO_PLAN_NO_API') {
               throw err
             }
             log.info('Company info fetch failed:', err instanceof Error ? err.message : String(err))
@@ -1772,21 +1759,10 @@ export const arcimMigrationExtension: Extension = {
             userId: ctx.userId,
             supabase,
             suggestParties,
-            fiscalYearScope: null,
             grantProven: grantProven === true,
-            // The behandlingshistorik rows the sales-invoice step writes need
-            // the service role (processing_history has no INSERT policy);
-            // built only when that step has rows to write.
-            createHistoryClient: async () =>
-              (await import('@/lib/supabase/server')).createServiceClient(),
             importCompanyInfo,
-            importCustomers: false,
-            importSuppliers: false,
-            importSalesInvoices: false,
-            importSupplierInvoices: false,
             importAssets,
             reconcileVouchers,
-            deadlineMs: Date.now() + MIGRATE_RUN_BUDGET_MS,
           }
 
           // Streaming mode (the migration wizard opts in via Accept): one

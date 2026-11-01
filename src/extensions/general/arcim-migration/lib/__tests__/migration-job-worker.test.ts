@@ -824,6 +824,16 @@ describe('a 403 on a token that still works', () => {
     expect(db.rows.map(row => [row.resource, row.state])).toEqual([['customers', 'done']])
   })
 
+  it('parks the job when the Bokio plan has no API access: reconnecting cannot change it', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(new BokioApiError('Bokio API error: 403 Forbidden', 403, '{"error":"price_plan_feature_required"}'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledOnce()
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'BOKIO_PLAN_NO_API' })
+  })
+
   it('parks the job as an expired connection when the probe cannot vouch for the token', async () => {
     const db = database({ provider: 'bokio', resources: ['customers', 'suppliers'] })
     mocks.page.mockRejectedValueOnce(forbidden())

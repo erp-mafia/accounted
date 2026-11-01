@@ -4,7 +4,7 @@ import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { openMigrationPayload } from '@/lib/providers/migration-payload'
 import { fetchMigrationPage } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
-import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { isProviderRefusal } from '@/lib/providers/with-provider-call'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mapSupplierInvoice } from './entity-mapper'
 
@@ -163,9 +163,7 @@ export function consentUnusable(error: unknown): boolean {
   if (error && typeof error === 'object' && !(error instanceof Error) && 'status' in error) {
     return [401, 403, 404].includes(Number((error as { status: unknown }).status))
   }
-  const code = classifyProviderError(error)
-  return code === 'PROVIDER_AUTH_EXPIRED' || code === 'PROVIDER_LICENSE_MISSING'
-    || code === 'PROVIDER_RESOURCE_FORBIDDEN' || code === 'PROVIDER_API_MODULE_INACTIVE'
+  return isProviderRefusal(error)
 }
 
 export function messageOf(error: unknown): string {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchCustomersDirect, hydrateCustomers } from '../provider-data-fetcher';
+import { fetchMigrationPage, hydrateCustomers } from '../provider-data-fetcher';
 import type { CustomerDto } from '../dto';
 
 /**
@@ -43,6 +43,15 @@ function detailFor(customerNumber: string, terms: string) {
   };
 }
 
+/** The customer register as the import job reads it: the listed page, then each record's detail form. */
+async function listedPage(): Promise<CustomerDto[]> {
+  return (await fetchMigrationPage('fortnox', 'token', undefined, 'customers', 1)).items as CustomerDto[];
+}
+
+async function register(): Promise<CustomerDto[]> {
+  return (await hydrateCustomers('fortnox', 'token', undefined, await listedPage())).customers;
+}
+
 describe('Fortnox customers carry the terms only their detail form names', () => {
   let requested: string[];
 
@@ -70,7 +79,7 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
   it('reads a listed customer\'s payment terms, VAT number and invoice e-mail from its detail form', async () => {
     stubFetch((url) => url.includes('/customers/1001') ? json(detailFor('1001', '10')) : json(listResponse([LISTED])));
 
-    const [customer] = await fetchCustomersDirect('fortnox', 'token');
+    const [customer] = await register();
 
     expect(customer?.defaultPaymentTermsDays).toBe(10);
     expect(customer?.vatNumber).toBe('SE556677889901');
@@ -81,7 +90,7 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
   it('keeps a stated 0 days (betalning direkt)', async () => {
     stubFetch((url) => url.includes('/customers/1001') ? json(detailFor('1001', '0')) : json(listResponse([LISTED])));
 
-    const [customer] = await fetchCustomersDirect('fortnox', 'token');
+    const [customer] = await register();
 
     expect(customer?.defaultPaymentTermsDays).toBe(0);
   });
@@ -91,7 +100,7 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
       ? json(detailFor('1001', '10'))
       : json(listResponse([{ ...LISTED, TermsOfPayment: '15' }])));
 
-    const [customer] = await fetchCustomersDirect('fortnox', 'token');
+    const [customer] = await register();
 
     expect(customer?.defaultPaymentTermsDays).toBe(10);
     expect(customer?.vatNumber).toBe('SE556677889901');
@@ -103,7 +112,7 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
       ? json({ ErrorInformation: { error: 1, message: 'Kan inte hitta kunden', code: 2000433 } }, 404)
       : json(listResponse([LISTED])));
 
-    const customers = await fetchCustomersDirect('fortnox', 'token');
+    const customers = await register();
 
     expect(customers).toHaveLength(1);
     expect(customers[0]?.party.name).toBe('Kund AB');
@@ -112,7 +121,7 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
 
   it('reports a customer the budget did not reach instead of dropping it', async () => {
     stubFetch(() => json(listResponse([LISTED])));
-    const listed = await fetchCustomersDirect('fortnox', 'token', undefined, { detailBudgetMs: 0 });
+    const listed = await listedPage();
     expect(listed).toHaveLength(1);
 
     const { customers, hydration, unhydratedIds } = await hydrateCustomers('fortnox', 'token', undefined, listed, 0);

@@ -178,6 +178,20 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(hydration.hydrated).toBe(1);
   });
 
+  it('stops at the first detail Fortnox refuses with a 400, as it does for the 403 form of the same refusal', async () => {
+    const refusal = JSON.stringify({ ErrorInformation: { error: 1, message: 'Saknar behörighet för kundregister.', code: 2001538 } });
+    const many = Array.from({ length: 20 }, (_, i) => ({ ...OPEN, DocumentNumber: 100 + i }));
+    stubFetch((url) => url.includes('/invoices/1')
+      ? new Response(refusal, { status: 400 })
+      : json(listResponse(many)));
+
+    const { hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    expect(hydration.abortedBy).toBe('auth');
+    // Only the concurrency window was spent, not all 20.
+    expect(requested.filter((url) => /\/invoices\/\d\d\d/.test(url)).length).toBeLessThanOrEqual(3);
+  });
+
   it('keeps the list-form invoice when its detail fetch fails', async () => {
     stubFetch((url) => url.includes('/invoices/4')
       ? new Response('boom', { status: 404 })

@@ -174,6 +174,28 @@ describe('refreshMigratedSupplierPaymentState', () => {
     expect(result).toMatchObject({ matched: 1, updated: 0, unchanged: 1 })
   })
 
+  it('reads the provider as the import does: a status of paid settles the row, whatever the money fields say', async () => {
+    mFetchProvider.mockResolvedValue([{ ...providerInvoice('A1', '2026-01-10', 1000, 1000), status: 'paid' }])
+    mFetchAll.mockResolvedValue([openRow('inv-1', 'A1', '2026-01-10', 1000)])
+    const { supabase, updates } = trackingSupabase()
+
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(result.updated).toBe(1)
+    expect(updates[0].values).toMatchObject({ status: 'paid', paid_amount: 1000, remaining_amount: 0 })
+  })
+
+  it('leaves an invoice the provider never issued as it is', async () => {
+    mFetchProvider.mockResolvedValue([{ ...providerInvoice('A1', '2026-01-10', 1000, 1000), status: 'draft' }])
+    mFetchAll.mockResolvedValue([openRow('inv-1', 'A1', '2026-01-10', 1000)])
+    const { supabase, updates } = trackingSupabase()
+
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+
+    expect(result.unchanged).toBe(1)
+    expect(updates).toHaveLength(0)
+  })
+
   it('reads only rows with no vouchers, no payment, no credit note and an open status', async () => {
     mFetchProvider.mockResolvedValue([])
     mFetchAll.mockResolvedValue([])

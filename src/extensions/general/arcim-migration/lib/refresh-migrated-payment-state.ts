@@ -12,7 +12,7 @@
  * That is what this pass does. It does NOT guess: a one-shot UPDATE marking
  * the 365 rows paid would fabricate payments, and some of them are genuinely
  * open. Bokio knows which, so Bokio is asked, and the answer is read by the
- * same rule the import uses (resolveSupplierSettlement), so the repair cannot
+ * same rule the import uses (resolveInvoiceSettlement), so the repair cannot
  * contradict the import it repairs.
  *
  * Guarantees:
@@ -38,8 +38,8 @@ import { createLogger } from '@/lib/logger'
 import type { ProviderName } from '@/lib/providers/types'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { fetchSupplierInvoicesDirect } from '@/lib/providers/provider-data-fetcher'
+import { resolveInvoiceSettlement } from '@/lib/providers/settlement'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { resolveSupplierSettlement } from './entity-mapper'
 import { joinKey, uniqueByKey } from './relink-registration-vouchers'
 import { listedMatchNumber, storedMatchNumber } from './supplier-invoice-identity'
 import type { BokioSupplierSnapshot } from './complete-bokio-supplier-invoices'
@@ -139,7 +139,7 @@ export async function refreshMigratedSupplierPaymentState(
       continue
     }
 
-    const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
+    const settlement = resolveInvoiceSettlement(dto.paymentStatus, dto.status, total)
     if (settlement.status !== 'paid' && settlement.status !== 'partially_paid') {
       unchanged++
       continue

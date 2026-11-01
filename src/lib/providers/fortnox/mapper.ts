@@ -8,7 +8,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto, CreditedInvoiceRefDto,
 } from '../dto';
-import { creditNoteTypeCode } from '../dto';
+import { documentPayment, documentState, type DocumentState } from '../document-state';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
 import { splitGrossVat } from '@/lib/bookkeeping/gross-split';
@@ -99,32 +99,36 @@ function providerEmailAddresses(
 }
 
 /**
- * Whether Fortnox states that the invoice was never issued: neither sent
- * (`Sent`) nor booked (`Booked`), the two status flags both the list and the
- * detail form carry. Both have to be stated false: a payload that omits them
- * (the supplier-invoice forms have no `Sent`) says nothing, and the other
- * signals decide as before.
- *
- * Such an invoice is a draft whatever its `Balance` says. Nothing has been
- * invoiced yet, so nothing can have been settled, and a draft whose balance
- * reads 0 (a zero total) used to be imported as a PAID invoice.
+ * "Is this invoice fully settled?", used by BOTH deriveInvoiceStatus and the
+ * paymentStatus.paid flag so they can never diverge. Numeric, not strict === 0,
+ * so a residual öre / float drift still reads as paid. Number(undefined ?? NaN)
+ * = NaN and NaN <= 0 is false, so an ABSENT Balance is treated as NOT paid (the
+ * supplier-invoice list payload omits Balance); only an explicit FullyPaid flag
+ * or a present non-positive Balance counts as paid.
  */
-function isUnissuedDraft(raw: Record<string, unknown>): boolean {
-  return raw['Sent'] === false && raw['Booked'] === false;
+function isFullyPaid(raw: Record<string, unknown>): boolean {
+  return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+}
+
+/** The supplier list form spells cancellation `Cancel`, every detail form `Cancelled`. */
+function isCancelled(raw: Record<string, unknown>): boolean {
+  return raw['Cancel'] === true || raw['Cancelled'] === true;
 }
 
 /**
- * Single source of truth for "is this invoice fully settled?", used by BOTH
- * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
- * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
- * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
- * treated as NOT paid (the supplier-invoice list payload omits Balance); only an
- * explicit FullyPaid flag or a present non-positive Balance counts as paid, and
- * never on an invoice that was not issued (isUnissuedDraft).
+ * What a Fortnox document is. It was never issued when it states it was
+ * neither sent (`Sent`) nor booked (`Booked`), the two status flags both the
+ * list and the detail form carry. Both have to be stated false: a payload that
+ * omits them (the supplier-invoice forms have no `Sent`) says nothing.
  */
-function isFullyPaid(raw: Record<string, unknown>): boolean {
-  if (isUnissuedDraft(raw)) return false;
-  return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+function fortnoxDocumentState(raw: Record<string, unknown>, total: number): DocumentState {
+  return documentState({
+    issued: !(raw['Sent'] === false && raw['Booked'] === false),
+    paymentStated: raw['FullyPaid'] === true,
+    cancelled: isCancelled(raw),
+    creditFlag: isFlaggedCredit(raw),
+    total,
+  });
 }
 
 /**
@@ -139,8 +143,7 @@ function isFullyPaid(raw: Record<string, unknown>): boolean {
 export function fortnoxSupplierInvoiceNotOpen(
   raw: Record<string, unknown>,
 ): 'cancelled' | 'unbooked' | 'paid' | null {
-  // The list form spells cancellation `Cancel`, the detail form `Cancelled`.
-  if (raw['Cancel'] === true || raw['Cancelled'] === true) return 'cancelled';
+  if (isCancelled(raw)) return 'cancelled';
   if (raw['Booked'] === false) return 'unbooked';
   const balance = readNumber(raw, ['Balance']);
   return balance !== undefined && Math.abs(balance) < ORE_TOLERANCE ? 'paid' : null;
@@ -158,7 +161,7 @@ export function fortnoxSupplierInvoiceNotOpen(
  * not one with status 'credited'. Every credit note had fallen through to
  * isFullyPaid (a credit invoice's balance is never positive) and was imported
  * as a PAID invoice with a negative paid amount (#2789). Both spellings are
- * read; the negative total covers the list form (see creditNoteTypeCode).
+ * read; the negative total covers the list form (see documentState).
  */
 function isFlaggedCredit(raw: Record<string, unknown>): boolean {
   const flag = raw['Credit'];
@@ -195,13 +198,8 @@ function creditedInvoiceRefOf(
   return { id: reference, invoiceNumber: reference };
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean): InvoiceStatusCode {
-  if (raw['Cancelled'] === true) return 'cancelled';
-  // Before the credit and paid checks: an unsent credit invoice has reduced
-  // nothing either, and the importer keeps a draft credit note a draft.
-  if (isUnissuedDraft(raw)) return 'draft';
-  if (isCreditNote) return 'credited';
-  if (isFullyPaid(raw)) return 'paid';
+function deriveInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
+  if (paid) return 'paid';
   if (raw['Booked'] === true) return 'booked';
   if (raw['Sent'] === true) return 'sent';
   return 'draft';
@@ -281,20 +279,19 @@ function headerChargeLines(
 export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
   const total = raw['Total'] as number ?? 0;
+  const doc = fortnoxDocumentState(raw, total);
+  const { invoiceTypeCode } = doc;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0, so a
   // missing Balance never silently reads as paid. A present Balance (incl. 0) is
   // used as-is. Mirrors the supplier path; paid-ness comes from isFullyPaid().
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
-  const paid = isFullyPaid(raw);
-  // An unissued draft owes its whole total: no payment can have been taken
-  // against it, so its Balance is not read as a part payment either.
-  const balance = paid ? 0
-    : isUnissuedDraft(raw) ? total
-      : ((raw['Balance'] as number | undefined) ?? total);
-  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
-  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), total);
+  const fullyPaid = isFullyPaid(raw);
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: fullyPaid,
+    balance: fullyPaid ? 0 : ((raw['Balance'] as number | undefined) ?? total),
+  });
 
   // Whether the row amounts include VAT. Absent on the list form, where there
   // are no rows anyway; false is the default when the detail form omits it.
@@ -371,7 +368,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
     // importer resolves the sign convention once for every provider.
     creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw) : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    status: doc.status ?? deriveInvoiceStatus(raw, paid),
     supplier: buildParty(
       (raw['CompanyName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,
@@ -412,17 +409,20 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
-  const paid = isFullyPaid(raw);
-  const balance = paid ? 0 : (readNumber(raw, ['Balance']) ?? total);
-  // 381 for a supplier kreditfaktura: the one signal the importer reads
-  // (dto.ts). Fortnox's schema types `Credit` as a boolean here and as a
-  // string on the sales side, so both spellings are read. The negative total
-  // is the signal production proves: on 2026-09-21 it held 26 Fortnox
-  // supplier documents with a negative `Total`, and not one of them had been
-  // read as credited by the old `Credit === true` test (all 26 landed as
-  // 'paid', #2838). `Total` is read as a number whether Fortnox serialises it
-  // as one or as a string.
-  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), readNumber(raw, ['Total']) ?? 0);
+  const fullyPaid = isFullyPaid(raw);
+  // 381 for a supplier kreditfaktura. Fortnox's schema types `Credit` as a
+  // boolean here and as a string on the sales side, so both spellings are
+  // read. The negative total is the signal production proves: on 2026-09-21
+  // it held 26 Fortnox supplier documents with a negative `Total`, and not one
+  // of them had been read as credited by the old `Credit === true` test (all
+  // 26 landed as 'paid', #2838). `Total` is read as a number whether Fortnox
+  // serialises it as one or as a string.
+  const doc = fortnoxDocumentState(raw, total);
+  const { invoiceTypeCode } = doc;
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: fullyPaid,
+    balance: fullyPaid ? 0 : (readNumber(raw, ['Balance']) ?? total),
+  });
 
   const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -481,7 +481,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     // existing, ordinary invoice of the same supplier.
     creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw, 'CreditReference', 'GivenNumber') : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    status: doc.status ?? deriveInvoiceStatus(raw, paid),
     supplier: buildParty(
       (raw['SupplierName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,

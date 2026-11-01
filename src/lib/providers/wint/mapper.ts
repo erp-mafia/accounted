@@ -6,7 +6,8 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto, PostalAddress,
 } from '../dto';
-import { creditNoteTypeCode, salesDocumentNumber } from '../dto';
+import { salesDocumentNumber } from '../dto';
+import { documentPayment, documentState, type DocumentState } from '../document-state';
 import { roundOre } from '@/lib/money';
 
 // Field names follow WINT's v1 swagger exactly (PascalCase). Amounts arrive as
@@ -67,14 +68,11 @@ function buildParty(
  * ReminderFeeNotFullyPaid | Expires. PaymentState refines it: Unpaid | Paid |
  * OverdueSoon | Overdue | PartiallyPaid | PartiallyPaidOverdue.
  */
-function deriveWintInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
+function deriveWintInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
   const status = raw['Status'] as string | undefined;
-  const creditStatus = raw['CreditStatus'] as string | undefined;
 
-  if (status === 'Cancelled') return 'cancelled';
-  if (creditStatus === 'Credited') return 'credited';
-  if (isWintInvoicePaid(raw)) return 'paid';
-  if (status === 'NotSent') return 'draft';
+  if (raw['CreditStatus'] === 'Credited') return 'credited';
+  if (paid) return 'paid';
 
   const paymentState = raw['PaymentState'] as string | undefined;
   if (
@@ -93,16 +91,33 @@ function deriveWintInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCod
 /**
  * Paid means WINT says so, from either enum. LeftToPay corroborates but a
  * missing LeftToPay never reads as paid (mirrors the Fortnox/Briox absent-
- * balance hardening), and neither does a zero LeftToPay on an invoice WINT
- * says was never sent (`NotSent`): nothing was invoiced, so nothing was
- * settled (the Fortnox mapper's unissued-draft rule, crm#1245).
+ * balance hardening).
  */
 function isWintInvoicePaid(raw: Record<string, unknown>): boolean {
   if (raw['Status'] === 'Paid' || raw['PaymentState'] === 'Paid') return true;
-  if (raw['Status'] === 'NotSent') return false;
   const total = num(raw['TotalAmount']);
   const leftToPay = num(raw['LeftToPay']);
   return total != null && total > 0 && leftToPay != null && leftToPay <= 0;
+}
+
+/** PaymentState values that say money moved on the invoice. */
+const WINT_PAYMENT_STATES: ReadonlySet<unknown> = new Set(['Paid', 'PartiallyPaid', 'PartiallyPaidOverdue']);
+
+/**
+ * What a WINT document is. `NotSent` says it never went out, unless WINT says
+ * it was paid or credited since. No "is a credit invoice" flag is known on
+ * WINT's v1 surface: `CreditStatus` says what happened TO an invoice (it has
+ * been credited), which describes the original, so the negative total is the
+ * signal.
+ */
+function wintDocumentState(raw: Record<string, unknown>, total: number): DocumentState {
+  return documentState({
+    issued: raw['Status'] !== 'NotSent' || raw['CreditStatus'] === 'Credited',
+    paymentStated: WINT_PAYMENT_STATES.has(raw['PaymentState']),
+    cancelled: raw['Status'] === 'Cancelled',
+    creditFlag: false,
+    total,
+  });
 }
 
 /**
@@ -120,20 +135,14 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   const currency = (raw['Currency'] as string) || 'SEK';
   const total = num(raw['TotalAmount']) ?? 0;
   const totalTax = num(raw['TotalTax']);
-  const paid = isWintInvoicePaid(raw);
-  // An unsent invoice owes its whole total; its LeftToPay is not a payment.
-  const balance = paid ? 0
-    : raw['Status'] === 'NotSent' ? total
-      : (num(raw['LeftToPay']) ?? total);
-  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
-  // No "is a credit invoice" flag is known on WINT's v1 surface. The one
-  // credit field this mapper reads, `CreditStatus`, says what happened TO an
-  // invoice (it has been credited), which describes the original, so the
-  // negative total is the signal.
-  const invoiceTypeCode = creditNoteTypeCode(false, total);
-  const wintStatus = deriveWintInvoiceStatus(raw);
-  const status: InvoiceStatusCode =
-    invoiceTypeCode && wintStatus !== 'cancelled' && wintStatus !== 'draft' ? 'credited' : wintStatus;
+  const doc = wintDocumentState(raw, total);
+  const { invoiceTypeCode } = doc;
+  const statedPaid = isWintInvoicePaid(raw);
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: statedPaid,
+    balance: statedPaid ? 0 : (num(raw['LeftToPay']) ?? total),
+  });
+  const status = doc.status ?? deriveWintInvoiceStatus(raw, paid);
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {

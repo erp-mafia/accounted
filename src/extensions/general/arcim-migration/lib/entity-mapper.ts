@@ -25,6 +25,7 @@ import { isAccountNumber } from '@/lib/invariants/account-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
 import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
+import { NOTHING_SETTLED, resolveInvoiceSettlement } from '@/lib/providers/settlement'
 import type {
   AmountType,
   CreditedInvoiceRefDto,
@@ -37,7 +38,6 @@ import type {
   CompanyInformationDto,
   PostalAddress,
   PartyDto,
-  PaymentStatusDto,
 } from '@/lib/providers/dto'
 import { roundOre } from '@/lib/money'
 
@@ -899,91 +899,6 @@ function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto
   } as T
 }
 
-/**
- * The balance the mapper trusts. A provider hands over two independent
- * signals, the paid flag and the remaining balance, and they can disagree.
- * When the flag came from the provider's explicit payment-status enum
- * (paymentStatus.source === 'enum') and says NOT settled, a non-positive
- * balance beside it is a payload artefact rather than a settlement, so the
- * open balance is the total. Company 5208b894 (Visma, 2026-09-10) imported
- * all 53 of its unpaid supplier invoices as paid with remaining_amount 0
- * because the zero balance was combined with the flag by OR. Without an enum
- * the balance keeps its drift-tolerant meaning: a residual öre resolves to
- * paid.
- */
-function trustedBalance(paymentStatus: PaymentStatusDto, total: number): number {
-  const balance = roundOre(paymentStatus.balance.value)
-  if (paymentStatus.source === 'enum' && !paymentStatus.paid && balance <= 0) return total
-  return balance
-}
-
-/** What the provider's payment fields say, as the columns an invoice row carries. */
-export interface SupplierSettlement {
-  /**
-   * The status the payment state implies, or null when it implies nothing
-   * and the caller should keep the provider's lifecycle status.
-   */
-  status: 'paid' | 'partially_paid' | null
-  paidAmount: number
-  remainingAmount: number
-  /**
-   * The settlement date the provider named, or null: when `status` is null
-   * and also when the provider gave no date (Fortnox never does). Never
-   * derived from the invoice date: an unknown date stays unknown (#2719).
-   */
-  paidAt: string | null
-}
-
-/**
- * One rule for reading a supplier invoice's payment state, shared by the
- * migration mapper below and by the repair pass that refreshes payment state
- * from the provider afterwards (refresh-migrated-payment-state.ts). Two
- * copies of this rule would drift, and the repair would then contradict the
- * import it repairs.
- *
- * The balance may declare a settlement on its own only when there is an
- * amount to settle and no enum spoke. `total > 0` is the part Bokio needed:
- * its API returns totalAmount 0 for invoices older than the register it
- * exposes, and a zero balance beside a zero total is an amount-less record,
- * not a payment (384 such rows across two migrated companies were written as
- * "paid" for 0 kr on 2026-09-14). An explicit paid = false from an enum is
- * never overridden by a zero either: see trustedBalance.
- *
- * The settlement date is the provider's `lastPaymentDate` or nothing. It
- * used to fall back to the issue date, which turned "the provider did not
- * say when" into a confident wrong date on every Fortnox-migrated invoice,
- * rendered as fact in the UI (#2719). The invoice date is deliberately not
- * a parameter any more so the fallback cannot creep back in.
- */
-export function resolveSupplierSettlement(
-  paymentStatus: PaymentStatusDto,
-  total: number,
-): SupplierSettlement {
-  const balance = trustedBalance(paymentStatus, total)
-  // Treat the balance numerically (never strict === 0) so floating drift or a
-  // residual öre resolves cleanly to paid/unpaid.
-  const paidAmount = paymentStatus.paid ? total : roundOre(total - balance)
-  const settled =
-    paymentStatus.paid || (balance <= 0 && total > 0 && paymentStatus.source !== 'enum')
-
-  if (settled) {
-    return {
-      status: 'paid',
-      paidAmount: total,
-      remainingAmount: 0,
-      paidAt: paymentStatus.lastPaymentDate || null,
-    }
-  }
-
-  const partial = paidAmount > 0 && paidAmount < total
-  return {
-    status: partial ? 'partially_paid' : null,
-    paidAmount: Math.max(0, paidAmount),
-    remainingAmount: Math.max(0, balance),
-    paidAt: partial ? paymentStatus.lastPaymentDate || null : null,
-  }
-}
-
 export function mapSalesInvoice(
   dto: SalesInvoiceDto,
   userId: string,
@@ -1029,33 +944,12 @@ export function mapSalesInvoice(
   // Nothing is ever collected on a kreditfaktura: it reduces what the customer
   // owes rather than settling anything. This also keeps the row clear of
   // invoices_credit_note_not_paid, which forbids paid/partially_paid the moment
-  // the row points at the invoice it credits.
-  const balance = trustedBalance(dto.paymentStatus, total)
-  const settlement = isCreditNote
-    ? { paidAt: null as string | null, paidAmount: 0, remainingAmount: 0 }
-    : {
-        // The provider's settlement date or nothing. The old issue-date
-        // fallback wrote every Fortnox-migrated invoice as paid on the day
-        // it was issued (#2719): Fortnox never sends lastPaymentDate, Visma
-        // and WINT do. A null paid_at on a paid invoice is a state the detail
-        // page already renders honestly (classifyPaymentHistoryGap).
-        paidAt: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || null : null,
-        paidAmount: dto.paymentStatus.paid ? total : roundOre(total - balance),
-        remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
-      }
-
-  // An open invoice the customer has paid part of is partially_paid, the
-  // status a native invoice takes on a part payment; it used to land as
-  // 'sent' beside a non-zero paid_amount. paid_at stays null, as natively
-  // (settle-invoice-payment.ts dates only the full settlement): a part-paid
-  // invoice is not paid, so settlement.paidAt is already null.
-  const status =
-    !isCreditNote &&
-    (lifecycleStatus === 'sent' || lifecycleStatus === 'overdue') &&
-    settlement.paidAmount > 0 &&
-    settlement.paidAmount < total
-      ? 'partially_paid'
-      : lifecycleStatus
+  // the row points at the invoice it credits. An open invoice the customer has
+  // paid part of is partially_paid, the status a native invoice takes on a part
+  // payment. A null paid_at on a paid invoice is a state the detail page
+  // already renders honestly (classifyPaymentHistoryGap).
+  const settlement = isCreditNote ? NOTHING_SETTLED : resolveInvoiceSettlement(dto.paymentStatus, dto.status, total)
+  const status = settlement.status ?? lifecycleStatus
 
   // SEK value of a foreign invoice, at the rate valid on its own issue date.
   const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
@@ -1308,40 +1202,18 @@ export function mapSupplierInvoice(
     credited: 'credited',
   }
 
-  // Payment-derived status and amounts, by the rule the repair pass shares.
-  // Never consulted for a credit note: see `settled` below.
-  const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
-
-  // Status MUST stay consistent with the payment amounts. The provider's
-  // lifecycle status (dto.status) and its payment status are computed
-  // independently upstream and can contradict each other (e.g. a Fortnox
-  // invoice that is "booked" but fully paid). Payment state wins:
-  //   fully paid           -> 'paid'
-  //   0 < paid < total     -> 'partially_paid'
-  //   otherwise            -> the mapped lifecycle status
-  const mappedStatus = statusMap[dto.status] || 'registered'
-  let resolvedStatus: string
-  if (isCreditNote) {
-    // A kreditfaktura is never an open or "paid" payable. Force a credit-note
-    // terminal status regardless of the provider's lifecycle status: the
-    // arcim gateway is the only source of invoiceTypeCode and is NOT guaranteed
-    // to also send status='credited', so trusting dto.status here could persist
-    // a credit note as 'registered'/'paid' (contradicting its amounts).
-    resolvedStatus = mappedStatus === 'reversed' ? 'reversed' : 'credited'
-  } else if (mappedStatus === 'credited' || mappedStatus === 'reversed') {
-    // Terminal states from the provider: never flipped by payment.
-    resolvedStatus = mappedStatus
-  } else {
-    resolvedStatus = settlement.status ?? mappedStatus
-  }
-
   // Nothing is ever paid on a kreditfaktura: it reduces what is owed to the
   // supplier rather than settling anything, so it carries no open balance
   // either (prod: a credited Fora note landed with remaining_amount = its
   // total). Same rule as the customer side.
-  const settled = isCreditNote
-    ? { paidAmount: 0, remainingAmount: 0 }
-    : { paidAmount: settlement.paidAmount, remainingAmount: settlement.remainingAmount }
+  const settlement = isCreditNote ? NOTHING_SETTLED : resolveInvoiceSettlement(dto.paymentStatus, dto.status, total)
+
+  // Status MUST stay consistent with the payment amounts. A kreditfaktura is
+  // never an open or "paid" payable, whatever the provider's lifecycle status
+  // says: invoiceTypeCode is the signal, and the register has no draft a
+  // credit note could wait in. For the rest the payment state wins over the
+  // lifecycle, and the terminal lifecycles imply no payment state.
+  const resolvedStatus = isCreditNote ? 'credited' : settlement.status ?? statusMap[dto.status] ?? 'registered'
 
   // SEK value of a foreign invoice, at the rate valid on its own issue date.
   const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
@@ -1376,11 +1248,9 @@ export function mapSupplierInvoice(
     vat_treatment: vatTreatment,
     reverse_charge: vatTreatment === 'reverse_charge',
     payment_reference: dto.ocrNumber || null,
-    paid_at: resolvedStatus === 'paid' || resolvedStatus === 'partially_paid'
-      ? settlement.paidAt
-      : null,
-    paid_amount: settled.paidAmount,
-    remaining_amount: settled.remainingAmount,
+    paid_at: settlement.paidAt,
+    paid_amount: settlement.paidAmount,
+    remaining_amount: settlement.remainingAmount,
     is_credit_note: isCreditNote,
     notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
   }

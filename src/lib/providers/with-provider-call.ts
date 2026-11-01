@@ -15,12 +15,14 @@
 // migration job, the SIE preview and the underlag import cannot disagree.
 import { fortnoxRefusal } from './fortnox/client'
 import { FortnoxOAuthError } from './fortnox/oauth-error'
+import { isBokioPricePlanError } from './bokio/client'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
   | 'PROVIDER_RESOURCE_FORBIDDEN'
   | 'PROVIDER_LICENSE_MISSING'
   | 'PROVIDER_API_MODULE_INACTIVE'
+  | 'BOKIO_PLAN_NO_API'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
   | 'PROVIDER_UPSTREAM_ERROR'
@@ -88,6 +90,8 @@ export interface ClassifyProviderErrorOptions {
  *           naming a missing right or licence) → PROVIDER_RESOURCE_FORBIDDEN,
  *           or PROVIDER_LICENSE_MISSING when the whole account lacks the API
  *           licence (2001103)
+ *   Bokio 403 price_plan_feature_required → BOKIO_PLAN_NO_API: the plan has no
+ *           API access, and the token may be fine
  *   403     → PROVIDER_RESOURCE_FORBIDDEN when `options.grantProven` says an
  *             earlier call in the same run already succeeded on this token;
  *             otherwise PROVIDER_AUTH_EXPIRED
@@ -116,6 +120,7 @@ export function classifyProviderError(
   }
   const refusal = fortnoxRefusal(error)
   if (refusal) return refusal.reason === 'api_license' ? 'PROVIDER_LICENSE_MISSING' : 'PROVIDER_RESOURCE_FORBIDDEN'
+  if (isBokioPricePlanError(error)) return 'BOKIO_PLAN_NO_API'
   if (error instanceof ProviderCallError) {
     // An error labelled from one response cannot know the run's history, so
     // a 403 already labelled AUTH_EXPIRED is re-read here with it.
@@ -158,6 +163,29 @@ export function classifyProviderError(
   if (isNetworkError(error)) return 'PROVIDER_UNREACHABLE'
 
   return null
+}
+
+/**
+ * The codes that answer the same until someone acts at the provider or on the
+ * connection: a dead token, a closed register, a missing licence or module.
+ */
+const REFUSAL_CODES: ReadonlySet<ProviderCallErrorCode> = new Set<ProviderCallErrorCode>([
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_RESOURCE_FORBIDDEN',
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+  'BOKIO_PLAN_NO_API',
+])
+
+/**
+ * Did the provider refuse, as opposed to fail? The one yes-or-no reading of
+ * classifyProviderError, for a door that stops on a refusal and needs no more
+ * than that: the next call gets the same answer, whatever the status it came
+ * under (Fortnox refuses a register with a 403 or a 400).
+ */
+export function isProviderRefusal(error: unknown): boolean {
+  const code = classifyProviderError(error)
+  return code !== null && REFUSAL_CODES.has(code)
 }
 
 /** Why the provider refused one register. */
