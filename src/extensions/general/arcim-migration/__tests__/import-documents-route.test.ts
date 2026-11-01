@@ -323,6 +323,145 @@ describe('POST /import-documents keeps the run outcome (crm#1410)', () => {
   })
 })
 
+describe('POST /import-documents continues from the point the saved run reached (crm#1581)', () => {
+  // The customer's run: the server folded the slice that reached file-2740,
+  // but the laptop slept before the tab got that answer.
+  const saved = {
+    provider: 'fortnox',
+    startedAt: '2026-10-31T10:37:18Z',
+    updatedAt: '2026-10-31T11:10:08Z',
+    complete: false,
+    total: 17219,
+    scanned: 2740,
+    linked: 762,
+    skipped: 2,
+    unmatched: 1976,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: 'file-2740',
+    needsReconnect: false,
+  }
+
+  function contextWithRun() {
+    const ctx = buildContext()
+    const set = vi.fn().mockResolvedValue(undefined)
+    const get = vi.fn().mockResolvedValue(saved)
+    ;(ctx as unknown as { settings: unknown }).settings = { get, set, clear: vi.fn() }
+    return { ctx, set, get }
+  }
+
+  // The tab still holds the cursor before the lost answer and retries it,
+  // with the run id its earlier answers carried.
+  function retry(body: Record<string, unknown> = { cursor: 'file-2540', run: saved.startedAt }) {
+    return createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-documents', {
+      method: 'POST',
+      body: { consentId: 'consent-1', dryRun: false, ...body },
+    })
+  }
+
+  const nextSlice = {
+    provider: 'fortnox',
+    scanned: 200,
+    linked: 60,
+    skipped: 0,
+    unmatched: 140,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    dryRun: false,
+    unmatchedSamples: [],
+    total: 17219,
+    partial: true,
+    nextCursor: 'file-2940',
+    unreachableSources: [],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    fortnoxOAuth.documentScopesApproved = false
+  })
+
+  it('runs the retried slice from the saved point, keeps counting the run and names it in the answer', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue(nextSlice)
+    const { ctx, set } = contextWithRun()
+
+    const { status, body } = await parseJsonResponse<{ result: { run: string } }>(await handler(retry(), ctx))
+
+    expect(status).toBe(200)
+    expect(importProviderDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: 'file-2540', savedRun: expect.objectContaining({ nextCursor: 'file-2740' }) }),
+    )
+    // On main this slice was refused as a repeat and nothing was stored again.
+    expect(set).toHaveBeenCalledWith(
+      'document_import_run',
+      expect.objectContaining({ startedAt: '2026-10-31T10:37:18Z', scanned: 2940, linked: 822, nextCursor: 'file-2940' }),
+    )
+    expect(body.result.run).toBe('2026-10-31T10:37:18Z')
+  })
+
+  it('leaves a newer run alone when a tab still looping on an older run continues (review of !1172)', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue({ ...nextSlice, nextCursor: 'file-9200' })
+    const { ctx, set } = contextWithRun()
+
+    const { body } = await parseJsonResponse<{ result: { run: string } }>(
+      await handler(retry({ cursor: 'file-9000', run: '2026-10-30T08:00:00Z' }), ctx),
+    )
+
+    expect(importProviderDocuments).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'file-9000', savedRun: null }))
+    expect(set).not.toHaveBeenCalled()
+    expect(body.result.run).toBe('2026-10-30T08:00:00Z')
+  })
+
+  it('keeps the exact-cursor rule for a tab that sends no run id (loaded before this change)', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue(nextSlice)
+    const { ctx, set, get } = contextWithRun()
+
+    await handler(retry({ cursor: 'file-2540' }), ctx)
+    expect(importProviderDocuments).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'file-2540', savedRun: null }))
+    expect(set).not.toHaveBeenCalled()
+
+    // Its slice from exactly the saved point still joins, as on main.
+    await handler(retry({ cursor: 'file-2740' }), ctx)
+    expect(set).toHaveBeenCalledWith('document_import_run', expect.objectContaining({ scanned: 2940 }))
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  it('marks the saved run for a reconnect even when the retried cursor is behind it', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderConnectionRefusedError('fortnox', 'PROVIDER_AUTH_EXPIRED', 401),
+    )
+    const { ctx, set } = contextWithRun()
+
+    const response = await handler(retry(), ctx)
+
+    expect(response.status).toBe(401)
+    expect(set).toHaveBeenCalledWith(
+      'document_import_run',
+      expect.objectContaining({ needsReconnect: true, scanned: 2740, nextCursor: 'file-2740' }),
+    )
+  })
+
+  it('reads the saved run only to fold a new run, never for discovery, and names the new run', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValueOnce({ ...nextSlice, dryRun: true, partial: false, nextCursor: null })
+    const { ctx, get } = contextWithRun()
+
+    await handler(request(true), ctx)
+    expect(get).not.toHaveBeenCalled()
+
+    ;(importProviderDocuments as Mock).mockResolvedValueOnce(nextSlice)
+    const { body } = await parseJsonResponse<{ result: { run: string } }>(await handler(request(false), ctx))
+    // The fold's own read; a new run is not continued, so nothing is read before the slice.
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(importProviderDocuments).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: null, savedRun: null }))
+    expect(body.result.run).not.toBe(saved.startedAt)
+    expect(typeof body.result.run).toBe('string')
+  })
+})
+
 describe('POST /import-documents stops once on a refused connection (B11)', () => {
   const running = {
     provider: 'fortnox',

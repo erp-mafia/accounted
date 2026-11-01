@@ -1329,6 +1329,44 @@ describe('importProviderDocuments', () => {
       expect(mockUpload).not.toHaveBeenCalled()
     })
 
+    it('starts a retried slice at the point the saved run reached, not at the tab cursor (crm#1581)', async () => {
+      // The server folded the slice that handled file-b, but the tab lost the
+      // answer and retries from file-a: file-b is not downloaded again.
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 'file-a',
+        savedRun: { provider: 'fortnox', complete: false, nextCursor: 'file-b' },
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 1, linked: 1, partial: false, nextCursor: null })
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+      expect(mockUpload.mock.calls.map((call) => (call[3] as { name: string }).name)).toEqual(['c.pdf'])
+    })
+
+    it("keeps the tab cursor when the saved run is another provider's", async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      mockDownloadFortnoxArchiveFile.mockImplementation(async (_client, _token, id) => ({
+        bytes: bytesOf('PDF-' + id),
+        contentType: 'application/pdf',
+      }))
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 'file-a',
+        savedRun: { provider: 'bokio', complete: false, nextCursor: 'file-b' },
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: false })
+    })
+
     it('resumes after the last handled id even when the provider list changed in between', async () => {
       // Slice 1 handled file-a. Before slice 2, Fortnox gained a file sorting
       // BEFORE the resume point (file-0) and lost file-b. An index cursor

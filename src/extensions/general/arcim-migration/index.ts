@@ -46,6 +46,7 @@ import {
   importProviderDocuments,
 } from './lib/import-documents'
 import {
+  continuationCursor,
   documentImportRunStatus,
   readDocumentImportRun,
   recordDocumentImportNeedsReconnect,
@@ -2063,11 +2064,13 @@ export const arcimMigrationExtension: Extension = {
         let consentId: string | undefined
         let dryRun = false
         let cursor: string | null = null
+        let run: string | null = null
         try {
           const body = (await request.json()) as {
             consentId?: string
             dryRun?: boolean
             cursor?: string
+            run?: string
           }
           consentId = body?.consentId
           dryRun = body?.dryRun === true
@@ -2079,6 +2082,8 @@ export const arcimMigrationExtension: Extension = {
             typeof body?.cursor === 'string' && body.cursor.length > 0 && body.cursor.length <= 256
               ? body.cursor
               : null
+          // The run id an earlier answer gave this tab (document-import-run.ts).
+          run = typeof body?.run === 'string' && body.run.length > 0 && body.run.length <= 64 ? body.run : null
         } catch {
           // empty/invalid body: consentId check below rejects it
         }
@@ -2086,6 +2091,26 @@ export const arcimMigrationExtension: Extension = {
         if (!consentId) {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
         }
+
+        // The run the server keeps owns the resume point of its own tab: a
+        // continuation never starts before the point it reached, even when
+        // the tab lost the answer that got there and retries an earlier
+        // cursor (crm#1581). Only the run's own tab (same run id): a tab
+        // still looping on an older run must not jump into a newer one, or
+        // the newer run would skip the files in between. Read once before the
+        // slice; the fold reads it again, so a run that another tab moved
+        // meanwhile is not counted twice.
+        const savedRun =
+          !dryRun && cursor !== null && run !== null && ctx.settings
+            ? await readDocumentImportRun(ctx.settings).catch((readError) => {
+                // Without it the slice starts at the tab's cursor, as before.
+                log.warn('arcim import-documents saved run not read', {
+                  reason: readError instanceof Error ? readError.message : 'unknown',
+                })
+                return null
+              })
+            : null
+        const ownRun = savedRun?.startedAt === run ? savedRun : null
 
         try {
           const result = await importProviderDocuments({
@@ -2095,11 +2120,15 @@ export const arcimMigrationExtension: Extension = {
             consentId,
             dryRun,
             cursor,
+            savedRun: ownRun,
           })
+          // Where this slice really started: the same rule the import applied.
+          const startCursor = continuationCursor(ownRun, result.provider, cursor)
           log.info('arcim import-documents completed', {
             companyId,
             dryRun,
             cursor,
+            startCursor,
             total: result.total,
             scanned: result.scanned,
             linked: result.linked,
@@ -2113,14 +2142,20 @@ export const arcimMigrationExtension: Extension = {
           // Keep the run's outcome past this tab (crm#1410). Best effort:
           // the files are linked either way, so a failed write never fails
           // the slice.
+          let recorded: { startedAt: string } | null = null
           if (!dryRun && ctx.settings) {
-            await recordDocumentImportSlice(ctx.settings, result, cursor).catch((recordError) =>
-              log.warn('arcim import-documents run summary not stored', {
-                reason: recordError instanceof Error ? recordError.message : 'unknown',
-              }),
+            recorded = await recordDocumentImportSlice(ctx.settings, result, startCursor, undefined, run).catch(
+              (recordError) => {
+                log.warn('arcim import-documents run summary not stored', {
+                  reason: recordError instanceof Error ? recordError.message : 'unknown',
+                })
+                return null
+              },
             )
           }
-          return NextResponse.json({ success: true, dryRun, result })
+          // The run this slice counts for, for the tab to send back with its
+          // next slice: the one it joined or started, else the one it named.
+          return NextResponse.json({ success: true, dryRun, result: { ...result, run: recorded?.startedAt ?? run } })
         } catch (error) {
           // The provider refused the connection itself: the token is dead (a
           // 401 a real refresh could not outlive, or a grant the refresh was
@@ -2151,7 +2186,13 @@ export const arcimMigrationExtension: Extension = {
                   : error instanceof ProviderCallError
                     ? error.provider
                     : 'fortnox'
-              await recordDocumentImportNeedsReconnect(ctx.settings, resolvedProvider, cursor).catch(
+              await recordDocumentImportNeedsReconnect(
+                ctx.settings,
+                resolvedProvider,
+                continuationCursor(ownRun, resolvedProvider, cursor),
+                undefined,
+                run,
+              ).catch(
                 (recordError) =>
                   log.warn('arcim import-documents run summary not stored', {
                     reason: recordError instanceof Error ? recordError.message : 'unknown',

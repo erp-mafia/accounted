@@ -3,6 +3,7 @@ import type { ExtensionSettings } from '@/lib/extensions/types'
 import type { ImportDocumentsResult } from '../import-documents'
 import {
   DOCUMENT_IMPORT_RUN_KEY,
+  continuationCursor,
   documentImportRunStatus,
   foldDocumentImportSlice,
   markDocumentImportNeedsReconnect,
@@ -90,16 +91,47 @@ describe('foldDocumentImportSlice', () => {
     })
   })
 
-  it('ignores a slice from another chain or a retry whose first answer already landed', () => {
+  it('ignores a slice that would count files twice, or that has no unfinished run to join', () => {
     const first = foldDocumentImportSlice(null, slice(), null, 't1')
 
-    // The summary stopped at file-40: a slice from file-20 is not its next.
+    // The summary reached file-40: a slice from file-20 overlaps what it counted.
     expect(foldDocumentImportSlice(first, slice(), 'file-20', 't2')).toBeNull()
     // Nothing recorded yet: a resumed slice has no run to join.
     expect(foldDocumentImportSlice(null, slice(), 'file-40', 't2')).toBeNull()
     // A finished run takes no more slices.
     const done = foldDocumentImportSlice(null, slice({ partial: false, nextCursor: null }), null, 't1')
     expect(foldDocumentImportSlice(done, slice(), 'file-40', 't2')).toBeNull()
+  })
+
+  it("joins the run's own slice that starts past its point (an earlier fold was not stored)", () => {
+    const first = foldDocumentImportSlice(null, slice(), null, 't1')
+
+    // The run id the tab sends back is the run's startedAt.
+    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', 't1')).toMatchObject({
+      startedAt: 't1',
+      scanned: 80,
+      nextCursor: 'file-90',
+    })
+    // Without the run id, or with another run's, only the exact point joins.
+    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2')).toBeNull()
+    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', 't0')).toBeNull()
+  })
+
+  it('leaves a newer run alone when a tab still looping on an older run sends a slice (review of !1172)', () => {
+    // Run t0 reached file-600; then run t1 started from the top and reached file-200.
+    const older = foldDocumentImportSlice(null, slice({ nextCursor: 'file-600' }), null, 't0')
+    const newer = foldDocumentImportSlice(older, slice({ nextCursor: 'file-200' }), null, 't1')
+
+    // The older run's tab continues from file-600. Joining would move the
+    // newer run past file-200..file-600, files it has not handled.
+    expect(foldDocumentImportSlice(newer, slice({ nextCursor: 'file-800' }), 'file-600', 't2', 't0')).toBeNull()
+    expect(foldDocumentImportSlice(newer, slice({ nextCursor: 'file-800' }), 'file-600', 't2')).toBeNull()
+  })
+
+  it('ignores a slice of another provider', () => {
+    const first = foldDocumentImportSlice(null, slice(), null, 't1')
+
+    expect(foldDocumentImportSlice(first, slice({ provider: 'bokio' }), 'file-40', 't2')).toBeNull()
   })
 
   it('replaces the summary when a run starts from the top again', () => {
@@ -140,6 +172,67 @@ describe('foldDocumentImportSlice', () => {
     expect(second?.unreachableSources).toEqual([
       { source: 'supplier_invoice_files', scope: 'supplierinvoice', reason: 'permission', providerMessage: 'Saknar behörighet' },
     ])
+  })
+})
+
+describe('continuationCursor', () => {
+  const saved = { provider: 'fortnox', complete: false, nextCursor: 'file-80' }
+
+  it('starts at the point the saved run reached when the tab asks for an earlier one', () => {
+    expect(continuationCursor(saved, 'fortnox', 'file-40')).toBe('file-80')
+  })
+
+  it('keeps the tab cursor when it is at or past the saved point', () => {
+    expect(continuationCursor(saved, 'fortnox', 'file-80')).toBe('file-80')
+    expect(continuationCursor(saved, 'fortnox', 'file-95')).toBe('file-95')
+  })
+
+  it('keeps the tab cursor for a new run, a finished run, another provider or no saved run', () => {
+    expect(continuationCursor(saved, 'fortnox', null)).toBeNull()
+    expect(continuationCursor({ ...saved, complete: true, nextCursor: null }, 'fortnox', 'file-40')).toBe('file-40')
+    expect(continuationCursor(saved, 'bokio', 'file-40')).toBe('file-40')
+    expect(continuationCursor({ ...saved, nextCursor: null }, 'fortnox', 'file-40')).toBe('file-40')
+    expect(continuationCursor(null, 'fortnox', 'file-40')).toBe('file-40')
+  })
+})
+
+describe('a slice the tab retries after losing its answer (crm#1581)', () => {
+  it('keeps counting the run instead of freezing at the slice whose answer was lost', async () => {
+    const { settings } = memorySettings()
+    // Slice 1 answered and started run t1: the run reached file-040, and the
+    // answer gave the tab the run id t1. (Ids zero-padded: the sweep orders them as strings.)
+    const run = (await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-040' }), null, 't1'))!.startedAt
+    expect(run).toBe('t1')
+    // Slice 2 (file-040 -> file-080) was folded, but the laptop slept before
+    // the tab got the answer, so the tab still holds file-040.
+    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-080' }), 'file-040', 't2', run)
+    const afterLostAnswer = await readDocumentImportRun(settings)
+
+    // On waking, the tab retries file-040. The fold alone refuses that cursor:
+    // it overlaps what the run counted. This is the slice that froze the run.
+    expect(foldDocumentImportSlice(afterLostAnswer, slice(), 'file-040', 't3', run)).toBeNull()
+
+    // The route starts the run's own retry at the saved point instead, and the run takes it.
+    const start = continuationCursor(afterLostAnswer, 'fortnox', 'file-040')
+    expect(start).toBe('file-080')
+    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-120' }), start, 't3', run)
+    // The tab's next slice continues from the answer it got, file-120.
+    await recordDocumentImportSlice(
+      settings,
+      slice({ partial: false, nextCursor: null }),
+      continuationCursor(await readDocumentImportRun(settings), 'fortnox', 'file-120'),
+      't4',
+      run,
+    )
+
+    expect(await readDocumentImportRun(settings)).toMatchObject({
+      startedAt: 't1',
+      updatedAt: 't4',
+      complete: true,
+      scanned: 160,
+      linked: 152,
+      nextCursor: null,
+    })
   })
 })
 

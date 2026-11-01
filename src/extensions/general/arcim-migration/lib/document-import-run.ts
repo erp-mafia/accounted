@@ -10,9 +10,22 @@
  * and whether it reached the end of the provider's list.
  *
  * One summary, not a history: a run that starts from the top replaces it. A
- * slice joins it only when it continues from the cursor the summary stopped
- * at, so a second tab's chain, or a retried slice whose first answer already
- * landed, never counts twice.
+ * slice joins it when it starts where the summary stopped, so no file is
+ * counted twice.
+ *
+ * The server owns that point for the run's own tab: every answer carries the
+ * run id (its startedAt), the tab sends it back, and a slice of that run
+ * starts at the saved point even when the tab sends an earlier cursor
+ * (continuationCursor). The tab sends an earlier cursor when it lost an
+ * answer the server had already folded, for example when the laptop slept
+ * mid-slice, and retries that slice. The fold used to refuse the retry as a
+ * repeat, and every slice after it too, because the tab's cursor stayed one
+ * slice behind: the summary froze at 2,740 files while the run went on to
+ * link 4,354 (crm#1581).
+ *
+ * A tab still looping on an older run sends the older run's id: it neither
+ * moves nor joins the newer run, which would otherwise skip the files in
+ * between.
  */
 
 import type { ExtensionSettings } from '@/lib/extensions/types'
@@ -53,18 +66,73 @@ export interface DocumentImportRunSummary {
 }
 
 /**
+ * Where a continuation slice starts: the cursor the tab sent, or the point
+ * the saved run already reached when that is further. Every file before that
+ * point was handled and counted, so starting earlier would only run it twice.
+ * A new run (no cursor), a finished run, or a run with another provider keeps
+ * the tab's cursor.
+ *
+ * Only for the tab's own run (the route checks the run id it sends back). A
+ * tab still looping on an older run that jumped to a newer run's point would
+ * make the newer run skip the files in between.
+ */
+export function continuationCursor(
+  saved: Pick<DocumentImportRunSummary, 'provider' | 'complete' | 'nextCursor'> | null,
+  provider: string,
+  cursor: string | null,
+): string | null {
+  if (cursor === null || !saved || saved.complete || saved.provider !== provider || saved.nextCursor === null) {
+    return cursor
+  }
+  return saved.nextCursor > cursor ? saved.nextCursor : cursor
+}
+
+/**
+ * A slice that started after `cursor` belongs to the saved run when the run
+ * is unfinished, has the same provider, and the slice starts exactly where
+ * the run stopped.
+ *
+ * The run's own chain (`run` is the run's startedAt, sent back by the tab)
+ * may also start past that point: an earlier slice of it answered, but its
+ * fold was not stored (a failed write, or a retry that raced the first try).
+ * Its files are linked; only their counts are missing.
+ *
+ * A slice that starts before the point would count files twice. Another
+ * run's chain never joins past it.
+ */
+function continuesRun(
+  previous: DocumentImportRunSummary | null,
+  provider: string,
+  cursor: string | null,
+  run: string | null,
+): previous is DocumentImportRunSummary {
+  if (
+    cursor === null ||
+    previous === null ||
+    previous.complete ||
+    previous.provider !== provider ||
+    previous.nextCursor === null
+  ) {
+    return false
+  }
+  if (cursor === previous.nextCursor) return true
+  return run !== null && run === previous.startedAt && cursor > previous.nextCursor
+}
+
+/**
  * The summary after one more slice, or null when the slice is not part of
- * the recorded run (a dry run, or a cursor the summary did not stop at).
+ * the recorded run: a dry run, or a slice that does not continue it
+ * (continuesRun). `run` is the run id the tab sent with the slice.
  */
 export function foldDocumentImportSlice(
   previous: DocumentImportRunSummary | null,
   slice: ImportDocumentsResult,
   cursor: string | null,
   at: string,
+  run: string | null = null,
 ): DocumentImportRunSummary | null {
   if (slice.dryRun) return null
-  const continues =
-    cursor !== null && previous !== null && !previous.complete && previous.nextCursor === cursor
+  const continues = continuesRun(previous, slice.provider, cursor, run)
   if (cursor !== null && !continues) return null
   const base = continues ? previous : null
 
@@ -108,9 +176,9 @@ export function markDocumentImportNeedsReconnect(
   provider: string,
   cursor: string | null,
   at: string,
+  run: string | null = null,
 ): DocumentImportRunSummary | null {
-  const continues =
-    cursor !== null && previous !== null && !previous.complete && previous.nextCursor === cursor
+  const continues = continuesRun(previous, provider, cursor, run)
   if (continues) return { ...previous, updatedAt: at, needsReconnect: true }
   if (cursor !== null) return null
   return {
@@ -183,15 +251,20 @@ export async function readDocumentImportRun(
   return isDocumentImportRunSummary(stored) ? stored : null
 }
 
-/** Fold one answered slice into the stored summary. */
+/**
+ * Fold one answered slice into the stored summary. Returns the summary it
+ * stored, or null when the slice was not part of the recorded run.
+ */
 export async function recordDocumentImportSlice(
   settings: ExtensionSettings,
   slice: ImportDocumentsResult,
   cursor: string | null,
   at: string = new Date().toISOString(),
-): Promise<void> {
-  const next = foldDocumentImportSlice(await readDocumentImportRun(settings), slice, cursor, at)
+  run: string | null = null,
+): Promise<DocumentImportRunSummary | null> {
+  const next = foldDocumentImportSlice(await readDocumentImportRun(settings), slice, cursor, at, run)
   if (next) await settings.set(DOCUMENT_IMPORT_RUN_KEY, next)
+  return next
 }
 
 /** Mark the stored run as waiting for a reconnect (see markDocumentImportNeedsReconnect). */
@@ -200,7 +273,8 @@ export async function recordDocumentImportNeedsReconnect(
   provider: string,
   cursor: string | null,
   at: string = new Date().toISOString(),
+  run: string | null = null,
 ): Promise<void> {
-  const next = markDocumentImportNeedsReconnect(await readDocumentImportRun(settings), provider, cursor, at)
+  const next = markDocumentImportNeedsReconnect(await readDocumentImportRun(settings), provider, cursor, at, run)
   if (next) await settings.set(DOCUMENT_IMPORT_RUN_KEY, next)
 }

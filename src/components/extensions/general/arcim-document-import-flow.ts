@@ -117,6 +117,12 @@ export interface ArcimDocumentImportResult {
    * with the scope the refused call needs, so the panel can name it.
    */
   unreachableSources: ArcimUnreachableDocumentSource[]
+  /**
+   * The run the server counted this slice for. Sent back with the next slice
+   * so the server can continue its own run from the point it saved, also
+   * after an answer this tab never got (crm#1581). Absent from older servers.
+   */
+  run?: string | null
 }
 
 export type ArcimDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice'
@@ -169,6 +175,7 @@ export function mergeArcimDocumentImportResults(
     partial: next.partial,
     nextCursor: next.nextCursor,
     unreachableSources: mergeUnreachableSources(accumulated.unreachableSources, next.unreachableSources),
+    run: next.run ?? accumulated.run ?? undefined,
   }
 }
 
@@ -432,6 +439,9 @@ export function resumableDocumentImportRun(
     partial: true,
     nextCursor: run.nextCursor,
     unreachableSources: run.unreachableSources,
+    // Its run id: a retried first slice whose answer is lost still continues
+    // where the server got to.
+    run: run.startedAt,
   }
 }
 
@@ -601,25 +611,31 @@ function normalizeDocumentImportResult(
       typeof result.nextCursor === 'string' && result.nextCursor.length > 0 && result.partial === true
         ? result.nextCursor
         : null,
+    run: typeof result.run === 'string' && result.run.length > 0 ? result.run : undefined,
   }
 }
 
 /**
  * Call the existing POST route for both discovery and the actual import.
  * `cursor` resumes a partial import; omit it for discovery and the first slice.
+ * `run` is the run id an earlier answer of this import carried.
  */
 export async function requestArcimDocumentImport(
   consentId: string,
   dryRun: boolean,
   fetcher: typeof fetch = fetch,
   cursor?: string,
+  run?: string,
 ): Promise<ArcimDocumentImportResult> {
   const response = await fetcher(ARCIM_DOCUMENT_IMPORT_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(
-      cursor === undefined ? { consentId, dryRun } : { consentId, dryRun, cursor },
-    ),
+    body: JSON.stringify({
+      consentId,
+      dryRun,
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(run === undefined ? {} : { run }),
+    }),
   })
   const payload = await response.json().catch(() => null)
 
@@ -680,11 +696,14 @@ export async function runArcimDocumentImportToCompletion(
   const resumeFrom = resumableDocumentImport(options.resumeFrom ?? null)
   let accumulated: ArcimDocumentImportResult | null = resumeFrom
   let cursor: string | undefined = resumeFrom?.nextCursor ?? undefined
+  // The server's id for this run, from its latest answer: a retried slice
+  // whose answer was lost then continues where the server got to (crm#1581).
+  let run: string | undefined = resumeFrom?.run ?? undefined
 
   const requestSlice = async (): Promise<ArcimDocumentImportResult> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await requestArcimDocumentImport(consentId, false, fetcher, cursor)
+        return await requestArcimDocumentImport(consentId, false, fetcher, cursor, run)
       } catch (error) {
         if (attempt >= retryDelaysMs.length || !isTransientImportFailure(error)) throw error
         await wait(retryDelaysMs[attempt])
@@ -694,6 +713,7 @@ export async function runArcimDocumentImportToCompletion(
 
   for (let round = 0; round < MAX_IMPORT_ROUNDS; round++) {
     const slice = await requestSlice()
+    run = slice.run ?? run
     accumulated = mergeArcimDocumentImportResults(accumulated, slice)
     if (!slice.partial) {
       return { ...accumulated, partial: false, nextCursor: null }
