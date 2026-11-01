@@ -24,6 +24,11 @@ describe('line-side: signed amount to one-sided line amounts', () => {
     expect(debitNatural(0)).toEqual({ debit_amount: 0, credit_amount: 0 })
   })
 
+  it('rounds exact öre halves up, where naive Math.round(x * 100) / 100 rounds them down', () => {
+    expect(debitNatural(1.005)).toEqual({ debit_amount: 1.01, credit_amount: 0 })
+    expect(creditNatural(2.675)).toEqual({ debit_amount: 0, credit_amount: 2.68 })
+  })
+
   it('never returns a negative side', () => {
     for (const n of [-1234.56, -0.01, 0, 0.01, 1234.56]) {
       for (const fn of [debitNatural, creditNatural]) {

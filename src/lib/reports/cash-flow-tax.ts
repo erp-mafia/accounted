@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
+import { roundOre } from '@/lib/money'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
 import { scopeCashFlowEntries, type CashFlowEntryScope } from './cash-flow-evidence'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
@@ -16,7 +17,7 @@ const isCurrentTaxExpense = (account: string) => CURRENT_TAX_EXPENSE.test(accoun
 const CURRENT_TAX_BALANCE = new Set(['1640', '2510', '2512', '2517', '2518'])
 const OTHER_TAX_BALANCE = new Set(['2513', '2514', '2515'])
 const OTHER_TAX_EXPENSE = new Set(['5191', '7533', '7550'])
-const r2 = (value: number) => Math.round(value * 100) / 100 || 0
+const r2 = (value: number) => roundOre(value) || 0
 
 /**
  * The accounts whose whole movement calculateCashFlowTax accounts for: the

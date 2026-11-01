@@ -12,15 +12,12 @@
  * (issue: "Kto 3740 visar noll, och Debit/Kredit summerar inte").
  */
 
+import { roundOre } from '@/lib/money'
 import { isKronorCurrency } from './currency-utils'
 
 export interface LineSides {
   debit_amount: number
   credit_amount: number
-}
-
-function roundOre(n: number): number {
-  return Math.round(n * 100) / 100
 }
 
 /**
