@@ -907,12 +907,13 @@ describe('countReconciliationDue', () => {
     })
     enqueue({
       data: [
-        { id: CASH_A, iban: 'SE1', currency: 'SEK', updated_at: '2026-08-01' },
-        { id: CASH_B, iban: 'SE2', currency: 'SEK', updated_at: '2026-08-01' },
+        { id: CASH_A, iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' },
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
         // Reconnect duplicate of B (same IBAN + currency): counts once.
-        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', updated_at: '2026-07-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
       ],
     })
+    enqueue({ data: [] }) // ledgersWithPostedLines: no ledger carries posted lines
     enqueue({ count: 12 })
     // Due: skattekonto + bank B (deduplicated) = 2.
     await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(2)
@@ -920,9 +921,38 @@ describe('countReconciliationDue', () => {
     expect(mockSupabase.from).toHaveBeenCalledWith('skattekonto_transactions')
   })
 
+  it('a reconnect duplicate counts as the row the reconciliation rail keeps: the one with posted lines', async () => {
+    enqueue({ data: [{ account_key: `bank:${CASH_B}`, through_date: '2026-07-31', reopened_at: null }] })
+    enqueue({
+      data: [
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
+      ],
+    })
+    enqueue({ data: [{ id: 'entry-1' }] }) // ledgersWithPostedLines: the entries...
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'entry-1', account_number: '1941' }] }) // ...and their lines
+    enqueue({ count: 0 })
+    // The sign-off on the row the account left covers nothing.
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
+  })
+
+  it('a sign-off on the row the rail keeps covers the account', async () => {
+    enqueue({ data: [{ account_key: `bank:${CASH_B_DUP}`, through_date: '2026-07-31', reopened_at: null }] })
+    enqueue({
+      data: [
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', ledger_account: '1940', is_primary: false, created_at: '2026-01-01' },
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', ledger_account: '1941', is_primary: false, created_at: '2026-07-01' },
+      ],
+    })
+    enqueue({ data: [{ id: 'entry-1' }] }) // ledgersWithPostedLines: the entries...
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'entry-1', account_number: '1941' }] }) // ...and their lines
+    enqueue({ count: 0 })
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+
   it('ignores the skattekonto when it has no rows', async () => {
     enqueue({ data: [{ account_key: `bank:${CASH_A}`, through_date: '2026-05-31', reopened_at: null }] })
-    enqueue({ data: [{ id: CASH_A, iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ data: [{ id: CASH_A, iban: null, currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' }] })
     enqueue({ count: 0 })
     await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
   })

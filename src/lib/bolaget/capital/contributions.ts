@@ -20,7 +20,8 @@ import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib
 import { checkPartyRef, ensureRegisterParty, loadRegisterParties, type PartyRef } from '../people'
 import { checkFreeEquity } from './free-equity'
 import { contributionLines, contributionRepaymentLines, postCapitalEntry } from './postings'
-import { DEFAULT_BANK_ACCOUNT, type CapitalDecidedBy, type ContributionKind } from './types'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
+import type { CapitalDecidedBy, ContributionKind } from './types'
 
 export interface ContributionRow {
   id: string
@@ -93,7 +94,7 @@ export async function createShareholderContribution(
   if (input.promised_on > todayIsoStockholm()) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'Datumet kan inte ligga i framtiden.' }
   const amount = roundOre(input.amount)
   if (!(amount > 0)) return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange ett belopp över noll.' }
-  const counter = input.counter_account ?? DEFAULT_BANK_ACCOUNT
+  const counter = input.counter_account ?? (await resolvePrimaryBankAccount(ctx.supabase, ctx.companyId, ctx.log))
   if (!/^(19\d\d|1685)$/.test(counter) || (kind === 'repayment' && counter === '1685')) {
     return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange ett bankkonto (19xx), eller 1685 för ett tillskott som utlovats men inte betalats.' }
   }

@@ -16,6 +16,7 @@ const voucherDocId = '55555555-5555-4555-8555-555555555556'
 const tool = tools.find((t) => t.name === 'gnubok_get_transaction')!
 
 const TX_ROW = {
+  is_booked: true,
   id: txId,
   date: '2026-10-03',
   description: 'BG 5050-1055',
@@ -131,7 +132,7 @@ describe('gnubok_get_transaction', () => {
     const result = await call({ transaction_id: txId }, client)
 
     const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
-    expect(select?.args[0]).toBe(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored`)
+    expect(select?.args[0]).toBe(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored, is_booked`)
     const v1Fields = TRANSACTION_DETAIL_COLUMNS.split(',').map((c) => c.trim()).map((c) => (c === 'id' ? 'transaction_id' : c))
     for (const field of v1Fields) expect(result, field).toHaveProperty(field)
     expect(result).not.toHaveProperty('id')
@@ -170,7 +171,7 @@ describe('gnubok_get_transaction', () => {
   })
 
   it('reads an unbooked transaction with its pinned document and no verifikat', async () => {
-    const { client, tables } = db({ transactions: { data: { ...TX_ROW, journal_entry_id: null } } })
+    const { client, tables } = db({ transactions: { data: { ...TX_ROW, journal_entry_id: null, is_booked: false } } })
     const result = await call({ transaction_id: txId }, client)
     expect(result).toMatchObject({ booked: false, verifikat: [], documents: [{ document_id: pinnedDocId, pinned_to_transaction: true }] })
     expect(tables()).not.toContain('journal_entries')

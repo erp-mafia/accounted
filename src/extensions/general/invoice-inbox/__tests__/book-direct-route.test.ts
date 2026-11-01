@@ -497,6 +497,7 @@ describe('POST /items/:id/book-direct', () => {
       data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: 'je-reversed', amount: -99 }), transaction_voucher_links: [] },
     })
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] })
+    enqueue({ data: null }) // standing_correction: no correction stands
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)

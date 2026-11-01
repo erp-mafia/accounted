@@ -88,19 +88,15 @@ describe('sweepBankRowsAfterSIEImport', () => {
     })
   })
 
-  it('counts only rows the matcher would consider: unlinked, not ignored, dated in the year', async () => {
+  it('counts only rows the matcher would consider: open work dated in the year', async () => {
     mock.enqueueMany([{ data: true }, { count: 1 }, { data: true }])
 
     await sweepBankRowsAfterSIEImport(supabase, job())
 
-    expect(mock.findCall('transactions', 'select')).toEqual(['id', { count: 'exact', head: true }])
-    expect(mock.findCalls('transactions', 'eq')).toEqual([
-      ['company_id', COMPANY],
-      ['is_ignored', false],
-    ])
-    expect(mock.findCall('transactions', 'is')).toEqual(['journal_entry_id', null])
-    expect(mock.findCall('transactions', 'gte')).toEqual(['date', '2026-01-01'])
-    expect(mock.findCall('transactions', 'lte')).toEqual(['date', '2026-12-31'])
+    expect(mock.findCall('open_bank_rows', 'select')).toEqual(['id', { count: 'exact', head: true }])
+    expect(mock.findCalls('open_bank_rows', 'eq')).toEqual([['company_id', COMPANY]])
+    expect(mock.findCall('open_bank_rows', 'gte')).toEqual(['date', '2026-01-01'])
+    expect(mock.findCall('open_bank_rows', 'lte')).toEqual(['date', '2026-12-31'])
   })
 
   it('skips the matcher, and still records a receipt, when the year holds no unlinked bank rows', async () => {

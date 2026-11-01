@@ -39,7 +39,7 @@ import {
   saveBankAccountSelection,
   type BankAccountSelection,
 } from '@/lib/cash-accounts/configuration'
-import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
+import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 
 const MAX_ACCOUNTS = 50
@@ -126,12 +126,10 @@ async function rowCounts(ctx: OperationContext, cashAccountId: string | null): P
   const [booked, unbooked] = await Promise.all([
     ctx.supabase.rpc('cash_account_booked_rows', { p_company_id: ctx.companyId, p_cash_account_id: cashAccountId }),
     ctx.supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', ctx.companyId)
-      .eq('cash_account_id', cashAccountId)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false),
+      .eq('cash_account_id', cashAccountId),
   ])
   if (booked.error) throw booked.error
   if (unbooked.error) throw unbooked.error
@@ -241,9 +239,9 @@ export async function changeBankAccountLedgers(
       // The row of the same physical account already on that ledger account
       // is kept (the picker's rule); a row of this connection that moves is
       // re-ledgered in place by the save.
-      const iban = normalizeIban(account.iban)
-      const reuse = iban
-        ? cashRows.find((r) => normalizeIban(r.iban) === iban && r.currency === currency && r.ledger_account === ledger)?.id ?? null
+      const physical = physicalAccountKey({ iban: account.iban, currency })
+      const reuse = physical
+        ? cashRows.find((r) => physicalAccountKey(r) === physical && r.ledger_account === ledger)?.id ?? null
         : null
       return { uid: account.uid, enabled: true, currency, ledger_account: ledger, reuse_cash_account_id: reuse }
     }

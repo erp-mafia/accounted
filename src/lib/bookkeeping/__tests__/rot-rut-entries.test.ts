@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CreateJournalEntryInput } from '@/types'
 
 const mockCreateJournalEntry = vi.fn()
@@ -10,7 +11,10 @@ vi.mock('../engine', () => ({
 
 import { createRotRutPayoutEntry, createRotRutPayoutSetEntry } from '../rot-rut-entries'
 
-const supabase = {} as SupabaseClient
+// Only the primary test answers the cash_accounts reads: a payout elsewhere in
+// this file names no account and books on the 1930 fallback.
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const supabase = mockSupabase as unknown as SupabaseClient
 
 function bookedLines() {
   const input = mockCreateJournalEntry.mock.calls[0][3] as CreateJournalEntryInput
@@ -30,6 +34,7 @@ function expectBalanced() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  reset()
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 })
 
@@ -121,6 +126,35 @@ describe('createRotRutPayoutSetEntry öre rounding', () => {
       { account: '1513', debit: 0, credit: 2250.75 },
     ])
     expectBalanced()
+  })
+})
+
+describe('the account a payout lands on', () => {
+  const legs = [{ requestId: 'req-1', requestName: 'ROT A', deductionType: 'rot' as const, amount: 2500 }]
+
+  it('books on the primary bank account when told none', async () => {
+    enqueue({ data: { id: 'ca-1931', ledger_account: '1931', enabled: true, currency: 'SEK' } })
+
+    await createRotRutPayoutSetEntry(supabase, 'company-1', 'user-1', { paymentDate: '2026-07-10', legs })
+
+    expect(bookedLines()).toEqual([
+      { account: '1931', debit: 2500, credit: 0 },
+      { account: '1513', debit: 0, credit: 2500 },
+    ])
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['is_primary', true],
+    ])
+  })
+
+  it('books on a named bank account without reading the primary', async () => {
+    await createRotRutPayoutSetEntry(supabase, 'company-1', 'user-1', { paymentDate: '2026-07-10', bankAccount: '1940', legs })
+
+    expect(bookedLines()).toEqual([
+      { account: '1940', debit: 2500, credit: 0 },
+      { account: '1513', debit: 0, credit: 2500 },
+    ])
+    expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 })
 

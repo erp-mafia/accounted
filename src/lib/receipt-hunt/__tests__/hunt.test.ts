@@ -66,7 +66,7 @@ const ITEM = {
 
 function fixture() {
   return {
-    transactions: [TX],
+    open_bank_rows: [TX],
     invoice_inbox_items: [ITEM],
     document_attachments: [{ id: 'doc-1', file_name: 'circlek.pdf' }],
     pending_operations: [],

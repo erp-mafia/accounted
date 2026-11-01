@@ -40,7 +40,7 @@ function cashAccount(id: string, overrides: Record<string, unknown> = {}) {
     is_primary: false,
     source: 'enable_banking',
     bank_connection_id: 'conn-1',
-    updated_at: '2026-08-01T00:00:00Z',
+    created_at: '2026-08-01T00:00:00Z',
     ...overrides,
   }
 }
@@ -155,12 +155,13 @@ describe('listReconciliationAccounts', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        cashAccount(ID_A, { is_primary: true, iban: 'SE1', updated_at: '2026-08-10T00:00:00Z' }),
-        cashAccount(ID_B, { iban: 'SE1', updated_at: '2026-06-01T00:00:00Z' }),
+        cashAccount(ID_A, { is_primary: true, iban: 'SE1', created_at: '2026-06-01T00:00:00Z' }),
+        cashAccount(ID_B, { iban: 'SE1', created_at: '2026-08-10T00:00:00Z' }),
         cashAccount(ID_C, { ledger_account: '1931', iban: 'SE2' }),
       ],
     })
     enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // ledgersWithPostedLines: no ledger carries posted lines
     enqueue({ data: [{ id: 'conn-1', bank_name: 'Swedbank' }] }) // bank names for logos
     // latestBankSyncAt per account (withStatus=false skips bankStatus): three maybeSingle reads
     enqueue({ data: { created_at: '2026-08-19T06:00:00Z' } })
@@ -191,7 +192,7 @@ describe('listReconciliationAccounts', () => {
       'skattekonto',
     ])
     const byKey = Object.fromEntries(accounts.map((a) => [a.account_key, a]))
-    // The older duplicate is marked, never dropped.
+    // The duplicate the account does not stand on is marked, never dropped.
     expect(byKey[bankAccountKey(ID_B)].superseded_by).toBe(bankAccountKey(ID_A))
     expect(byKey[bankAccountKey(ID_A)].superseded_by).toBeNull()
     expect(byKey[bankAccountKey(ID_C)].superseded_by).toBeNull()
@@ -207,6 +208,51 @@ describe('listReconciliationAccounts', () => {
       logo_url: null,
       source: { type: 'skatteverket_api', stale: false },
       status: { state: 'open', open_counts: { proposed: 2, unmatched_external: 3, unmatched_ledger: 1 } },
+    })
+  })
+
+  describe('a reconnect duplicate (pickKeeper)', () => {
+    const twins = () => [
+      cashAccount(ID_A, { is_primary: true, iban: 'SE1' }),
+      cashAccount(ID_B, { ledger_account: '1931', iban: 'SE1' }),
+    ]
+    const ledgerLines = (...accounts: string[]) => [
+      { data: [{ id: 'entry-1' }] },
+      { data: accounts.map((account_number, i) => ({ id: `line-${i}`, journal_entry_id: 'entry-1', account_number })) },
+    ]
+
+    async function supersededBy(ledgerReads: Array<{ data?: unknown; error?: unknown }>) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: twins() })
+      enqueue({ data: [] }) // latest sign-offs (none)
+      for (const read of ledgerReads) enqueue(read)
+      enqueue({ data: [] }) // bank names for logos
+      enqueue({ data: null })
+      enqueue({ data: null })
+      skattekontoStatusMock.mockResolvedValue(null)
+      const accounts = await listReconciliationAccounts(supabase as never, COMPANY, { today: '2026-08-20', withStatus: false })
+      return accounts.map((a) => [a.account_key, a.superseded_by])
+    }
+
+    it('keeps the row whose ledger carries posted lines, over the primary', async () => {
+      expect(await supersededBy(ledgerLines('1931'))).toEqual([
+        [bankAccountKey(ID_A), bankAccountKey(ID_B)],
+        [bankAccountKey(ID_B), null],
+      ])
+    })
+
+    it('folds nothing for an account split over two ledgers', async () => {
+      expect(await supersededBy(ledgerLines('1930', '1931'))).toEqual([
+        [bankAccountKey(ID_A), null],
+        [bankAccountKey(ID_B), null],
+      ])
+    })
+
+    it('folds nothing when the ledger read fails', async () => {
+      expect(await supersededBy([{ error: { message: 'timeout' } }])).toEqual([
+        [bankAccountKey(ID_A), null],
+        [bankAccountKey(ID_B), null],
+      ])
     })
   })
 

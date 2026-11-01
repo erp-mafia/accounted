@@ -24,7 +24,11 @@ import { CA_1930, CO, checkFixture, unbookedRow } from '@/lib/unexplained/__test
 
 const NAMES = ['gnubok_list_unexplained', 'gnubok_get_unexplained', 'gnubok_explain_unexplained']
 const tool = (name: string) => tools.find((t) => t.name === name)!
-const ledger = (options: Parameters<typeof checkFixture>[0] = {}) => createFakeLedger(checkFixture(options)).supabase
+/** The fixture's bank rows are all open work, so open_bank_rows answers them. */
+const ledger = (options: Parameters<typeof checkFixture>[0] = {}) => {
+  const data = checkFixture(options)
+  return createFakeLedger({ ...data, extraTables: { ...data.extraTables, open_bank_rows: data.extraTables?.transactions ?? [] } }).supabase
+}
 
 /** Response budgets in characters of the JSON an agent receives (about 4 characters per token). */
 const LIST_BUDGET = 8_000

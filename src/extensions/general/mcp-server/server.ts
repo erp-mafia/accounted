@@ -177,7 +177,7 @@ import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { bankRowRefusalCode, decideBankRowRebooking, hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
@@ -607,7 +607,6 @@ import {
   kontantmetodCutoffPreflight,
   kontantmetodCutoffWriteDates,
 } from '@/lib/vat/kontantmetod-cutoff-preflight'
-import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { previewIngestDedup } from '@/lib/transactions/dedup-preview'
 import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
 import { giroCounterpartyForWire, mayReadGiro, readGiroCounterparty, type GiroRow } from '@/lib/transactions/giro-counterparty'
@@ -8350,9 +8349,8 @@ export const tools: McpTool[] = [
       // triaged as private, and anchored to no verifikat. journal_entry_id IS
       // NULL is only the first anchor: a row split over several verifikat
       // (#1553), bulk-booked into a samlingsverifikat or settled through an
-      // invoice allocation keeps it NULL. applyUnbookedFilter reads all four
-      // anchors server-side (the is_booked computed column), so one query
-      // gives the page and an exact total_count.
+      // invoice allocation keeps it NULL. public.open_bank_rows holds every
+      // anchor, so one query gives the page and an exact total_count.
       // The enrichment columns (organisationsnummer, the counterparty's IBAN,
       // the instructed amount of a foreign purchase, the balance after, the
       // enriched flag) and external_id (the row's id at its source, e.g. the
@@ -8361,7 +8359,7 @@ export const tools: McpTool[] = [
       // (payload-size.bench.test.ts), and output schemas are open. The IBAN
       // is often the only thing a foreign payment names its payee by (PH 196).
       let listQuery = supabase
-        .from('transactions')
+        .from('open_bank_rows')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
           'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
@@ -8369,7 +8367,6 @@ export const tools: McpTool[] = [
           { count: 'exact' },
         )
         .eq('company_id', companyId)
-      listQuery = applyUnbookedFilter(listQuery)
       if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
       const { data, error, count } = await listQuery
         .order('date', { ascending: false })
@@ -9017,12 +9014,11 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
 
       const { data, error } = await supabase
-        .from('transactions')
+        .from('open_bank_rows')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category'
         )
         .eq('company_id', companyId)
-        .is('journal_entry_id', null)
         .order('date', { ascending: false })
         .limit(limit)
 
@@ -15389,25 +15385,19 @@ export const tools: McpTool[] = [
       // amount because matchInvoiceCandidates only matches income; expenses are
       // out of scope for this tool.
       const { data: transactions, error: txError } = await supabase
-        .from('transactions')
-        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, reference, journal_entry_id, invoice_id, transaction_voucher_links(journal_entry_id, role)')
+        .from('open_bank_rows')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, reference, journal_entry_id, invoice_id')
         .eq('company_id', companyId)
         .gte('date', dateFrom)
         .lte('date', dateTo)
         .gt('amount', 0)
-        .is('journal_entry_id', null)
         .is('invoice_id', null)
-        .eq('is_ignored', false)
         .order('date', { ascending: true })
         .limit(maxTransactions + 1)
 
       if (txError) throw new Error(`Failed to fetch transactions: ${txError.message}`)
 
-      // A row booked through a voucher link has no pointer but is booked all
-      // the same: the approval would refuse it, so it is never proposed.
-      const txList = (transactions ?? [])
-        .slice(0, maxTransactions)
-        .filter((tx) => !hasBankLineJunctionRow(tx.transaction_voucher_links))
+      const txList = (transactions ?? []).slice(0, maxTransactions)
       const truncated = (transactions ?? []).length > maxTransactions
 
       type Proposal = {
@@ -21874,6 +21864,7 @@ export const tools: McpTool[] = [
       // be a no-op. Nothing is written here; the commit path re-runs the core.
       const preflight = await setTransactionIgnored(supabase, companyId, transactionId, !restore, {
         dryRun: true,
+        userId,
       })
       if (!preflight.ok) {
         const entry = getErrorEntry(preflight.code)
@@ -26637,7 +26628,7 @@ export const tools: McpTool[] = [
         disposal_type: { type: 'string', enum: [...ASSET_DISPOSAL_TYPES], description: 'sale, scrap (utrangering) or business_transfer (ML 5 kap. 38 §)' },
         disposed_at: { type: 'string', description: 'yyyy-MM-dd; the voucher date' },
         disposed_proceeds: { type: 'number', description: 'Gross incl. VAT for a taxable sale; 0 for scrap' },
-        proceeds_account: { type: 'string', description: 'Account the proceeds landed on (default 1930)' },
+        proceeds_account: { type: 'string', description: "Account the proceeds landed on (default: the company's primary bank account)" },
         fiscal_period_id: { type: 'string', description: 'Open fiscal period the voucher is posted in' },
         vat_treatment: { type: 'string', enum: [...ASSET_DISPOSAL_VAT_TREATMENTS], description: 'Required for a sale with proceeds; forbidden otherwise' },
         jamkning_original_input_vat: { type: 'number', description: 'Original input VAT at acquisition (with the deduction percent) enables the jämkning assessment' },

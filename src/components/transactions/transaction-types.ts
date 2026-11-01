@@ -27,6 +27,8 @@ export interface PotentialVoucher {
 
 // Shared transaction type with potential invoice data
 export interface TransactionWithInvoice extends Transaction {
+  /** Whether a live verifikat books the row, on the reads that name the column. */
+  is_booked?: boolean | null
   potential_invoice?: Invoice & { customer?: Customer }
   potential_supplier_invoice?: SupplierInvoice
   potential_rot_rut_payout?: PotentialRotRutPayout

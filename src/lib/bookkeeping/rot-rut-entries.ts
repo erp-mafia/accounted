@@ -3,6 +3,8 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput, DeductionTyp
 import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
 import { DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { postingPort } from '@/lib/posting/port'
+import { createLogger } from '@/lib/logger'
+import { resolvePrimaryBankAccount } from './settlement-account'
 import { findFiscalPeriod } from './engine'
 import { installmentOutputVat } from './invoice-lines'
 import {
@@ -18,7 +20,7 @@ import {
  * When the agency pays out a begäran, the 1513 receivable created at
  * invoicing (fakturamodellen) clears against the bank:
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * One voucher per bank transfer: that mirrors the actual bank transaction.
@@ -102,6 +104,8 @@ function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): st
   return 'skattereduktion'
 }
 
+const log = createLogger('bookkeeping/rot-rut-entries')
+
 function payoutDescription(label: string, names: string[]): string {
   return `Utbetalning ${label} från Skatteverket (${names.join(', ')})`
 }
@@ -115,8 +119,8 @@ function payoutDescription(label: string, names: string[]): string {
  * add up to).
  */
 export function buildRotRutPayoutLines(params: {
-  /** The account the payout landed on. Defaults to 1930. */
-  bankAccount?: string
+  /** The account the payout landed on. */
+  bankAccount: string
   /** One leg per begäran the transfer settles; at least one. */
   legs: RotRutPayoutLeg[]
 }): { description: string; total: number; lines: CreateJournalEntryLineInput[]; recognisedVatSek: number } {
@@ -153,7 +157,7 @@ export function buildRotRutPayoutLines(params: {
     }
   }
   const total = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
-  const bankAccount = params.bankAccount ?? '1930'
+  const { bankAccount } = params
   const description = payoutDescription(
     deductionLabel(legs),
     legs.map((leg) => leg.requestName),
@@ -199,7 +203,7 @@ export async function createRotRutPayoutSetEntry(
   userId: string,
   params: {
     paymentDate: string
-    /** BAS 19xx account the payout landed on. Defaults to 1930. */
+    /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
     bankAccount?: string
     /** One leg per begäran the transfer settles; at least one. */
     legs: RotRutPayoutLeg[]
@@ -214,7 +218,8 @@ export async function createRotRutPayoutSetEntry(
     throw new Error(`No open fiscal period found for payment date ${params.paymentDate}`)
   }
 
-  const { description, total, lines, recognisedVatSek } = buildRotRutPayoutLines(params)
+  const bankAccount = params.bankAccount ?? (await resolvePrimaryBankAccount(supabase, companyId, log))
+  const { description, total, lines, recognisedVatSek } = buildRotRutPayoutLines({ ...params, bankAccount })
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: params.paymentDate,
@@ -252,7 +257,7 @@ export async function createRotRutPayoutEntry(
     oreRounding?: number
     /** See RotRutPayoutLeg.invoiceCount. */
     invoiceCount?: number
-    /** BAS 19xx account the payout landed on. Defaults to 1930. */
+    /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
     bankAccount?: string
     /** See RotRutPayoutLeg.recognition. */
     recognition?: RotRutPayoutLeg['recognition']

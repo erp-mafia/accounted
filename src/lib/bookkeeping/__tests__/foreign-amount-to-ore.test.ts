@@ -72,6 +72,7 @@ describe('a foreign amount in öre', () => {
       { currency: 'EUR', exchange_rate: rate, remaining_amount: amount, total: amount, paid_amount: 0 },
       'x',
       amount,
+      '1930',
     )
     expect(arSek).toBe(sek)
   })

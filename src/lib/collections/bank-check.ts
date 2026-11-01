@@ -231,15 +231,12 @@ export async function loadUnexplainedInboundRows(
 ): Promise<BankCandidateRow[]> {
   return fetchAllRows<BankCandidateRow>(({ from, to }) =>
     db
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, date, amount, description, original_description, merchant_name, reference, potential_invoice_id')
       .eq('company_id', companyId)
       .gt('amount', 0)
-      .eq('is_ignored', false)
       .is('invoice_id', null)
       .is('supplier_invoice_id', null)
-      .is('journal_entry_id', null)
-      .or('is_business.is.null,is_business.eq.true')
       .gte('date', invoice.invoice_date)
       .lte('date', today)
       .order('id', { ascending: true })

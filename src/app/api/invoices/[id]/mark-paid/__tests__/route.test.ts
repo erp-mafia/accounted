@@ -71,6 +71,15 @@ vi.mock('@/lib/invoices/refund-credit-note', () => ({
   refundCreditNote: (...args: unknown[]) => mockRefundCreditNote(...args),
 }))
 
+// The primary's own reads are covered in
+// lib/bookkeeping/__tests__/settlement-account.test.ts: here it answers without
+// a slot in the queued mock, and no invoice chose a payee account.
+const mockResolvePrimaryBankAccount = vi.fn()
+vi.mock('@/lib/bookkeeping/settlement-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/settlement-account')>()),
+  resolvePrimaryBankAccount: (...args: unknown[]) => mockResolvePrimaryBankAccount(...args),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/invoices/[id]/mark-paid', () => {
@@ -81,6 +90,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     reset()
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockResolvePrimaryBankAccount.mockResolvedValue('1931')
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -183,7 +193,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.objectContaining({
         creditNote: expect.objectContaining({ credited_invoice_id: 'original-invoice-1' }),
         refundDate: '2026-10-20',
-        settlementAccountNumber: '1930',
+        settlementAccountNumber: '1931',
         force: false,
       }),
     )
@@ -347,7 +357,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       undefined,
       expect.anything(),
       undefined, // paymentAmount: full settle
-      '1930', // settlementAccountNumber: no chosen payee account, so the default
+      '1931', // settlementAccountNumber: no chosen payee account, so the primary
       undefined, // bankTransaction: no bank row
       expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
     )
@@ -452,7 +462,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
         'inv-1',
         expect.objectContaining({
           lines: expect.arrayContaining([
-            expect.objectContaining({ account_number: '1930', debit_amount: 750, credit_amount: 0 }),
+            expect.objectContaining({ account_number: '1931', debit_amount: 750, credit_amount: 0 }),
           ]),
         }),
         expect.any(String),
@@ -503,7 +513,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       expect.any(String),
       'enskild_firma',
       expect.anything(),
-      '1930', // settlementAccountNumber: no chosen payee account, so the default
+      '1931', // settlementAccountNumber: no chosen payee account, so the primary
       undefined, // bankTransaction: no bank row
       undefined, // overpaymentAccount
       expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on

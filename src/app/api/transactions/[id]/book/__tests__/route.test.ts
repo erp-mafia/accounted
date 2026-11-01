@@ -248,6 +248,7 @@ describe('POST /api/transactions/[id]/book', () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: 'je-reversed' }), error: null })
     enqueue({ data: [] }) // transaction_voucher_links
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries
+    enqueue({ data: null }) // standing_correction: none stands
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // transactions update
 

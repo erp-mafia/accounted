@@ -168,16 +168,13 @@ async function loadGivenInboundRows(
   const ids = [...new Set(transactionIds)]
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const { data, error } = await db
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, date, amount, description, original_description, merchant_name, reference, potential_invoice_id')
       .eq('company_id', companyId)
       .in('id', ids.slice(i, i + ID_CHUNK))
       .gt('amount', 0)
-      .eq('is_ignored', false)
       .is('invoice_id', null)
       .is('supplier_invoice_id', null)
-      .is('journal_entry_id', null)
-      .or('is_business.is.null,is_business.eq.true')
     if (error) throw new Error(`transactions lookup failed: ${error.message}`)
     rows.push(...((data ?? []) as BankCandidateRow[]))
   }
@@ -518,14 +515,12 @@ export async function loadPossiblePayments(
   if (hits.length === 0) return []
   // A row booked since the last upkeep is answered already: do not ask about it.
   const { data: rows, error: rowsError } = await db
-    .from('transactions')
+    .from('open_bank_rows')
     .select('id')
     .eq('company_id', companyId)
     .in('id', hits.map((h) => h.transaction_id))
-    .eq('is_ignored', false)
     .is('invoice_id', null)
     .is('supplier_invoice_id', null)
-    .is('journal_entry_id', null)
   if (rowsError) throw new Error(`transactions lookup failed: ${rowsError.message}`)
   const unexplained = new Set(((rows ?? []) as { id: string }[]).map((r) => r.id))
   return hits

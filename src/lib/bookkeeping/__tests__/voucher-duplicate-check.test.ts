@@ -4,7 +4,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { detectVoucherDuplicates } from '../voucher-duplicate-check'
 import { runVoucherWarningsGuard } from '../voucher-warnings-guard'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const db = supabase as unknown as SupabaseClient
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never
 
@@ -56,8 +56,9 @@ describe('detectVoucherDuplicates', () => {
   it('finds a booked bank row of the same account that already books the money', async () => {
     enqueue({ data: [] }) // same-day vouchers
     enqueue({ data: [{ id: 'ca-1', ledger_account: '1930' }] }) // cash accounts
-    enqueue({ data: [{ id: 'tx-1', date: '2026-08-28', amount: -2000, description: 'Kortköp', journal_entry_id: 'je-9' }] })
-    enqueue({ data: [{ id: 'je-9', voucher_series: 'A', voucher_number: 12 }] }) // posted check
+    enqueue({ data: [{ id: 'tx-1', date: '2026-08-28', amount: -2000, description: 'Kortköp' }] }) // rows of that amount
+    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }] }) // live anchors
+    enqueue({ data: { id: 'je-9', voucher_series: 'A', voucher_number: 12 } }) // the anchored verifikat
 
     const warnings = await detectVoucherDuplicates(db, 'company-1', REPOST)
 
@@ -66,6 +67,21 @@ describe('detectVoucherDuplicates', () => {
       code: 'BANK_MOVEMENT_ALREADY_BOOKED',
       details: { transaction_id: 'tx-1', journal_entry_id: 'je-9', voucher: 'A12', account: '1930', amount: -2000 },
     })
+    // The rows are read booked or not, up to the limit; the anchors decide.
+    expect(findCalls('transactions', 'not')).toEqual([])
+    expect(findCalls('transactions', 'limit')).toEqual([[20]])
+    expect(findCalls('bank_row_anchors', 'select')).toEqual([['transaction_id, journal_entry_id']])
+    expect(findCalls('bank_row_anchors', 'in')).toEqual([['transaction_id', ['tx-1']]])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', 'je-9'])
+  })
+
+  it('leaves a bank row alone when no live verifikat anchors it', async () => {
+    enqueue({ data: [] }) // same-day vouchers
+    enqueue({ data: [{ id: 'ca-1', ledger_account: '1930' }] }) // cash accounts
+    enqueue({ data: [{ id: 'tx-1', date: '2026-08-28', amount: -2000, description: 'Kortköp' }] }) // rows of that amount
+    enqueue({ data: [] }) // no anchors
+
+    expect(await detectVoucherDuplicates(db, 'company-1', REPOST)).toEqual([])
   })
 
   it('leaves a bank line alone when no bank account feeds that ledger account', async () => {

@@ -32,7 +32,7 @@ describe('the company\'s invoices, booked from their headers', () => {
       const invoice = { ...row, items: [] }
       const note = { ...invoice, subtotal: -row.subtotal, vat_amount: -row.vat_amount, total: -row.total }
       const registration = validateBalance(buildInvoiceRegistrationLines(invoice, 'aktiebolag')).valid
-      const payment = validateBalance(buildInvoiceCashLines(invoice, 'aktiebolag').lines).valid
+      const payment = validateBalance(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines).valid
       const credit = validateBalance(buildCreditNoteLines(note, 'aktiebolag')).valid
       // Registration and payment share one answer; a credit note reverses what exists.
       return registration === payment && credit ? [] : [[row.invoice_number, registration, payment, credit]]

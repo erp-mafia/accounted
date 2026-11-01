@@ -1,7 +1,7 @@
 'use client'
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useFiscalPeriods, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -77,7 +77,9 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const [proceeds, setProceeds] = useState('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
   const [periodId, setPeriodId] = useState('')
-  const [proceedsAccount, setProceedsAccount] = useState('1930')
+  const paymentLedger = usePaymentBankLedger()
+  const [proceedsAccountChoice, setProceedsAccount] = useState<string | null>(null)
+  const proceedsAccount = proceedsAccountChoice ?? paymentLedger
   const [originalInputVat, setOriginalInputVat] = useState('')
   const [originalDeductionPercent, setOriginalDeductionPercent] = useState('100')
   const [businessTransferConfirmed, setBusinessTransferConfirmed] = useState(false)

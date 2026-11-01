@@ -62,9 +62,9 @@ interface GuardBypassPayment {
   paymentAmount: number
   paymentDate: string
   /**
-   * BAS account the caller named for the payment, or null when it let the
-   * generator default (1930) or supplied custom lines. Null never guesses: the
-   * voucher named by `journalEntryId` is the authority on what was credited.
+   * BAS account the caller named for the payment, or null when it named none
+   * or supplied custom lines. Null never guesses: the voucher named by
+   * `journalEntryId` is the authority on what was credited.
    */
   paymentAccount?: string | null
   /** The posted payment voucher the override produced. */

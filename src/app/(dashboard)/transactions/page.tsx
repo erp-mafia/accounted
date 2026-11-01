@@ -138,6 +138,7 @@ const ASSISTANT_WARM_WINDOW = 30
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
 import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
+import { withLivePointer } from '@/lib/transactions/is-booked'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import { bankRowInSource, countInboxScope, skattekontoInSource } from '@/lib/transactions/inbox-scope'
 import type { FiscalPeriod } from '@/types'
@@ -150,6 +151,9 @@ import type { FiscalPeriod } from '@/types'
 // "N delbetalningar"); the parts themselves load in the drawer.
 const TRANSACTION_LIST_SELECT =
   '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number)), parts_count:bank_transaction_parts(count)'
+// The window's rows can be booked: is_booked tells a stale pointer from a live
+// one (withLivePointer). The pending backlog never is, and it can be thousands.
+const TRANSACTION_WINDOW_SELECT = `${TRANSACTION_LIST_SELECT}, is_booked`
 
 function InlineDialogContentLoading() {
   return (
@@ -1321,7 +1325,7 @@ export default function TransactionsPage() {
       const windowPage = async (offset: number, limit: number) => {
         let windowQuery = supabase
           .from('transactions')
-          .select(TRANSACTION_LIST_SELECT)
+          .select(TRANSACTION_WINDOW_SELECT)
           .eq('company_id', companyId)
         if (periodBounds) {
           windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
@@ -1334,7 +1338,7 @@ export default function TransactionsPage() {
           .order('id', { ascending: true })
           .range(offset, offset + limit - 1)
         if (error) throw error
-        return { data: (data ?? []) as TransactionWithInvoice[] }
+        return { data: ((data ?? []) as TransactionWithInvoice[]).map(withLivePointer) }
       }
 
       const [{ data: txData, error: txError }, pendingRows] = await Promise.all([
@@ -1455,7 +1459,7 @@ export default function TransactionsPage() {
     const offset = pagedCountRef.current
     let pageQuery = supabase
       .from('transactions')
-      .select(TRANSACTION_LIST_SELECT)
+      .select(TRANSACTION_WINDOW_SELECT)
       .eq('company_id', companyId)
     // Same period scope as the initial window fetch: mixed-scope pages would
     // corrupt the offset bookkeeping.
@@ -1477,10 +1481,11 @@ export default function TransactionsPage() {
     pagedCountRef.current += txData.length
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
+    const pageRows = (txData as TransactionWithInvoice[]).map(withLivePointer)
 
     const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
-      fetchPotentialMatches(supabase, companyId, txData),
-      fetchExpensePayoutMatches(supabase, companyId, txData),
+      fetchPotentialMatches(supabase, companyId, pageRows),
+      fetchExpensePayoutMatches(supabase, companyId, pageRows),
     ])
     const expensePayoutMap = expensePayouts.byTransaction
 
@@ -1491,7 +1496,7 @@ export default function TransactionsPage() {
       return
     }
 
-    const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
+    const newTransactions: TransactionWithInvoice[] = pageRows.map((t) => ({
       ...t,
       potential_expense_payout: expensePayoutMap.get(t.id),
       potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,

@@ -16,7 +16,7 @@ import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/componen
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
-import { useAccounts } from '@/lib/reference-data/hooks'
+import { useAccounts, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { parseAmountInput } from '@/lib/money'
@@ -55,7 +55,7 @@ interface SupplierPaymentDialogProps {
   invoice: SupplierInvoice
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** The company's last-used supplier payment account; 1930 when it has none. */
+  /** The company's last-used supplier payment account; the primary bank account when it has none. */
   defaultPaymentAccount?: string | null
   /** After a payment was booked or an existing voucher linked: refetch the invoice. */
   onPaid: () => void | Promise<void>
@@ -86,7 +86,10 @@ export function SupplierPaymentDialog({
   // SEK the preview shows (paid_sek), i.e. no kursdifferens.
   const [paySek, setPaySek] = useState('')
   const [paymentDate, setPaymentDate] = useState(() => todayIsoStockholm())
-  const [paymentAccount, setPaymentAccount] = useState(defaultPaymentAccount || '1930')
+  // The last-used account, then whatever the person picks; else the primary.
+  const paymentLedger = usePaymentBankLedger()
+  const [pickedAccount, setPaymentAccount] = useState(defaultPaymentAccount || null)
+  const paymentAccount = pickedAccount ?? paymentLedger
   const [isProcessing, setIsProcessing] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
   // Chart of accounts for the payment account, from the session cache.

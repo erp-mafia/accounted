@@ -186,6 +186,23 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview', () => {
     expect(body.lines[3].description).toBe('Öresavrundning')
   })
 
+  it('with no account named it previews the primary bank account, what the POST books; a last-used account is the dialog\'s to send', async () => {
+    enqueue({
+      data: { ...roundedInvoice(), supplier: { supplier_type: 'swedish_business', name: 'Leverantören AB' }, items, registration_journal_entry_id: 'je-1' },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '1940' }, error: null })
+    enqueue({ data: { id: 'ca-1', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null })
+
+    const res = await GET(makeReq('amount=1234.56'), createMockRouteParams({ id: 'si-1' }))
+
+    expect(res.status).toBe(200)
+    const { body } = await parseJsonResponse<PreviewBody>(res)
+    expect(body.lines.map((l) => l.account_number)).toContain('1931')
+    expect(body.lines.map((l) => l.account_number)).not.toContain('1940')
+    expect(body.lines.map((l) => l.account_number)).not.toContain('1930')
+  })
+
   it('kontantmetod: the preview is line-for-line what createSupplierInvoiceCashEntry books', async () => {
     const invoice = roundedInvoice()
     enqueue({

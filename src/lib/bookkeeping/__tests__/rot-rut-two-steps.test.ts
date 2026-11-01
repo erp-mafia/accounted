@@ -202,7 +202,7 @@ describe('kontantmetoden: customer payment, then payout', () => {
 
 describe('faktureringsmetoden is unchanged', () => {
   it('a kontantfaktura without the flag books the full revenue and moms with 1513 for the deduction', () => {
-    const lines = buildInvoiceCashLines(invoice(), 'aktiebolag').lines
+    const lines = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930').lines
     expect(netByAccount(lines)).toEqual({ '1930': -19250, '1513': -3750, '3001': 18400, '2611': 4600 })
   })
 

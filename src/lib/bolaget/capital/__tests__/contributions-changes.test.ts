@@ -79,6 +79,12 @@ describe('createShareholderContribution', () => {
     expect(lines()[0]).toEqual(['1685', 10_000, 0])
   })
 
+  it('with no account named a contribution lands on the primary bank account', async () => {
+    mock.setTable('cash_accounts', { data: [{ id: 'ca', ledger_account: '1931', enabled: true, currency: 'SEK', is_primary: true, kind: 'bank' }] })
+    await createShareholderContribution(ctx, { holder: { party_id: ANNA }, promised_on: '2026-03-01', amount: 50_000, conditional: true }, { dryRun: false })
+    expect(lines()[0]).toEqual(['1931', 50_000, 0])
+  })
+
   it('repays a villkorat tillskott D 2093 / K bank, warning without a stämma decision', async () => {
     mock.setTable('shareholder_contributions', (chain) =>
       chain.some((c) => c.method === 'insert')
@@ -170,6 +176,13 @@ describe('bookCapitalChange', () => {
     registration_entry_id: null,
     status: 'decided',
     ...over,
+  })
+
+  it('with no account named the payment lands on the primary bank account', async () => {
+    mock.setTable('cash_accounts', { data: [{ id: 'ca', ledger_account: '1931', enabled: true, currency: 'SEK', is_primary: true, kind: 'bank' }] })
+    mock.setTable('capital_changes', (chain) => (chain.some((c) => c.method === 'update') ? { data: null } : { data: nyemission() }))
+    await bookCapitalChange(ctx, { capital_change_id: CHANGE, step: 'payment', date: '2026-09-10' }, { dryRun: false })
+    expect(lines()[0]?.[0]).toBe('1931')
   })
 
   it('books the payment D bank / K 2082 + 2097, then the registration D 2082 / K 2081', async () => {

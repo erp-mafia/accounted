@@ -65,17 +65,6 @@ export {
 const log = createLogger('supplier-invoice-entries')
 
 /**
- * BAS account credited for a supplier payment when the caller names none.
- * 1930 Företagskonto is the default business bank account in the BAS chart.
- *
- * Every surface that books or previews a supplier payment resolves the credit
- * account the same way: an explicit account wins, otherwise this. Named here
- * so no route re-spells '1930' and quietly drifts from the generators, which
- * are the only place that fallback may be decided. Issue #2550.
- */
-export const DEFAULT_SUPPLIER_PAYMENT_ACCOUNT = '1930' as const
-
-/**
  * The least a credit note's tolerance ever is, in SEK (see
  * creditNotePayableToleranceSek). The rows are compared in SEK, where each
  * cost bucket and moms group of a foreign invoice is rounded to the öre on
@@ -278,8 +267,8 @@ export interface SupplierInvoicePaymentLinesOptions {
   /** Kursvinst (> 0) or kursförlust (< 0) in SEK; omit for none. */
   exchangeRateDifference?: number
   supplierName?: string
-  /** Account credited; DEFAULT_SUPPLIER_PAYMENT_ACCOUNT when omitted. */
-  paymentAccount?: string
+  /** Account credited. */
+  paymentAccount: string
   /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
   bankFeeSek?: number
   /**
@@ -325,7 +314,7 @@ export function buildSupplierInvoicePaymentLines(
   if (sekClearingDebt !== undefined && exchangeRateDifference) {
     throw new Error('buildSupplierInvoicePaymentLines: a SEK clearing has no exchange rate difference')
   }
-  const creditAccount = options.paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
+  const creditAccount = options.paymentAccount
 
   const desc = buildSupplierDescription('Utbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
@@ -416,9 +405,9 @@ export async function createSupplierInvoicePaymentEntry(
   // SEK, see SupplierInvoicePaymentLinesOptions.paymentAmount.
   paymentAmount: number,
   paymentDate: string,
-  exchangeRateDifference?: number,
-  supplierName?: string,
-  paymentAccount?: string,
+  exchangeRateDifference: number | undefined,
+  supplierName: string | undefined,
+  paymentAccount: string,
   bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
   // Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570.
   bankFeeSek?: number,
@@ -467,8 +456,8 @@ export async function createSupplierInvoicePaymentEntry(
 
 export interface SupplierInvoiceCashLinesOptions {
   supplierName?: string
-  /** Payment account credited; defaults to DEFAULT_SUPPLIER_PAYMENT_ACCOUNT. */
-  paymentAccount?: string
+  /** Payment account credited. */
+  paymentAccount: string
   /**
    * SEK that actually left the bank, when the payment is matched from a bank
    * row. For a foreign-currency invoice this pins the whole entry to the
@@ -516,10 +505,9 @@ export function buildSupplierInvoiceCashLines(
   invoice: SupplierInvoice,
   items: SupplierInvoiceItem[],
   supplierType: string,
-  options: SupplierInvoiceCashLinesOptions = {},
+  options: SupplierInvoiceCashLinesOptions,
 ): SupplierInvoiceCashLinesResult {
-  const { supplierName, paymentAccount, settledBankSek, bankFeeSek, chartVatTreatments } = options
-  const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
+  const { supplierName, paymentAccount: creditAccount, settledBankSek, bankFeeSek, chartVatTreatments } = options
 
   // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap:
   // "bokföring vid betalningstillfället"), so the entire verifikat is translated
@@ -712,8 +700,8 @@ export async function createSupplierInvoiceCashEntry(
   items: SupplierInvoiceItem[],
   paymentDate: string,
   supplierType: string,
-  supplierName?: string,
-  paymentAccount?: string,
+  supplierName: string | undefined,
+  paymentAccount: string,
   // SEK that actually settled the invoice (the amount that left the bank),
   // see SupplierInvoiceCashLinesOptions.settledBankSek.
   settledBankSek?: number,
@@ -741,7 +729,7 @@ export async function createSupplierInvoiceCashEntry(
     description,
     source_type: 'supplier_invoice_cash_payment',
     source_id: invoice.id,
-    ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT)] } : {}),
+    ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, paymentAccount)] } : {}),
     lines,
   }
 
@@ -753,7 +741,7 @@ export async function createSupplierInvoiceCashEntry(
       supplierInvoicePaymentBusinessEvent(
         invoice,
         input,
-        { paymentAccount: paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT, generated: true, bankLine: !!bankTransaction },
+        { paymentAccount, generated: true, bankLine: !!bankTransaction },
         posting?.(),
       ),
     input,

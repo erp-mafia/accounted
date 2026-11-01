@@ -32,6 +32,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
+import { descriptionMentionsReference } from '@/lib/invariants/reference-number'
 import { normalizeOcrReference } from './duplicate-payment-guard'
 import { invoiceDocumentRefusal } from '@/lib/transactions/invoice-document-refusal'
 import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
@@ -460,11 +461,8 @@ export function matchInvoiceCandidates(
   // are ranked as for the reference field (invoicesNamedInTiers): a text
   // that names an invoice by its number or printed OCR is read exactly as
   // before, and Bankgirot's length-digit OCR is read only when it names none.
-  // Normalised once per row as descriptionMentionsReference would (it is
-  // idempotent on them): every invoice of the pool is searched for in them.
   const referenceHaystacks = [transaction.description, transaction.merchant_name]
     .filter((value): value is string => Boolean(value))
-    .map((value) => value.replace(/\s+/g, '').toLowerCase())
   const referenceInTextIds = new Set<string>()
   if (referenceHaystacks.length > 0) {
     const mentioned = invoicesNamedInTiers(filteredInvoices, (invoice, forms) => {
@@ -577,35 +575,4 @@ export function bestInvoiceMatch(
   return null
 }
 
-/**
- * True when `reference` occurs in `description` as a whole number, never as
- * part of a longer digit run. Whitespace is stripped from both sides first so
- * an OCR string typed in groups ("1234 5678") still matches; after that a hit
- * may not touch a digit on either side. That is what keeps ankomstnummer 14
- * out of "Levbet Tele2 (1814)" and invoice 26 out of "2026-05-11". The plain
- * substring test this replaces linked a Tele2 payment to a Postronic invoice
- * as a 99 % match (desk crm#64, 2026-09-16).
- */
-export function descriptionMentionsReference(
-  description: string | null | undefined,
-  reference: string | number | null | undefined,
-): boolean {
-  if (!description || reference === null || reference === undefined) return false
-  const haystack = description.replace(/\s+/g, '').toLowerCase()
-  const needle = String(reference).replace(/\s+/g, '').toLowerCase()
-  if (needle.length < 2) return false
-  let from = 0
-  while (from + needle.length <= haystack.length) {
-    const at = haystack.indexOf(needle, from)
-    if (at === -1) return false
-    const before = at > 0 ? haystack[at - 1] : ''
-    const after = haystack[at + needle.length] ?? ''
-    if (!isDigit(before) && !isDigit(after)) return true
-    from = at + 1
-  }
-  return false
-}
-
-function isDigit(ch: string): boolean {
-  return ch >= '0' && ch <= '9'
-}
+export { descriptionMentionsReference }

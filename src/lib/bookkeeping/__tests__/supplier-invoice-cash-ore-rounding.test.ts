@@ -76,7 +76,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mark-paid doors)', () => {
   it('rounded UP: credits the payment account with the whole kronor the user paid and debits 3740', () => {
-    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business')
+    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', { paymentAccount: '1930' })
     expect(find(built.lines, '6110')[0].debit_amount).toBe(987.65)
     expect(find(built.lines, '2641')[0].debit_amount).toBe(246.91)
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1235)
@@ -89,7 +89,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
   })
 
   it('rounded DOWN: credits the whole kronor and credits 3740', () => {
-    const built = buildSupplierInvoiceCashLines(invoiceDown(), itemsDown, 'swedish_business')
+    const built = buildSupplierInvoiceCashLines(invoiceDown(), itemsDown, 'swedish_business', { paymentAccount: '1930' })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1234)
     expect(find(built.lines, '3740')).toEqual([
       expect.objectContaining({ debit_amount: 0, credit_amount: 0.44 }),
@@ -99,8 +99,8 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
   })
 
   it('3740 carries no VAT: expense and input VAT are the exact invoice figures, untouched by the rounding', () => {
-    const rounded = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business')
-    const exact = buildSupplierInvoiceCashLines(invoiceUp({ ore_rounding: false }), itemsUp, 'swedish_business')
+    const rounded = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', { paymentAccount: '1930' })
+    const exact = buildSupplierInvoiceCashLines(invoiceUp({ ore_rounding: false }), itemsUp, 'swedish_business', { paymentAccount: '1930' })
     for (const account of ['6110', '2641']) {
       expect(find(rounded.lines, account)).toEqual(find(exact.lines, account))
     }
@@ -110,7 +110,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
     ['flag off', { ore_rounding: false }],
     ['flag null (supplier invoices have no company-wide setting)', { ore_rounding: null }],
   ])('%s: byte-identical to before, exact öre and no 3740 line', (_label, overrides) => {
-    const built = buildSupplierInvoiceCashLines(invoiceUp(overrides), itemsUp, 'swedish_business')
+    const built = buildSupplierInvoiceCashLines(invoiceUp(overrides), itemsUp, 'swedish_business', { paymentAccount: '1930' })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1234.56)
     expect(find(built.lines, '3740')).toEqual([])
     expect(built.oreDiffSek).toBe(0)
@@ -125,7 +125,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
     const built = buildSupplierInvoiceCashLines(
       invoiceUp({ subtotal: 988.09, total: 1235, remaining_amount: 1235 }),
       items,
-      'swedish_business',
+      'swedish_business', { paymentAccount: '1930' },
     )
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1235)
     // Exactly one 3740 line: the item's own.
@@ -143,7 +143,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
       reverse_charge: true, vat_treatment: 'reverse_charge', ore_rounding: true,
     })
     // No momskoder configured: the reverse-charge lines need them (crm#1096).
-    const built = buildSupplierInvoiceCashLines(invoice, items, 'swedish_business', { chartVatTreatments: new Map() })
+    const built = buildSupplierInvoiceCashLines(invoice, items, 'swedish_business', { paymentAccount: '1930', chartVatTreatments: new Map() })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1000)
     expect(find(built.lines, '3740')[0].credit_amount).toBe(0.4)
     expect(balance(built.lines)).toBe(0)
@@ -155,14 +155,14 @@ describe('buildSupplierInvoiceCashLines: öresavrundning without a bank row (mar
       subtotal: 1000, vat_amount: 0, total: 1000, remaining_amount: 1000,
       reverse_charge: true, vat_treatment: 'reverse_charge',
     })
-    expect(() => buildSupplierInvoiceCashLines(invoice, items, 'eu_business')).toThrow(/momskoder/)
+    expect(() => buildSupplierInvoiceCashLines(invoice, items, 'eu_business', { paymentAccount: '1930' })).toThrow(/momskoder/)
   })
 
   it('stamps the invoice default dimensions on the 3740 leg like every other leg', () => {
     const built = buildSupplierInvoiceCashLines(
       invoiceUp({ default_dimensions: { '1': 'KS1' } }),
       itemsUp,
-      'swedish_business',
+      'swedish_business', { paymentAccount: '1930' },
     )
     expect(find(built.lines, '3740')[0].dimensions).toEqual({ '1': 'KS1' })
   })
@@ -180,7 +180,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning with a known bank row (
   })
 
   it('an exact-öre bank row books no 3740 even when the flag is on', () => {
-    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', {
+    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', { paymentAccount: '1930',
       settledBankSek: 1234.56,
     })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1234.56)
@@ -188,7 +188,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning with a known bank row (
   })
 
   it('a row a krona or more off is never rounding: the exact debt is booked, as before', () => {
-    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', {
+    const built = buildSupplierInvoiceCashLines(invoiceUp(), itemsUp, 'swedish_business', { paymentAccount: '1930',
       settledBankSek: 1300,
     })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1234.56)
@@ -201,7 +201,7 @@ describe('buildSupplierInvoiceCashLines: öresavrundning with a known bank row (
       currency: 'EUR', exchange_rate: 11, subtotal: 100.5, vat_amount: 0, total: 100.5,
       remaining_amount: 100.5, vat_treatment: 'export', ore_rounding: true,
     })
-    const built = buildSupplierInvoiceCashLines(invoice, items, 'non_eu_business', {
+    const built = buildSupplierInvoiceCashLines(invoice, items, 'non_eu_business', { paymentAccount: '1930',
       settledBankSek: 1120,
     })
     expect(find(built.lines, '1930')[0].credit_amount).toBe(1120)

@@ -121,7 +121,7 @@ describe('commitCollectionsDailyBatch', () => {
   it('skips an invoice a new bank row may have paid', async () => {
     const world = await ladderWorld()
     const op = await stagedBatch(world)
-    world.db.seed('transactions', [BANK_ROW])
+    world.db.seed('open_bank_rows', [BANK_ROW])
     expect(await commit(world, op)).toMatchObject({
       ok: true,
       data: { done_count: 0, skipped: [{ reason: 'bank', code: 'COLLECTION_BANK_CANDIDATES' }] },
@@ -206,11 +206,11 @@ describe('commitCollectionsDailyBatch', () => {
     const openCase = vi.spyOn(adapter, 'openCase')
 
     // A payment that may be this invoice's arrived after the batch was staged.
-    world.db.seed('transactions', [BANK_ROW])
+    world.db.seed('open_bank_rows', [BANK_ROW])
     expect(await commit(world, op, adapter)).toMatchObject({ ok: true, data: { done: [], skipped: [{ reason: 'bank' }] } })
     expect(sent).toEqual([])
 
-    world.db.rows('transactions').splice(0)
+    world.db.rows('open_bank_rows').splice(0)
     expect(await commit(world, op, adapter)).toMatchObject({ ok: true, data: { done: [{ kind: 'start', case_id: row.id }], skipped_count: 0 } })
     expect(sent).toEqual([expect.objectContaining({ action: 'start', step: 'reminder' })])
     expect(openCase).not.toHaveBeenCalled()

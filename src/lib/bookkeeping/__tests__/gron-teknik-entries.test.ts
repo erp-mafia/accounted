@@ -196,7 +196,7 @@ describe('createInvoiceJournalEntry: grön teknik', () => {
   })
 
   it('kontantmetoden: the bank gets the customer share, 1513 the reduction', async () => {
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice(), '2026-09-20')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice(), '2026-09-20', 'enskild_firma', undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(sum(byAccount(input, '1930'), 'debit_amount')).toBe(86250)
     expect(sum(byAccount(input, '1513'), 'debit_amount')).toBe(15000)
@@ -249,6 +249,7 @@ describe('proposals: grön teknik', () => {
       },
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
+      paymentAccount: '1930',
     })
     // Bokslutsmetoden (ML 2023:200 7 kap. 16 §): 15 000 kr reduktion holds
     // 3 000 kr moms (12 000 + 3 000), booked when Skatteverket pays.
@@ -293,6 +294,7 @@ describe('payout and reclaim vouchers name grön teknik', () => {
       paymentDate: '2026-10-10',
       amount: 15000,
       oreRounding: 0.4,
+      bankAccount: '1930',
     })
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Utbetalning skattereduktion grön teknik från Skatteverket (GT 2026-10)')
@@ -307,6 +309,7 @@ describe('payout and reclaim vouchers name grön teknik', () => {
       deductionType: 'rot',
       paymentDate: '2026-07-10',
       amount: 3000,
+      bankAccount: '1930',
     })
     expect(mockedCreateEntry.mock.calls[0][3].description).toBe('Utbetalning ROT-avdrag från Skatteverket (ROT 2026-07)')
   })

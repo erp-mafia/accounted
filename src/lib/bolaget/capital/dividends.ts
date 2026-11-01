@@ -23,6 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
@@ -37,7 +38,6 @@ import { checkFreeEquity, type FreeEquityCheck } from './free-equity'
 import { dividendDecisionLines, dividendPayoutLines, postCapitalEntry } from './postings'
 import { syncKu31Deadline, upsertCapitalDeadline } from './deadlines'
 import {
-  DEFAULT_BANK_ACCOUNT,
   DIVIDEND_LIABILITY_ACCOUNT,
   type DividendDecidedBy,
   type DividendSourceAccount,
@@ -658,7 +658,7 @@ export async function payDividend(ctx: OperationContext, input: PayDividendInput
     return { ok: true, data: { dividend_id: dividend.id, status: 'paid', payout_entry_id: input.journal_entry_id, paid_on: paidOn, linked: true }, ...(warnings.length ? { warnings } : {}) }
   }
 
-  const bank = input.bank_account ?? DEFAULT_BANK_ACCOUNT
+  const bank = input.bank_account ?? (await resolvePrimaryBankAccount(ctx.supabase, ctx.companyId, ctx.log))
   const lines = dividendPayoutLines(bank, dividend.total_amount)
   if (dryRun) {
     return {

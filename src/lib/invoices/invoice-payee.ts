@@ -4,6 +4,8 @@ import { cashAccountPayee, isBankCashAccount, isUsableInvoicePayee } from '@/lib
 import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 
 const log = createLogger('invoices/payee')
 
@@ -138,9 +140,10 @@ export async function snapshotInvoicePayee(
 /**
  * The BAS account a manual "mark as paid" debits: the chosen payee account's
  * ledger account (1930, 1931, ...) when the invoice chose one and the row
- * still exists, else the 1930 default the generators have always used.
- * Bank-transaction matches never come here: they debit the account the
- * money actually landed on (resolveSettlementAccount on the transaction).
+ * still exists, else the company's primary bank account. Bank-transaction
+ * matches never come here: they debit the account the money actually landed
+ * on (resolveSettlementAccount on the transaction). A failed read throws: a
+ * retry is cheap, a verifikat on the wrong bank account is a storno.
  */
 export async function resolveInvoiceSettlementAccount(
   supabase: SupabaseClient,
@@ -148,32 +151,29 @@ export async function resolveInvoiceSettlementAccount(
   invoice: Partial<Pick<Invoice, 'payment_cash_account_id'>>,
 ): Promise<string> {
   const cashAccountId = invoice.payment_cash_account_id ?? null
-  if (!cashAccountId) return '1930'
+  if (!cashAccountId) return resolvePrimaryBankAccount(supabase, companyId, log)
   const { data, error } = await supabase
     .from('cash_accounts')
     .select('ledger_account, enabled')
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
     .maybeSingle()
-  if (error) {
-    log.warn('settlement account lookup failed; defaulting to 1930', { cashAccountId, error: error.message })
-    return '1930'
-  }
+  if (error) throw new BookkeepingDatabaseError('resolve_settlement_account', error.message)
   const row = data as { ledger_account?: string; enabled?: boolean } | null
   const ledger = row?.ledger_account
   // Only a live bank account (19xx) may take the debit: a PSP clearing
   // account (1686, 1680, 1584) cleared later by a payout must never receive
   // a bank transfer, and a disabled or deleted account is not where money
-  // lands any more. Both fall back to 1930, and say so: the printed invoice
-  // named another account, so the bookkeeper must know.
+  // lands any more. Both fall back to the primary, and say so: the printed
+  // invoice named another account, so the bookkeeper must know.
   if (!row || !ledger || !ACCOUNT_NUMBER_RE.test(ledger) || !isBankCashAccount({ ledger_account: ledger }) || row.enabled === false) {
-    log.warn('chosen payee account is not a live bank account; debiting 1930 instead', {
+    log.warn('chosen payee account is not a live bank account; debiting the primary instead', {
       cashAccountId,
       ledger: ledger ?? null,
       enabled: row?.enabled ?? null,
       found: Boolean(row),
     })
-    return '1930'
+    return resolvePrimaryBankAccount(supabase, companyId, log)
   }
   return ledger
 }

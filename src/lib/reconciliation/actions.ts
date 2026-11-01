@@ -486,12 +486,10 @@ async function proposalsAsPairs(
     }>(
       ({ from, to }) =>
         supabase
-          .from('transactions')
+          .from('open_bank_rows')
           .select('id, potential_journal_entry_id, potential_match_method, potential_match_confidence')
           .eq('company_id', companyId)
           .eq('cash_account_id', parsed.cashAccountId)
-          .is('journal_entry_id', null)
-          .eq('is_ignored', false)
           .not('potential_journal_entry_id', 'is', null)
           .order('date')
           .order('id')

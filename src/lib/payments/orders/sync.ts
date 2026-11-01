@@ -529,15 +529,13 @@ async function unbookedDebitFor(
   order: PaymentOrderRow,
 ): Promise<{ transaction: Transaction; confidence: number; basis: DebitMatchBasis } | null> {
   const { data, error } = await writer
-    .from('transactions')
+    .from('open_bank_rows')
     .select('*')
     .eq('company_id', order.company_id)
     .eq('cash_account_id', order.cash_account_id)
     .eq('currency', order.currency)
     .eq('amount', -Number(order.amount))
-    .is('journal_entry_id', null)
     .is('supplier_invoice_id', null)
-    .eq('is_ignored', false)
     .in('import_source', [...DEBIT_FEEDS])
     .gte('date', addDaysIso(order.requested_execution_date, -(DEBIT_WINDOW_DAYS_BEFORE + DEBIT_READ_SLACK_DAYS)))
     .lte('date', addDaysIso(order.requested_execution_date, DEBIT_WINDOW_DAYS_AFTER + DEBIT_READ_SLACK_DAYS))

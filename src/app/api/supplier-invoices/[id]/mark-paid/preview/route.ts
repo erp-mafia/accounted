@@ -22,7 +22,6 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   buildSupplierInvoiceCashLines,
   buildSupplierInvoicePaymentLines,
-  DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
@@ -98,12 +97,12 @@ export const GET = withRouteContext(
     const planned = await planSupplierSettlement(
       { supabase, companyId: companyId!, userId: user.id, log },
       invoice as SettleableSupplierInvoice,
-      { amount, amountSek: amount_sek, paymentDate: payment_date, paymentAccount: payment_account, force: true },
+      { amount, amountSek: amount_sek, paymentDate: payment_date, paymentAccount: payment_account || undefined, force: true },
     )
     if (!planned.ok) return sessionFailureResponse(planned, log, requestId)
     const { plan } = planned
 
-    const creditAccount = payment_account || plan.lastPaymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
+    const creditAccount = plan.paymentAccount
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'

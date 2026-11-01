@@ -1000,8 +1000,8 @@ function headerRecognitionLines(
 export function buildInvoiceCashLines(
   invoice: InvoiceCashLinesSource,
   entityType: EntityType,
-  customerName?: string,
-  settlementAccountNumber: string = '1930',
+  customerName: string | undefined,
+  settlementAccountNumber: string,
   knownBankSek?: number,
   overpaymentAccount?: string,
   options: { deferDeductionShare?: boolean; feeAccount?: string } = {},
@@ -1213,8 +1213,8 @@ export function buildInvoiceCashPartialLines(
   invoice: InvoiceCashLinesSource,
   entityType: EntityType,
   installment: InvoiceCashInstallment,
-  customerName?: string,
-  settlementAccountNumber: string = '1930',
+  customerName: string | undefined,
+  settlementAccountNumber: string,
 ): InvoiceCashPartialLines {
   const unsupported = cashProRataUnsupportedReason(invoice)
   if (unsupported) return { ok: false, reason: unsupported }

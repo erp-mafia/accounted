@@ -2,7 +2,7 @@
  * Settle a ROT/RUT begäran: book Skatteverkets utbetalning and, optionally,
  * link the bank transaction that carried it.
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * Shared between two callers:
@@ -57,7 +57,7 @@ export interface SettleRotRutPayoutParams {
   paymentDate: string
   /** Defaults to decided_total ?? requested_total. */
   amount?: number
-  /** BAS 19xx account the payout landed on. Defaults to 1930 in the engine. */
+  /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
   bankAccount?: string
   /**
    * Bank transaction that carried the payout. When set, the row is linked to
@@ -528,7 +528,7 @@ export interface SettleRotRutPayoutSetParams {
   paymentDate: string
   /** The bank row amount: must equal the requests' expected payouts to the öre. */
   amount: number
-  /** BAS 19xx account the payout landed on. Defaults to 1930 in the engine. */
+  /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
   bankAccount?: string
   /** See SettleRotRutPayoutParams.transactionId. */
   transactionId?: string

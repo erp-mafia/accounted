@@ -442,7 +442,7 @@ async function paySupplier(
 ): Promise<string> {
   const payment = buildSupplierInvoicePaymentLines(
     { supplier_invoice_number: 'LF-2001', arrival_number: 2001 },
-    { paymentAmount: params.amount, supplierName: 'Leverantör AB' },
+    { paymentAccount: '1930', paymentAmount: params.amount, supplierName: 'Leverantör AB' },
   )
   expect(sig(payment.lines)).toEqual([['1930', 0, params.amount], ['2440', params.amount, 0]])
   const entryId = await post(company, {
@@ -745,7 +745,7 @@ describe('kontantmetoden cut-off: a payment booked as cash before the cut-off is
 
     // E and E_s: the generated kontantmetod cash verifikat, booked on
     // 2027-01-14 while the cut-off was not yet posted.
-    const cash = buildInvoiceCashLines(source, ENTITY, 'Kund AB')
+    const cash = buildInvoiceCashLines(source, ENTITY, 'Kund AB', '1930')
     expect(sig(cash.lines)).toEqual([['1930', 1250, 0], ['2611', 0, 250], ['3001', 0, 1000]])
     const eId = await post(company, {
       fiscalPeriodId: company.nextPeriodId, entryDate: '2027-01-14', description: cash.description,
@@ -754,7 +754,7 @@ describe('kontantmetoden cut-off: a payment booked as cash before the cut-off is
     const rowId = await insertPaymentRow(company, 'customer', invoiceId, '2027-01-14', CUSTOMER_TOTAL, eId)
 
     const supplierCash = buildSupplierInvoiceCashLines(
-      supplier.invoice, supplier.items, 'swedish_business', { supplierName: 'Leverantör AB' },
+      supplier.invoice, supplier.items, 'swedish_business', { paymentAccount: '1930', supplierName: 'Leverantör AB' },
     )
     expect(sig(supplierCash.lines)).toEqual([['1930', 0, 500], ['2641', 100, 0], ['6110', 400, 0]])
     const esId = await post(company, {
@@ -1003,7 +1003,7 @@ async function seedLegacyScenario(): Promise<CashCompany> {
   // The year-2 payments as the old routing booked them for unlinked
   // invoices: kontantmetod cash verifikat with revenue, cost and moms.
   const customerCash = buildInvoiceCashLines(
-    customerSource('00000000-0000-4000-8000-000000001001'), ENTITY, 'Kund AB',
+    customerSource('00000000-0000-4000-8000-000000001001'), ENTITY, 'Kund AB', '1930',
   )
   await post(company, {
     fiscalPeriodId: fy2027, entryDate: '2027-02-15', description: customerCash.description,
@@ -1011,7 +1011,7 @@ async function seedLegacyScenario(): Promise<CashCompany> {
   })
   const supplier = supplierSource('00000000-0000-4000-8000-000000002001')
   const supplierCash = buildSupplierInvoiceCashLines(
-    supplier.invoice, supplier.items, 'swedish_business', { supplierName: 'Leverantör AB' },
+    supplier.invoice, supplier.items, 'swedish_business', { paymentAccount: '1930', supplierName: 'Leverantör AB' },
   )
   await post(company, {
     fiscalPeriodId: fy2027, entryDate: '2027-02-20', description: supplierCash.description,

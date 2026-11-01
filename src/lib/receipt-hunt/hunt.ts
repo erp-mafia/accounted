@@ -206,16 +206,10 @@ export async function fetchCandidateTransactions(
 
   const rows = await fetchAllRows<HuntTransaction>((range) =>
     supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate')
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
       .is('document_id', null)
-      .eq('is_ignored', false)
-      // is_business IS DISTINCT FROM false: NULL is untriaged and true is
-      // "business, not yet booked". Only an explicit false means the user
-      // called it private, and a private purchase needs no underlag.
-      .not('is_business', 'is', false)
       // Outflows only, and amount <= -MIN covers the floor in one filter.
       .lte('amount', -MIN_AMOUNT_SEK)
       .gte('date', sinceDate)

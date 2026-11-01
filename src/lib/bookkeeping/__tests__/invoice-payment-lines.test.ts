@@ -12,7 +12,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1250, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1250, total: 1250, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(1250)
       expect(result.arSek).toBe(1250)
@@ -30,7 +30,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1020, total: 1250, paid_amount: 230 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(1000)
       expect(result.arSek).toBe(1000)
@@ -42,7 +42,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: -500, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 500, total: 500, paid_amount: 0 },
-        'desc',
+        'desc', undefined, '1930',
       )
       expect(result.bankSek).toBe(500)
       expect(result.arSek).toBe(500)
@@ -57,7 +57,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1100, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'USD', exchange_rate: 10, remaining_amount: 100, total: 100, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(1100)
       expect(result.arSek).toBe(1000)
@@ -87,7 +87,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'USD', exchange_rate: 10.5, remaining_amount: 100, total: 100, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(1000)
       expect(result.arSek).toBe(1000)
@@ -110,6 +110,7 @@ describe('buildInvoicePaymentClearingLines', () => {
         { currency: 'USD', exchange_rate: 9.3, remaining_amount: 140, total: 140, paid_amount: 0 },
         'Inbetalning kundfaktura',
         95.6938, // paidInInvoiceCurrency
+        '1930',
       )
       expect(result.bankSek).toBe(1000)
       expect(result.arSek).toBeCloseTo(889.95, 1)
@@ -138,6 +139,7 @@ describe('buildInvoicePaymentClearingLines', () => {
         { currency: 'USD', exchange_rate: 9.3, remaining_amount: 100, total: 100, paid_amount: 0 },
         'Inbetalning kundfaktura',
         100, // paidInInvoiceCurrency (full settlement at today's 9.00 rate)
+        '1930',
       )
       expect(result.bankSek).toBe(900)
       expect(result.arSek).toBeCloseTo(930, 2)
@@ -165,7 +167,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 230, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'USD', exchange_rate: 15.3, remaining_amount: 140, total: 140, paid_amount: 0 },
-        'Delbetalning kundfaktura',
+        'Delbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(230)
       expect(result.arSek).toBe(230)
@@ -180,7 +182,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'USD', exchange_rate: 10, remaining_amount: 100, total: 100, paid_amount: 0 },
-        'desc',
+        'desc', undefined, '1930',
       )
       expect(result.bankSek).toBe(1000)
       expect(result.arSek).toBe(1000)
@@ -199,7 +201,7 @@ describe('buildInvoicePaymentClearingLines', () => {
           total: 100.0001,
           paid_amount: 0,
         },
-        'desc',
+        'desc', undefined, '1930',
       )
       expect(Math.abs(result.fxDiffSek)).toBeLessThanOrEqual(0.005)
       expect(result.lines).toHaveLength(2)
@@ -211,7 +213,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1000.25, total: 1000.25, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.arSek).toBe(1000.25) // full remaining cleared → invoice settles
       expect(result.oreRoundingSek).toBe(0.25)
@@ -228,7 +230,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000.25, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.arSek).toBe(1000)
       expect(result.oreRoundingSek).toBe(-0.25)
@@ -242,7 +244,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 600, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Delbetalning kundfaktura',
+        'Delbetalning kundfaktura', undefined, '1930',
       )
       expect(result.arSek).toBe(600)
       expect(result.oreRoundingSek).toBe(0)
@@ -260,7 +262,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 100, amount_sek: 1100, currency: 'USD', exchange_rate: 11 },
         { currency: 'USD', exchange_rate: 10, remaining_amount: 100, total: 100, paid_amount: 0 },
-        'desc',
+        'desc', undefined, '1930',
       )
       expect(result.bankSek).toBe(1100)
       expect(result.arSek).toBe(1000)
@@ -309,7 +311,7 @@ describe('buildInvoicePaymentClearingLines', () => {
         buildInvoicePaymentClearingLines(
           BANK_11496_70,
           EUR_INVOICE_NO_RATE,
-          'Inbetalning kundfaktura',
+          'Inbetalning kundfaktura', undefined, '1930',
         ),
       ).toThrow(InvoiceBookingRateMissingError)
     })
@@ -323,14 +325,14 @@ describe('buildInvoicePaymentClearingLines', () => {
           BANK_11496_70,
           EUR_INVOICE_NO_RATE,
           'Inbetalning kundfaktura',
-          1000,
+          1000, '1930',
         ),
       ).toThrow(InvoiceBookingRateMissingError)
     })
 
     it('carries the structured code and the offending currency/rate', () => {
       try {
-        buildInvoicePaymentClearingLines(BANK_11496_70, EUR_INVOICE_NO_RATE, 'desc')
+        buildInvoicePaymentClearingLines(BANK_11496_70, EUR_INVOICE_NO_RATE, 'desc', undefined, '1930')
         expect.unreachable('should have thrown')
       } catch (err) {
         const e = err as InvoiceBookingRateMissingError
@@ -354,7 +356,7 @@ describe('buildInvoicePaymentClearingLines', () => {
           buildInvoicePaymentClearingLines(
             BANK_11496_70,
             { ...EUR_INVOICE_NO_RATE, exchange_rate: rate },
-            'desc',
+            'desc', undefined, '1930',
           ),
         ).toThrow(InvoiceBookingRateMissingError)
       }
@@ -366,7 +368,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         BANK_11496_70,
         { ...EUR_INVOICE_NO_RATE, exchange_rate: 11.3 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(11496.7)
       expect(result.arSek).toBe(11300)
@@ -390,7 +392,7 @@ describe('buildInvoicePaymentClearingLines', () => {
         BANK_11496_70,
         { ...EUR_INVOICE_NO_RATE, exchange_rate: 11.6 },
         'Inbetalning kundfaktura',
-        1000,
+        1000, '1930',
       )
       expect(result.bankSek).toBe(11496.7)
       expect(result.arSek).toBe(11600)
@@ -419,7 +421,7 @@ describe('buildInvoicePaymentClearingLines', () => {
           total: 11496.7,
           paid_amount: 0,
         },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.arSek).toBe(11496.7)
       expect(result.fxDiffSek).toBe(0)
@@ -437,7 +439,7 @@ describe('buildInvoicePaymentClearingLines', () => {
           total: 11496.7,
           paid_amount: 0,
         },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(11496.7)
       expect(result.arSek).toBe(11496.7)
@@ -454,7 +456,7 @@ describe('buildInvoicePaymentClearingLines', () => {
         buildInvoicePaymentClearingLines(
           { amount: 1000, amount_sek: 11496.7, currency: 'EUR', exchange_rate: 11.4967 },
           { ...EUR_INVOICE_NO_RATE },
-          'Inbetalning kundfaktura',
+          'Inbetalning kundfaktura', undefined, '1930',
         ),
       ).toThrow(InvoiceBookingRateMissingError)
     })
@@ -470,7 +472,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: 11496.7, currency: 'EUR', exchange_rate: 11.4967 },
         { currency: 'EUR', exchange_rate: 11.3, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(11496.7)
       expect(result.arSek).toBe(11300)
@@ -497,7 +499,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: 11496.7, currency: 'EUR', exchange_rate: 11.4967 },
         { currency: 'EUR', exchange_rate: 11.6, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(11496.7)
       expect(result.arSek).toBe(11600)
@@ -523,7 +525,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 400, amount_sek: 4598.68, currency: 'EUR', exchange_rate: 11.4967 },
         { currency: 'EUR', exchange_rate: 11.3, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Delbetalning kundfaktura',
+        'Delbetalning kundfaktura', undefined, '1930',
       )
       expect(result.bankSek).toBe(4598.68)
       expect(result.arSek).toBe(4520)
@@ -539,7 +541,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1000, amount_sek: 11300, currency: 'EUR', exchange_rate: 11.3 },
         { currency: 'EUR', exchange_rate: 11.3, remaining_amount: 1000, total: 1000, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.arSek).toBe(11300)
       expect(result.fxDiffSek).toBe(0)
@@ -552,7 +554,7 @@ describe('buildInvoicePaymentClearingLines', () => {
       const result = buildInvoicePaymentClearingLines(
         { amount: 1250, amount_sek: null, currency: 'SEK', exchange_rate: null },
         { currency: 'SEK', exchange_rate: null, remaining_amount: 1250, total: 1250, paid_amount: 0 },
-        'Inbetalning kundfaktura',
+        'Inbetalning kundfaktura', undefined, '1930',
       )
       expect(result.lines[0]).toMatchObject({ account_number: '1930', debit_amount: 1250 })
     })
@@ -633,7 +635,7 @@ describe('buildInvoicePaymentClearingLines: overpaymentAccount (crm#253)', () =>
 
   it('books no excess line for 3740 at the cap, without an account, or under a krona', () => {
     expect(buildInvoicePaymentClearingLines(tx(347.5), invoice, 'x', undefined, '1930', '3740').overpaymentSek).toBe(0)
-    expect(buildInvoicePaymentClearingLines(tx(340), invoice, 'x').overpaymentSek).toBe(0)
+    expect(buildInvoicePaymentClearingLines(tx(340), invoice, 'x', undefined, '1930').overpaymentSek).toBe(0)
     const ore = buildInvoicePaymentClearingLines(tx(338), invoice, 'x', undefined, '1930', '2420')
     expect(ore.overpaymentSek).toBe(0)
     expect(ore.oreRoundingSek).toBe(-0.5)
@@ -660,7 +662,7 @@ describe('buildInvoicePaymentClearingLines: feeAccount (crm#1364)', () => {
   })
 
   it('stays a partial without the account, at the cap, or for a cross-currency row', () => {
-    expect(rows(buildInvoicePaymentClearingLines(tx(33773.05), invoice, 'x'))).toEqual([
+    expect(rows(buildInvoicePaymentClearingLines(tx(33773.05), invoice, 'x', undefined, '1930'))).toEqual([
       ['1930', 33773.05, 0],
       ['1510', 0, 33773.05],
     ])

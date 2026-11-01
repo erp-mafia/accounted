@@ -958,13 +958,12 @@ export async function linkPayoutBankRow(
     const reference = await payoutBankText(deps.db, settlement)
     if (!reference) return 'not_found'
     const { data, error } = await deps.db
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, description, original_description, cash_account_id')
       .eq('company_id', settlement.company_id)
       .gte('date', addDays(settlement.payment_date, -SETTLEMENT_BANK_LINK_WINDOW_DAYS))
       .lte('date', addDays(settlement.payment_date, SETTLEMENT_BANK_LINK_WINDOW_DAYS))
       .eq('amount', roundOre(settlement.amount))
-      .is('journal_entry_id', null)
       .limit(20)
     if (error) throw new Error(`transactions lookup failed: ${error.message}`)
     const referenced = ((data ?? []) as { id: string; description: string | null; original_description: string | null; cash_account_id?: string | null }[]).filter(

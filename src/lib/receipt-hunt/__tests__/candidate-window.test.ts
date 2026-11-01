@@ -24,6 +24,6 @@ describe('fetchCandidateTransactions: window from the Swedish day', () => {
 
     await fetchCandidateTransactions(supabase as unknown as SupabaseClient, 'company-1')
 
-    expect(findCall('transactions', 'gte')).toEqual(['date', from])
+    expect(findCall('open_bank_rows', 'gte')).toEqual(['date', from])
   })
 })

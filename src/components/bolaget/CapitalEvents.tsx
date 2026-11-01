@@ -20,7 +20,8 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { CAPITAL_CHANGE_KINDS, DEFAULT_BANK_ACCOUNT, FONDEMISSION_SOURCE_ACCOUNTS, MINSKNING_PURPOSES } from '@/lib/bolaget/capital/types'
+import { CAPITAL_CHANGE_KINDS, FONDEMISSION_SOURCE_ACCOUNTS, MINSKNING_PURPOSES } from '@/lib/bolaget/capital/types'
+import { usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import type { CapitalView } from '@/lib/bolaget/capital/view'
 import type { Ku31Status } from '@/lib/bolaget/capital/ku31'
 import type { LedgerPayout } from '@/lib/bolaget/capital/dividends'
@@ -75,6 +76,7 @@ export function CapitalEvents() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const paymentLedger = usePaymentBankLedger()
 
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
@@ -487,7 +489,7 @@ export function CapitalEvents() {
                   <DropdownMenuItem
                     onSelect={() => {
                       setPreview(null)
-                      setContributionForm({ kind: 'contribution', party: '', name: '', party_kind: 'person', promised_on: todayIsoStockholm(), amount: '', conditional: '', counter_account: DEFAULT_BANK_ACCOUNT, repays_contribution_id: '', decided_on: '', decided_by: 'arsstamma' })
+                      setContributionForm({ kind: 'contribution', party: '', name: '', party_kind: 'person', promised_on: todayIsoStockholm(), amount: '', conditional: '', counter_account: paymentLedger, repays_contribution_id: '', decided_on: '', decided_by: 'arsstamma' })
                     }}
                   >
                     {t('new_contribution')}
@@ -554,7 +556,7 @@ export function CapitalEvents() {
                       </span>
                     )}
                     {canWrite && d.status === 'booked' && (
-                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setAction({ kind: 'pay', dividend: d, form: { paid_on: d.payment_date <= todayIsoStockholm() ? d.payment_date : todayIsoStockholm(), bank_account: DEFAULT_BANK_ACCOUNT } }) }}>
+                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setAction({ kind: 'pay', dividend: d, form: { paid_on: d.payment_date <= todayIsoStockholm() ? d.payment_date : todayIsoStockholm(), bank_account: paymentLedger } }) }}>
                         {t('pay_action')}
                       </button>
                     )}
@@ -688,7 +690,7 @@ export function CapitalEvents() {
                     {canWrite && c.status === 'decided' && (
                       <span className="flex justify-end gap-3">
                         {c.kind === 'nyemission' && !c.payment_entry_id && (
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'payment', date: todayIsoStockholm(), bank_account: DEFAULT_BANK_ACCOUNT } }) }}>
+                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'payment', date: todayIsoStockholm(), bank_account: paymentLedger } }) }}>
                             {t('change_pay_action')}
                           </button>
                         )}

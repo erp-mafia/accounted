@@ -25,6 +25,8 @@ type TxRow = {
   cash_account_id: string | null
   /** NULL = no 1:1 anchor; booked-ness may still come from links/payments. */
   journal_entry_id: string | null
+  /** The database's answer; absent in most fixtures: the row then counts as booked. */
+  is_booked?: boolean | null
   /** Provider identity (absent in most fixtures: the ids then cannot speak). */
   external_id?: string | null
   import_source?: string | null
@@ -33,6 +35,8 @@ type TxRow = {
   bank_file_import_id?: string | null
 }
 type JeRow = { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
+/** What readPhysicalKeys reads to tell two rows of one bank account from two accounts. */
+type CashRow = { id: string; iban: string | null; currency: string | null }
 
 /** Anchor rows for the is_transaction_booked resolution (batch-fetched). */
 type SiblingAnchors = {
@@ -72,12 +76,15 @@ function makeSupabase(
   txData: TxRow[],
   jeData: JeRow | null = { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' },
   anchors: SiblingAnchors = {},
+  cashAccounts: CashRow[] = [],
 ) {
   return {
     from: (table: string) => {
       switch (table) {
         case 'transactions':
           return txChain(txData)
+        case 'cash_accounts':
+          return anchorChain(cashAccounts)
         case 'transaction_voucher_links':
           return anchorChain(anchors.voucherLinks ?? [])
         case 'invoice_payments':
@@ -132,9 +139,42 @@ describe('detectBookedDuplicateTransaction', () => {
   })
 
   it('does NOT flag a sibling on a different known cash account', async () => {
-    const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })])
+    const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })], undefined, {}, [
+      { id: 'acct-A', iban: 'SE1111', currency: 'SEK' },
+      { id: 'acct-B', iban: 'SE2222', currency: 'SEK' },
+    ])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
       id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: 'acct-B',
+    })
+    expect(result).toBeNull()
+  })
+
+  it('does NOT read two accounts as one without a shared IBAN: a row with no IBAN is its own account', async () => {
+    const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })], undefined, {}, [
+      { id: 'acct-A', iban: null, currency: 'SEK' },
+      { id: 'acct-B', iban: null, currency: 'SEK' },
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: 'acct-B',
+    })
+    expect(result).toBeNull()
+  })
+
+  it('flags a sibling on a twin row of the same bank account: a reconnect left one IBAN on two rows', async () => {
+    const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })], undefined, {}, [
+      { id: 'acct-A', iban: 'SE1111', currency: 'SEK' },
+      { id: 'acct-B', iban: 'SE1111', currency: 'SEK' },
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: 'acct-B',
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+  })
+
+  it('does NOT flag a sibling the database answers as not booked: a stale pointer is open work, no twin', async () => {
+    const supabase = makeSupabase([sibling({ journal_entry_id: 'je-reversed', is_booked: false })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -474,6 +514,7 @@ function makeLedgerSupabase(opts: {
     transactions?: { amount: number; currency: string | null; cash_account_id: string | null }
   }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
+  cashAccounts?: CashRow[] // readPhysicalKeys
 }) {
   // Fixtures stay embed-shaped for readability; the two-step fetch reads the
   // parent entries and the bare lines separately, so split them here. The
@@ -493,11 +534,16 @@ function makeLedgerSupabase(opts: {
     from: (table: string) => {
       tablesTouched.push(table)
       switch (table) {
-        case 'cash_accounts':
-          return ledgerChain({
+        case 'cash_accounts': {
+          // Two roles: the settlement account of the target (.maybeSingle) and
+          // the physical keys of the linked rows (.in).
+          const chain = ledgerChain({
             data: opts.ledgerAccount != null ? { ledger_account: opts.ledgerAccount } : null,
             error: null,
           })
+          chain.in = () => Promise.resolve({ data: opts.cashAccounts ?? [], error: null })
+          return chain
+        }
         case 'journal_entries':
           // Two roles: the entry-side page of the two-step fetch (.range) and
           // the sibling scan's voucher-label lookup (.maybeSingle).
@@ -710,11 +756,35 @@ describe('detectLedgerDuplicateVoucher', () => {
         id: 'acct-1', date: '2026-03-30', amount: 98565, currency: null,
         cash_account_id: 'ca-other', journal_entry_id: 'je-2',
       }],
+      cashAccounts: [
+        { id: 'ca-self', iban: 'SE1111', currency: 'SEK' },
+        { id: 'ca-other', iban: 'SE2222', currency: 'SEK' },
+      ],
     })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
       id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: 'ca-self',
     })
     expect(result).toBeNull()
+  })
+
+  it('reports a voucher whose linking transaction sits on a twin row of the same bank account', async () => {
+    // A reconnect left one IBAN on two rows: another cash_account_id, one account.
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      txLinks: [{
+        id: 'twin-1', date: '2026-03-30', amount: 98565, currency: null,
+        cash_account_id: 'ca-twin', journal_entry_id: 'je-2',
+      }],
+      cashAccounts: [
+        { id: 'ca-self', iban: 'SE1111', currency: 'SEK' },
+        { id: 'ca-twin', iban: 'SE1111', currency: 'SEK' },
+      ],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: 'ca-self',
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.transaction_id).toBe('twin-1')
   })
 
   it('ignores storno/correction vouchers (valid second vouchers, not duplicates)', async () => {

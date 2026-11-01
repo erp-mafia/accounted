@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount } from '@/types'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
 
 /**
@@ -40,6 +41,24 @@ export function primaryIneligibleReason(
   if ((account.currency ?? '').toUpperCase() !== 'SEK') return 'not_sek'
   if (!isBankCashAccount(account)) return 'not_bank_account'
   return null
+}
+
+/** What paymentBankRow reads off a cash account. */
+export type PaymentBankCandidate = Pick<CashAccount, 'ledger_account' | 'enabled' | 'currency' | 'is_primary'> &
+  Partial<Pick<CashAccount, 'kind'>>
+
+/**
+ * The UI-side mirror of resolvePrimaryBankAccountRow (lib/bookkeeping/
+ * settlement-account.ts), for a dialog that names an account before the
+ * booking and holds the company's cash accounts: the primary when it could be
+ * made primary today, else the only enabled SEK bank account, else none.
+ * settlement-account.test.ts runs the same cases through both.
+ */
+export function paymentBankRow<T extends PaymentBankCandidate>(rows: readonly T[]): T | null {
+  const primary = rows.find((row) => row.is_primary)
+  if (primary && primaryIneligibleReason(primary) === null) return primary
+  const banks = rows.filter((row) => row.enabled && (row.kind ?? 'bank') === 'bank' && isLedgerCurrency(row.currency))
+  return banks.length === 1 ? banks[0] : null
 }
 
 /** The refusal the RPC raised, read off its message; null for any other error. */

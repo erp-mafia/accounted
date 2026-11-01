@@ -35,8 +35,6 @@ export type DividendSourceAccount = (typeof DIVIDEND_SOURCE_ACCOUNTS)[number]
 
 /** Outtagen vinstutdelning: the liability from decision to payout. */
 export const DIVIDEND_LIABILITY_ACCOUNT = '2898'
-/** The default bank account of a payout or a payment. */
-export const DEFAULT_BANK_ACCOUNT = '1930'
 
 /** Aktiekapital, Ej registrerat aktiekapital, Fri överkursfond, Erhållna aktieägartillskott (BAS 2026). */
 export const SHARE_CAPITAL_ACCOUNT = '2081'

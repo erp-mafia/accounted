@@ -1,0 +1,27 @@
+export default {
+  rule: 'payment-without-bank-row-account',
+  says: "A payment with no bank row of its own books on the company's primary bank account when nothing else names one, and a line builder is told its account.",
+  home: 'src/lib/bookkeeping/settlement-account.ts: resolvePrimaryBankAccount (choice: src/lib/cash-accounts/primary.ts paymentBankRow; dialogs: usePaymentBankLedger)',
+  why: 'Doors defaulted to the literal 1930: 181 companies have another primary and 129 of them no enabled 1930 account, so a payment could land on an account the company does not use.',
+  match: [
+    /\?\?\s*'1930'/,
+    /\|\|\s*'1930'/,
+    /\w+: string = '1930'/,
+    /\w+ = '1930',?\s*$/,
+    /useState\('1930'\)/,
+  ],
+  sanctioned: ['lib/bookkeeping/settlement-account.ts'],
+  allowed: {
+    'app/api/sandbox/seed/salary-vouchers.ts': 'the demo company books every bank leg on its seeded 1930.',
+    'components/extensions/general/BookDirectlyDialog.tsx': 'a placeholder while the cash accounts load: the settlement follows the bank row or resolveAccount.',
+    'components/import/BankFileConfirmStep.tsx': 'an account to import a bank file onto, not a payment.',
+    'components/transactions/DuplicateBookingDialog.tsx': 'a bank row of its own: the account of the booked twin.',
+    'components/transactions/MatchVoucherDialog.tsx': 'a bank row of its own: the dialog reads the row\'s account.',
+    'components/transactions/TransactionBookingDialog.tsx': 'a bank row of its own: the placeholder the template swaps for the row\'s account.',
+    'lib/bookkeeping/category-mapping.ts': 'a bank row of its own: the template\'s placeholder for the settlement account.',
+    'lib/bookkeeping/mapping-engine.ts': 'a bank row of its own: the settlement account the row resolves to.',
+    'lib/bookkeeping/transaction-entries.ts': 'a bank row of its own: the mapping result names its account.',
+    'lib/cash-accounts/ledger-slots.ts': 'the slot a new account in this currency takes, not a payment.',
+    'lib/mileage/counter-accounts.ts': 'a named choice in the request enum, not a default.',
+  },
+}

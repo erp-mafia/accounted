@@ -92,12 +92,12 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
 
   it('exact payment: the entry is the one without a bank amount, no 3740', () => {
     const exact = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1234.56)
-    expect(exact.lines).toEqual(buildInvoiceCashLines(invoice(), 'aktiebolag').lines)
+    expect(exact.lines).toEqual(buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930').lines)
     expect(exact.lines.some((l) => l.account_number === '3740')).toBe(false)
   })
 
   it('a gap of a krona or more is never rounding: the customer share is booked as before', () => {
-    const before = buildInvoiceCashLines(invoice(), 'aktiebolag').lines
+    const before = buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930').lines
     expect(buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1233.56).lines).toEqual(before)
     expect(buildInvoiceCashLines(invoice(), 'aktiebolag', undefined, '1930', 1236).lines).toEqual(before)
   })
@@ -111,7 +111,7 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
       vat_amount: 25,
       items: [item({ unit_price: 100, line_total: 100, vat_amount: 25 })],
     })
-    expect(rows(buildInvoiceCashLines(eur, 'aktiebolag').lines)).toEqual([
+    expect(rows(buildInvoiceCashLines(eur, 'aktiebolag', undefined, '1930').lines)).toEqual([
       ['1930', 1437.5, 0],
       ['3001', 0, 1150],
       ['2611', 0, 287.5],
@@ -130,7 +130,7 @@ describe('buildInvoiceCashLines with a known bank amount', () => {
         item({ unit_price: 1002, line_total: 1002, vat_amount: 250.5, deduction_type: 'rot', deduction_amount: 375.75 }),
       ],
     })
-    const before = buildInvoiceCashLines(rot, 'aktiebolag').lines
+    const before = buildInvoiceCashLines(rot, 'aktiebolag', undefined, '1930').lines
     expect(before[0]).toMatchObject({ account_number: '1930', debit_amount: 876.75 })
 
     const { lines } = buildInvoiceCashLines(rot, 'aktiebolag', undefined, '1930', 877)
@@ -181,7 +181,7 @@ describe('createInvoiceCashEntry books the bank row it is matched to', () => {
   })
 
   it('no bank row (mark-paid): the customer share, no 3740', async () => {
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice(), '2026-09-15', 'aktiebolag')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice(), '2026-09-15', 'aktiebolag', undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines[0]).toMatchObject({ account_number: '1930', debit_amount: 1234.56 })
     expect(input.lines.some((l) => l.account_number === '3740')).toBe(false)

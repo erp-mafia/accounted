@@ -110,21 +110,21 @@ function makeSupabase() {
 /**
  * Queue setup helper. Each call to guessCounterAccount makes:
  *   1. skattekonto_rules query (always)
- *   2. cash_accounts query (only when a __PRIMARY_SEK__ rule matches)
+ *   2. cash_accounts queries (only when a __PRIMARY_SEK__ rule matches)
  *
- * primarySekRow lets a test stub a cash_accounts.getPrimary result so the
- * sentinel resolves to that row's ledger_account. When omitted, the fallback
- * '1930' is used (sentinel hit but no row in cash_accounts).
+ * primarySekRow lets a test stub the is_primary row resolvePrimaryBankAccount
+ * reads, so the sentinel resolves to that row's ledger_account. When omitted,
+ * the fallback '1930' is used (sentinel hit but no row in cash_accounts).
  */
 function enqueueRules(
   enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue'],
   rules = SEED_RULES,
-  primarySekRow: { ledger_account: string } | null = null,
+  primarySekRow: { ledger_account: string; enabled: boolean; currency: string } | null = null,
 ) {
   enqueue({ data: rules })
   enqueue({ data: primarySekRow }) // cash_accounts.maybeSingle()
-  // anyPrimary fallback inside getPrimary triggers only when first lookup is null
-  if (!primarySekRow) enqueue({ data: null })
+  // The enabled SEK listing behind it runs only when there is no usable primary
+  if (!primarySekRow) enqueue({ data: [] })
 }
 
 const AB_ONLY_RULE = {
@@ -168,7 +168,7 @@ describe('guessCounterAccount', () => {
 
   it('resolves __PRIMARY_SEK__ to the cash_accounts.is_primary row when present', async () => {
     const { supabase, enqueue } = makeSupabase()
-    enqueueRules(enqueue, SEED_RULES, { ledger_account: '1932' })
+    enqueueRules(enqueue, SEED_RULES, { ledger_account: '1932', enabled: true, currency: 'SEK' })
     const guess = await guessCounterAccount(
       supabase as unknown as SupabaseClient, 'company-1', 'Inbetalning bokförd', 'aktiebolag',
     )
@@ -473,10 +473,8 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
     sumAccountBalanceMock.mockImplementation(actual.sumAccountBalance)
     const { supabase, enqueue, findCalls } = makeSupabase()
     enqueue({ data: SEED_RULES })
-    // findOpeningBalanceFloor: the IB entries on 1650, their lines, the fiscal years.
-    enqueue({ data: [{ id: 'ib-2026', entry_date: '2026-01-01', status: 'posted', source_type: 'opening_balance' }] })
-    enqueue({ data: [{ id: 'l1', journal_entry_id: 'ib-2026', debit_amount: 3000, credit_amount: 0 }] })
-    enqueue({ data: [{ period_start: '2026-01-01' }] })
+    // findOpeningBalanceFloor: the IB on 1650 as public.account_ib_floor answers it.
+    enqueue({ data: { floor_date: '2026-01-01', amount: 3000, entry_ids: ['ib-2026'] } })
     // sumAccountBalance from the IB date: the IB and the February refund.
     enqueue({ data: [{ id: 'ib-2026' }, { id: 'refund-feb' }] })
     enqueue({
@@ -487,6 +485,11 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
     })
 
     expect((await guess(supabase, refundText, 1240))?.account).toBe('2650')
+    expect(supabase.rpc).toHaveBeenCalledWith('account_ib_floor', {
+      p_company_id: 'company-1',
+      p_account_number: '1650',
+      p_through: '2026-10-05',
+    })
     expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-01-01'])
     expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-10-05'])
   })
@@ -681,7 +684,7 @@ describe('one counter-account resolver: guess and suggestion agree', () => {
   for (const c of cases) {
     it(c.name, async () => {
       sumAccountBalanceMock.mockResolvedValue(c.receivable ?? 0)
-      const primary = { ledger_account: '1931' }
+      const primary = { ledger_account: '1931', enabled: true, currency: 'SEK' }
 
       const single = makeSupabase()
       enqueueRules(single.enqueue, SEED_RULES, primary)

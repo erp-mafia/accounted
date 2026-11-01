@@ -31,11 +31,10 @@ export async function searchUnmatchedOutgoingTransactions(
 ): Promise<{ rows: UnmatchedOutgoingTransaction[]; capped: boolean }> {
   const trimmed = term.trim()
   let query = supabase
-    .from('transactions')
+    .from('open_bank_rows')
     .select('id, date, description, amount, currency')
     .eq('company_id', companyId)
     .lt('amount', 0)
-    .is('journal_entry_id', null)
     .is('supplier_invoice_id', null)
     .is('invoice_id', null)
   if (trimmed) query = query.ilike('description', `%${escapeLikePattern(trimmed)}%`)

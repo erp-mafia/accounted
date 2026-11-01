@@ -153,7 +153,7 @@ describe('buildInvoiceCashPartialLines', () => {
       expect(debit).toBe(credit)
     }
     const booked = netByCell(entries.flatMap((e) => e.lines))
-    expect(booked).toEqual(netByCell(buildInvoiceCashLines(invoice, 'aktiebolag').lines))
+    expect(booked).toEqual(netByCell(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines))
     expect(booked).toEqual({
       '3001|{}': 1000,
       '2611|{}': 250,
@@ -179,8 +179,8 @@ describe('buildInvoiceCashPartialLines', () => {
 
   it('books one payment of the whole invoice exactly like the whole-payment entry', () => {
     const invoice = mixedRates()
-    const whole = ok(buildInvoiceCashPartialLines(invoice, 'aktiebolag', { priorPaid: 0, amount: invoice.total }))
-    expect(rows(whole.lines)).toEqual(rows(buildInvoiceCashLines(invoice, 'aktiebolag').lines))
+    const whole = ok(buildInvoiceCashPartialLines(invoice, 'aktiebolag', { priorPaid: 0, amount: invoice.total }, undefined, '1930'))
+    expect(rows(whole.lines)).toEqual(rows(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines))
   })
 
   it('debits the settlement account the caller names', () => {
@@ -210,7 +210,7 @@ describe('buildInvoiceCashPartialLines', () => {
       ['2611', 0, 90],
     ])
     expect(netByCell(entries.flatMap((e) => e.lines))).toEqual(
-      netByCell(buildInvoiceCashLines(invoice, 'aktiebolag').lines),
+      netByCell(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines),
     )
   })
 
@@ -230,7 +230,7 @@ describe('buildInvoiceCashPartialLines', () => {
       ['2611', 100, { '1': 'K10' }],
     ])
     expect(netByCell(entries.flatMap((e) => e.lines))).toEqual(
-      netByCell(buildInvoiceCashLines(invoice, 'aktiebolag').lines),
+      netByCell(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines),
     )
   })
 
@@ -291,7 +291,7 @@ describe('buildInvoiceCashPartialLines', () => {
       }
 
       const entries = payInInstallments(invoice, amounts)
-      const whole = netByCell(buildInvoiceCashLines(invoice, 'aktiebolag').lines)
+      const whole = netByCell(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines)
       entries.forEach((entry, i) => {
         const { debit, credit } = sideTotals(entry.lines)
         expect(debit).toBe(credit)
@@ -311,7 +311,7 @@ describe('buildInvoiceCashPartialLines', () => {
       })
       expect(entries[entries.length - 1].settles).toBe(true)
       expect(netByCell(entries.flatMap((e) => e.lines))).toEqual(
-        netByCell(buildInvoiceCashLines(invoice, 'aktiebolag').lines),
+        netByCell(buildInvoiceCashLines(invoice, 'aktiebolag', undefined, '1930').lines),
       )
     }
   })
@@ -346,7 +346,7 @@ describe('buildInvoiceCashPartialLines', () => {
       const result = buildInvoiceCashPartialLines(
         invoiceWith([item()], { currency: 'EUR', exchange_rate: 11.5 }),
         'aktiebolag',
-        { priorPaid: 0, amount: 100 },
+        { priorPaid: 0, amount: 100 }, undefined, '1930',
       )
       expect(result).toEqual({ ok: false, reason: 'foreign_currency' })
     })
@@ -355,7 +355,7 @@ describe('buildInvoiceCashPartialLines', () => {
       const result = buildInvoiceCashPartialLines(
         invoiceWith([item()], { deduction_total: 300 } as Partial<Invoice>),
         'aktiebolag',
-        { priorPaid: 0, amount: 100 },
+        { priorPaid: 0, amount: 100 }, undefined, '1930',
       )
       expect(result).toEqual({ ok: false, reason: 'tax_deduction' })
     })
@@ -364,7 +364,7 @@ describe('buildInvoiceCashPartialLines', () => {
       const result = buildInvoiceCashPartialLines(
         invoiceWith([item({ deduction_type: 'rot' } as Partial<InvoiceItem>)]),
         'aktiebolag',
-        { priorPaid: 0, amount: 100 },
+        { priorPaid: 0, amount: 100 }, undefined, '1930',
       )
       expect(result).toEqual({ ok: false, reason: 'tax_deduction' })
     })
@@ -373,7 +373,7 @@ describe('buildInvoiceCashPartialLines', () => {
       const result = buildInvoiceCashPartialLines(
         invoiceWith([item()], { total: 1300 }),
         'aktiebolag',
-        { priorPaid: 0, amount: 100 },
+        { priorPaid: 0, amount: 100 }, undefined, '1930',
       )
       expect(result).toEqual({ ok: false, reason: 'lines_do_not_match_total' })
     })
@@ -385,7 +385,7 @@ describe('buildInvoiceCashPartialLines', () => {
       ['an invoice already paid in full', 1234.56, 1],
       ['a negative prior payment', -1, 100],
     ])('refuses %s', (_label, priorPaid, amount) => {
-      const result = buildInvoiceCashPartialLines(singleRate(), 'aktiebolag', { priorPaid, amount })
+      const result = buildInvoiceCashPartialLines(singleRate(), 'aktiebolag', { priorPaid, amount }, undefined, '1930')
       expect(result).toEqual({ ok: false, reason: 'invalid_amount' })
     })
   })

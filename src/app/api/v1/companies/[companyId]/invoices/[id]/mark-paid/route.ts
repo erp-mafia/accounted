@@ -5,10 +5,12 @@
  * bank-sync flow.
  *
  * Accounting:
- *   - Faktureringsmetoden (accrual): Debit 1930 / Credit 1510. The invoice
+ *   - Faktureringsmetoden (accrual): Debit the bank / Credit 1510. The invoice
  *     was already booked as revenue at :mark-sent; this just settles the AR.
- *   - Kontantmetoden (cash): Debit 1930 / Credit 30xx + Credit 26xx. Revenue
+ *   - Kontantmetoden (cash): Debit the bank / Credit 30xx + Credit 26xx. Revenue
  *     recognition happens here (no entry at :mark-sent under cash basis).
+ *   The bank is the account the invoice asked to be paid to, else the company's
+ *   primary bank account (resolveInvoiceSettlementAccount).
  *   - Faktureringsmetoden with defer_invoice_booking: an invoice sent without
  *     its verifikat gets its sale booked first by the :book step (dated on
  *     the invoice date), then the clearing above (lib/invoices/sale-first.ts).
@@ -97,7 +99,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).',
+    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit the bank account (the one the invoice asked to be paid to, else the company\'s primary bank account) / Credit 1510 under faktureringsmetoden, or Debit the bank account / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
@@ -522,6 +524,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_create_journal_entry: !typed.document_type || typed.document_type === 'invoice',
           accounting_method: accountingMethod,
           would_use_custom_lines: customLines !== undefined,
+          // The account the committed entry will debit, already resolved, so a
+          // caller can verify the routing before committing.
+          payment_account: await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed),
           ...saleFirstPreview(salePlan),
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -533,7 +538,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // 1510), invoice_payments row, CAS-guarded status update (a lost race or a
     // failed update makulerar the voucher and removes the row), suggestion
     // cleanup and invoice.paid. The generated debit lands on the bank account
-    // the invoice asked to be paid to (1930 when none was chosen).
+    // the invoice asked to be paid to (the primary bank account when none was
+    // chosen).
     const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
     const result = await settleInvoicePayment(ctx.supabase, ctx.companyId!, ctx.userId, {
       invoice: typed,

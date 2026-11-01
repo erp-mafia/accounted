@@ -59,7 +59,7 @@ const signature = (lines: AnyLine[]) =>
   }))
 
 function propose(inv: Invoice) {
-  return proposePaymentLines({ invoice: inv, accountingMethod: 'cash', entityType: 'aktiebolag' })
+  return proposePaymentLines({ invoice: inv, accountingMethod: 'cash', entityType: 'aktiebolag' , paymentAccount: '1930' })
 }
 
 function booked(inv: Invoice): CreateJournalEntryLineInput[] {
@@ -137,6 +137,7 @@ describe('proposePaymentLines (cash) proposes what createInvoiceCashEntry books'
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
       companyOreRounding: true,
+      paymentAccount: '1930',
     })
     const [bank, ...rest] = signature(booked(inv))
     expect(signature(proposed)).toEqual([

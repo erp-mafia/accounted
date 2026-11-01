@@ -325,6 +325,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // The junction rows ride along on the transaction read.
     enqueue({ data: { ...tx, transaction_voucher_links: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }, error: null })
     enqueue({ data: [{ id: 'je-old', status: 'reversed' }] }) // journal_entries
+    enqueue({ data: null, error: null }) // standing_correction: none
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod

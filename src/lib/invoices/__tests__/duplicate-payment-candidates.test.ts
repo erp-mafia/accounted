@@ -17,9 +17,9 @@ type QueryRecord = Record<string, unknown[][]>
 function createRecordingSupabase(pages: Array<Array<Record<string, unknown>>>) {
   const queries: QueryRecord[] = []
 
-  const build = () => {
+  const build = (table: string) => {
     const index = queries.length
-    const record: QueryRecord = {}
+    const record: QueryRecord = { from: [[table]] }
     queries.push(record)
     const result = { data: pages[index] ?? [], error: null }
 
@@ -40,7 +40,7 @@ function createRecordingSupabase(pages: Array<Array<Record<string, unknown>>>) {
     return chain
   }
 
-  const supabase = { from: () => build() } as unknown as SupabaseClient
+  const supabase = { from: (table: string) => build(table) } as unknown as SupabaseClient
   return { supabase, queries }
 }
 
@@ -363,8 +363,8 @@ describe('findDuplicatePaymentCandidatesForInvoice: Bankgirot aggregate rows', (
 
     expect(queries).toHaveLength(3)
     // Rows larger than the payment, unbooked, kronor, on the payment day ± 7.
+    expect(queries[1].from).toEqual([['open_bank_rows']])
     expect(queries[1].gt).toContainEqual(['amount', 62500])
-    expect(queries[1].is).toContainEqual(['journal_entry_id', null])
     expect(queries[1].or).toEqual([[SEK_ROWS]])
     expect(queries[1].gte).toContainEqual(['date', '2026-07-24'])
     expect(queries[1].lte).toContainEqual(['date', '2026-08-07'])

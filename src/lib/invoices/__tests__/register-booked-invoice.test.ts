@@ -811,7 +811,7 @@ describe('a foreign-currency invoice', () => {
     const clearing = buildInvoicePaymentClearingLines(
       { amount: 250, amount_sek: null, currency: 'USD', exchange_rate: 9.6 },
       { currency: row.currency, exchange_rate: row.exchange_rate, remaining_amount: 250, total: row.total, paid_amount: 0 },
-      'Betalning faktura 1023',
+      'Betalning faktura 1023', undefined, '1930',
     )
     expect(clearing).toMatchObject({ arSek: 2377.24, bankSek: 2400, fxDiffSek: -22.76 })
   })

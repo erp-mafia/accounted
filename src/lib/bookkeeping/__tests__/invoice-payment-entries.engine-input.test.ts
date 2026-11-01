@@ -207,7 +207,7 @@ interface CashScenario {
   kind: 'cash'
   invoice: PaidInvoice
   paymentDate: string
-  entityType?: EntityType
+  entityType: EntityType
   customerName?: string
   settlementAccountNumber?: string
   bankTransaction?: BankRow
@@ -217,6 +217,9 @@ interface CashScenario {
 }
 
 type Scenario = PaymentScenario | CashScenario
+
+/** The account a door names when the scenario does not: the fixture's 1930. */
+const BANK_ACCOUNT = '1930'
 
 const SCENARIOS: Scenario[] = [
   {
@@ -367,6 +370,7 @@ const SCENARIOS: Scenario[] = [
     kind: 'cash',
     invoice: invoice(15),
     paymentDate: '2026-09-21',
+    entityType: 'enskild_firma',
     noPeriod: true,
   },
 ]
@@ -427,7 +431,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
               s.exchangeRateDifference,
               s.customerName,
               s.paymentAmount,
-              s.settlementAccountNumber,
+              s.settlementAccountNumber ?? BANK_ACCOUNT,
               s.bankTransaction,
               posting,
             )
@@ -439,7 +443,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
               s.paymentDate,
               s.entityType,
               s.customerName,
-              s.settlementAccountNumber,
+              s.settlementAccountNumber ?? BANK_ACCOUNT,
               s.bankTransaction,
               s.overpaymentAccount,
               posting,

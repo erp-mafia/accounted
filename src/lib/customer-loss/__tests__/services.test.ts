@@ -5,6 +5,9 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(),
   findFiscalPeriod: vi.fn(),
 }))
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({
+  resolvePrimaryBankAccount: vi.fn(async () => '1931'),
+}))
 vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   reverseOrphanedJournalEntry: vi.fn(),
 }))
@@ -40,6 +43,7 @@ vi.mock('../state', async (importOriginal) => {
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError, TargetPeriodLockedError } from '@/lib/bookkeeping/errors'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { reserveOutstanding } from '../amounts'
 import { recordConfirmedLoss } from '../confirmed'
@@ -380,6 +384,19 @@ describe('återvunnen kundförlust', () => {
       ['2611', 0, 25],
     ])
     expect(rpc).toHaveBeenCalledWith('record_invoice_write_off', expect.objectContaining({ p_kind: 'recovered', p_net_amount: 100, p_vat_amount: 25 }))
+  })
+
+  it('with no account named the money lands on the primary bank account', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({
+      ok: true,
+      state: makeState({ rows: [confirmed], confirmed, invoice: { status: 'written_off' } }),
+    })
+    const { supabase } = mockSupabase()
+    const { paymentAccount: _named, ...unnamed } = params
+    const outcome = await recordRecoveredLoss(supabase, COMPANY, USER, unnamed)
+    expect(outcome.ok).toBe(true)
+    expect(resolvePrimaryBankAccount).toHaveBeenCalledWith(supabase, COMPANY, expect.anything())
+    expect(lineTuples()[0]).toEqual(['1931', 125, 0])
   })
 
   it('refuses more than was written off, an open invoice and a never-booked write-off', async () => {

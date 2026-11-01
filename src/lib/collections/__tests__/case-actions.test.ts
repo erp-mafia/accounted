@@ -153,7 +153,7 @@ describe('runCaseAction', () => {
     const row = await loadOpenCaseForInvoice(world.db.client, COMPANY_ID, INVOICE_ID)
     expect(row).toMatchObject({ stage: 'awaiting_decision', decision_kind: 'approve_collection_notice' })
 
-    world.db.seed('transactions', [
+    world.db.seed('open_bank_rows', [
       {
         id: 'tx-1',
         company_id: COMPANY_ID,

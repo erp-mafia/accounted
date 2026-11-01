@@ -74,12 +74,11 @@ export async function handleSupplierInvoiceRetroMatch(
     const lowDate = new Date(anchorMs - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
     const { data: candidates, error: candidatesError } = await supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('*')
       .eq('company_id', companyId)
       .is('supplier_invoice_id', null)
       .is('potential_supplier_invoice_id', null)
-      .is('journal_entry_id', null)
       .lt('amount', 0)
       .gte('date', lowDate)
       .order('date', { ascending: false })

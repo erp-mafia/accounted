@@ -91,7 +91,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         outcome = await recordRecoveredLoss(ctx.supabase, ctx.companyId, ctx.user.id, {
           ...common,
           amount: body.data.amount,
-          paymentAccount: body.data.payment_account ?? '1930',
+          paymentAccount: body.data.payment_account,
         })
         break
     }

@@ -229,6 +229,7 @@ describe('kontantmetoden end to end: customer payment, then payout', () => {
       deductionType: 'rot',
       paymentDate: '2026-10-10',
       amount: 3750,
+      bankAccount: '1930',
       recognition: (result as { recognition: { amount: number; lines: CreateJournalEntryLineInput[] } }).recognition,
     })
     const payout = vi.mocked(createJournalEntry).mock.calls[0][3] as CreateJournalEntryInput

@@ -107,7 +107,7 @@ describe('resolveSupplierPaymentSek', () => {
     expect(result).toEqual({ ok: true, clearingSek: 361.55, exchangeRateDifference: diff })
     if (!result.ok) throw new Error('unreachable')
 
-    const { lines } = buildSupplierInvoicePaymentLines(usdInvoice(), {
+    const { lines } = buildSupplierInvoicePaymentLines(usdInvoice(), { paymentAccount: '1930',
       paymentAmount: result.clearingSek,
       exchangeRateDifference: result.exchangeRateDifference,
     })

@@ -79,6 +79,7 @@ describe('settleInvoicePayment: a carried invoice under kontantmetoden', () => {
 
     const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
       invoice: carriedInvoice(),
+      settlementAccountNumber: '1930',
       paymentAmountInInvoiceCurrency: 1250,
       paymentDate: '2027-02-10',
       accountingMethod: 'cash',
@@ -101,6 +102,7 @@ describe('settleInvoicePayment: a carried invoice under kontantmetoden', () => {
 
     const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
       invoice: carriedInvoice(),
+      settlementAccountNumber: '1930',
       paymentAmountInInvoiceCurrency: 500,
       paymentDate: '2027-01-20',
       accountingMethod: 'cash',

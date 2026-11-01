@@ -387,7 +387,7 @@ describe('attachBookingSuggestions', () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     enqueue({ data: { entity_type: 'aktiebolag' } })
-    enqueue({ data: { ledger_account: '1932' } }) // cash_accounts primary
+    enqueue({ data: { ledger_account: '1932', enabled: true, currency: 'SEK' } }) // cash_accounts primary
 
     const rows = [
       makeSkvRow({ transaktionstext: 'Inbetalning bokförd 240412' }),

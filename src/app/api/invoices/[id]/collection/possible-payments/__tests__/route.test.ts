@@ -45,7 +45,7 @@ let caseId: string
 
 function hit(): Record<string, unknown> {
   const transactionId = randomUUID()
-  world.db.seed('transactions', [
+  world.db.seed('open_bank_rows', [
     {
       id: transactionId,
       company_id: COMPANY_ID,

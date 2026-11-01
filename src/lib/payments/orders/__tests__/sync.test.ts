@@ -482,8 +482,8 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
       { data: arcimOrder() }, // read again before booking
       { data: { id: ARCIM.orderId, status: 'executed', supplier_invoice_payment_id: 'sip-1' } }, // the trigger linked it
     ])
+    db.setTable('open_bank_rows', { data: options.debits ?? [arcimDebit()] }) // unbooked debits of the order's shape
     db.setTable('transactions', [
-      { data: options.debits ?? [arcimDebit()] }, // unbooked debits of the order's shape
       { data: arcimDebit() }, // read again before booking
       { data: [{ id: ARCIM.transactionId }] }, // the row claim (compare-and-set)
     ])
@@ -502,17 +502,16 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
     // unbooked debits of its amount from its account in the bank feeds.
     expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'executed'])
     expect(db.findCalls('payment_orders', 'is')).toContainEqual(['supplier_invoice_payment_id', null])
-    expect(db.findCalls('transactions', 'eq')).toEqual(
+    expect(db.findCalls('open_bank_rows', 'eq')).toEqual(
       expect.arrayContaining([
         ['company_id', ARCIM.companyId],
         ['cash_account_id', ARCIM.cashAccountId],
         ['currency', 'SEK'],
         ['amount', -10],
-        ['is_ignored', false],
       ]),
     )
-    expect(db.findCalls('transactions', 'is')).toEqual(expect.arrayContaining([['journal_entry_id', null], ['supplier_invoice_id', null]]))
-    expect(db.findCalls('transactions', 'in')).toContainEqual(['import_source', ['open_payments', 'enable_banking']])
+    expect(db.findCalls('open_bank_rows', 'is')).toEqual([['supplier_invoice_id', null]])
+    expect(db.findCalls('open_bank_rows', 'in')).toContainEqual(['import_source', ['open_payments', 'enable_banking']])
     // Booked as the user who approved the order: Dr 2440 / Cr 1930, 10,00 on 2026-10-13.
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
     const [, companyId, userId, input] = mockCreateJournalEntry.mock.calls[0] as [unknown, string, string, CreateJournalEntryInput]
@@ -556,7 +555,7 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
 
   it('leaves an executed order alone when its debit was booked meanwhile', async () => {
     seedArcim()
-    db.setTable('transactions', [{ data: [arcimDebit()] }, { data: arcimDebit({ journal_entry_id: 'je-by-hand' }) }])
+    db.setTable('transactions', [{ data: arcimDebit({ journal_entry_id: 'je-by-hand' }) }])
 
     const result = await run()
 

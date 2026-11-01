@@ -35,6 +35,7 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { recordBankFeedPageArrival } from './page-arrival'
@@ -110,11 +111,6 @@ export interface BankFeedAccountSyncResult {
   enrichment: { lastEnrichedAt: string | null; windowEnriched: boolean } | null
   /** Stored rows the re-read updated with richer data (IngestResult.enriched_updated). */
   enrichedUpdated: number
-}
-
-export function normalizeIban(value: string | null | undefined): string | null {
-  const iban = (value ?? '').replace(/\s+/g, '').toUpperCase()
-  return iban.length > 0 ? iban : null
 }
 
 function looksLikeIban(value: string | null | undefined): boolean {

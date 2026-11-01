@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
+import { createLogger } from '@/lib/logger'
 import { frameworkOnDate } from '@/lib/company/accounting-framework'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -50,6 +52,8 @@ import type {
   JournalEntry,
   VatTreatment,
 } from '@/types'
+
+const log = createLogger('bokslut/asset-service')
 
 export interface AssetAccountTriple {
   asset: string
@@ -1510,6 +1514,8 @@ export interface AssetDisposalPreview {
 
 export function buildAssetDisposalPlan(args: {
   asset: Asset
+  /** The account the proceeds landed on: the caller resolves it. */
+  proceedsAccount: string
   input: DisposeAssetInput
   fiscalPeriod: Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>
   periods: Array<Pick<FiscalPeriod, 'id' | 'period_start'> & { period_end?: string }>
@@ -1669,7 +1675,7 @@ export function buildAssetDisposalPlan(args: {
   }
   if (proceedsGross > 0.005) {
     lines.push({
-      account_number: input.proceeds_account ?? '1930',
+      account_number: args.proceedsAccount,
       debit_amount: proceedsGross,
       credit_amount: 0,
       line_description: `Avyttring: erhållet belopp ${asset.name}`,
@@ -1808,6 +1814,7 @@ export async function previewAssetDisposal(
     : undefined
   const plan = buildAssetDisposalPlan({
     asset,
+    proceedsAccount: input.proceeds_account ?? (await resolvePrimaryBankAccount(supabase, companyId, log)),
     input,
     fiscalPeriod,
     periods,

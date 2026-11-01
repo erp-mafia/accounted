@@ -284,7 +284,7 @@ describe('runCollectionsSync: the nightly sweep and reconcile', () => {
     const world = await createCaseWorld()
     const opened = await handedOver(world)
     world.clock.now = OPENED_AT + 30 * MINUTE
-    world.db.seed('transactions', [
+    world.db.seed('open_bank_rows', [
       {
         id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         company_id: COMPANY_ID,

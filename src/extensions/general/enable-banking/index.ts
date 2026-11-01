@@ -48,6 +48,7 @@ import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import { createServiceClient } from '@/lib/supabase/server'
 import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { bankAccountLabel, ibanLast4, ledgerSyncedElsewhereMessage } from '@/lib/cash-accounts/selection-refusal'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
@@ -1360,7 +1361,7 @@ export const enableBankingExtension: Extension = {
         // Resolve the effective ledger for every account and report obvious
         // collisions before submitting the complete selection. The database
         // rechecks all claims and physical identities under its locks.
-        const { resolvePsd2LedgerAccount, getRevokedConnectionIds, normalizeIban } =
+        const { resolvePsd2LedgerAccount, getRevokedConnectionIds } =
           await import('@/lib/cash-accounts/service')
 
         // name and the connection's bank name only serve the refusal below:
@@ -1393,8 +1394,8 @@ export const enableBankingExtension: Extension = {
         const reuseRowByUid = new Map<string, { id: string; ledger_account: string }>()
         const ownIbanRowIds = new Set<string>()
         for (const a of updatedAccounts) {
-          const normalized = normalizeIban(a.iban)
-          const matches = normalized ? cashRows.filter(r => normalizeIban(r.iban) === normalized && r.currency === a.currency) : []
+          const physical = physicalAccountKey(a)
+          const matches = physical ? cashRows.filter(r => physicalAccountKey(r) === physical) : []
           for (const match of matches) ownIbanRowIds.add(match.id)
           const row = matches.find(r => r.ledger_account === a.ledger_account) ?? matches[0]
           if (row) reuseRowByUid.set(a.uid, row)

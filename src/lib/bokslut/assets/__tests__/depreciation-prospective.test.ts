@@ -300,6 +300,7 @@ describe('the disposal plan charges what the proposal booked', () => {
   it('scrapping after the trued-up final year was posted is not refused as a mismatch', () => {
     expect(schedules.map((s) => s.planned_depreciation)).toEqual([2_968, 3_333, 3_333, 366])
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset,
       input: scrap,
       fiscalPeriod: periods[3],
@@ -315,7 +316,7 @@ describe('the disposal plan charges what the proposal booked', () => {
     // Before the true-up the last 40 days were booked at 365: the disposal
     // takes the books as they are and the stranded krona is the scrapping loss.
     const legacy = schedules.map((s) => (s.fiscal_period_id === 'p-2029' ? { ...s, planned_depreciation: 365 } : s))
-    const plan = buildAssetDisposalPlan({ asset, input: scrap, fiscalPeriod: periods[3], periods, schedules: legacy })
+    const plan = buildAssetDisposalPlan({ asset, input: scrap, fiscalPeriod: periods[3], periods, schedules: legacy, proceedsAccount: '1930' })
     expect(plan.currentDepreciation).toBe(0)
     expect(plan.accumulatedDepreciation).toBe(9_999)
     expect(plan.gainOrLoss).toBe(-1)
@@ -324,13 +325,14 @@ describe('the disposal plan charges what the proposal booked', () => {
   it('still refuses a posted year that matches neither charge', () => {
     const wrong = schedules.map((s) => (s.fiscal_period_id === 'p-2029' ? { ...s, planned_depreciation: 3_333 } : s))
     expect(() =>
-      buildAssetDisposalPlan({ asset, input: scrap, fiscalPeriod: periods[3], periods, schedules: wrong }),
+      buildAssetDisposalPlan({ asset, input: scrap, fiscalPeriod: periods[3], periods, schedules: wrong, proceedsAccount: '1930' }),
     ).toThrow(AssetDisposalBlockedError)
   })
 
   it('without the period dates it falls back to the bare total, as before', () => {
     expect(() =>
       buildAssetDisposalPlan({
+        proceedsAccount: '1930',
         asset,
         input: scrap,
         fiscalPeriod: periods[3],
@@ -344,6 +346,7 @@ describe('the disposal plan charges what the proposal booked', () => {
     const edited = makeAsset({ useful_life_months: 240 })
     const dated = years(2020, 2023).map((y) => ({ id: `p-${y.period_start.slice(0, 4)}`, ...y }))
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset: edited,
       input: { ...scrap, disposed_at: '2023-12-31', fiscal_period_id: 'p-2023' },
       fiscalPeriod: dated[3],

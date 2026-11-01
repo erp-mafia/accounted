@@ -832,8 +832,8 @@ export async function recordateEntry(
  * transaction_voucher_links junction (bulk-book writes a bank_line row beside
  * the pointer for N=1 and as the ONLY anchor for a samlingsverifikat with
  * N>1; 1:N splits and residual bookings anchor through it too). Every junction
- * reader (is_transaction_booked(), fetchJunctionLinkedTxIds, the bulk_book
- * RPC, the reconciliation bridge) treats a surviving link as an anchor, so a
+ * reader (is_transaction_booked(), the bulk_book RPC, the reconciliation
+ * bridge) treats a surviving link as an anchor, so a
  * link left on the reversed original keeps the row double-anchored: a later
  * storno of the correction releases the pointer while the stale link keeps
  * the row out of Att bokföra (#2364, the split #2061 fixed on the storno

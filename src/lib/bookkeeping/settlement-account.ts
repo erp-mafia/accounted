@@ -153,11 +153,13 @@ export async function resolveSettlementAccount(
 }
 
 /**
- * Resolve the cash account a SEK payment with NO bank row of its own settles
- * on: the net pay of a salary run, booked on the payment date before any bank
- * transaction exists (issue #3097), and the account a payment file pays that
- * net pay from (crm#1483). resolvePrimaryBankAccount is this row's ledger
- * account, so the verifikat and the file can never name different accounts.
+ * Resolve the cash account a payment with NO bank row of its own settles on,
+ * when nothing else names one: a manual "mark as paid" on either ledger, a
+ * recovered customer loss, a disposal's proceeds, a dividend or a ROT/RUT
+ * payout, and the net pay of a salary run booked before any bank transaction
+ * exists (issue #3097), with the account a payment file pays it from
+ * (crm#1483). resolvePrimaryBankAccount is this row's ledger account, so the
+ * verifikat and the file can never name different accounts.
  *
  * The company's primary cash account is the answer the product already gives
  * for "which bank account, when nothing else says" (lib/cash-accounts/primary.ts):
@@ -168,6 +170,8 @@ export async function resolveSettlementAccount(
  * disabled or foreign-currency account. Without a usable primary this is the
  * unbound-SEK-row answer above (the only enabled SEK account, else 1930), so a
  * company with no cash accounts at all (legacy) keeps booking on 1930.
+ * The dialogs read the same rule from the list they hold: paymentBankRow in
+ * lib/cash-accounts/primary.ts, a mirror a test holds to this one.
  *
  * A failed primary lookup throws instead of degrading to 1930: a verifikat
  * booked on the wrong bank account needs a storno to correct (BFL 5 kap), a

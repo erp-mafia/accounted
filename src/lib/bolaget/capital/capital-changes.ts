@@ -20,6 +20,7 @@
  * other than a nyemission's allotment are made in Ägare och aktiebok, which
  * holds the share numbers; the warnings say when.
  */
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { addDaysIso, addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
@@ -29,7 +30,6 @@ import { completeCapitalDeadlines, upsertCapitalDeadline } from './deadlines'
 import { fondemissionLines, minskningLines, nyemissionPaymentLines, nyemissionRegistrationLines, postCapitalEntry, type CapitalLine } from './postings'
 import {
   CAPITAL_CHANGE_LABELS_SV,
-  DEFAULT_BANK_ACCOUNT,
   minskningTargetAccount,
   type CapitalChangeKind,
   type CapitalChangeStatus,
@@ -359,7 +359,7 @@ export async function bookCapitalChange(
   if (change.status !== 'decided') return { ok: false, code: 'CAPITAL_CHANGE_STATUS_INVALID', details: { status: change.status } }
   if (input.date > todayIsoStockholm()) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'Datumet kan inte ligga i framtiden.' }
   if (input.date < change.decided_on) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'Datumet kan inte ligga före beslutet.' }
-  const bank = input.bank_account ?? DEFAULT_BANK_ACCOUNT
+  const bank = input.bank_account ?? (await resolvePrimaryBankAccount(ctx.supabase, ctx.companyId, ctx.log))
   if (!/^19\d\d$/.test(bank)) return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange ett bankkonto (19xx).' }
 
   let lines: CapitalLine[]

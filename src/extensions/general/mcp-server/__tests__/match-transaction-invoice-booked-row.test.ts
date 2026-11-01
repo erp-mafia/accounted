@@ -131,15 +131,9 @@ describe('the tool text', () => {
 })
 
 describe('gnubok_auto_match_period: never proposes a row the approval refuses', () => {
-  it('asks for rows that are not ignored and leaves out a row booked through a link', async () => {
+  it('proposes from what open_bank_rows answers: ignored and booked rows leave the view', async () => {
     const { supabase, calls } = createTableMockSupabase({
-      transactions: {
-        data: [
-          { ...row, transaction_voucher_links: [{ journal_entry_id: ENTRY_ID, role: 'bank_line' }] },
-          { ...row, id: '33333333-3333-4333-8333-333333333333', transaction_voucher_links: [] },
-        ],
-        error: null,
-      },
+      open_bank_rows: { data: [{ ...row, id: '33333333-3333-4333-8333-333333333333' }], error: null },
       invoices: { data: [], error: null },
       invoice_payments: { data: [], error: null },
     })
@@ -153,6 +147,7 @@ describe('gnubok_auto_match_period: never proposes a row the approval refuses', 
     )) as { scanned_transactions: number }
 
     expect(result.scanned_transactions).toBe(1)
-    expect(calls.filter((c) => c.table === 'transactions' && c.method === 'eq').map((c) => c.args)).toContainEqual(['is_ignored', false])
+    expect(calls.filter((c) => c.table === 'open_bank_rows' && c.method === 'is').map((c) => c.args)).toEqual([['invoice_id', null]])
+    expect(calls.filter((c) => c.table === 'transactions')).toEqual([])
   })
 })

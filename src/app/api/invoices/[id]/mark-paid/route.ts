@@ -23,7 +23,7 @@ import type { Invoice } from '@/types'
  * mark-paid body, payment_date being the refund's date and lines the
  * person's own rows (Dr 1510 / Cr the bank). Without lines the whole amount
  * owed goes out of the account the customer paid to (the credit note's
- * payee, 1930 when none was chosen). The credit note keeps its status: the
+ * payee, the primary bank account when none was chosen). The credit note keeps its status: the
  * response says so with refund: true.
  */
 async function creditNoteRefundResponse(
@@ -303,7 +303,8 @@ export const POST = withRouteContext(
     // duplicate-payment guard, so the guard comparison and the ledger math run
     // in the same unit as remaining_amount.
     // The generated debit lands on the bank account the invoice asked to be
-    // paid to (1930 when none was chosen). Custom lines carry their own.
+    // paid to (the primary bank account when none was chosen). Custom lines
+    // carry their own.
     const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId!, invoice as Invoice)
     const result = await settleInvoicePayment(supabase, companyId!, user.id, {
       invoice: invoice as Invoice & { customer?: { name?: string | null } | null },

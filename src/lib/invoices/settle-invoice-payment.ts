@@ -74,9 +74,9 @@ const log = createLogger('settle-invoice-payment')
  *      correct booking of a sent invoice either way)
  *   6. invoice.paid event when the invoice is now fully paid (best-effort)
  *
- * `settlementAccountNumber` routes the debit side: default 1930 (bank), 1686
- * for PSP-balance settlements (Stripe) where the money reaches the bank only
- * with the later payout.
+ * `settlementAccountNumber` routes the debit side: the bank account from
+ * resolveInvoiceSettlementAccount, 1686 for PSP-balance settlements (Stripe)
+ * where the money reaches the bank only with the later payout.
  *
  * Whether the document can be paid at all is invoicePayableRefusal's answer,
  * asked first here so no door can skip it. Caller-owned concerns stay in the
@@ -116,8 +116,8 @@ export interface SettleInvoicePaymentParams {
   exchangeRateDifference?: number
   /** Caller-supplied booking lines (manual dialog only); must balance. */
   customLines?: SettleCustomLine[]
-  /** Debit-side account; default '1930'. Stripe settlements pass '1686'. */
-  settlementAccountNumber?: string
+  /** Debit-side account: resolveInvoiceSettlementAccount on a manual payment. Stripe settlements pass '1686'. */
+  settlementAccountNumber: string
   /**
    * Where the payment came from (invoice_payments.source): 'manual' for
    * "Markera som betald", 'stripe' for the Stripe sync, 'collections' for a

@@ -7,10 +7,10 @@
  * states its SEK) and the response.
  *
  * The credited payment account is `payment_account` when the body names one,
- * otherwise DEFAULT_SUPPLIER_PAYMENT_ACCOUNT (1930): the same resolution the
- * dashboard route uses, and the same one the generators own. Issue #2550: this
- * door accepted the field in its schema but dropped it on the floor, so every
- * API payment landed on 1930 no matter what the caller asked for.
+ * otherwise the company's primary bank account: the same resolution the
+ * dashboard route uses, in planSupplierSettlement. Issue #2550: this door
+ * accepted the field in its schema but dropped it on the floor, so every API
+ * payment landed on 1930 no matter what the caller asked for.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -22,7 +22,6 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
-import { DEFAULT_SUPPLIER_PAYMENT_ACCOUNT } from '@/lib/bookkeeping/supplier-invoice-entries'
 import {
   bookSupplierSettlement,
   planSupplierSettlement,
@@ -69,7 +68,7 @@ registerEndpoint({
     'A failure while booking changes nothing: a voucher left without its payment row or status is cancelled and its number documented as a gap (500 SI_PAID_FAILED). Retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
     'Cash basis + öresavrundning: a SEK invoice with ore_rounding on and an öre-bearing total is paid in whole kronor, so the generated entry credits the payment account with the rounded amount and books the residual on 3740 (no VAT). amount, paid_amount and remaining_amount stay in exact öre. Invoices whose rounding is already an invoice row on 3740 have a whole-krona total and are unaffected.',
-    'payment_account picks the BAS account credited for the payment (1930 Företagskonto when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means 1930.',
+    'payment_account picks the BAS account credited for the payment (the company\'s primary bank account when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means the primary bank account.',
     'An invoice with a bank payment order that is signed or being signed (awaiting_signature, awaiting_second_signer, accepted) returns 409 SI_BANK_PAYMENT_UNDER_WAY, also under dry-run and with no force: the bank still pays it. Let that payment settle the invoice, or cancel the order first; once the money has left, match its bank row to the invoice instead.',
     'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run. A forced full settlement is recorded in behandlingshistorik together with the candidates the guard would have flagged.',
   ],
@@ -198,7 +197,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             : {}),
           // The account the committed entry will credit, already resolved, so
           // a caller can verify the routing before committing.
-          payment_account: input.paymentAccount ?? DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
+          payment_account: plan.paymentAccount,
           would_create_payment_journal_entry: true,
           // The registration verifikat the commit books first, or null.
           would_book_registration_first: plan.registration.required,

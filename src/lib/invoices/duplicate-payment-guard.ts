@@ -12,17 +12,7 @@ export const DUPLICATE_AMOUNT_TOLERANCE_PCT = 0.02
 /** Date window (±days) around the payment / invoice date. */
 export const DUPLICATE_DATE_WINDOW_DAYS = 60
 
-/**
- * Normalize a Swedish payment reference (OCR / fakturanummer) for equality
- * comparison. Banks emit references with varying separators ("2026-0042",
- * "2026 0042", "2026/0042"); the OCR-spec equality is over the digits only.
- * Returns "" for nullish/empty so callers can short-circuit without
- * branching.
- */
-export function normalizeOcrReference(value: string | null | undefined): string {
-  if (!value) return ''
-  return value.replace(/\D/g, '')
-}
+export { normalizeOcrReference } from '@/lib/invariants/reference-number'
 
 /**
  * Legal-form words carry no identity: "AB" sits on half the supplier

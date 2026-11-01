@@ -5,14 +5,12 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 // The unbooked count is the shared lib predicate (lib/transactions/unbooked.ts,
 // tested on its own); here it is a seam so the queue below only carries the
 // resource's own reads.
-const { countUnbooked, fetchAnchored, logWarn } = vi.hoisted(() => ({
+const { countUnbooked, logWarn } = vi.hoisted(() => ({
   countUnbooked: vi.fn(),
-  fetchAnchored: vi.fn(),
   logWarn: vi.fn(),
 }))
 vi.mock('@/lib/transactions/unbooked', () => ({
   countUnbookedBankTransactions: countUnbooked,
-  fetchAnchoredTransactionIds: fetchAnchored,
 }))
 // The overdue group's rows are lib/worklist listOverdueInvoiceRows (tested on
 // its own, with its collections exclusion); here it is a seam that reads the
@@ -33,9 +31,8 @@ vi.mock('@/lib/logger', () => {
 
 import { attentionResource } from '../resources/attention'
 
-function setUnbooked(total: number, anchored: string[] = []) {
+function setUnbooked(total: number) {
   countUnbooked.mockResolvedValue({ total, untriaged: total, business_unbooked: 0 })
-  fetchAnchored.mockResolvedValue(new Set(anchored))
 }
 
 beforeEach(() => {
@@ -192,16 +189,13 @@ describe('Accounted://attention', () => {
     expect(result.summary).toEqual({ total_items: 2, critical: 0, warning: 1, info: 0 })
   })
 
-  it('does not count a row anchored only through transaction_voucher_links as unbooked (bulk-book, 1:N split)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('samples what open_bank_rows answers, oldest first', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)
     const txns = [
-      { id: 't-split', date: today, amount: -800, currency: 'SEK', description: 'Utlägg', merchant_name: null },
       { id: 't-open', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
-    // The shared count already excludes the anchored row; the samples query
-    // cannot, so the resource drops anchored ids from the samples itself.
-    setUnbooked(1, ['t-split'])
+    setUnbooked(1)
     enqueue({ data: txns })                            // 2. unbookedSamples
     enqueue({ data: [] })                              // 3. overdueRows
     enqueue({ count: 0 })                              // 4. pendingSupplierHead
@@ -212,7 +206,9 @@ describe('Accounted://attention', () => {
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
     const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
-    expect(fetchAnchored).toHaveBeenCalledWith(supabase, 'company-1', ['t-split', 't-open'])
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCall('open_bank_rows', 'order')).toEqual(['date', { ascending: true }])
+    expect(findCall('open_bank_rows', 'limit')).toEqual([5])
     expect(cat?.count).toBe(1)
     expect(cat?.samples.map((s) => s.id)).toEqual(['t-open'])
     expect(cat?.next?.args).toEqual({ transaction_id: 't-open' })
@@ -238,12 +234,10 @@ describe('Accounted://attention', () => {
     })
   })
 
-  it('keeps the count and logs when the sample anchor lookup fails', async () => {
+  it('keeps the count when the sample read fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const today = new Date().toISOString().slice(0, 10)
     setUnbooked(1)
-    fetchAnchored.mockRejectedValue(new Error('invoice_payments anchor lookup failed: timeout'))
-    enqueue({ data: [{ id: 't-1', date: today, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }] })
+    enqueue({ error: { message: 'statement timeout' } }) // 2. unbookedSamples
     enqueue({ data: [] })                              // 3. overdueRows
     enqueue({ count: 0 })                              // 4. pendingSupplierHead
     enqueue({ data: null })                            // 4b. accounting method
@@ -252,11 +246,10 @@ describe('Accounted://attention', () => {
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
-    expect(result.categories.find((c) => c.key === 'unbooked_transactions')?.count).toBe(1)
-    expect(logWarn).toHaveBeenCalledWith('attention unbooked sample anchor lookup failed', {
-      companyId: 'company-1',
-      reason: 'invoice_payments anchor lookup failed: timeout',
-    })
+    const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
+    expect(cat?.count).toBe(1)
+    expect(cat?.samples).toEqual([])
+    expect(cat?.next?.args).toBeUndefined()
   })
 
   it('escalates unbooked transactions to critical when oldest is > 30 days old', async () => {
@@ -572,7 +565,7 @@ describe('Accounted://attention: reconciliation_due', () => {
     enqueue({
       data: [{ account_key: 'skattekonto', through_date: '2020-01-31', reopened_at: null }],
     })
-    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01T00:00:00Z' }] })
     enqueue({ count: 3 })
     const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     const cat = out.categories.find((c) => c.key === 'reconciliation_due')

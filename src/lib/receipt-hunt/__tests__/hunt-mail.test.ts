@@ -64,7 +64,7 @@ beforeEach(() => {
 describe('huntCompany mail leg: searchable and searched', () => {
   it('leaves salary and tax runs out of what can be searched, and searches the largest first', async () => {
     const supabase = mockSupabase({
-      transactions: [
+      open_bank_rows: [
         purchase('salary', 'LÖN SEPTEMBER', -45000),
         purchase('tax', 'Skatteverket 16556', -30000),
         purchase('big', 'CLAS OHLSON', -2400),
@@ -85,7 +85,7 @@ describe('huntCompany mail leg: searchable and searched', () => {
 
   it('reports nothing searchable when every purchase is a salary or tax run', async () => {
     const supabase = mockSupabase({
-      transactions: [purchase('salary', 'LÖN SEPTEMBER', -45000)],
+      open_bank_rows: [purchase('salary', 'LÖN SEPTEMBER', -45000)],
       company_members: [{ user_id: 'user-1', role: 'owner' }],
     })
 

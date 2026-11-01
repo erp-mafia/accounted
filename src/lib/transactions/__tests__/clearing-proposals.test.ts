@@ -107,13 +107,13 @@ describe('clearingBankRows', () => {
       incoming({ id: 'tx-own', counterparty_iban: 'SE4550000000058398257466' }),
     ]
     const { supabase, findCall } = tables({
-      transactions: { data: rows },
+      unbooked_bank_rows: { data: rows },
       cash_accounts: { data: [{ iban: 'SE4550000000058398257466' }] },
     })
     const open = await clearingBankRows(supabase, COMPANY).open('2026-09-15', '2026-10-11')
     expect(open.map((r) => r.id)).toEqual(['tx-a'])
-    expect(findCall('transactions', 'eq')).toEqual(['company_id', COMPANY])
-    expect(findCall('transactions', 'gt')).toEqual(['amount', 0])
+    expect(findCall('unbooked_bank_rows', 'eq')).toEqual(['company_id', COMPANY])
+    expect(findCall('unbooked_bank_rows', 'gt')).toEqual(['amount', 0])
   })
 
   it('cleared: the incoming rows of verifikat crediting the account, by pointer and by bank-line link, in the window', async () => {

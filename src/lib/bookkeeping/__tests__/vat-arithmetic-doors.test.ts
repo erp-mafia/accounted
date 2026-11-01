@@ -140,7 +140,7 @@ describe('an invoice booked from its header books the VAT it states', () => {
   })
 
   it('the kontantmetod entry books the same', () => {
-    const { lines } = buildInvoiceCashLines(lineVat, entity)
+    const { lines } = buildInvoiceCashLines(lineVat, entity, undefined, '1930')
     expect(credit(lines, '2611')).toBe(0.24)
     expect(validateBalance(lines).valid).toBe(true)
   })
@@ -175,7 +175,7 @@ describe('an invoice booked from its header books the VAT it states', () => {
         }
         const note = { ...invoice, subtotal: -invoice.subtotal, vat_amount: -invoice.vat_amount, total: -invoice.total }
         expect(validateBalance(buildInvoiceRegistrationLines(invoice, entity)).valid).toBe(true)
-        expect(validateBalance(buildInvoiceCashLines(invoice, entity).lines).valid).toBe(true)
+        expect(validateBalance(buildInvoiceCashLines(invoice, entity, undefined, '1930').lines).valid).toBe(true)
         expect(validateBalance(buildCreditNoteLines(note, entity)).valid).toBe(true)
       }
     }
@@ -205,7 +205,7 @@ describe('an invoice booked from its header books the VAT it states', () => {
     const lines = buildInvoiceRegistrationLines(stated, entity)
     expect(lines.some((l) => l.account_number.startsWith('26'))).toBe(false)
     expect(validateBalance(lines).valid).toBe(false)
-    expect(validateBalance(buildInvoiceCashLines(stated, entity).lines).valid).toBe(false)
+    expect(validateBalance(buildInvoiceCashLines(stated, entity, undefined, '1930').lines).valid).toBe(false)
   })
 
   // One treatment has one account. VAT further from its rate than rounding
@@ -220,7 +220,7 @@ describe('an invoice booked from its header books the VAT it states', () => {
   ] as const)('a SEK header with VAT that does not fit its rate stays refused: %s', (_case, vat_treatment, subtotal, vat_amount) => {
     const stated = { ...header, vat_treatment, subtotal, vat_amount, total: subtotal + vat_amount }
     expect(validateBalance(buildInvoiceRegistrationLines(stated, entity)).valid).toBe(false)
-    expect(validateBalance(buildInvoiceCashLines(stated, entity).lines).valid).toBe(false)
+    expect(validateBalance(buildInvoiceCashLines(stated, entity, undefined, '1930').lines).valid).toBe(false)
   })
 
   it('the legacy rows without a per-line rate are held to the same fit', () => {

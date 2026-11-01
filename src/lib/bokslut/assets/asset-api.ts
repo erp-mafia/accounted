@@ -288,7 +288,7 @@ export const DisposeAssetSchema = z
     disposal_type: z.enum(ASSET_DISPOSAL_TYPES).describe('sale, scrap (utrangering) or business_transfer (verksamhetsöverlåtelse, ML 5 kap. 38 §).'),
     disposed_at: z.string().regex(ISO_DATE).describe('yyyy-MM-dd; the disposal voucher date.'),
     disposed_proceeds: z.number().nonnegative().describe('Gross consideration incl. VAT for a taxable sale. 0 for scrap.'),
-    proceeds_account: z.string().regex(BAS_ACCOUNT).optional().describe('Account the proceeds landed on (default 1930).'),
+    proceeds_account: z.string().regex(BAS_ACCOUNT).optional().describe("Account the proceeds landed on (default: the company's primary bank account)."),
     fiscal_period_id: z.string().uuid(),
     vat_treatment: z.enum(ASSET_DISPOSAL_VAT_TREATMENTS).optional().describe('Required for a sale with proceeds; forbidden otherwise.'),
     jamkning_original_input_vat: z.number().nonnegative().optional().describe('Original input VAT at acquisition; enables the ML 15 kap. jämkning assessment together with the deduction percent.'),

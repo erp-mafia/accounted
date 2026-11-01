@@ -14,7 +14,6 @@ const unlinkMock = vi.fn()
 const setIgnoredMock = vi.fn()
 const manualLinkMock = vi.fn()
 const linkToVouchersMock = vi.fn()
-const junctionLinkedMock = vi.fn()
 const unlinkReconciliationMock = vi.fn()
 const skvStatusMock = vi.fn()
 const emitMock = vi.fn()
@@ -37,7 +36,6 @@ vi.mock('@/lib/skatteverket/skattekonto-link', async (importOriginal) => {
 vi.mock('../bank-reconciliation', () => ({
   manualLink: (...args: unknown[]) => manualLinkMock(...args),
   linkTransactionToVouchers: (...args: unknown[]) => linkToVouchersMock(...args),
-  fetchJunctionLinkedTxIds: (...args: unknown[]) => junctionLinkedMock(...args),
   unlinkReconciliation: (...args: unknown[]) => unlinkReconciliationMock(...args),
 }))
 vi.mock('../skattekonto-reconciliation', () => ({
@@ -509,8 +507,8 @@ describe('matchPairs', () => {
   })
 
   it('applies every bank proposal with use_proposals when there are more than 1,000', async () => {
-    const { supabase } = createPagedMockSupabase({
-      transactions: manyRows(1001, (i) => ({
+    const { supabase, findCalls } = createPagedMockSupabase({
+      open_bank_rows: manyRows(1001, (i) => ({
         id: `tx-${i}`,
         potential_journal_entry_id: `je-${i}`,
         potential_match_confidence: 0.95,
@@ -523,6 +521,9 @@ describe('matchPairs', () => {
 
     expect(result?.considered).toBe(1001)
     expect(result?.applied).toHaveLength(1001)
+    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['cash_account_id', CASH])
+    expect(findCalls('open_bank_rows', 'not')).toContainEqual(['potential_journal_entry_id', 'is', null])
   })
 })
 
@@ -1163,8 +1164,6 @@ describe('unmatchLink / setItemIgnored', () => {
     unlinkMock.mockReset()
     unlinkReconciliationMock.mockReset()
     setIgnoredMock.mockReset()
-    junctionLinkedMock.mockReset()
-    junctionLinkedMock.mockResolvedValue(new Set<string>())
     undoSettlementMock.mockReset()
     emitMock.mockResolvedValue(undefined)
   })
@@ -1314,18 +1313,11 @@ describe('unmatchLink / setItemIgnored', () => {
   // only, so a row booked as a payment allocation (match_batch_allocate)
   // could be ignored while its verifikat still carries it.
   describe('a bank row: the shared ignore rule (crm#1183)', () => {
-    const unbookedRow = { data: { id: R1, journal_entry_id: null, is_ignored: false } }
+    const unbookedRow = { data: { id: R1, journal_entry_id: null, is_booked: false, is_ignored: false } }
 
-    it.each([
-      ['a voucher link (1:N split, bulk-book)', [{ transaction_id: R1 }], [], []],
-      ['a customer invoice payment allocation', [], [{ transaction_id: R1 }], []],
-      ['a supplier invoice payment allocation', [], [], [{ transaction_id: R1 }]],
-    ])('refuses a row booked only through %s, and writes nothing', async (_anchor, links, invoicePayments, supplierPayments) => {
+    it('refuses a row booked with no pointer (a voucher link, a payment allocation), and writes nothing', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-      enqueue(unbookedRow)
-      enqueue({ data: links })
-      enqueue({ data: invoicePayments })
-      enqueue({ data: supplierPayments })
+      enqueue({ data: { ...unbookedRow.data, is_booked: true } })
       await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true, USER)).rejects.toMatchObject({
         code: 'ALREADY_BOOKED',
       })
@@ -1334,19 +1326,16 @@ describe('unmatchLink / setItemIgnored', () => {
 
     it('refuses a row booked on its journal_entry_id without reading the junctions', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-      enqueue({ data: { id: R1, journal_entry_id: E1, is_ignored: false } })
+      enqueue({ data: { id: R1, journal_entry_id: E1, is_booked: true, is_ignored: false } })
       await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
         code: 'ALREADY_BOOKED',
       })
       expect(findCalls('transaction_voucher_links', 'select')).toEqual([])
     })
 
-    it('fails closed when an anchor read fails, where the copy read it as unbooked', async () => {
+    it('fails closed when the read of the row and its is_booked fails, where the copy read it as unbooked', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-      enqueue(unbookedRow)
       enqueue({ data: null, error: { message: 'timeout' } })
-      enqueue({ data: [] })
-      enqueue({ data: [] })
       await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toBeTruthy()
       expect(findCalls('transactions', 'update')).toEqual([])
     })
@@ -1364,9 +1353,6 @@ describe('unmatchLink / setItemIgnored', () => {
       const snapshot = { companyId: COMPANY, byTransaction: new Map() }
       snapshotSuggestionsMock.mockResolvedValue(snapshot)
       enqueue(unbookedRow)
-      enqueue({ data: [] })
-      enqueue({ data: [] })
-      enqueue({ data: [] })
       enqueue({ data: null }) // update
       const result = await setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true, USER)
       expect(result).toEqual({ external_id: R1, is_ignored: true })
@@ -1381,7 +1367,7 @@ describe('unmatchLink / setItemIgnored', () => {
 
     it('restores an ignored row without an anchor check, and is a no-op when already in that state', async () => {
       const restore = createQueuedMockSupabase()
-      restore.enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: true } })
+      restore.enqueue({ data: { id: R1, journal_entry_id: null, is_booked: false, is_ignored: true } })
       restore.enqueue({ data: null }) // update
       expect(await setItemIgnored(restore.supabase as never, COMPANY, `bank:${CASH}`, R1, false)).toEqual({
         external_id: R1,
@@ -1391,10 +1377,7 @@ describe('unmatchLink / setItemIgnored', () => {
       expect(restore.findCalls('transaction_voucher_links', 'select')).toEqual([])
 
       const same = createQueuedMockSupabase()
-      same.enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: true } })
-      same.enqueue({ data: [] })
-      same.enqueue({ data: [] })
-      same.enqueue({ data: [] })
+      same.enqueue({ data: { id: R1, journal_entry_id: null, is_booked: false, is_ignored: true } })
       expect(await setItemIgnored(same.supabase as never, COMPANY, `bank:${CASH}`, R1, true)).toEqual({
         external_id: R1,
         is_ignored: true,

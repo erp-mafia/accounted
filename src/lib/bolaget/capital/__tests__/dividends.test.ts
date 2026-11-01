@@ -292,6 +292,13 @@ describe('payDividend', () => {
     expect(mock.payloads('dividends', 'update')).toEqual([{ status: 'paid', paid_on: '2026-05-15' }, { payout_entry_id: 'je-1' }])
   })
 
+  it('with no account named the payout leaves the primary bank account', async () => {
+    mock.setTable('cash_accounts', { data: [{ id: 'ca', ledger_account: '1931', enabled: true, currency: 'SEK', is_primary: true, kind: 'bank' }] })
+    await payDividend(ctx, { dividend_id: DIVIDEND }, { dryRun: false })
+    const call = vi.mocked(postingPort.postJournalEntry).mock.calls[0]![0]
+    expect(call.input.lines.map((l) => l.account_number)).toEqual(['2898', '1931'])
+  })
+
   it('links a payout already booked from the bank instead of booking another', async () => {
     vi.mocked(fetchEntryLines).mockResolvedValue([{ journal_entry_id: 'je-bank', account_number: '2898', debit_amount: '100000.00', journal_entries: {} }] as never)
     const outcome = await payDividend(ctx, { dividend_id: DIVIDEND, journal_entry_id: 'je-bank', paid_on: '2026-05-16' }, { dryRun: false })

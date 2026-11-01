@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
-  isTransactionBooked,
   getPrimaryJournalEntryId,
   getLinkedJournalEntryIds,
   embeddedVoucherLabel,
@@ -11,44 +10,6 @@ import {
   bankRowRefusalCode,
   type BankRowRefusal,
 } from '../is-booked'
-
-describe('isTransactionBooked', () => {
-  it('returns false for a tx with no journal entry, payments, or voucher links', () => {
-    const tx = { id: 'tx-1', journal_entry_id: null }
-    expect(isTransactionBooked(tx)).toBe(false)
-    expect(isTransactionBooked(tx, [], [])).toBe(false)
-  })
-
-  it('returns true when transactions.journal_entry_id is set (1:1 case)', () => {
-    const tx = { id: 'tx-1', journal_entry_id: 'je-1' }
-    expect(isTransactionBooked(tx)).toBe(true)
-  })
-
-  it('returns true when a matching invoice_payments row exists (multi-allocation)', () => {
-    const tx = { id: 'tx-1', journal_entry_id: null }
-    const payments = [{ transaction_id: 'tx-1' }]
-    expect(isTransactionBooked(tx, payments)).toBe(true)
-  })
-
-  it('returns true when a matching supplier_invoice_payments row exists', () => {
-    const tx = { id: 'tx-1', journal_entry_id: null }
-    const payments = [{ transaction_id: 'tx-1' }]
-    expect(isTransactionBooked(tx, payments)).toBe(true)
-  })
-
-  it('returns true when a transaction_voucher_links row references the tx (bulk-book)', () => {
-    const tx = { id: 'tx-1', journal_entry_id: null }
-    const links = [{ transaction_id: 'tx-1' }]
-    expect(isTransactionBooked(tx, [], links)).toBe(true)
-  })
-
-  it('ignores payment / voucher-link rows that reference a different tx', () => {
-    const tx = { id: 'tx-1', journal_entry_id: null }
-    const payments = [{ transaction_id: 'tx-other' }]
-    const links = [{ transaction_id: 'tx-other' }]
-    expect(isTransactionBooked(tx, payments, links)).toBe(false)
-  })
-})
 
 describe('getPrimaryJournalEntryId', () => {
   it('returns null when nothing is anchored', () => {
@@ -187,9 +148,54 @@ describe('assertTransactionBookable', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] })
     enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: null }) // standing_correction: none stands
     expect(
       await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-old' }),
     ).toEqual({ ok: true })
+    expect(supabase.rpc).toHaveBeenCalledWith('standing_correction', { p_entry_id: 'je-old' })
+  })
+
+  it('refuses a row whose pointer names a verifikat a standing correction replaced, as a link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: 'je-correction' }) // standing_correction
+    enqueue({ data: { id: 'je-correction', source_type: 'correction', source_id: null, voucher_series: 'A', voucher_number: 13 } })
+    expect(
+      await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-old' }),
+    ).toEqual({ ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: 'je-correction', via: 'link' })
+  })
+
+  it('asks for no correction while every anchor names a posted verifikat', async () => {
+    const posted = createQueuedMockSupabase()
+    posted.enqueue({ data: [{ journal_entry_id: 'je-2', role: 'bank_line' }] })
+    posted.enqueue({ data: [{ id: 'je-1', status: 'posted' }, { id: 'je-2', status: 'posted' }] })
+    await assertTransactionBookable(posted.supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-1' })
+    expect(posted.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('a link at a reversed verifikat counts while a correction of it stands, as a pointer does', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: 'je-new' }) // standing_correction
+    enqueue({ data: { id: 'je-new', source_type: 'correction', source_id: null, voucher_series: 'A', voucher_number: 7 } })
+
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toMatchObject({
+      ok: false,
+      via: 'link',
+      journalEntryId: 'je-new',
+    })
+    expect(supabase.rpc).toHaveBeenCalledWith('standing_correction', { p_entry_id: 'je-old' })
+  })
+
+  it('a link at a reversed verifikat with no correction books nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] })
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: null })
+
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
   })
 
   it('ignores supplementary roles and never reads their verifikat', async () => {
@@ -223,6 +229,26 @@ describe('assertTransactionBookable', () => {
     entriesDown.enqueue({ data: [{ journal_entry_id: 'je-1', role: 'bank_line' }] })
     entriesDown.enqueue({ error: { message: 'timeout' } })
     expect(await assertTransactionBookable(entriesDown.supabase as never, 'company-1', TX)).toMatchObject({
+      ok: false,
+      via: 'read_error',
+    })
+
+    const stale = { id: 'tx-1', journal_entry_id: 'je-old' }
+    const correctionDown = createQueuedMockSupabase()
+    correctionDown.enqueue({ data: [] })
+    correctionDown.enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    correctionDown.enqueue({ error: { message: 'timeout' } })
+    expect(await assertTransactionBookable(correctionDown.supabase as never, 'company-1', stale)).toMatchObject({
+      ok: false,
+      via: 'read_error',
+    })
+
+    const correctionRowDown = createQueuedMockSupabase()
+    correctionRowDown.enqueue({ data: [] })
+    correctionRowDown.enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    correctionRowDown.enqueue({ data: 'je-correction' })
+    correctionRowDown.enqueue({ error: { message: 'timeout' } })
+    expect(await assertTransactionBookable(correctionRowDown.supabase as never, 'company-1', stale)).toMatchObject({
       ok: false,
       via: 'read_error',
     })
@@ -344,7 +370,24 @@ describe('decideBankRowRebooking', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [] })
     enqueue({ data: [{ ...OWN, status: 'reversed' }] })
+    enqueue({ data: null }) // standing_correction: none stands
     expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: false })).toEqual({ outcome: 'open' })
+  })
+
+  it('refuses a corrected row as a link, even when asked: only a storno of the correction opens it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ ...OWN, status: 'reversed' }] })
+    enqueue({ data: 'je-correction' }) // standing_correction
+    enqueue({ data: { ...OWN, id: 'je-correction', source_type: 'correction', source_id: null, voucher_number: 13 } })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true })).toEqual({
+      outcome: 'refuse',
+      via: 'link',
+      journalEntryId: 'je-correction',
+      voucher: 'A13',
+      replaceable: false,
+      undo: 'reverse_voucher',
+    })
   })
 
   it('fails closed on a read error, and never offers a storno then', async () => {

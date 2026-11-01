@@ -1,50 +1,35 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyBookedFilter, applyUnbookedFilter, countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '../unbooked'
+import { applyBookedFilter, countUnbookedBankTransactions } from '../unbooked'
 
 /**
- * Table-routed double that records every builder call. The untriaged leg is
- * a head count; the business leg returns candidate ids; the three anchor
- * tables answer from `anchors`.
+ * Table-routed double that records every builder call. Both legs are head
+ * counts on open_bank_rows, told apart by the is_business filter they ask
+ * with. Which rows are open is the view's answer, not this file's:
+ * tests/pg/bank-row-open-read.pg.test.ts proves it.
  */
-function makeSupabase(opts: {
-  untriaged?: number
-  candidates?: string[]
-  anchors?: Partial<Record<'transaction_voucher_links' | 'invoice_payments' | 'supplier_invoice_payments', string[]>>
-  failTable?: string
-}) {
+function makeSupabase(opts: { untriaged?: number; business?: number; failLeg?: 'untriaged' | 'business' }) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   const from = (table: string) => {
-    let isHead = false
+    let leg: 'untriaged' | 'business' | null = null
     const chain: Record<string, unknown> = {}
     const settle = () => {
-      if (opts.failTable === table) return { data: null, error: { message: 'boom' }, count: null }
-      if (table === 'transactions') {
-        if (isHead) return { data: null, error: null, count: opts.untriaged ?? 0 }
-        return { data: (opts.candidates ?? []).map((id) => ({ id })), error: null, count: null }
-      }
-      const ids = opts.anchors?.[table as keyof NonNullable<typeof opts.anchors>] ?? []
-      return { data: ids.map((transaction_id) => ({ transaction_id })), error: null, count: null }
+      if (opts.failLeg === leg) return { data: null, error: { message: 'boom' }, count: null }
+      return { data: null, error: null, count: (leg === 'untriaged' ? opts.untriaged : opts.business) ?? 0 }
     }
-    for (const m of ['eq', 'is', 'gte', 'lte', 'in', 'order', 'or', 'not']) {
+    for (const m of ['select', 'eq', 'is', 'gte', 'lte']) {
       chain[m] = (...args: unknown[]) => {
         calls.push({ table, method: m, args })
+        if (args[0] === 'is_business') leg = m === 'is' ? 'untriaged' : 'business'
         return chain
       }
     }
-    chain.select = (...args: unknown[]) => {
-      calls.push({ table, method: 'select', args })
-      const o = args[1] as { head?: boolean } | undefined
-      isHead = o?.head === true
-      return chain
-    }
-    chain.range = () => Promise.resolve(settle())
     chain.then = (resolve: (v: unknown) => void, reject?: (e: unknown) => void) =>
       Promise.resolve(settle()).then(resolve, reject)
     return chain
   }
   const find = (table: string, method: string) =>
     calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
-  return { supabase: { from } as never, find }
+  return { supabase: { from } as never, calls, find }
 }
 
 describe('countUnbookedBankTransactions', () => {
@@ -54,129 +39,57 @@ describe('countUnbookedBankTransactions', () => {
   })
 
   it('counts untriaged rows plus triaged business rows with no verifikat', async () => {
-    setup = makeSupabase({ untriaged: 4, candidates: ['a', 'b', 'c'] })
+    setup = makeSupabase({ untriaged: 4, business: 3 })
     const result = await countUnbookedBankTransactions(setup.supabase, 'co-1')
     expect(result).toEqual({ total: 7, untriaged: 4, business_unbooked: 3 })
   })
 
-  it('does not count a business row anchored through a voucher link or a payment allocation', async () => {
-    setup = makeSupabase({
-      untriaged: 0,
-      candidates: ['bulk', 'paid', 'supplier', 'open'],
-      anchors: {
-        transaction_voucher_links: ['bulk'],
-        invoice_payments: ['paid'],
-        supplier_invoice_payments: ['supplier'],
-      },
-    })
-    const result = await countUnbookedBankTransactions(setup.supabase, 'co-1')
-    expect(result).toEqual({ total: 1, untriaged: 0, business_unbooked: 1 })
-    // Defense in depth: every anchor lookup is scoped to the company.
-    for (const table of ['transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments']) {
-      expect(setup.find(table, 'eq'), table).toEqual([['company_id', 'co-1']])
-      expect(setup.find(table, 'in'), table).toEqual([['transaction_id', ['bulk', 'paid', 'supplier', 'open']]])
-    }
+  it('is two head counts on open_bank_rows alone, scoped to the company', async () => {
+    await countUnbookedBankTransactions(setup.supabase, 'co-1')
+    expect([...new Set(setup.calls.map((c) => c.table))]).toEqual(['open_bank_rows'])
+    expect(setup.find('open_bank_rows', 'select')).toEqual([
+      ['id', { count: 'exact', head: true }],
+      ['id', { count: 'exact', head: true }],
+    ])
+    expect(setup.find('open_bank_rows', 'eq').filter((a) => a[0] === 'company_id')).toEqual([
+      ['company_id', 'co-1'],
+      ['company_id', 'co-1'],
+    ])
   })
 
-  it('excludes ignored rows and private rows on both legs', async () => {
+  it('asks for the untriaged leg, then the business leg: a private row is on neither', async () => {
     await countUnbookedBankTransactions(setup.supabase, 'co-1')
-    const eq = setup.find('transactions', 'eq')
-    expect(eq.filter((a) => a[0] === 'is_ignored')).toEqual([['is_ignored', false], ['is_ignored', false]])
-    // Leg 1 is is_business IS NULL, leg 2 is is_business = true: false (private) is never counted.
-    expect(setup.find('transactions', 'is')).toContainEqual(['is_business', null])
-    expect(eq).toContainEqual(['is_business', true])
-    expect(eq).not.toContainEqual(['is_business', false])
+    const legs = setup.calls.filter((c) => c.args[0] === 'is_business').map((c) => [c.method, ...c.args])
+    expect(legs).toEqual([
+      ['is', 'is_business', null],
+      ['eq', 'is_business', true],
+    ])
   })
 
   it('applies the date range to both legs', async () => {
     await countUnbookedBankTransactions(setup.supabase, 'co-1', { fromDate: '2026-03-01', toDate: '2026-03-31' })
-    expect(setup.find('transactions', 'gte')).toEqual([['date', '2026-03-01'], ['date', '2026-03-01']])
-    expect(setup.find('transactions', 'lte')).toEqual([['date', '2026-03-31'], ['date', '2026-03-31']])
+    expect(setup.find('open_bank_rows', 'gte')).toEqual([['date', '2026-03-01'], ['date', '2026-03-01']])
+    expect(setup.find('open_bank_rows', 'lte')).toEqual([['date', '2026-03-31'], ['date', '2026-03-31']])
   })
 
-  it('reads no anchors when there are no business candidates', async () => {
-    setup = makeSupabase({ untriaged: 2 })
-    await countUnbookedBankTransactions(setup.supabase, 'co-1')
-    expect(setup.find('transaction_voucher_links', 'in')).toEqual([])
-  })
-
-  it('throws instead of reporting zero when an anchor lookup fails', async () => {
-    setup = makeSupabase({ candidates: ['a'], failTable: 'invoice_payments' })
-    await expect(countUnbookedBankTransactions(setup.supabase, 'co-1')).rejects.toThrow(/invoice_payments anchor lookup failed/)
+  it('throws instead of reporting zero when either count fails', async () => {
+    await expect(countUnbookedBankTransactions(makeSupabase({ failLeg: 'untriaged' }).supabase, 'co-1')).rejects.toThrow(
+      /untriaged transaction count failed: boom/,
+    )
+    await expect(countUnbookedBankTransactions(makeSupabase({ failLeg: 'business' }).supabase, 'co-1')).rejects.toThrow(
+      /business transaction count failed: boom/,
+    )
   })
 })
 
-describe('fetchAnchoredTransactionIds', () => {
-  it('returns the ids anchored in any of the three tables, scoped to the company', async () => {
-    const { supabase, find } = makeSupabase({
-      anchors: { transaction_voucher_links: ['x'], supplier_invoice_payments: ['y'] },
-    })
-    const anchored = await fetchAnchoredTransactionIds(supabase, 'co-1', ['x', 'y', 'z'])
-    expect([...anchored].sort()).toEqual(['x', 'y'])
-    expect(find('invoice_payments', 'eq')).toEqual([['company_id', 'co-1']])
-  })
-
-  it('keeps at most one request in flight per table, however many chunks', async () => {
-    // Runs on every report read (data_status): the lookups must not burst
-    // into 3 x ceil(n / 200) concurrent requests from one call.
-    const inFlight: Record<string, number> = {}
-    let maxPerTable = 0
-    let maxTotal = 0
-    let total = 0
-    const seen: string[] = []
-    const supabase = {
-      from(table: string) {
-        const q = {
-          select: () => q,
-          eq: () => q,
-          in: async (_col: string, ids: string[]) => {
-            inFlight[table] = (inFlight[table] ?? 0) + 1
-            total += 1
-            maxPerTable = Math.max(maxPerTable, inFlight[table])
-            maxTotal = Math.max(maxTotal, total)
-            await new Promise((resolve) => setTimeout(resolve, 1))
-            inFlight[table] -= 1
-            total -= 1
-            seen.push(...ids)
-            return { data: [], error: null }
-          },
-        }
-        return q
-      },
-    }
-    const ids = Array.from({ length: 450 }, (_, i) => `t${i}`)
-    await fetchAnchoredTransactionIds(supabase as never, 'co-1', ids)
-    expect(maxPerTable).toBe(1)
-    expect(maxTotal).toBeLessThanOrEqual(3)
-    expect(seen).toHaveLength(450 * 3)
-  })
-
-  it('reads nothing for an empty id list', async () => {
-    const { supabase, find } = makeSupabase({})
-    expect((await fetchAnchoredTransactionIds(supabase, 'co-1', [])).size).toBe(0)
-    expect(find('transaction_voucher_links', 'in')).toEqual([])
-  })
-})
-
-describe('applyUnbookedFilter / applyBookedFilter', () => {
+describe('applyBookedFilter', () => {
   function recorder() {
     const calls: unknown[][] = []
     const chain = {
       eq: (...args: unknown[]) => (calls.push(['eq', ...args]), chain),
-      not: (...args: unknown[]) => (calls.push(['not', ...args]), chain),
     }
     return { chain, calls }
   }
-
-  it('the work queue: not ignored, not private, anchored to no verifikat (is_booked computed column)', () => {
-    const { chain, calls } = recorder()
-    expect(applyUnbookedFilter(chain)).toBe(chain)
-    expect(calls).toEqual([
-      ['eq', 'is_ignored', false],
-      ['not', 'is_business', 'is', false],
-      ['eq', 'is_booked', false],
-    ])
-  })
 
   it('booked: anchored to a verifikat in any of the four ways', () => {
     const { chain, calls } = recorder()

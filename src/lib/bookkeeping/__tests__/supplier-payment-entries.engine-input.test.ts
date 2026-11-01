@@ -177,7 +177,7 @@ type Scenario =
       paymentDate: string
       exchangeRateDifference?: number
       supplierName?: string
-      paymentAccount?: string
+      paymentAccount: string
       bankTransaction?: BankLine
       bankFeeSek?: number
       sekClearingDebt?: number
@@ -193,7 +193,7 @@ type Scenario =
       paymentDate: string
       supplierType: string
       supplierName?: string
-      paymentAccount?: string
+      paymentAccount: string
       settledBankSek?: number
       bankTransaction?: BankLine
       bankFeeSek?: number
@@ -218,6 +218,7 @@ const SCENARIOS: Scenario[] = [
     paymentAmount: 1500,
     paymentDate: '2026-09-28',
     supplierName: 'Kontorsbolaget AB',
+    paymentAccount: '1930',
     posting: { linkBasis: { link_basis: 'user_created', link_evidence: null }, settledAmount: 1500 },
   },
   {
@@ -235,6 +236,7 @@ const SCENARIOS: Scenario[] = [
     invoice: invoice(2, EUR_INVOICE),
     paymentAmount: 2300,
     paymentDate: '2026-10-02',
+    paymentAccount: '1930',
     exchangeRateDifference: -23.5,
     supplierName: 'Hosting GmbH',
     posting: {
@@ -248,6 +250,7 @@ const SCENARIOS: Scenario[] = [
     invoice: invoice(3, EUR_INVOICE),
     paymentAmount: 2300,
     paymentDate: '2026-10-03',
+    paymentAccount: '1930',
     exchangeRateDifference: 12.25,
   },
   {
@@ -268,6 +271,7 @@ const SCENARIOS: Scenario[] = [
     invoice: invoice(5),
     paymentAmount: 1500,
     paymentDate: '2027-02-01',
+    paymentAccount: '1930',
     noPeriod: true,
   },
   {
@@ -276,6 +280,7 @@ const SCENARIOS: Scenario[] = [
     invoice: invoice(6, { default_dimensions: { '6': 'P200' } } as Partial<SupplierInvoice>),
     items: DOMESTIC_ITEMS,
     paymentDate: '2026-09-30',
+    paymentAccount: '1930',
     supplierType: 'swedish_business',
     supplierName: 'Kontorsbolaget AB',
     posting: { linkBasis: { link_basis: 'user_created', link_evidence: null }, settledAmount: 1500 },
@@ -312,6 +317,7 @@ const SCENARIOS: Scenario[] = [
     invoice: invoice(9),
     items: DOMESTIC_ITEMS,
     paymentDate: '2027-02-02',
+    paymentAccount: '1930',
     supplierType: 'swedish_business',
     noPeriod: true,
   },

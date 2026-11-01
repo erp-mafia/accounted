@@ -57,7 +57,7 @@ function setup(options: {
         },
     cash_accounts: { data: options.cash },
     'rpc:cash_account_booked_rows': { data: options.booked ?? 0 },
-    transactions: { count: options.unbooked ?? 0 },
+    open_bank_rows: { count: options.unbooked ?? 0 },
     'rpc:save_bank_account_selection': options.saveError
       ? { error: options.saveError }
       : { data: { status: 'active', accounts: options.accounts } },

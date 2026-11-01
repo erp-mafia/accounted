@@ -30,6 +30,7 @@ import type { Transaction, SupplierInvoice } from '@/types'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
+import { descriptionMentionsReference, normalizeOcrReference } from '@/lib/invariants/reference-number'
 
 export interface SupplierInvoiceMatch {
   supplierInvoice: SupplierInvoice
@@ -42,13 +43,6 @@ export interface SupplierInvoiceMatch {
    * auto-link. Undefined/false for the unique passes (OCR, bankgiro).
    */
   ambiguous?: boolean
-}
-
-/**
- * Normalize payment reference for comparison (strip whitespace and non-digits).
- */
-function normalizeReference(ref: string): string {
-  return ref.replace(/\D/g, '')
 }
 
 /**
@@ -140,8 +134,8 @@ export function findSupplierInvoiceMatch(
 
     // Pass 1: Payment reference/OCR exact match → 0.98
     if (transaction.reference && invoice.payment_reference) {
-      const txRef = normalizeReference(transaction.reference)
-      const invRef = normalizeReference(invoice.payment_reference)
+      const txRef = normalizeOcrReference(transaction.reference)
+      const invRef = normalizeOcrReference(invoice.payment_reference)
       if (txRef && invRef && txRef === invRef) {
         return {
           supplierInvoice: invoice,
@@ -162,11 +156,10 @@ export function findSupplierInvoiceMatch(
     // Pass 2: Exact amount + bankgiro/plusgiro match → 0.92
     const amountMatch = Math.abs(txValue - invoiceValue) < 0.005
     if (amountMatch) {
-      const txDesc = (transaction.description || '').toLowerCase()
       const supplierBg = invoice.supplier?.bankgiro
       const supplierPg = invoice.supplier?.plusgiro
-      const bgMatch = supplierBg && txDesc.includes(normalizeReference(supplierBg))
-      const pgMatch = supplierPg && txDesc.includes(normalizeReference(supplierPg))
+      const bgMatch = descriptionMentionsReference(transaction.description, normalizeOcrReference(supplierBg))
+      const pgMatch = descriptionMentionsReference(transaction.description, normalizeOcrReference(supplierPg))
       // The row's counterparty giro as the shared reading sees it: the bank's
       // counterparty account or a formatted or padded BG/PG number, which the
       // digit substring above misses ("BG 123-4567"), against the card's and

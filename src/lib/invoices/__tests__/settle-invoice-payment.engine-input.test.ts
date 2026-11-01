@@ -137,7 +137,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'clearing: an issued invoice paid in full (mark-paid without lines)',
     invoice: invoice(0),
-    params: { paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-15', accountingMethod: 'accrual', paymentSource: 'manual' },
+    params: { settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-15', accountingMethod: 'accrual', paymentSource: 'manual' },
   },
   {
     name: 'clearing: an EUR invoice with a kursvinst, to the account the invoice asked for',
@@ -177,7 +177,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'cash: kontantmetoden books a never-booked invoice with its moms',
     invoice: invoice(3, { journal_entry_id: null }),
-    params: { paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-18', accountingMethod: 'cash', paymentSource: 'manual' },
+    params: { settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-18', accountingMethod: 'cash', paymentSource: 'manual' },
   },
   {
     name: 'cash: a kontantfaktura paid at issue under faktureringsmetoden',
@@ -195,7 +195,7 @@ const SCENARIOS: Scenario[] = [
     name: "own rows: a partial payment on the person's rows",
     invoice: invoice(5),
     params: {
-      paymentAmountInInvoiceCurrency: 600,
+      settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 600,
       paymentDate: '2026-09-19',
       accountingMethod: 'accrual',
       paymentSource: 'manual',
@@ -209,7 +209,7 @@ const SCENARIOS: Scenario[] = [
     name: "own rows: kontantmetoden on the person's rows books as a cash payment",
     invoice: invoice(6, { journal_entry_id: null, customer: null }),
     params: {
-      paymentAmountInInvoiceCurrency: 1500,
+      settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 1500,
       paymentDate: '2026-09-20',
       accountingMethod: 'cash',
       paymentSource: 'manual',
@@ -224,7 +224,7 @@ const SCENARIOS: Scenario[] = [
     name: "own rows: no open fiscal period, refused before the engine",
     invoice: invoice(7),
     params: {
-      paymentAmountInInvoiceCurrency: 1500,
+      settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 1500,
       paymentDate: '2026-09-21',
       accountingMethod: 'accrual',
       paymentSource: 'manual',
@@ -238,7 +238,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'clearing: no open fiscal period, refused',
     invoice: invoice(8),
-    params: { paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-22', accountingMethod: 'accrual', paymentSource: 'manual' },
+    params: { settlementAccountNumber: '1930', paymentAmountInInvoiceCurrency: 1500, paymentDate: '2026-09-22', accountingMethod: 'accrual', paymentSource: 'manual' },
     noPeriod: true,
   },
 ]

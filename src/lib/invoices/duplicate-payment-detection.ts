@@ -466,8 +466,8 @@ function collectSetCandidates(legs: BankLegRow[], target: SetTarget): Map<string
 
 /**
  * Voucher ids a bank transaction already explains, through any of the three
- * anchors isTransactionBooked reads (transactions.journal_entry_id, a payment
- * row carrying a bank transaction, a transaction_voucher_links row). A payment
+ * anchors of a bank row (transactions.journal_entry_id, a payment row carrying
+ * a bank transaction, a transaction_voucher_links row). A payment
  * row WITHOUT a bank transaction is a manual settlement (#2019) and keeps the
  * voucher in play: its bank line is precisely what has not been matched yet.
  * Rows in `ownTransactionIds` never count as links: the guard runs before the
@@ -583,7 +583,7 @@ function pickExplainingSet(
  * none. A voucher counts as linked (and drops out) when a transaction points
  * at it, a payment row with a bank transaction references it, or a
  * transaction_voucher_links row anchors it: the same three storage
- * locations isTransactionBooked reads, seen from the voucher side
+ * locations public.bank_row_anchors reads, seen from the voucher side
  * (fetchExplainedVoucherIds).
  *
  * Composed of the same steps the batch form (detectExplainingVoucherSets)

@@ -17,6 +17,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { resolveSupplierPaymentSek, supplierPaymentSekInputIssue } from '@/lib/bookkeeping/supplier-payment-amounts'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -95,7 +96,7 @@ export interface SupplierSettlementInput {
   amountSek?: number
   /** Cleared SEK minus paid SEK, the alternative to amountSek. */
   exchangeRateDifference?: number
-  /** The BAS account credited. Omitted: the generators' default, 1930. */
+  /** The BAS account credited. Omitted: the company's primary bank account. */
   paymentAccount?: string
   /** The person's own rows instead of the generated verifikat. */
   lines?: SupplierPaymentLine[]
@@ -126,6 +127,8 @@ export interface SupplierSettlementPlan {
   paymentDate: string
   /** The debt this payment settles, in the invoice's currency. */
   paymentAmount: number
+  /** The account a generated verifikat credits: the named one, else the primary bank account. */
+  paymentAccount: string
   newPaidAmount: number
   newRemaining: number
   newStatus: 'paid' | 'partially_paid'
@@ -175,7 +178,7 @@ export async function planSupplierSettlement(
   invoice: SettleableSupplierInvoice,
   input: SupplierSettlementInput,
 ): Promise<{ ok: true; plan: SupplierSettlementPlan } | Failure> {
-  const { supabase, companyId } = ctx
+  const { supabase, companyId, log } = ctx
   const paymentDate = input.paymentDate || todayIsoStockholm()
 
   const futureDate = futurePaymentDateRefusal(paymentDate)
@@ -326,6 +329,7 @@ export async function planSupplierSettlement(
       input,
       paymentDate,
       paymentAmount,
+      paymentAccount: input.paymentAccount ?? (await resolvePrimaryBankAccount(supabase, companyId, log)),
       newPaidAmount,
       newRemaining,
       newStatus,
@@ -551,7 +555,7 @@ async function postPaymentVoucher(
       paymentDate,
       invoice.supplier?.supplier_type || 'swedish_business',
       invoice.supplier?.name,
-      input.paymentAccount,
+      plan.paymentAccount,
       // Foreign invoice: the SEK that left the account pins the entry to the
       // payment-date rate, as a bank match does.
       input.amountSek,
@@ -569,7 +573,7 @@ async function postPaymentVoucher(
     paymentDate,
     plan.exchangeRateDifference,
     invoice.supplier?.name,
-    input.paymentAccount,
+    plan.paymentAccount,
     undefined, // bankTransaction: no bank line on this door
     undefined, // bankFeeSek
     undefined, // sekClearingDebt

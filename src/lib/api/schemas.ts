@@ -1098,7 +1098,8 @@ export const RotRutSettleSchema = z.object({
   // Defaults server-side to decided_total ?? requested_total.
   amount: z.number().positive().optional(),
   // BAS 19xx account the payout landed on (1920 Bank, 1930 Företagskonto, …).
-  // Omitted → 1930. The engine validates existence against chart_of_accounts.
+  // Omitted → the company's primary bank account. The engine validates
+  // existence against chart_of_accounts.
   bank_account: z
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
@@ -2199,8 +2200,8 @@ export const MarkSupplierInvoicePaidSchema = z.object({
     ),
   notes: z.string().optional(),
   force: z.boolean().optional(),
-  // Which BAS account to credit for the payment. Defaults to 1930 to preserve
-  // the historical behaviour for MCP / agent callers that don't supply it.
+  // Which BAS account to credit for the payment. Omitted: the company's
+  // primary bank account.
   payment_account: accountNumber.optional(),
   // Optional user-edited journal entry rows. When present they override the
   // default 2440-clearing / cash booking. Server validates balance and posts
