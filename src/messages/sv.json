@@ -4712,6 +4712,7 @@
     "already_booked_open_voucher": "Öppna {label}",
     "link_to_existing": "Koppla till {label}",
     "create_new_anyway": "Skapa ny verifikation ändå",
+    "duplicate_supplier_hint": "Är det samma betalning? Koppla då leverantörsfakturan till {label} från fakturan i stället, så bokförs den bara en gång.",
     "transaction_label": "Transaktion",
     "invoice_label": "Faktura",
     "invoice_number": "Faktura {number}",

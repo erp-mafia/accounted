@@ -303,11 +303,12 @@ export default function InvoiceMatchDialog({
   ])
 
   useEffect(() => {
+    // The supplier match runs the same guard (accounted#58), so the panel
+    // shows for it too; it books anyway only by the force-bound button.
     if (
       !open ||
       !transactionId ||
-      !isCustomerInvoice ||
-      !onLinkToExisting ||
+      !(isSupplierInvoice || (isCustomerInvoice && onLinkToExisting)) ||
       targetBlocked
     ) {
       setCandidate(null)
@@ -318,7 +319,9 @@ export default function InvoiceMatchDialog({
     async function check() {
       setIsCheckingDuplicate(true)
       try {
-        const res = await fetch(`/api/transactions/${transactionId}/duplicate-payment-check`)
+        // The supplier match refuses in its own reading (accounted#58).
+        const side = isSupplierInvoice ? '?side=supplier' : ''
+        const res = await fetch(`/api/transactions/${transactionId}/duplicate-payment-check${side}`)
         if (!res.ok) return
         const data = (await res.json()) as { candidate: DuplicateCandidate | null }
         if (!cancelled) setCandidate(data.candidate ?? null)
@@ -332,7 +335,7 @@ export default function InvoiceMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, transactionId, isCustomerInvoice, onLinkToExisting, targetBlocked])
+  }, [open, transactionId, isCustomerInvoice, isSupplierInvoice, onLinkToExisting, targetBlocked])
 
   // Cross-currency settlement whose invoice carries no booked exchange rate.
   // The kursvinst/kursförlust is then UNDEFINED, not zero: the SEK value the
@@ -436,8 +439,8 @@ export default function InvoiceMatchDialog({
               </div>
             )}
 
-            {/* Duplicate-payment warning: customer-side only, only when a candidate exists */}
-            {!targetBlocked && candidate && isCustomerInvoice && (
+            {/* Duplicate-payment warning, only when a candidate exists */}
+            {!targetBlocked && candidate && (isCustomerInvoice || isSupplierInvoice) && (
               <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                 <div className="flex items-start gap-2">
                   <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
@@ -477,7 +480,31 @@ export default function InvoiceMatchDialog({
                     )}
                   </div>
                 </div>
-                {onLinkToExisting && (
+                {/* Supplier side: linking the bank row alone would leave the
+                    invoice open, so the way to use the verifikat is the
+                    invoice's own "Koppla till verifikation". */}
+                {isSupplierInvoice && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      {t('duplicate_supplier_hint', { label: candidate.voucher_label })}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        handleConfirm({
+                          force: true,
+                          expected_journal_entry_id: candidate.journal_entry_id,
+                        })
+                      }
+                      disabled={isConfirming || !editor.validation.isValid}
+                      className="text-muted-foreground"
+                    >
+                      {t('create_new_anyway')}
+                    </Button>
+                  </div>
+                )}
+                {isCustomerInvoice && onLinkToExisting && (
                   <div className="flex flex-col sm:flex-row gap-2">
                     <Button
                       variant="default"

@@ -9,7 +9,9 @@
  * needing to first submit a doomed match.
  *
  * Same detectors as the match-invoice and match-batch pre-flights, so what
- * you see here matches what the POSTs would refuse.
+ * you see here matches what the POSTs would refuse. `?side=supplier` asks for
+ * the supplier match's reading (skipClaimed, accounted#58), which the
+ * supplier match POST refuses with.
  */
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -22,8 +24,9 @@ import {
 
 export const GET = withRouteContext(
   'transaction.duplicate_payment_check',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id: transactionId } = await params
+    const supplierSide = new URL(request.url).searchParams.get('side') === 'supplier'
     const { supabase, companyId, log, requestId } = ctx
 
     // Membership is enforced by withRouteContext (see its docstring): the
@@ -71,7 +74,7 @@ export const GET = withRouteContext(
         // Scoped to the account the money landed on, like the set detector
         // below: a 1686 row is never a duplicate of a 1930 voucher.
         cashAccountId: transaction.cash_account_id ?? null,
-      })
+      }, { skipClaimed: supplierSide })
     } catch (err) {
       log.warn('duplicate-payment-voucher detection failed', err as Error)
     }

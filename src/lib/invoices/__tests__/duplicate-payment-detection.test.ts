@@ -300,6 +300,99 @@ describe('detectDuplicatePaymentVoucher', () => {
     expect(result).toMatchObject({ journal_entry_id: 'je-twin', reason: 'exact_amount_within_window' })
   })
 
+  describe('the supplier match reading (skipClaimed, accounted#58)', () => {
+    // Two supplier invoices of 1500 kr paid from two bank rows five days
+    // apart, no provider ids on either row: E8 pays the first invoice from
+    // its own row. The content-only twin rule names E8 for the second row;
+    // the supplier reading must not, or the second invoice cannot be paid.
+    const outflow = {
+      companyId: 'company-1',
+      transactionId: 'tx-second',
+      transactionDate: '2026-04-21',
+      transactionAmount: -1500,
+      transactionCurrency: 'SEK',
+      bankAccountNumber: '1930',
+    }
+    const paymentOfFirst = makeLineRow({
+      je_id: 'je-e8', account: '1930', debit: 0, credit: 1500, date: '2026-04-16', voucher_label: 'E8', source_type: 'supplier_invoice_paid',
+    })
+    const firstRow = { id: 'tx-first', journal_entry_id: 'je-e8', date: '2026-04-16', amount: -1500, currency: 'SEK', cash_account_id: null }
+
+    it('the customer reading keeps the twin rule: the first payment is named', async () => {
+      enqueueLines([paymentOfFirst])
+      enqueue({ data: [firstRow], error: null }) // transactions linking it
+      enqueue({ data: [], error: null }) // invoice_payments
+
+      const result = await detectDuplicatePaymentVoucher(supabase as never, outflow)
+
+      expect(result?.journal_entry_id).toBe('je-e8')
+    })
+
+    it('skips the payment of another invoice linked to its own row, and books the second invoice', async () => {
+      enqueueLines([paymentOfFirst])
+      enqueue({ data: [firstRow], error: null }) // transactions linking it: the twin rule keeps it
+      enqueue({ data: [], error: null }) // invoice_payments
+      enqueue({ data: [], error: null }) // transaction_voucher_links
+      // Re-scan without E8: nothing else in the window.
+      enqueue({ data: [], error: null })
+
+      const result = await detectDuplicatePaymentVoucher(supabase as never, outflow, { skipClaimed: true })
+
+      expect(result).toBeNull()
+      // E8 was skipped by its bank-row link alone: no claim reads were needed.
+      expect(findCalls('supplier_invoice_payments', 'select')).toEqual([])
+    })
+
+    it('skips a mark-paid payment of another invoice (no bank row behind it)', async () => {
+      enqueueLines([paymentOfFirst])
+      enqueue({ data: [], error: null }) // transactions
+      enqueue({ data: [], error: null }) // invoice_payments
+      enqueue({ data: [], error: null }) // transaction_voucher_links
+      // Claim reads: supplier_invoice_payments names it.
+      enqueue({ data: [{ id: 'sip-1' }], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [], error: null }) // re-scan: nothing else
+
+      const result = await detectDuplicatePaymentVoucher(supabase as never, outflow, { skipClaimed: true })
+
+      expect(result).toBeNull()
+      expect(findCalls('supplier_invoice_payments', 'select')).toHaveLength(1)
+      // One scan, then one without E8.
+      expect(findCalls('journal_entries', 'select')).toHaveLength(2)
+    })
+
+    it('still names a hand booking that no invoice and no bank row claims, the case it exists for', async () => {
+      enqueueLines([
+        makeLineRow({ je_id: 'je-hand', account: '1930', debit: 0, credit: 1500, date: '2026-04-20', voucher_label: 'A31' }),
+      ])
+      enqueue({ data: [], error: null }) // transactions
+      enqueue({ data: [], error: null }) // invoice_payments
+      enqueue({ data: [], error: null }) // transaction_voucher_links
+      for (let i = 0; i < 4; i++) enqueue({ data: [], error: null }) // claim reads: none
+
+      const result = await detectDuplicatePaymentVoucher(supabase as never, outflow, { skipClaimed: true })
+
+      expect(result).toMatchObject({ journal_entry_id: 'je-hand', voucher_label: 'A31', amount: 1500 })
+    })
+
+    it('throws when a claim read fails, so the door runs its detection-failure path', async () => {
+      enqueueLines([
+        makeLineRow({ je_id: 'je-hand', account: '1930', debit: 0, credit: 1500, date: '2026-04-20' }),
+      ])
+      enqueue({ data: [], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: null, error: { message: 'boom' } })
+      for (let i = 0; i < 3; i++) enqueue({ data: [], error: null })
+
+      await expect(detectDuplicatePaymentVoucher(supabase as never, outflow, { skipClaimed: true })).rejects.toThrow(
+        'voucher claim lookup failed',
+      )
+    })
+  })
+
   it('excludes storno entries', async () => {
     enqueueLines([
       makeLineRow({

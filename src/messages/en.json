@@ -4712,6 +4712,7 @@
     "already_booked_open_voucher": "Open {label}",
     "link_to_existing": "Link to {label}",
     "create_new_anyway": "Create new voucher anyway",
+    "duplicate_supplier_hint": "Is it the same payment? Then link the supplier invoice to {label} from the invoice instead, so it is booked once.",
     "transaction_label": "Transaction",
     "invoice_label": "Invoice",
     "invoice_number": "Invoice {number}",

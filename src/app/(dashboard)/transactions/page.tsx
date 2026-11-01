@@ -2560,7 +2560,7 @@ export default function TransactionsPage() {
       const body: Record<string, unknown> = isSupplier
         ? { supplier_invoice_id: selectedTransaction.potential_supplier_invoice!.id }
         : { invoice_id: selectedTransaction.potential_invoice!.id }
-      if (!isSupplier && opts?.force) {
+      if (opts?.force) {
         body.force = true
         // Bind the override to the candidate the user saw in the dialog.
         // The server re-detects the candidate and rejects the bypass if

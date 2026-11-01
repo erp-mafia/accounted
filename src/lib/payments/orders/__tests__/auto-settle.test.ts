@@ -38,6 +38,14 @@ vi.mock('@/lib/supplier-invoices/registration-first', () => ({
   })),
 }))
 
+// The ledger duplicate guard runs for real (beforeEach); a test that needs a
+// verifikat already booking the payment answers it here.
+const mockDetectDuplicate = vi.fn()
+vi.mock('@/lib/invoices/duplicate-payment-detection', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
+}))
+
 import {
   bookRegistrationBeforeSettlement,
   planRegistrationBeforeSettlement,
@@ -85,8 +93,12 @@ function seed(options: { order?: Record<string, unknown>; linkedAfter?: boolean 
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
+  const detection = await vi.importActual<typeof import('@/lib/invoices/duplicate-payment-detection')>(
+    '@/lib/invoices/duplicate-payment-detection',
+  )
+  mockDetectDuplicate.mockImplementation(detection.detectDuplicatePaymentVoucher)
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
   mockFindFiscalPeriod.mockResolvedValue('fp-2026')
   seed()
@@ -207,6 +219,30 @@ describe('settleOrderWithDebit', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
     expect(db.findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('leaves a debit a verifikat already books to a person: no force, nothing written (accounted#58)', async () => {
+    // The payment booked by hand while the invoice stayed open: the debit of
+    // the signed order must not book it a second time with no one looking.
+    const candidate = {
+      journal_entry_id: 'je-by-hand', voucher_label: 'A31', entry_date: '2026-10-13', description: null,
+      amount: 10, bank_account_number: '1930', reason: 'exact_amount_same_date', amount_verified: true, unverified_reason: null,
+    }
+    mockDetectDuplicate.mockResolvedValueOnce(candidate)
+
+    expect(await settle()).toEqual({
+      ok: false,
+      reason: 'booking_failed',
+      code: 'MATCH_SI_POSSIBLE_DUPLICATE',
+      details: { candidate },
+    })
+    expect(mockDetectDuplicate).toHaveBeenCalledWith(db.supabase, expect.objectContaining({
+      companyId: ARCIM.companyId, transactionId: ARCIM.transactionId,
+    }), { skipClaimed: true })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(db.findCalls('transactions', 'update')).toEqual([])
+    expect(db.findCalls('payment_orders', 'update')).toEqual([])
   })
 
   it('refuses amounts apart: an end-to-end match of another amount stays a suggestion for a person', async () => {

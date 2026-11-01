@@ -47,6 +47,14 @@ vi.mock('@/lib/supplier-invoices/registration-first', () => ({
   })),
 }))
 
+// The ledger duplicate guard runs for real (beforeEach); a test that needs a
+// verifikat already booking the payment answers it here (accounted#58).
+const mockDetectDuplicate = vi.fn()
+vi.mock('@/lib/invoices/duplicate-payment-detection', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   bookRegistrationBeforeSettlement,
@@ -119,9 +127,13 @@ const REGISTERED_INVOICE = {
   items: [],
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   eventBus.clear()
+  const detection = await vi.importActual<typeof import('@/lib/invoices/duplicate-payment-detection')>(
+    '@/lib/invoices/duplicate-payment-detection',
+  )
+  mockDetectDuplicate.mockImplementation(detection.detectDuplicatePaymentVoucher)
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
@@ -723,5 +735,71 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(response.status).toBe(200)
     expect(body.data.registration_journal_entry_id).toBeNull()
     expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice: a verifikat already books the payment (accounted#58)', () => {
+  const CANDIDATE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const candidate = {
+    journal_entry_id: CANDIDATE_ID, voucher_label: 'A7', entry_date: '2026-05-12', description: null,
+    amount: 1000, bank_account_number: '1930', reason: 'exact_amount_same_date', amount_verified: true, unverified_reason: null,
+  }
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`
+
+  function seed() {
+    const db = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      supplier_invoices: [
+        { data: REGISTERED_INVOICE, error: null },
+        { data: [{ id: SI_ID }], error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(db.supabase)
+    return db
+  }
+
+  it('answers 409 MATCH_SI_POSSIBLE_DUPLICATE naming the verifikat, and writes nothing', async () => {
+    const { calls } = seed()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const response = await matchSupplierInvoice(makeRequest(url, { supplier_invoice_id: SI_ID }), detailParams(COMPANY_ID, TX_ID))
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_POSSIBLE_DUPLICATE')
+    expect(body.error.details.candidate).toEqual(candidate)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(calls.filter((c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'))).toEqual([])
+  })
+
+  it('books with force and expected_journal_entry_id naming that verifikat', async () => {
+    seed()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const response = await matchSupplierInvoice(
+      makeRequest(url, { supplier_invoice_id: SI_ID, force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects force without expected_journal_entry_id with 400 VALIDATION_ERROR', async () => {
+    seed()
+
+    const response = await matchSupplierInvoice(
+      makeRequest(url, { supplier_invoice_id: SI_ID, force: true }),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(mockDetectDuplicate).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
   })
 })
