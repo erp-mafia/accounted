@@ -577,14 +577,12 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       supplier_invoices: [
         { data: USD_SI, error: null },
-        { data: opts.sharedRegistration ? [{ id: 'si-other' }] : [], error: null },
         { data: { ...USD_SI, status: 'paid', paid_amount: 37.5, remaining_amount: 0 }, error: null },
       ],
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
-      journal_entries: { data: { id: 'je-reg', status: 'posted' }, error: null },
-      supplier_invoice_payments: [{ data: [], error: null }, { data: { id: 'pay-1' }, error: null }],
-      journal_entry_lines: {
-        data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
+      'rpc:document_carried_sek': {
+        data: opts.sharedRegistration ? { ok: false, reason: 'registration_voucher_shared' } : { ok: true, sek: 361.55 },
         error: null,
       },
     })
@@ -683,18 +681,11 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: si, error: null },
-          ...(si.currency === 'SEK' ? [] : [{ data: [], error: null }]),
           { data: { ...si, status: 'paid', paid_amount: si.total, remaining_amount: 0 }, error: null },
         ],
         company_settings: { data: { accounting_method: 'cash' }, error: null },
-        journal_entries: { data: { id: 'je-reg', status: 'posted' }, error: null },
-        supplier_invoice_payments: si.currency === 'SEK'
-          ? { data: { id: 'pay-1' }, error: null }
-          : [{ data: [], error: null }, { data: { id: 'pay-1' }, error: null }],
-        journal_entry_lines: {
-          data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
-          error: null,
-        },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
+        'rpc:document_carried_sek': { data: { ok: true, sek: 361.55 }, error: null },
       })
     }
 

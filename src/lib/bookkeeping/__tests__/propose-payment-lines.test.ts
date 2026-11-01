@@ -419,6 +419,56 @@ describe('proposePaymentLines: remaining-aware partials (#1717)', () => {
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
   })
 
+  it('a foreign invoice proposes what 1510 carries, so the öre the rate misses is not stranded', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+    })
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('1965.44')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1965.44')
+  })
+
+  it('a stated difference keeps the bank at what arrived: the ledger gap lands on 3960/7960', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      exchangeRateDifference: 13.61,
+    })
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1979.04')
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('1965.44')
+    expect(lines.find((l) => l.account_number === '3960')?.credit_amount).toBe('13.6')
+  })
+
+  it('adds no zero line when the stated difference closes the ledger gap', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        carried_sek: 1965.44,
+      } as Parameters<typeof makeInvoiceInput>[0]),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      exchangeRateDifference: 0.01,
+    })
+    expect(lines.map((l) => l.account_number)).toEqual(['1930', '1510'])
+  })
+
   it('foreign-currency partial keeps the legacy proposal', () => {
     const lines = proposePaymentLines({
       invoice: {

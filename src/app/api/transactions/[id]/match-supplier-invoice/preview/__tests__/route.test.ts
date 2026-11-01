@@ -638,6 +638,45 @@ describe('GET /api/transactions/[id]/match-supplier-invoice/preview: a deferred 
     )
   })
 
+  it('clears what the registration will leave on 2440, off its dry run, as the POST does', async () => {
+    // 141.36 + 35.34 EUR at 11.123: the registration credits 1965.44, the rate says 1965.43.
+    enqueue({
+      data: { id: TX_UUID, date: '2026-02-01', amount: -176.7, currency: 'EUR', amount_sek: -1979.04, cash_account_id: null },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        remaining_amount: 176.7,
+        registration_journal_entry_id: null,
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      required: true,
+      supplierInvoiceId: SI_UUID,
+      entry: registrationEntry,
+      payableSek: 1965.44,
+      createsAccrualSchedules: false,
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(1965.44)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('answers the Bokför refusal the POST would give', async () => {
     enqueueUnbooked()
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({

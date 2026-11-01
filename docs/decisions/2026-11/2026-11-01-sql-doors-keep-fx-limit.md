@@ -1,0 +1,1 @@
+[2026-11-01] Batch and link keep 10 % against the booked SEK, as one named limit, not the 2 % band: SQL has no payment-day rate and they settle in full or not at all. 2 % on the booked rate would have refused 25 of 36 batch rows whose rate had only moved. A band for batch is the founders' call.

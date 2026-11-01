@@ -334,7 +334,7 @@
             {
               "currency": "SEK",
               "dimensions": {},
-              "debit_amount": "0.40000000000000000000",
+              "debit_amount": "0.40",
               "credit_amount": "0",
               "account_number": "3740",
               "line_description": "Öresavrundning",
@@ -402,7 +402,7 @@
               "currency": "SEK",
               "dimensions": {},
               "debit_amount": "0",
-              "credit_amount": "1140.0000000000000000",
+              "credit_amount": "1140.00",
               "account_number": "1510",
               "line_description": "Faktura F-1003 (EUR)",
               "amount_in_currency": null

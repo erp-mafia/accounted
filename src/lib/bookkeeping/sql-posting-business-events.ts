@@ -1,9 +1,9 @@
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
-import { roundOre } from '@/lib/money'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { bankLineBookingBusinessEvent } from './bank-line-business-events'
+import { oreSettlementResidual } from './ore-rounding'
 
 /**
  * The business events of the verifikat a SQL function drafts and commits
@@ -70,8 +70,7 @@ export interface BatchAllocationFacts {
 export function batchAllocationSettledAmount(facts: BatchAllocationFacts, transactionCurrency: string): number {
   const remaining = facts.invoice.remaining_amount ?? facts.invoice.total
   if ((facts.invoice.currency ?? transactionCurrency) !== transactionCurrency) return Math.abs(remaining)
-  const ore = roundOre(remaining - facts.amount)
-  return Math.abs(ore !== 0 && Math.abs(ore) < 1 ? remaining : facts.amount)
+  return Math.abs(oreSettlementResidual(remaining, facts.amount) !== 0 ? remaining : facts.amount)
 }
 
 /**

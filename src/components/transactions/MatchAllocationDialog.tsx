@@ -1,5 +1,6 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
@@ -213,7 +214,7 @@ function parseAmount(s: string): number {
  */
 function owedInRowCurrency(candidate: AllocationCandidate, rowCurrency: string): number | null {
   if (candidate.currency === rowCurrency) return roundOre(candidate.remaining)
-  return isValidExchangeRate(candidate.exchangeRate) ? roundOre(candidate.remaining * candidate.exchangeRate) : null
+  return isValidExchangeRate(candidate.exchangeRate) ? sekOfForeign(candidate.remaining, candidate.exchangeRate) : null
 }
 
 /** A pasted invoice as a dialog row: the same shape a click adds. */
@@ -575,7 +576,7 @@ export default function MatchAllocationDialog({
       if (sameCurrency) {
         defaultAmount = Math.min(candidate.remaining, remainingTxBudget)
       } else if (isValidExchangeRate(candidate.exchangeRate)) {
-        defaultAmount = roundOre(candidate.remaining * candidate.exchangeRate)
+        defaultAmount = sekOfForeign(candidate.remaining, candidate.exchangeRate)
       } else {
         // No (or out-of-range) FX rate. Leave the amount blank rather
         // than guessing a misleading default; the user must enter the

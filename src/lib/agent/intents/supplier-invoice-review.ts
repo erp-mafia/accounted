@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL, EFFORT_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
@@ -114,7 +115,7 @@ function sekEquivalent(
   if (amountSek != null && Number.isFinite(Number(amountSek))) return Number(amountSek)
   const rate = exchangeRate == null ? null : Number(exchangeRate)
   if (rate != null && Number.isFinite(rate) && rate > 0) {
-    return Math.round(Number(amount) * rate * 100) / 100
+    return sekOfForeign(Number(amount), rate)
   }
   return null
 }

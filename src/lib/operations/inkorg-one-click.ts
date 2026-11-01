@@ -72,7 +72,7 @@ import type { InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { SE_PURCHASE_CATEGORY_PACK } from '@/lib/bookkeeping/bas-data/purchase-category-accounts'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import {
   generateReverseChargePurchaseLines,
   resolveReverseChargeRate,
@@ -529,11 +529,6 @@ function paidLines(gross: number, vat: OneClickVat, costAccount: string, settlem
   return lines
 }
 
-/** The kronor value of an amount in the invoice's currency. */
-function inKronor(amount: number, rate: number): number {
-  return roundOre(amount * rate)
-}
-
 type InvoiceBuild = { ok: true; invoice: OneClickInvoiceBody; lines: OneClickLine[] } | { ok: false; reason: OneClickReason }
 
 /**
@@ -612,8 +607,8 @@ function invoiceOf(
   }
 
   // The registration verifikat, in kronor.
-  const net = sumOre(items.map((item) => inKronor(item.amount, rate)))
-  const vatSek = vat.kind === 'input' || vat.kind === 'cost' ? sumOre(items.map((_item, index) => inKronor(vatOf(index), rate))) : 0
+  const net = sumOre(items.map((item) => sekOfForeign(item.amount, rate)))
+  const vatSek = vat.kind === 'input' || vat.kind === 'cost' ? sumOre(items.map((_item, index) => sekOfForeign(vatOf(index), rate))) : 0
   const lines: OneClickLine[] =
     vat.kind === 'input'
       ? [line(costAccount, net, 0, description), line(INPUT_VAT_ACCOUNT, vatSek, 0, description), line(PAYABLE_ACCOUNT, 0, net + vatSek, description)]
@@ -745,7 +740,7 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
   if (CAPITALISABLE_CATEGORIES.has(input.category)) {
     const total = finite(reading.totals?.total)
     const kronor =
-      gross ?? (total === null ? null : isKronorCurrency(reading.invoice?.currency) ? total : input.invoiceRate ? total * input.invoiceRate : null)
+      gross ?? (total === null ? null : isKronorCurrency(reading.invoice?.currency) ? total : input.invoiceRate ? sekOfForeign(total, input.invoiceRate) : null)
     const year = Number((plan.entryDate ?? bank?.date ?? '').slice(0, 4))
     if (kronor !== null && kronor > getCapitalizationThreshold(year)) return ask('editor', 'possible_asset')
   }

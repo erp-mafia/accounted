@@ -6,9 +6,7 @@ import {
 } from './vat-entries'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from './chart-vat-treatments'
 import { reconcileRcBasisWithChart } from './rc-basis-reconcile'
-// Aliased: this file already has a local resolveSekAmountOrNull(transaction)
-// for account-selection decisions, which refuses when unconvertible.
-import { resolveSekAmount as resolveSekAmountLenient } from './currency-utils'
+import { resolveSekAmount as resolveSekAmountLenient, resolveSekAmountOrNull } from './currency-utils'
 import { findMatchingTemplates, buildMappingResultFromTemplate } from './booking-templates'
 import {
   findCounterpartyTemplate,
@@ -57,30 +55,18 @@ export function getCapitalizationThreshold(year: number): number {
 }
 
 /**
- * Resolve the SEK value of a transaction, or null when it cannot be
- * established.
+ * The SEK value of a transaction, or null when it cannot be established.
  *
- * Deliberately stricter than `resolveSekAmount()` in currency-utils: that
- * helper falls back to the raw foreign amount for legacy rows, which is
- * tolerable for a line amount (the entry still balances against itself) but
- * never for a comparison against a SEK limit. Both the halva-prisbasbeloppet
- * threshold and a rule's amount_min/amount_max band are SEK figures; feeding
- * them an unconverted foreign number silently picks the wrong branch. When no
- * rate is known we return null so the caller declines instead of guessing.
+ * The strict ladder, not `resolveSekAmount()`: that helper falls back to the
+ * raw foreign amount for legacy rows, which is tolerable for a line amount (the
+ * entry still balances against itself) but never for a comparison against a SEK
+ * limit. Both the halva-prisbasbeloppet threshold and a rule's
+ * amount_min/amount_max band are SEK figures; feeding them an unconverted
+ * foreign number silently picks the wrong branch. When no rate is known we
+ * return null so the caller declines instead of guessing.
  */
-function resolveSekAmountOrNull(transaction: Transaction): number | null {
-  const currency = (transaction.currency || 'SEK').toUpperCase()
-  if (currency === 'SEK') return transaction.amount
-
-  if (transaction.amount_sek != null) {
-    return Math.round(transaction.amount_sek * 100) / 100
-  }
-
-  if (transaction.exchange_rate != null && transaction.exchange_rate > 0) {
-    return Math.round(transaction.amount * transaction.exchange_rate * 100) / 100
-  }
-
-  return null
+function transactionSek(transaction: Transaction): number | null {
+  return resolveSekAmountOrNull(transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate)
 }
 
 /**
@@ -388,7 +374,7 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
   // band is not evaluable, so the rule does not apply: skipping is the honest
   // outcome, matching on an unconverted number is not.
   if (rule.amount_min != null || rule.amount_max != null) {
-    const sekAmount = resolveSekAmountOrNull(transaction)
+    const sekAmount = transactionSek(transaction)
     if (sekAmount === null) {
       log.warn('mapping rule with a SEK amount band skipped: transaction has no SEK value', {
         transactionId: transaction.id,
@@ -450,7 +436,7 @@ function buildResult(
   if (rule.capitalized_debit_account) {
     const year = new Date(transaction.date).getFullYear()
     const threshold = rule.capitalization_threshold ?? getCapitalizationThreshold(year)
-    const sekAmount = resolveSekAmountOrNull(transaction)
+    const sekAmount = transactionSek(transaction)
 
     if (sekAmount === null) {
       // Non-SEK row with neither amount_sek nor an exchange_rate. Both

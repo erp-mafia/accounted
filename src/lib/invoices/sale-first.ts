@@ -57,8 +57,10 @@
  * where the company books in a separate step.
  */
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import type { EntryPreview } from '@/lib/bookkeeping/entry-preview'
+import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationWarning } from '@/lib/operations/types'
 import { chunk } from '@/lib/utils'
 import { bookInvoice } from './book-service'
@@ -94,6 +96,21 @@ export function settlementBooksSaleFirst(
   return lacksOwnVerifikat(invoice) && invoiceBookingMoment(settings) === 'manual'
 }
 
+/**
+ * The SEK a sale verifikat leaves on kundfordringar: its debits less its
+ * credits on the accounts-receivable account. 1513, Skatteverket's share, is
+ * another account and never the customer's to pay.
+ */
+export function saleReceivableSek(entry: Pick<EntryPreview, 'lines'>): number {
+  const receivableAccount = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+  let carried = 0
+  for (const line of entry.lines) {
+    if (line.account_number !== receivableAccount) continue
+    carried += (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+  }
+  return roundOre(carried)
+}
+
 export interface SaleFirstRefusal {
   ok: false
   /** The Bokför step's code, or the settlement date's. */
@@ -111,6 +128,8 @@ export type SaleFirstPlan =
       invoiceId: string
       /** The sale verifikat Bokför will post, as its dry run builds it. */
       entry: EntryPreview
+      /** SEK the sale leaves on kundfordringar: what the settlement clears. */
+      receivableSek: number
     }
 
 export type RequiredSaleFirstPlan = Extract<SaleFirstPlan, { required: true }>
@@ -259,12 +278,8 @@ async function planDeferred(
     return refusal(invoiceId, dryRun.code, dryRun.details, dryRun.error)
   }
   if (!dryRun.dryRun) return refusal(invoiceId, 'INVOICE_BOOK_FAILED')
-  return {
-    ok: true,
-    required: true,
-    invoiceId,
-    entry: dryRun.preview.journal_entry as EntryPreview,
-  }
+  const entry = dryRun.preview.journal_entry as EntryPreview
+  return { ok: true, required: true, invoiceId, entry, receivableSek: saleReceivableSek(entry) }
 }
 
 export type SaleFirstBooking =

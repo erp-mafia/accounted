@@ -75,7 +75,7 @@ async function postAndPreview(kind: Kind, txId: string) {
   ).rows[0]
   const bankAccount = await resolveSettlementAccount(db, owner.companyId, tx.cash_account_id, silentLog, tx.currency)
   const preview = buildBatchAllocationPreview({
-    transaction: { amount: tx.amount, currency: tx.currency, date: tx.date },
+    transaction: { amount: tx.amount, date: tx.date },
     bankAccount,
     allocations: [allocation],
     invoices: { [invoiceId]: invoice },
@@ -285,7 +285,7 @@ describe('match_batch_allocate fee rows: RPC and staged preview agree', () => {
     }
     const bankAccount = await resolveSettlementAccount(db, owner.companyId, tx.cash_account_id, silentLog, tx.currency)
     const preview = buildBatchAllocationPreview({
-      transaction: { amount: tx.amount, currency: tx.currency, date: tx.date },
+      transaction: { amount: tx.amount, date: tx.date },
       bankAccount,
       allocations,
       invoices,

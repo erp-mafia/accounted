@@ -196,7 +196,7 @@ describe('settleInvoicePayment', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      invoice,
+      { ...invoice, carried_sek: null },
       '2026-07-12',
       undefined,
       'Kund AB',
@@ -994,8 +994,32 @@ describe('settleInvoicePayment', () => {
       })
     })
 
+    it('clears what 1510 carries on a foreign invoice, read as the entry books', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { ok: true, sek: 1965.44 } }) // what 1510 carries
+      enqueue({ data: { id: 'ip-1' } })
+      enqueue({ data: [{ id: 'inv-1' }] })
+
+      const invoice = payableInvoice({
+        total: 176.7,
+        remaining_amount: 176.7,
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        journal_entry_id: 'je-orig',
+      } as Partial<Invoice>)
+      await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 176.7,
+      })
+
+      expect(supabase.rpc).toHaveBeenCalledWith('document_carried_sek', expect.objectContaining({ p_side: 'customer', p_document_id: invoice.id }))
+      expect(vi.mocked(createInvoicePaymentJournalEntry).mock.calls.at(-1)?.[3]).toMatchObject({ carried_sek: 1965.44 })
+    })
+
     it('stores a partial in invoice currency, not the SEK line total', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { ok: false, reason: 'no_registration_voucher' } }) // what 1510 carries
       enqueue({ data: { id: 'ip-1' } })
       enqueue({ data: [{ id: 'inv-1' }] })
 

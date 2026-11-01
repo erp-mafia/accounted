@@ -1099,6 +1099,51 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 
+  it('pays the whole remainder when SEK lines clear what 1510 carries: at the rate it read as an overpayment', async () => {
+    // 126.39 NOK at 0.9512 registered 120.23; 120.23 / 0.9512 is 126.40.
+    const NOK_INVOICE = {
+      ...EUR_INVOICE,
+      currency: 'NOK',
+      exchange_rate: 0.9512,
+      subtotal: 126.39,
+      vat_amount: 0,
+      total: 126.39,
+      total_sek: 120.22,
+      remaining_amount: 126.39,
+    }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: NOK_INVOICE, error: null },
+          { data: { ...NOK_INVOICE, status: 'paid', remaining_amount: 0, paid_amount: 126.39 }, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
+        transactions: { data: [], error: null },
+        'rpc:document_carried_sek': { data: { ok: true, sek: 120.23 }, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 120.23, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 120.23 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ status: 'paid', remaining_amount: 0 })
+  })
+
   it('still runs the duplicate guard when the converted SEK lines settle a EUR invoice in full', async () => {
     // The complement of the test above: 11 496,70 kr at 11,4967 is exactly the
     // 1 000 EUR remaining, so this IS a full settlement and the advisory must

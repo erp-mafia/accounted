@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
+import { clearedSek, statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
@@ -212,12 +213,16 @@ function invoiceOutstandingAmount(invoice: Invoice): number {
  * as a pure function so a preview shows exactly what the mark-paid doors
  * book: the settlement account debited and 1510 credited for what is still
  * outstanding (remaining_amount, net of the ROT/RUT share), or the partial
- * `paymentAmount`, with a 3960/7960 line when an exchange-rate difference
- * is given. Throws InvoiceFxRateMissingError for a foreign amount without a
- * rate, like the booking itself.
+ * `paymentAmount`. A foreign invoice clears what 1510 carries when the caller
+ * read it (`carried_sek`, carriedSekOf), so nothing is stranded on a paid
+ * invoice. An exchange-rate difference is measured from the rate: the bank takes
+ * that figure plus the difference and the gap to what 1510 gives up is the
+ * 3960/7960 line (statedSettlement).
+ * Throws InvoiceFxRateMissingError for a foreign amount without a rate, like
+ * the booking itself.
  */
 export function buildInvoicePaymentLines(
-  invoice: Invoice,
+  invoice: Invoice & { carried_sek?: number | null },
   customerName: string | undefined,
   settlementAccountNumber: string = '1930',
   exchangeRateDifference?: number,
@@ -249,55 +254,34 @@ export function buildInvoicePaymentLines(
   // total_sek exactly as before, so legacy rows without a rate keep working.
   const outstanding = invoiceOutstandingAmount(invoice)
   const settlesFullTotal = Math.abs(outstanding - invoice.total) < 0.005
-  const bookedSekAmount = isPartial
+  const sekAtRate = isPartial
     ? headerToSekOrThrow(paymentAmount, null, invoice.currency, invoice.exchange_rate)
     : settlesFullTotal
       ? headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
       : headerToSekOrThrow(outstanding, null, invoice.currency, invoice.exchange_rate)
+  const bookedSekAmount =
+    invoice.carried_sek != null
+      ? clearedSek({
+          amount: paymentAmount ?? outstanding,
+          remaining: outstanding,
+          carried: invoice.carried_sek,
+          rate: invoice.exchange_rate ?? 0,
+        })
+      : sekAtRate
+  const { bankSek, gainSek } = statedSettlement({
+    cleared: bookedSekAmount,
+    sekAtRate,
+    difference: isPartial ? undefined : exchangeRateDifference,
+  })
 
-  const lines: CreateJournalEntryLineInput[] = []
-
-  if (!isPartial && exchangeRateDifference && exchangeRateDifference !== 0) {
-    // Foreign currency with exchange rate difference
-    // For receivables: positive diff = gain (received more), negative = loss (received less)
-    const actualSekReceived = bookedSekAmount + exchangeRateDifference
-
-    // Debit: settlement account (bank by default) at actual SEK received
-    lines.push({
-      account_number: settlementAccountNumber,
-      debit_amount: Math.round(actualSekReceived * 100) / 100,
-      credit_amount: 0,
-      line_description: desc,
-    })
-
-    // Credit: Clear kundfordringar at original booked SEK amount
-    lines.push({
-      account_number: '1510',
-      debit_amount: 0,
-      credit_amount: Math.round(bookedSekAmount * 100) / 100,
-      line_description: desc,
-    })
-
-    // Exchange rate difference: received more than booked is a gain (Cr 3960),
-    // less a loss (Dr 7960).
-    lines.push(fxDifferenceLine(exchangeRateDifference))
-  } else {
-    // Standard SEK payment or no exchange rate difference
-    lines.push(
-      {
-        account_number: settlementAccountNumber,
-        debit_amount: Math.round(bookedSekAmount * 100) / 100,
-        credit_amount: 0,
-        line_description: desc,
-      },
-      {
-        account_number: '1510',
-        debit_amount: 0,
-        credit_amount: Math.round(bookedSekAmount * 100) / 100,
-        line_description: desc,
-      }
-    )
-  }
+  // Debit the settlement account (bank by default) at the SEK received, credit
+  // kundfordringar at the SEK booked. Received more than booked is a gain
+  // (Cr 3960), less a loss (Dr 7960).
+  const lines: CreateJournalEntryLineInput[] = [
+    { account_number: settlementAccountNumber, debit_amount: bankSek, credit_amount: 0, line_description: desc },
+    { account_number: '1510', debit_amount: 0, credit_amount: roundOre(bookedSekAmount), line_description: desc },
+  ]
+  if (gainSek !== 0) lines.push(fxDifferenceLine(gainSek))
 
   if (defaultDimensions) {
     // Copy per line: a shared bag object would let one line's mutation
@@ -331,7 +315,7 @@ export async function createInvoicePaymentJournalEntry(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  invoice: Invoice,
+  invoice: Invoice & { carried_sek?: number | null },
   paymentDate: string,
   exchangeRateDifference?: number,
   customerName?: string,

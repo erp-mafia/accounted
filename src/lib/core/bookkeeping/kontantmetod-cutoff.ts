@@ -109,7 +109,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventTaxAmount } from '@/lib/posting/store'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import {
   fetchCreditedAfter,
   fetchPaymentsAsOf,
@@ -1134,7 +1134,7 @@ function resolveHeaderSek(
   const currency = String(row.currency ?? 'SEK').toUpperCase()
   if (currency === 'SEK') return amount
   const rate = Number(row.exchange_rate ?? 0)
-  if (Number.isFinite(rate) && rate > 0) return roundOre(amount * rate)
+  if (Number.isFinite(rate) && rate > 0) return sekOfForeign(amount, rate)
   throw new Error(
     `Faktura ${String(row.id ?? '')} i ${currency} saknar användbart SEK-belopp eller valutakurs`,
   )

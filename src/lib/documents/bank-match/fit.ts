@@ -32,11 +32,10 @@
  * calculateMatchConfidence).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isKronorCurrency, resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, resolveSekAmountOrNull, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
-import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { calculateMerchantSimilarity, CONVERTED_AMOUNT_TOLERANCE_PERCENT } from '@/lib/documents/core-receipt-matcher'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
@@ -162,7 +161,7 @@ export async function findDocumentRowMismatch(
           return rate && rate.rate > 0 ? rate.rate : null
         })
       const rate = await rateFor(facts.currency, facts.issueDate ?? row.date ?? today)
-      documentSek = rate != null ? roundOre(facts.amount * rate) : null
+      documentSek = rate != null ? sekOfForeign(facts.amount, rate) : null
     }
     return documentRowMismatch(facts, row, documentSek)
   } catch (err) {

@@ -466,6 +466,7 @@ export const transactionsMatchBatch = defineOperation({
     doNotUseFor:
       'One invoice (POST /transactions/{id}/match-invoice or match-supplier-invoice), mixing customer and supplier invoices, or supplier invoices never booked under kontantmetoden.',
     pitfalls: [
+      'A bank row in a foreign currency returns 400 BATCH_FOREIGN_CURRENCY: the verifikat is in kronor and this door does not read the row\'s SEK. Match it to one invoice at a time (match-invoice, match-supplier-invoice). A SEK row against foreign invoices works: state each allocation in kronor, within 10 % of what the invoice is booked at (BATCH_FX_DEVIATION_TOO_LARGE).',
       'The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.',
       'fees books a payment service\'s fee on the row: a payout net of Stripe\'s or a card acquirer\'s fee (customer invoices: allocations - fees = |amount|) or a bank\'s charge added to a payment (supplier invoices: allocations + fees = |amount|). Each invoice is allocated what it owed. At most 5 rows, each a debit on an active BAS class 6 account (6570 Bankkostnader, 6040 Kontokortsavgifter) with no VAT, since a payment service is exempt (ML 10 kap. 33 §): BATCH_FEE_ACCOUNT_INVALID otherwise. The fees must be smaller than the invoices (BATCH_FEE_TOO_LARGE). A platform\'s commission is a taxable service, not a fee row: book it from the platform\'s invoice.',
       'A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.',
@@ -520,6 +521,7 @@ export const transactionsMatchBatch = defineOperation({
     'BATCH_TX_ALREADY_BOOKED',
     'BANK_ROW_IGNORED',
     'BANK_ROW_READ_FAILED',
+    'BATCH_FOREIGN_CURRENCY',
     'BATCH_TX_ZERO_AMOUNT',
     'BATCH_DIRECTION_MISMATCH',
     'BATCH_INVOICE_NOT_FOUND',
@@ -528,6 +530,7 @@ export const transactionsMatchBatch = defineOperation({
     'BATCH_SUPPLIER_INVOICE_NOT_OPEN',
     'BATCH_AMOUNT_EXCEEDS_TX',
     'BATCH_AMOUNT_BELOW_TX',
+    'BATCH_FX_DEVIATION_TOO_LARGE',
     'BATCH_FEE_INVALID',
     'BATCH_FEE_ACCOUNT_INVALID',
     'BATCH_FEE_TOO_LARGE',
@@ -553,7 +556,7 @@ export const transactionsMatchBatch = defineOperation({
     visibility: 'default',
     keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
     description:
-      'Stage booking 1 bank tx against N customer OR N supplier invoices in one verifikat (BFL 5 kap 6§). Amounts in tx currency (cross-currency: SEK credited). fees: exempt payment fees (customer: invoices - fees = tx; supplier: + fees). preview.expected_lines = rows approval posts.',
+      'Stage booking 1 SEK bank tx against N customer OR N supplier invoices in one verifikat (BFL 5 kap 6§). Amounts in SEK; a foreign row is refused. fees: exempt payment fees (customer: invoices - fees = tx; supplier: + fees). preview.expected_lines = rows approval posts.',
     stage: {
       pendingType: 'match_batch_allocate',
       title: (input, preview) => {
@@ -602,6 +605,13 @@ export const transactionsMatchBatch = defineOperation({
       refusal: (failure, _input, keyScopes) => {
         if (failure.code === 'BATCH_TX_POSSIBLE_DUPLICATE' && failure.details) {
           return alreadyExplainedRefusal(failure.details as unknown as AlreadyExplainedRefusalDetails, keyScopes)
+        }
+        if (failure.code === 'BATCH_FOREIGN_CURRENCY') {
+          return codedRefusal(
+            failure.code,
+            `${getErrorEntry(failure.code)?.message_sv ?? failure.code}` +
+              ' Kundfaktura: gnubok_match_transaction_to_invoice. Leverantörsfaktura: be användaren matcha betalningen mot fakturan i Accounted; inget MCP-verktyg bokför den än.',
+          )
         }
         if (failure.code === 'BATCH_CASH_METHOD_UNBOOKED_INVOICE') {
           const unbooked = (failure.details?.invoices as Array<{ id: string; kind?: string; invoice_number?: string | null }> | undefined) ?? []
@@ -916,7 +926,7 @@ export const transactionsBulkBook = defineOperation({
           case 'BULK_BOOK_MIXED_CURRENCY':
             return codedRefusal(
               failure.code,
-              'All transactions must share the same currency. For cross-currency allocations, use gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).',
+              'All transactions must share the same currency. Book a foreign-currency row on its own; a SEK row against foreign invoices goes through gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).',
             )
           case 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE': {
             const details = failure.details as

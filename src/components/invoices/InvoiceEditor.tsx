@@ -1,5 +1,6 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { Fragment, useState, useEffect, useRef, useMemo, useId } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
@@ -2081,9 +2082,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           if (!isSek && !(typeof rate === 'number' && rate > 0)) continue
           for (const it of inv.invoice_items ?? []) {
             if (!it.deduction_type || !it.deduction_amount) continue
-            const sek = isSek ? it.deduction_amount : it.deduction_amount * (rate as number)
+            const sek = isSek ? roundOre(it.deduction_amount) : sekOfForeign(it.deduction_amount, rate as number)
             if (!(it.deduction_type in totals)) continue
-            totals[it.deduction_type] += roundOre(sek)
+            totals[it.deduction_type] += sek
           }
         }
         setPriorYearDeductions(totals)

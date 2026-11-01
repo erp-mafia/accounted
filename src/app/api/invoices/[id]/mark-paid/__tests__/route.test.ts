@@ -1209,6 +1209,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { ok: true, sek: 11496.7 }, error: null }) // what 1510 carries
     // No duplicate-guard probes enqueued: 500 EUR < 1 000 EUR remaining, so the
     // guard is skipped entirely.
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
@@ -1270,6 +1271,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { ok: true, sek: 11496.7 }, error: null }) // what 1510 carries
     enqueue({ data: [], error: null }) // duplicate guard: EUR currency sweep
     enqueue({ data: [], error: null }) // duplicate guard: SEK currency sweep
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
@@ -1304,6 +1306,76 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     )
   })
 
+  describe('SEK lines against what 1510 carries', () => {
+    /** The door with the proposal's rows on a NOK invoice, where one öre is more than a cent. */
+    async function payRows(total: number, rate: number, carried: number | null, sek: number, settles = true) {
+      const invoice = makeInvoice({
+        id: 'inv-1',
+        status: 'sent',
+        currency: 'NOK',
+        exchange_rate: rate,
+        total,
+        remaining_amount: total,
+        customer: makeCustomer(),
+      })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: carried === null ? { ok: false, reason: 'no_registration_voucher' } : { ok: true, sek: carried }, error: null })
+      if (settles) {
+        enqueue({ data: [], error: null }) // duplicate guard: NOK currency sweep
+        enqueue({ data: [], error: null }) // duplicate guard: SEK currency sweep
+      }
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update
+      mockFindFiscalPeriod.mockResolvedValue('fp-1')
+      mockCreateJournalEntry.mockResolvedValue({ id: 'je-nok' })
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+        method: 'POST',
+        body: {
+          lines: [
+            { account_number: '1930', debit_amount: sek, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: sek },
+          ],
+        },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      return parseJsonResponse<{
+        status: string
+        paid_amount: number
+        remaining_amount: number
+        error?: { code: string }
+      }>(response)
+    }
+
+    it('pays the whole remainder when the rows clear the ledger figure: at the rate it read as an overpayment', async () => {
+      // 120.23 / 0.9512 is 126.40, over the 126.39 owed.
+      const { status, body } = await payRows(126.39, 0.9512, 120.23, 120.23)
+      expect(status).toBe(200)
+      expect(body).toMatchObject({ status: 'paid', paid_amount: 126.39, remaining_amount: 0 })
+    })
+
+    it('pays the whole remainder when the rate reads a cent short: no paid invoice left open for 0.01 NOK', async () => {
+      // 126.37 / 0.9512 is 132.85, a cent under the 132.86 owed.
+      const { status, body } = await payRows(132.86, 0.9512, 126.37, 126.37)
+      expect(status).toBe(200)
+      expect(body).toMatchObject({ status: 'paid', paid_amount: 132.86, remaining_amount: 0 })
+    })
+
+    it('takes rows short of the ledger as their share of it, not at the rate', async () => {
+      // A rättelse left 5 750 on 1510 for 500 NOK at 11: half of that is 250 NOK, not 261.36.
+      const { status, body } = await payRows(500, 11, 5750, 2875, false)
+      expect(status).toBe(200)
+      expect(body).toMatchObject({ status: 'partially_paid', paid_amount: 250, remaining_amount: 250 })
+    })
+
+    it('reads the rows at the rate when the ledger cannot say', async () => {
+      const { status, body } = await payRows(500, 11, null, 2750, false)
+      expect(status).toBe(200)
+      expect(body).toMatchObject({ status: 'partially_paid', paid_amount: 250, remaining_amount: 250 })
+    })
+  })
+
   it('still runs the duplicate guard when the converted SEK lines settle a EUR invoice in full', async () => {
     // The complement of the test above: 11 496,70 kr at 11,4967 is exactly the
     // 1 000 EUR remaining, so this IS a full settlement and the advisory must
@@ -1321,6 +1393,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { ok: true, sek: 11496.7 }, error: null }) // what 1510 carries
     // EUR currency sweep (one counterparty probe per currency, issue #2299):
     // the queued stub ignores filters, so the kronor row lands here and is
     // kept by the per-row re-check as a SEK magnitude of the EUR payment.
@@ -1441,6 +1514,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: { ok: false, reason: 'no_registration_voucher' }, error: null }) // what 1510 carries
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }], error: null })
 

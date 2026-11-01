@@ -38,6 +38,7 @@
  * amount in its currency (anything else is refused, never full-credited),
  * and the item is marked converted to the credit note.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { z } from 'zod'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { CoreEvent } from '@/lib/events/types'
@@ -56,7 +57,6 @@ import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
-import { roundOre } from '@/lib/money'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import {
@@ -203,7 +203,7 @@ function originalPayableSek(original: Original): number | null {
   if (typeof original.total !== 'number' || !Number.isFinite(original.total)) return null
   if (original.currency === 'SEK') return original.total
   const rate = original.exchange_rate
-  return rate != null && rate > 0 ? roundOre(original.total * rate) : null
+  return rate != null && rate > 0 ? sekOfForeign(original.total, rate) : null
 }
 
 function creditItemsFor(creditNoteId: string, items: SupplierInvoiceItem[]) {

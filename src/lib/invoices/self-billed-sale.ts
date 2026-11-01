@@ -18,7 +18,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
 import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
@@ -202,9 +203,9 @@ export async function resolveSelfBilledSaleDraft(
     }
     exchangeRate = rateData.rate
     exchangeRateDate = rateData.date
-    subtotalSek = convertToSEK(subtotal, exchangeRate)
-    vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-    totalSek = convertToSEK(total, exchangeRate)
+    subtotalSek = sekOfForeign(subtotal, exchangeRate)
+    vatAmountSek = sekOfForeign(vatAmount, exchangeRate)
+    totalSek = sekOfForeign(total, exchangeRate)
   }
 
   return {

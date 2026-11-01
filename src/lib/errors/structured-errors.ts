@@ -8814,6 +8814,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'Invoice currency does not match the transaction currency. Same-currency only in v1.',
   },
+  BATCH_FOREIGN_CURRENCY: {
+    httpStatus: 400,
+    message_sv:
+      'Samlingsbetalning stödjer bara bankrader i SEK. Matcha en bankrad i utländsk valuta mot en faktura i taget, så att beloppet räknas om till kronor med rätt växelkurs.',
+    message_en:
+      'A batch allocation takes SEK bank rows only. Match a foreign-currency bank row to one invoice at a time, so the amount is converted to kronor at the correct exchange rate.',
+  },
   BATCH_FX_RATE_MISSING: {
     httpStatus: 400,
     message_sv:

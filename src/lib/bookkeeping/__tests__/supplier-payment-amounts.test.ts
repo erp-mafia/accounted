@@ -2,29 +2,16 @@
  * #2955: a manual payment of a foreign-currency supplier invoice clears the
  * SEK its linked vouchers carry on 244x, never the invoice-currency figure.
  *
- * The loader runs against the queued Supabase mock: each query takes the next
- * queued result, so the enqueue order below is the loader's read order:
- *   1. the registration verifikat (plus its corrections when stornoed)
- *   2. another invoice naming the same registration verifikat?
- *   3. this invoice's payment rows
- *   4. per chunk of payment vouchers: their status, a stornoed one's
- *      correction chain, then sharing
- *   5. the 244x lines of the live registration and the payment vouchers
+ * What the ledger carries is public.document_carried_sek, on real Postgres in
+ * tests/pg/document-carried-sek.pg.test.ts: every voucher shape and refusal.
+ * Here the door: which question it asks and what it does with the answer.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase, makeSupplierInvoice } from '@/tests/helpers'
 import { buildSupplierInvoicePaymentLines } from '../supplier-invoice-entries'
-import { MAX_CHAIN_WALK } from '@/lib/core/bookkeeping/correction-chain'
-import {
-  CHAIN_HOP_BUDGET,
-  MAX_PAYMENT_ROWS,
-  loadSupplierInvoiceRemainingSek,
-  prorateSupplierPaymentSek,
-  resolveSupplierPaymentSek,
-  supplierPaymentSekInputIssue,
-} from '../supplier-payment-amounts'
+import { resolveSupplierPaymentSek, supplierPaymentSekInputIssue } from '../supplier-payment-amounts'
 
-const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const { supabase, enqueue, reset } = createQueuedMockSupabase()
 const COMPANY = 'company-1'
 
 // The ticket's invoice: 37.50 USD at 9.6414, registered at 361.55 kr on 2440.
@@ -44,37 +31,14 @@ function usdInvoice(overrides: Parameters<typeof makeSupplierInvoice>[0] = {}) {
   })
 }
 
-const apLine = (id: string, entry: string, debit: number, credit: number) => ({
-  id,
-  journal_entry_id: entry,
-  debit_amount: debit,
-  credit_amount: credit,
-})
-
-/** An open invoice whose registration is posted and that has no payments yet. */
-function enqueueFreshLedger(registrationCreditSek: number) {
-  enqueue({ data: { id: 'je-reg', status: 'posted' } })
-  enqueue({ data: [] }) // no other invoice on the registration
-  enqueue({ data: [] }) // no payment rows
-  enqueue({ data: [apLine('l-1', 'je-reg', 0, registrationCreditSek)] })
+/** What public.document_carried_sek answers for the invoice. */
+function ledgerCarries(sek: number) {
+  enqueue({ data: { ok: true, sek } })
 }
 
 beforeEach(() => {
   reset()
-})
-
-describe('prorateSupplierPaymentSek', () => {
-  it('a full settlement clears exactly the SEK left on 244x', () => {
-    expect(prorateSupplierPaymentSek({ amount: 37.5, remaining: 37.5, remainingSek: 361.55 })).toBe(361.55)
-  })
-
-  it('a partial then the rest leaves nothing on 244x', () => {
-    const first = prorateSupplierPaymentSek({ amount: 12.5, remaining: 37.5, remainingSek: 361.55 })
-    expect(first).toBe(120.52)
-    const rest = prorateSupplierPaymentSek({ amount: 25, remaining: 25, remainingSek: 361.55 - first })
-    expect(rest).toBe(241.03)
-    expect(Math.round((first + rest) * 100) / 100).toBe(361.55)
-  })
+  supabase.rpc.mockClear()
 })
 
 describe('supplierPaymentSekInputIssue', () => {
@@ -98,11 +62,11 @@ describe('resolveSupplierPaymentSek', () => {
       amount: 10000,
     })
     expect(result).toEqual({ ok: true, clearingSek: 10000, exchangeRateDifference: undefined })
-    expect(findCalls('journal_entries', 'select')).toHaveLength(0)
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('the ticket: 37.50 USD fully settled clears 361.55 kr, and the verifikat says so', async () => {
-    enqueueFreshLedger(361.55)
+    ledgerCarries(361.55)
     const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 37.5 })
     expect(result).toEqual({ ok: true, clearingSek: 361.55, exchangeRateDifference: undefined })
     if (!result.ok) throw new Error('unreachable')
@@ -121,7 +85,7 @@ describe('resolveSupplierPaymentSek', () => {
   it('reads 244x off the vouchers, not the rate: per-line rounding is cleared to the öre', async () => {
     // Registration credited 742.12 (per-line rounding) while 76.97 x 9.6418
     // rounds to 742.13: the rate would strand an öre on 2440.
-    enqueueFreshLedger(742.12)
+    ledgerCarries(742.12)
     const result = await resolveSupplierPaymentSek(
       supabase as never,
       COMPANY,
@@ -135,7 +99,7 @@ describe('resolveSupplierPaymentSek', () => {
     [365, -3.45, '7960'],
     [358, 3.55, '3960'],
   ])('amount_sek %d books the difference to the cleared SEK (%d) on %s', async (amountSek, diff, account) => {
-    enqueueFreshLedger(361.55)
+    ledgerCarries(361.55)
     const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), {
       amount: 37.5,
       amountSek,
@@ -154,7 +118,7 @@ describe('resolveSupplierPaymentSek', () => {
   })
 
   it('keeps a legacy exchange_rate_difference on the SEK cleared from the ledger', async () => {
-    enqueueFreshLedger(361.55)
+    ledgerCarries(361.55)
     const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), {
       amount: 37.5,
       exchangeRateDifference: -2,
@@ -162,49 +126,35 @@ describe('resolveSupplierPaymentSek', () => {
     expect(result).toEqual({ ok: true, clearingSek: 361.55, exchangeRateDifference: -2 })
   })
 
-  it('an earlier bank-matched partial at another rate is subtracted as booked, and the rest clears exactly', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'p-1', amount: 12.5, journal_entry_id: 'je-pay-1' }] })
-    enqueue({ data: [{ id: 'je-pay-1', status: 'posted' }] })
-    enqueue({ data: [] }) // the payment voucher settles no other invoice
-    enqueue({
-      data: [apLine('l-1', 'je-reg', 0, 361.55), apLine('l-2', 'je-pay-1', 125, 0)],
+  it('asks the ledger for this invoice on this company', async () => {
+    ledgerCarries(361.55)
+    await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 37.5 })
+    expect(supabase.rpc).toHaveBeenCalledWith('document_carried_sek', {
+      p_company_id: COMPANY,
+      p_side: 'supplier',
+      p_document_id: 'si-usd',
     })
-    const result = await resolveSupplierPaymentSek(
+  })
+
+  it('a part payment clears its share of what the ledger carries, and the rest what is left', async () => {
+    ledgerCarries(361.55)
+    const part = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 12.5 })
+    expect(part).toMatchObject({ ok: true, clearingSek: 120.52 })
+    ledgerCarries(241.03)
+    const rest = await resolveSupplierPaymentSek(
       supabase as never,
       COMPANY,
       usdInvoice({ paid_amount: 12.5, remaining_amount: 25, status: 'partially_paid' }),
       { amount: 25 },
     )
-    expect(result).toMatchObject({ ok: true, clearingSek: 236.55 })
-  })
-
-  it('a stornoed registration is followed to its correction, whose 244x is the skuld now', async () => {
-    // The original booked 37.50 kr (no rate); its rättelse books 361.55 kr.
-    enqueue({ data: { id: 'je-reg', status: 'reversed' } })
-    enqueue({ data: [{ id: 'je-corr' }] })
-    enqueue({ data: { id: 'je-corr', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
-    enqueue({ data: [apLine('l-9', 'je-corr', 0, 361.55)] })
-    const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 37.5 })
-    expect(result).toMatchObject({ ok: true, clearingSek: 361.55 })
-    // Lines are read for the live correction, not the reversed original.
-    const lineRead = findCalls('journal_entry_lines', 'in')[0]
-    expect(lineRead).toEqual(['journal_entry_id', ['je-corr']])
+    expect(rest).toMatchObject({ ok: true, clearingSek: 241.03 })
   })
 
   it('a ledger skuld far from the invoice rate is refused, not booked as a kursdifferens', async () => {
     // 99.58 USD at 9.2738 owes 923.49 kr, but the registration was corrected
     // to omvänd skattskyldighet and its rättelse credits 2440 only 738.75 kr.
     // Paying 930 kr would otherwise book 191.25 kr on 7960 as a kursförlust.
-    enqueue({ data: { id: 'je-reg', status: 'reversed' } })
-    enqueue({ data: [{ id: 'je-corr' }] })
-    enqueue({ data: { id: 'je-corr', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
-    enqueue({ data: [apLine('l-9', 'je-corr', 0, 738.75)] })
+    enqueue({ data: { ok: false, reason: 'ledger_rate_mismatch', expected_sek: 923.49, ledger_sek: 738.75 } })
     const result = await resolveSupplierPaymentSek(
       supabase as never,
       COMPANY,
@@ -225,7 +175,7 @@ describe('resolveSupplierPaymentSek', () => {
 
   it('a ledger skuld inside the 10% band still clears what the ledger says', async () => {
     // 37.50 x 9.6414 = 361.55; the registration credited 330 kr (8.7% off).
-    enqueueFreshLedger(330)
+    ledgerCarries(330)
     const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 37.5 })
     expect(result).toMatchObject({ ok: true, clearingSek: 330 })
   })
@@ -251,8 +201,7 @@ describe('resolveSupplierPaymentSek', () => {
   })
 
   it('an unresolvable ledger is refused with SI_PAID_SEK_UNRESOLVED and its reason', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'reversed' } })
-    enqueue({ data: [] }) // stornoed with no correction
+    enqueue({ data: { ok: false, reason: 'registration_voucher_not_live' } })
     const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), { amount: 37.5 })
     expect(result).toEqual({
       ok: false,
@@ -261,148 +210,3 @@ describe('resolveSupplierPaymentSek', () => {
     })
   })
 })
-
-describe('loadSupplierInvoiceRemainingSek: contradictions are refused, not guessed', () => {
-  const invoice = { id: 'si-usd', paid_amount: 0, registration_journal_entry_id: 'je-reg' }
-
-  it('scopes every read to the company', async () => {
-    enqueueFreshLedger(361.55)
-    await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, invoice)
-    for (const table of ['journal_entries', 'supplier_invoices', 'supplier_invoice_payments']) {
-      expect(findCalls(table, 'eq')).toContainEqual(['company_id', COMPANY])
-    }
-  })
-
-  it('registration verifikat shared with another invoice', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [{ id: 'si-other' }] })
-    expect(await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, invoice)).toEqual({
-      ok: false,
-      reason: 'registration_voucher_shared',
-    })
-  })
-
-  it('payment rows that do not add up to paid_amount', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [] }) // paid 12.50 but no row says so
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 12.5 }),
-    ).toEqual({ ok: false, reason: 'payment_history_mismatch' })
-  })
-
-  it('a payment voucher reversed with no correction', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'p-1', amount: 12.5, journal_entry_id: 'je-pay-1' }] })
-    enqueue({ data: [{ id: 'je-pay-1', status: 'reversed' }] })
-    enqueue({ data: { id: 'je-pay-1', status: 'reversed' } }) // chain walk
-    enqueue({ data: [] }) // no correction
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 12.5 }),
-    ).toEqual({ ok: false, reason: 'payment_voucher_not_posted' })
-  })
-
-  it('a stornoed payment voucher counts its correction, which carries the payment now', async () => {
-    // correctEntry leaves the payment row on the reversed original.
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'p-1', amount: 12.5, journal_entry_id: 'je-pay-1' }] })
-    enqueue({ data: [{ id: 'je-pay-1', status: 'reversed' }] })
-    enqueue({ data: { id: 'je-pay-1', status: 'reversed' } })
-    enqueue({ data: [{ id: 'je-pay-1-corr' }] })
-    enqueue({ data: { id: 'je-pay-1-corr', status: 'posted' } })
-    enqueue({ data: [] }) // settles no other invoice
-    enqueue({ data: [apLine('l-1', 'je-reg', 0, 361.55), apLine('l-2', 'je-pay-1-corr', 120.52, 0)] })
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 12.5 }),
-    ).toEqual({ ok: true, remainingSek: 241.03 })
-    expect(findCalls('journal_entry_lines', 'in')[0]).toEqual(['journal_entry_id', ['je-reg', 'je-pay-1-corr']])
-  })
-
-  it('a batch payment voucher that also settles another invoice', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'p-1', amount: 12.5, journal_entry_id: 'je-batch' }] })
-    enqueue({ data: [{ id: 'je-batch', status: 'posted' }] })
-    enqueue({ data: [{ id: 'p-other' }] })
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 12.5 }),
-    ).toEqual({ ok: false, reason: 'payment_voucher_shared' })
-  })
-
-  it('nothing left on 244x for an invoice the reskontra calls open', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'p-1', amount: 12.5, journal_entry_id: 'je-pay-1' }] })
-    enqueue({ data: [{ id: 'je-pay-1', status: 'posted' }] })
-    enqueue({ data: [] })
-    enqueue({ data: [apLine('l-1', 'je-reg', 0, 361.55), apLine('l-2', 'je-pay-1', 361.55, 0)] })
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 12.5 }),
-    ).toEqual({ ok: false, reason: 'no_liability_left' })
-  })
-})
-
-describe('loadSupplierInvoiceRemainingSek: the work one resolution does is bounded', () => {
-  const invoice = { id: 'si-usd', paid_amount: 0, registration_journal_entry_id: 'je-reg' }
-
-  it('reads the payment rows in one query capped one past MAX_PAYMENT_ROWS', async () => {
-    enqueueFreshLedger(361.55)
-    await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, invoice)
-    expect(findCalls('supplier_invoice_payments', 'limit')).toContainEqual([MAX_PAYMENT_ROWS + 1])
-    expect(findCalls('supplier_invoice_payments', 'range')).toHaveLength(0)
-  })
-
-  it('more payment rows than the cap are refused before any voucher is read', async () => {
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    const rows = Array.from({ length: MAX_PAYMENT_ROWS + 1 }, (_, i) => ({
-      id: `p-${i}`,
-      amount: 0.01,
-      journal_entry_id: `je-pay-${i}`,
-    }))
-    enqueue({ data: rows })
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, {
-        ...invoice,
-        paid_amount: roundTo2(0.01 * rows.length),
-      }),
-    ).toEqual({ ok: false, reason: 'ledger_history_too_long' })
-    // Only the registration lookup touched journal_entries; no line read.
-    expect(findCalls('journal_entries', 'select')).toHaveLength(1)
-    expect(findCalls('journal_entry_lines', 'select')).toHaveLength(0)
-  })
-
-  it('storno walks share one hop budget across the registration and every payment voucher', async () => {
-    // A registration corrected MAX_CHAIN_WALK times uses MAX_CHAIN_WALK + 1
-    // hops; a stornoed payment voucher then needs more than the budget left.
-    enqueue({ data: { id: 'je-reg', status: 'reversed' } })
-    for (let i = 1; i <= MAX_CHAIN_WALK; i++) {
-      enqueue({ data: [{ id: `je-reg-${i}` }] })
-      enqueue({ data: { id: `je-reg-${i}`, status: i === MAX_CHAIN_WALK ? 'posted' : 'reversed' } })
-    }
-    enqueue({ data: [] }) // no other invoice on the registration
-    const payments = Array.from({ length: 5 }, (_, i) => ({
-      id: `p-${i}`,
-      amount: 1,
-      journal_entry_id: `je-pay-${i}`,
-    }))
-    enqueue({ data: payments })
-    enqueue({ data: payments.map((p) => ({ id: p.journal_entry_id, status: 'reversed' })) })
-    for (let i = 0; i < 5; i++) {
-      enqueue({ data: { id: `je-pay-${i}`, status: 'reversed' } })
-      enqueue({ data: [{ id: `je-pay-${i}-corr` }] })
-      enqueue({ data: { id: `je-pay-${i}-corr`, status: 'posted' } })
-    }
-    expect(
-      await loadSupplierInvoiceRemainingSek(supabase as never, COMPANY, { ...invoice, paid_amount: 5 }),
-    ).toEqual({ ok: false, reason: 'ledger_history_too_long' })
-    expect(findCalls('journal_entry_lines', 'select')).toHaveLength(0)
-    expect(CHAIN_HOP_BUDGET).toBe(2 * MAX_CHAIN_WALK)
-  })
-})
-
-function roundTo2(x: number): number {
-  return Math.round(x * 100) / 100
-}

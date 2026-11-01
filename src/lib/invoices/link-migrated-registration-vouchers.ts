@@ -24,7 +24,7 @@
  * A foreign-currency invoice is the one exception to an exact AP/AR match
  * (crm#1039, founder decision 2026-10-06). Its SEK total came from our rate
  * index, while the source booked the verifikat at its own rate. When the
- * verifikat its ref singles out books within LEDGER_RATE_BAND of that total,
+ * verifikat its ref singles out books within FX_SAME_DOCUMENT_LIMIT of that total,
  * it is this invoice at the source's rate: the invoice links and takes the
  * SEK amount the verifikat books (`sourceRate`), so the reskontra agrees with
  * 151x/244x and a later payment clears them exactly. Further apart it is a
@@ -43,7 +43,8 @@ import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
-import { LEDGER_RATE_BAND } from '@/lib/bookkeeping/supplier-payment-amounts'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fxDeviationTooLarge, FX_SAME_DOCUMENT_LIMIT } from '@/lib/bookkeeping/fx-settlement'
 import {
   buildCopyIndexes,
   fetchFiscalPeriods,
@@ -248,13 +249,13 @@ function isForeignCurrency(code: string | null | undefined): boolean {
 }
 
 /**
- * Whether the verifikat books the invoice's SEK total at another rate: within
- * LEDGER_RATE_BAND of it, the band match_batch_allocate,
- * link_supplier_invoice_to_voucher and the manual supplier payment read a rate
- * difference by. Further apart it is a different receivable or skuld.
+ * Whether the verifikat books the invoice's SEK total at another rate: inside
+ * the limit match_batch_allocate, link_supplier_invoice_to_voucher and the
+ * manual supplier payment read a rate difference by. Further apart it is a
+ * different receivable or skuld.
  */
 function withinRateBand(booked: number, expected: number): boolean {
-  return Math.abs(booked - expected) <= Math.abs(expected) * LEDGER_RATE_BAND
+  return !fxDeviationTooLarge(booked, expected)
 }
 
 /**
@@ -277,8 +278,8 @@ function sourceRateValues(row: ForeignInvoiceRow | undefined, kind: MigratedInvo
   return {
     total,
     totalSek,
-    subtotalSek: roundOre(Number(row.subtotal ?? 0) * exchangeRate),
-    vatAmountSek: roundOre(Number(row.vat_amount ?? 0) * exchangeRate),
+    subtotalSek: sekOfForeign(Number(row.subtotal ?? 0), exchangeRate),
+    vatAmountSek: sekOfForeign(Number(row.vat_amount ?? 0), exchangeRate),
     exchangeRate,
     exchangeRateDate: entryDate,
     previousTotalSek: row.total_sek == null ? null : Number(row.total_sek),
@@ -841,7 +842,7 @@ export async function linkMigratedRegistrationVouchers(
         input,
         'amountMismatch',
         currency !== 'SEK'
-          ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency} and ${withinRateBand(booked, expected) ? 'its row cannot take the source rate' : `the two are more than ${LEDGER_RATE_BAND * 100}% apart, so the verifikat is not this invoice at another rate`}`
+          ? `${side} is ${booked} but the invoice total is ${expected} SEK; the invoice is in ${currency} and ${withinRateBand(booked, expected) ? 'its row cannot take the source rate' : `the two are more than ${FX_SAME_DOCUMENT_LIMIT * 100}% apart, so the verifikat is not this invoice at another rate`}`
           : `${side} is ${booked} but the invoice total is ${expected} SEK`,
         undefined,
         { bookedSek: booked, expectedSek: expected },

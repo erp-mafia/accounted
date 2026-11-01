@@ -82,6 +82,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { POST } from '../route'
 import { GET } from '../preview/route'
 
@@ -100,7 +101,10 @@ const SALE_ENTRY = {
   balanced: true,
   note: 'preview',
 }
-const REQUIRED_PLAN = { ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY }
+const REQUIRED_PLAN = { ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 12500 }
+// 141.36 + 35.34 EUR at 11.123: the sale will leave 1965.44, the header at the rate says 1965.43.
+const FOREIGN_INVOICE = { currency: 'EUR', exchange_rate: 11.123, total: 176.7, total_sek: 1965.43, remaining_amount: 176.7, subtotal: 141.36, vat_amount: 35.34 }
+const FOREIGN_PLAN = { ...REQUIRED_PLAN, receivableSek: 1965.44 }
 const NOT_REQUIRED = { ok: true, required: false }
 const BOOKED = { ok: true, journalEntryId: 'je-sale', bookedHere: true, warnings: [] }
 const NOTHING_BOOKED = { ok: true, journalEntryId: null, bookedHere: false, warnings: [] }
@@ -224,6 +228,29 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
       ]),
     )
     expect(input.lines.some((l) => l.account_number.startsWith('30') || l.account_number.startsWith('26'))).toBe(false)
+  })
+
+  it('clears what the sale will leave on 1510, off its dry run: no voucher holds it yet', async () => {
+    mockPlanSale.mockResolvedValue(FOREIGN_PLAN)
+    mockBookSale.mockResolvedValue(BOOKED)
+    vi.mocked(fetchExchangeRate).mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2024-06-15' })
+    enqueueReads({ tx: { amount: 1965.43, currency: 'SEK' }, invoice: FOREIGN_INVOICE })
+    enqueueSettleWrites()
+
+    const { status, body } = await post()
+
+    expect(status).toBe(200)
+    expect(body.invoice_status).toBe('paid')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account_number: '1930', debit_amount: 1965.43 }),
+        expect.objectContaining({ account_number: '1510', credit_amount: 1965.44 }),
+        expect.objectContaining({ account_number: '7960', debit_amount: 0.01 }),
+      ]),
+    )
   })
 
   it('re-attaches the invoice PDF from the sale verifikat booked first', async () => {
@@ -386,8 +413,8 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
 })
 
 describe('GET /api/transactions/[id]/match-invoice/preview: the sale first', () => {
-  function enqueuePreviewReads(opts: { invoice?: Record<string, unknown> } = {}) {
-    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' }), error: null })
+  function enqueuePreviewReads(opts: { tx?: Record<string, unknown>; invoice?: Record<string, unknown> } = {}) {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15', ...opts.tx }), error: null })
     enqueue({ data: { ...sentInvoice(opts.invoice), items: [] }, error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // cash accounts -> 1930
@@ -428,6 +455,23 @@ describe('GET /api/transactions/[id]/match-invoice/preview: the sale first', () 
     )
     // A preview writes nothing, the sale included.
     expect(mockBookSale).not.toHaveBeenCalled()
+  })
+
+  it('shows what the sale will leave on 1510, as the POST clears it', async () => {
+    mockPlanSale.mockResolvedValue(FOREIGN_PLAN)
+    vi.mocked(fetchExchangeRate).mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2024-06-15' })
+    enqueuePreviewReads({ tx: { amount: 1965.43, currency: 'SEK' }, invoice: FOREIGN_INVOICE })
+
+    const { status, body } = await preview()
+
+    expect(status).toBe(200)
+    expect(body.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account_number: '1930', debit_amount: 1965.43 }),
+        expect.objectContaining({ account_number: '1510', credit_amount: 1965.44 }),
+        expect.objectContaining({ account_number: '7960', debit_amount: 0.01 }),
+      ]),
+    )
   })
 
   it('answers the refusal the POST would answer', async () => {

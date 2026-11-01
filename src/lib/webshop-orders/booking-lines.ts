@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre as round } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -324,7 +325,7 @@ export function buildOrderBookingLines({
 
   const routing = routeOrder(order, settings)
 
-  const toSek = (amount: number) => round(Math.abs(amount) * rate)
+  const toSek = (amount: number) => sekOfForeign(Math.abs(amount), rate)
 
   const description = orderBookingDescription(order)
 

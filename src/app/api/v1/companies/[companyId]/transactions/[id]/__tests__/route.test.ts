@@ -18,6 +18,12 @@ beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
 
+// The payment-day rate is a network read; null falls back to the invoice's own.
+vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/currency/riksbanken')>()),
+  fetchExchangeRate: vi.fn().mockResolvedValue(null),
+}))
+
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
   return { ...actual, validateApiKey: vi.fn(), createServiceClientNoCookies: vi.fn() }

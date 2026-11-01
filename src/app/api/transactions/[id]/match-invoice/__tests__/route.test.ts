@@ -306,6 +306,56 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect((body.error as unknown as { code: string }).code).toBe('MATCH_INVOICE_NOT_OPEN')
   })
 
+  it('a full settlement clears what 1510 carries, the rate would strand an öre on the paid invoice', async () => {
+    // 176.70 EUR at 11.123 is 1965.43; the registration left 1965.44 on 1510.
+    const tx = makeTransaction({ id: 'tx-1', amount: 1965.43, invoice_id: null, currency: 'SEK', date: '2026-05-30' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: 11.123,
+      total: 176.7,
+      remaining_amount: 176.7,
+      paid_amount: 0,
+      journal_entry_id: 'je-reg',
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 1965.44 }, error: null }) // what 1510 carries
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2026-05-30' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: null, error: null }) // logMatchEvent
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 1965.43 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 1965.44 }),
+          expect.objectContaining({ account_number: '7960', debit_amount: 0.01 }),
+        ]),
+      }),
+      undefined,
+      undefined,
+    )
+  })
+
   it('cross-currency settlement: converts SEK tx via Riksbanken rate, posts FX-diff verifikat', async () => {
     // 1000 SEK bank tx paying a 140 USD invoice. Spot rate today: 10.45.
     // Conversion: 1000 / 10.45 = 95.6938 USD. Invoice was booked at 9.30,
@@ -333,6 +383,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: false, reason: 'no_registration_voucher' }, error: null }) // what 1510 carries
 
     mockFetchExchangeRate.mockResolvedValue({
       currency: 'USD',
@@ -441,6 +492,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: false, reason: 'no_registration_voucher' }, error: null }) // what 1510 carries
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down: manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })

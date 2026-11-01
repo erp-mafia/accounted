@@ -134,12 +134,7 @@ function usdInvoice(overrides: Parameters<typeof makeSupplierInvoice>[0] = {}) {
 function enqueueUsdUpToLedger(registrationCreditSek = 361.55) {
   enqueue({ data: usdInvoice() })
   enqueue({ data: { accounting_method: 'accrual' } })
-  enqueue({ data: { id: 'je-reg', status: 'posted' } })
-  enqueue({ data: [] })
-  enqueue({ data: [] })
-  enqueue({
-    data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: registrationCreditSek }],
-  })
+  enqueue({ data: { ok: true, sek: registrationCreditSek } })
 }
 
 function post(body: Record<string, unknown>) {
@@ -284,8 +279,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
   it('an ambiguous ledger is refused with 409 before any voucher is posted', async () => {
     enqueue({ data: usdInvoice() })
     enqueue({ data: { accounting_method: 'accrual' } })
-    enqueue({ data: { id: 'je-reg', status: 'reversed' } })
-    enqueue({ data: [] }) // stornoed, no correction
+    enqueue({ data: { ok: false, reason: 'registration_voucher_not_live' } })
 
     const res = await post({ amount: 37.5 })
     const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)

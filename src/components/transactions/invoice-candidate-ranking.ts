@@ -49,6 +49,7 @@
  * Ranking on the same rule means the order the user sees agrees with what the
  * booking path will actually accept.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { isValidExchangeRate } from '@/lib/utils'
 
@@ -132,7 +133,7 @@ function convertToSek(
 ): number | null {
   if (currency === DOMESTIC_CURRENCY) return null
   if (!isValidExchangeRate(exchangeRate)) return null
-  return roundOre(amount * exchangeRate)
+  return sekOfForeign(amount, exchangeRate)
 }
 
 /**

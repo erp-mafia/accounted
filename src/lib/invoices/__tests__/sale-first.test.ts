@@ -91,7 +91,7 @@ function dryRunOk(invoiceId = 'inv-1', entry: unknown = SALE_ENTRY) {
 const UNBOOKED = { id: 'inv-1', journal_entry_id: null, document_type: 'invoice', credited_invoice_id: null }
 
 function requiredPlan(invoiceId: string): RequiredSaleFirstPlan {
-  return { ok: true, required: true, invoiceId, entry: SALE_ENTRY as never }
+  return { ok: true, required: true, invoiceId, entry: SALE_ENTRY as never, receivableSek: 1250 }
 }
 
 beforeEach(() => {
@@ -162,7 +162,7 @@ describe('planSaleBeforeSettlement', () => {
     const { supabase } = fakeSupabase({ company_settings: [{ data: DEFERRING, error: null }] })
     const ctx = ctxFor(supabase)
     const plan = await planSaleBeforeSettlement(ctx, UNBOOKED, { settlementDate: '2026-10-10' })
-    expect(plan).toEqual({ ok: true, required: true, invoiceId: 'inv-1', entry: SALE_ENTRY })
+    expect(plan).toEqual({ ok: true, required: true, invoiceId: 'inv-1', entry: SALE_ENTRY, receivableSek: 1250 })
     expect(checkPeriodLock).toHaveBeenCalledWith(supabase, 'company-1', '2026-10-10')
     expect(bookInvoice).toHaveBeenCalledTimes(1)
     expect(bookInvoice).toHaveBeenCalledWith(ctx, 'inv-1', { dryRun: true })
@@ -417,8 +417,8 @@ describe('planSalesBeforeBatchSettlement', () => {
     expect(plan).toEqual({
       ok: true,
       plans: [
-        { ok: true, required: true, invoiceId: 'inv-b', entry: SALE_ENTRY },
-        { ok: true, required: true, invoiceId: 'inv-a', entry: SALE_ENTRY },
+        { ok: true, required: true, invoiceId: 'inv-b', entry: SALE_ENTRY, receivableSek: 1250 },
+        { ok: true, required: true, invoiceId: 'inv-a', entry: SALE_ENTRY, receivableSek: 1250 },
       ],
     })
     expect(settlementDate).toHaveBeenCalledTimes(1)

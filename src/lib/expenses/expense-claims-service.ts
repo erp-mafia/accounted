@@ -23,6 +23,7 @@
  * valutan). All rounding through roundOre.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
@@ -269,18 +270,16 @@ export async function planExpenseClaim(
       rate = fetched.rate
     }
   }
-  const amountSek = roundOre(input.amount * rate)
+  const amountSek = sekOfForeign(input.amount, rate)
   // With custom lines the claim's displayed VAT is the actually debited
   // 2641 side (reverse-charge 2614/2645 pairs net to zero and stay out).
   const vatSek = input.lines
-    ? roundOre(
-        sumOre(
-          input.lines
-            .filter((l) => l.account_number.startsWith('2641'))
-            .map((l) => (l.debit_amount || 0) * rate),
-        ),
+    ? sumOre(
+        input.lines
+          .filter((l) => l.account_number.startsWith('2641'))
+          .map((l) => sekOfForeign(l.debit_amount || 0, rate)),
       )
-    : roundOre(input.vat_amount * rate)
+    : sekOfForeign(input.vat_amount, rate)
   const netSek = roundOre(amountSek - vatSek)
 
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.expense_date)
@@ -296,12 +295,12 @@ export async function planExpenseClaim(
     // orphan row behind.
     const converted = input.lines.map((l) => ({
       account_number: l.account_number,
-      debit_amount: (l.debit_amount || 0) > 0 ? roundOre(l.debit_amount * rate) : 0,
+      debit_amount: (l.debit_amount || 0) > 0 ? sekOfForeign(l.debit_amount, rate) : 0,
       credit_amount:
         l.account_number === liability
           ? amountSek
           : (l.credit_amount || 0) > 0
-            ? roundOre(l.credit_amount * rate)
+            ? sekOfForeign(l.credit_amount, rate)
             : 0,
       line_description: l.line_description?.trim() || desc,
       // The claim-level bag defaults the cost lines only; without one the

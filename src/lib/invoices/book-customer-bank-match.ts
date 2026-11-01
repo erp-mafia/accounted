@@ -43,6 +43,7 @@ import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '
 import { buildInvoiceCashLines, createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
 import { buildInvoiceMatchClearingLines, invoiceMatchPaymentDescription } from '@/lib/bookkeeping/invoice-payment-lines'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
@@ -405,12 +406,30 @@ export async function bookCustomerBankMatch(
     })
   }
 
+  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+  // its verifikat gets its sale booked first, by the Bokför step on its
+  // invoice date, and the payment then clears the 1510 it debits. The plan is
+  // that step's dry run and the payment date's lock, so a refusal comes
+  // before anything is written. Edited rows that book the revenue themselves
+  // carry the sale already.
+  const salePlan =
+    customLines && !clearsReceivable(customLines)
+      ? SALE_FIRST_NOT_REQUIRED
+      : await planSaleBeforeSettlement(ctx, invoice, { settlementDate: transaction.date })
+  if (!salePlan.ok) return salePlan
+
   // The rows, built up front so the builders' own refusals and the chart
   // check come before anything is written: the same builders the booking
   // uses and the preview shows, the invoice's dimensions on every leg.
   const description = invoiceMatchPaymentDescription(invoice)
   let paymentLines: CreateJournalEntryLineInput[]
   try {
+    const carriedSek =
+      customLines || useCashEntry
+        ? null
+        : salePlan.required
+          ? salePlan.receivableSek
+          : await carriedSekOf(supabase, companyId, 'customer', invoice)
     paymentLines = customLines
       ? customLines
       : useCashEntry
@@ -437,6 +456,7 @@ export async function bookCustomerBankMatch(
               remaining_amount: invoice.remaining_amount ?? null,
               total: invoice.total,
               paid_amount: invoice.paid_amount ?? null,
+              carried_sek: carriedSek,
               invoice_number: invoice.invoice_number,
               customer: invoice.customer,
               default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
@@ -460,18 +480,6 @@ export async function bookCustomerBankMatch(
   if (unresolvable.length > 0) {
     return { ok: false, code: 'ACCOUNTS_NOT_IN_CHART', error: new AccountsNotInChartError(unresolvable) }
   }
-
-  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
-  // its verifikat gets its sale booked first, by the Bokför step on its
-  // invoice date, and the payment then clears the 1510 it debits. The plan is
-  // that step's dry run and the payment date's lock, so a refusal comes
-  // before anything is written. Edited rows that book the revenue themselves
-  // carry the sale already.
-  const salePlan =
-    customLines && !clearsReceivable(customLines)
-      ? SALE_FIRST_NOT_REQUIRED
-      : await planSaleBeforeSettlement(ctx, invoice, { settlementDate: transaction.date })
-  if (!salePlan.ok) return salePlan
 
   // An API key's unattended ceiling, on the payment verifikat, before the sale
   // posts anything: the engine refuses it at commit too, but by then the sale

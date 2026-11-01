@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { chunk as chunks } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntriesWithAccountLines, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
@@ -322,8 +323,8 @@ function signedBuckets(order: OssOrder, sekRate: number) {
       rate: rateKey(bucket.rate),
       net: sign * Math.abs(bucket.net),
       vat: sign * Math.abs(bucket.tax),
-      net_sek: sign * roundOre(Math.abs(bucket.net) * sekRate),
-      vat_sek: sign * roundOre(Math.abs(bucket.tax) * sekRate),
+      net_sek: sign * sekOfForeign(Math.abs(bucket.net), sekRate),
+      vat_sek: sign * sekOfForeign(Math.abs(bucket.tax), sekRate),
     }))
 }
 

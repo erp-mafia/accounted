@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -27,7 +28,6 @@ import {
 import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
-import { roundOre } from '@/lib/money'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
 /**
@@ -1489,9 +1489,7 @@ export async function ingestTransactions(
     const rateInfo = raw.currency && raw.currency !== 'SEK'
       ? exchangeRatesByDate.get(`${raw.currency}|${raw.date}`)
       : undefined
-    // roundOre, never Math.round(x * 100) / 100: the naive form rounds an
-    // exact half-öre by its binary representation (CLAUDE.md hard rule 6).
-    const amountSek = rateInfo ? roundOre(raw.amount * rateInfo.rate) : null
+    const amountSek = rateInfo ? sekOfForeign(raw.amount, rateInfo.rate) : null
     // A purchase made in another currency than the account's (the bank's
     // enrichment): the instructed amount and currency travel on any account;
     // the bank's rate only on a SEK account, where exchange_rate has no

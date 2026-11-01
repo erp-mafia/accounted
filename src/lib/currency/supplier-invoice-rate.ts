@@ -54,9 +54,9 @@
  * longer has the invoice in hand.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
-import { roundOre } from '@/lib/money'
 import { CURRENCIES, type Currency } from '@/types'
 
 /** Currencies a supplier invoice can be registered in; each has a Riksbanken series (currencies.test.ts). */
@@ -234,8 +234,8 @@ export function supplierInvoiceSekAmounts(
   amounts: { subtotal: number; vatAmount: number; total: number },
 ): { subtotal_sek: number; vat_amount_sek: number; total_sek: number } {
   return {
-    subtotal_sek: roundOre(amounts.subtotal * rate.rate),
-    vat_amount_sek: roundOre(amounts.vatAmount * rate.rate),
-    total_sek: roundOre(amounts.total * rate.rate),
+    subtotal_sek: sekOfForeign(amounts.subtotal, rate.rate),
+    vat_amount_sek: sekOfForeign(amounts.vatAmount, rate.rate),
+    total_sek: sekOfForeign(amounts.total, rate.rate),
   }
 }

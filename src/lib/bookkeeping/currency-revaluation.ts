@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -430,8 +431,8 @@ export async function previewCurrencyRevaluation(
     if (!closingRate || !inv.exchange_rate) continue
 
     const amountInCurrency = outstanding
-    const originalSek = Math.round(amountInCurrency * inv.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
+    const originalSek = sekOfForeign(amountInCurrency, inv.exchange_rate)
+    const closingSek = sekOfForeign(amountInCurrency, closingRate)
     const difference = Math.round((closingSek - originalSek) * 100) / 100
 
     if (Math.abs(difference) < 0.01) continue
@@ -457,8 +458,8 @@ export async function previewCurrencyRevaluation(
 
     const amountInCurrency = outstanding
 
-    const originalSek = Math.round(amountInCurrency * si.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
+    const originalSek = sekOfForeign(amountInCurrency, si.exchange_rate)
+    const closingSek = sekOfForeign(amountInCurrency, closingRate)
     const difference = Math.round((closingSek - originalSek) * 100) / 100
 
     if (Math.abs(difference) < 0.01) continue

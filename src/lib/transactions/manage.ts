@@ -25,6 +25,7 @@
  * A dry run reads, checks and answers a preview; it writes nothing, never
  * calls Riksbanken and never touches the exchange rate cache.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { Currency } from '@/types'
 import { isImportedTransaction } from '@/lib/transactions/origin'
@@ -33,7 +34,6 @@ import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import { bankFeedIbanOf } from '@/lib/transactions/external-id'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { roundOre } from '@/lib/money'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -483,7 +483,7 @@ export async function refreshTransactionExchangeRate(
   const { data: updated, error: updateError } = await supabase
     .from('transactions')
     .update({
-      amount_sek: roundOre(transaction.amount * rate.rate),
+      amount_sek: sekOfForeign(transaction.amount, rate.rate),
       exchange_rate: rate.rate,
       exchange_rate_date: rate.date,
     })

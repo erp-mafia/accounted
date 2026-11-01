@@ -1,4 +1,5 @@
-import { isZeroOre, ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
+import { oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
+import { isZeroOre, roundOre, sumOre } from '@/lib/money'
 import type { BatchAllocationPrefill } from './parts-read'
 
 /**
@@ -102,7 +103,7 @@ export function planPickedAllocations(rowAmount: number, picked: readonly Picked
 
   const last = ordered[ordered.length - 1]
   const lastAmount = roundOre(last.remaining + difference)
-  if (Math.abs(difference) < ORE_ROUNDING_SETTLEMENT_MAX && lastAmount > 0) {
+  if (oreSettlementResidual(pickedTotal, rowAbs) !== 0 && lastAmount > 0) {
     // The RPC settles an invoice in full when its allocation is under 1 kr
     // off what it owes and books the residual on 3740, so the öre goes on the
     // last invoice and the sum still equals the row.

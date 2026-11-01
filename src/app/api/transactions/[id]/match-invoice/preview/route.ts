@@ -48,6 +48,7 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-entries'
 import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import {
   CUSTOMER_ADVANCE_ACCOUNT,
   OVERPAYMENT_ACCOUNTS,
@@ -220,15 +221,14 @@ export const GET = withRouteContext(
     // Actual SEK that hit the bank, resolved through the same helper
     // buildInvoicePaymentClearingLines uses for the bank leg. SEK rows return
     // Math.abs(amount) unchanged.
-    const txAbsSek =
-      Math.round(
-        resolveSekAmount(
-          Math.abs(transaction.amount),
-          transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
-          transaction.currency,
-          transaction.exchange_rate,
-        ) * 100,
-      ) / 100
+    const txAbsSek = roundOre(
+      resolveSekAmount(
+        Math.abs(transaction.amount),
+        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+        transaction.currency,
+        transaction.exchange_rate,
+      ),
+    )
 
     let fxConversion: FxConversion = { required: false }
     if (transaction.currency !== invoice.currency) {
@@ -395,6 +395,9 @@ export const GET = withRouteContext(
           remaining_amount: inv.remaining_amount ?? null,
           total: inv.total,
           paid_amount: inv.paid_amount ?? null,
+          carried_sek: salePlan.required
+            ? salePlan.receivableSek
+            : await carriedSekOf(supabase, companyId!, 'customer', inv),
           invoice_number: inv.invoice_number,
           customer: inv.customer,
           default_dimensions: inv.default_dimensions,

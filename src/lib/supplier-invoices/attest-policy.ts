@@ -37,7 +37,8 @@
  * tests/pg/supplier-invoice-attest-levels.pg.test.ts proves the two agree.
  */
 
-import { multiplyOre, roundOre } from '@/lib/money'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import { companyAttestsSupplierInvoices } from './lifecycle'
 
 export type AttestMode = 'any' | 'all'
@@ -122,7 +123,7 @@ export function invoiceTotalSek(invoice: Pick<AttestInvoiceFacts, 'currency' | '
   const rate = Number(invoice.exchange_rate)
   if (!invoice.exchange_rate || !Number.isFinite(rate) || rate <= 0) return null
   // In decimals, not floats: 33.33 × 11.5 is 383.30 kr in SQL and must be here too.
-  return multiplyOre(Math.abs(Number(invoice.total)), rate)
+  return sekOfForeign(Math.abs(Number(invoice.total)), rate)
 }
 
 /** The person's limit; null = no limit. */

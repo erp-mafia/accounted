@@ -8,6 +8,7 @@ import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
 import { roundOre, ORE_TOLERANCE } from '@/lib/money'
 import { InvoiceFxRateMissingError } from './invoice-accounts'
 import { buildInvoiceCashLines } from './invoice-lines'
+import { statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -65,6 +66,11 @@ export interface ProposePaymentLinesInput {
      */
     paid_amount?: number | null
     remaining_amount?: number | null
+    /**
+     * What 1510 carries for a foreign invoice (carriedSekOf): the proposal
+     * clears exactly that, so nothing is stranded on a paid invoice.
+     */
+    carried_sek?: number | null
   }
   accountingMethod: 'accrual' | 'cash'
   entityType: EntityType
@@ -268,20 +274,22 @@ function proposeAccrualLines(
 ): FormLine[] {
   // The customer's share only: 1510 was debited total minus the ROT/RUT
   // deduction at issue (1513 took the rest), so that is what the payment clears.
-  const bookedSekAmount = Math.round((resolveSekAmount(
-    invoice.total,
-    invoice.total_sek,
-    invoice.currency,
-    invoice.exchange_rate
-  ) - deductionSek) * 100) / 100
+  const sekAtRate = roundOre(
+    resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate) - deductionSek,
+  )
+  const bookedSekAmount = invoice.carried_sek ?? sekAtRate
   const lines: FormLine[] = []
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
-    const actualSekReceived = bookedSekAmount + exchangeRateDifference
+    const { bankSek, gainSek } = statedSettlement({
+      cleared: bookedSekAmount,
+      sekAtRate,
+      difference: exchangeRateDifference,
+    })
 
     lines.push({
       account_number: paymentAccount,
-      debit_amount: toFormAmount(actualSekReceived),
+      debit_amount: toFormAmount(bankSek),
       credit_amount: '',
       line_description: desc,
     })
@@ -293,7 +301,7 @@ function proposeAccrualLines(
       line_description: desc,
     })
 
-    lines.push(toFormLine(fxDifferenceLine(exchangeRateDifference)))
+    if (gainSek !== 0) lines.push(toFormLine(fxDifferenceLine(gainSek)))
   } else {
     const amount = Math.round(bookedSekAmount * 100) / 100
     lines.push({

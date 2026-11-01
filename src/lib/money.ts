@@ -108,9 +108,10 @@ export function multiplyOre(a: number, b: number): number {
     ore = product / divisor
     if ((product % divisor) * BigInt(2) >= divisor) ore += BigInt(1)
   }
-  const negative = a < 0 !== b < 0
   // Parsed from the decimal string: the nearest double to the exact öre amount.
-  return (negative ? -1 : 1) * Number(`${ore.toString()}e-2`)
+  const magnitude = Number(`${ore.toString()}e-2`)
+  // A plain 0 under half an öre, never -0, as roundOre.
+  return a < 0 !== b < 0 && magnitude !== 0 ? -magnitude : magnitude
 }
 
 /**

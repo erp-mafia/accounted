@@ -19,6 +19,7 @@ vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
   bookSalesBeforeBatchSettlement: mockBookSales,
 }))
 
+import { transactionsMatchBatch } from '@/lib/operations/transactions'
 import { matchTransactionBatch, type MatchBatchInput } from '../match-batch'
 
 const TX_ID = '11111111-1111-4111-8111-111111111111'
@@ -59,7 +60,27 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+describe('the agent refused a foreign row', () => {
+  it('is told which door takes it, on either ledger', () => {
+    const refusal = transactionsMatchBatch.mcp?.stage?.refusal?.(
+      { code: 'BATCH_FOREIGN_CURRENCY', details: { currency: 'EUR' } },
+      {} as never,
+      [],
+    )
+    expect(refusal?.message).toContain('gnubok_match_transaction_to_invoice')
+    expect(refusal?.message).toContain('matcha betalningen mot fakturan i Accounted')
+  })
+})
+
 describe.each([[false], [true]])('matchTransactionBatch, dry run %s', (dryRun) => {
+  it('refuses a foreign row: its figure never lands in the kronor columns, and nothing is booked first', async () => {
+    const outcome = await run({ row: { currency: 'EUR' } }, { dryRun })
+
+    expect(outcome).toEqual({ ok: false, code: 'BATCH_FOREIGN_CURRENCY', details: { currency: 'EUR' } })
+    expect(mockCommitBatch).not.toHaveBeenCalled()
+    expect(mockBookSales).not.toHaveBeenCalled()
+  })
+
   it('refuses a row booked through a voucher link, naming the verifikat', async () => {
     const outcome = await run(
       { links: [{ journal_entry_id: ENTRY_ID, role: 'bank_line' }], entries: [posted] },

@@ -27,8 +27,8 @@ import {
   creditNoteNumber,
   creditNoteOriginalReference,
 } from '@/lib/invoices/build-credit-note'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
@@ -529,7 +529,7 @@ async function buildDraftPreview(params: {
   const toSek = (amount: number): number | null => {
     if (isDeliveryNote) return null
     if (currency === 'SEK') return amount
-    return exchangeRate ? roundOre(convertToSEK(amount, exchangeRate.rate)) : null
+    return exchangeRate ? sekOfForeign(amount, exchangeRate.rate) : null
   }
 
   const invoice = {

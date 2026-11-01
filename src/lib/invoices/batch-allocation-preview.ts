@@ -1,6 +1,8 @@
 import { roundOre } from '@/lib/money'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { clearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
-import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT } from '@/lib/bookkeeping/ore-rounding'
+import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
 
@@ -26,7 +28,11 @@ import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from
  * leg, built by the RPC call's own builder (lib/bookkeeping/payout-fee-lines.ts).
  * Since 20261031100700 a kontantmetoden invoice with no verifikat books the
  * lines it is handed (p_cash_lines, lib/invoices/batch-cash-method-guard.ts) in
- * place of the 1510 clearing; the preview takes the same lines.
+ * place of the 1510 clearing; the preview takes the same lines. Since
+ * 20261101120200 the RPC refuses a foreign bank row (BATCH_FOREIGN_CURRENCY,
+ * and so does matchTransactionBatch before it gets here), so every row here is
+ * kronor, and a foreign invoice clears what the ledger carries (carried_sek,
+ * read from the RPC's own document_carried_sek) or its remainder at the rate.
  * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
@@ -42,9 +48,8 @@ import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from
  */
 
 export interface BatchAllocationPreviewTransaction {
-  /** Signed amount in the transaction currency: income > 0, expense < 0. */
+  /** Signed amount in kronor: income > 0, expense < 0. */
   amount: number
-  currency: string
   /** ISO date or timestamp; the first ten characters are the entry date. */
   date: string
 }
@@ -53,7 +58,7 @@ export interface BatchAllocationPreviewAllocation {
   kind: 'customer_invoice' | 'supplier_invoice'
   invoice_id?: string | null
   supplier_invoice_id?: string | null
-  /** Amount in the transaction currency (cross-currency: bank-credited SEK). */
+  /** Amount in kronor: for a foreign invoice, the SEK of the row it takes. */
   amount: number
 }
 
@@ -63,6 +68,8 @@ export interface BatchAllocationPreviewInvoice {
   exchange_rate?: number | null
   remaining_amount?: number | null
   total?: number | null
+  /** What the ledger carries for a foreign invoice (carriedSekOf); null when it cannot say. */
+  carried_sek?: number | null
 }
 
 export interface BatchAllocationPreviewLine {
@@ -84,7 +91,7 @@ export interface BatchAllocationPreview {
   /** Debits equal credits to the öre. Always true for a batch the RPC accepts. */
   balanced: boolean
   /**
-   * none: every invoice is in the transaction currency.
+   * none: every invoice is in kronor.
    * included: the 7960/3960 leg is in `lines`, computed from the invoice's booked rate.
    * computed_at_commit: a cross-currency invoice had no usable rate, so the
    * RPC will refuse or compute the leg at commit; the line shows the allocation.
@@ -173,15 +180,14 @@ export function buildBatchAllocationPreview(input: {
     }
     const invoice = lookup(allocationSortKey(alloc))
     const remaining = invoice?.remaining_amount ?? invoice?.total ?? null
-    const sameCurrency = !invoice?.currency || invoice.currency === transaction.currency
 
-    if (sameCurrency) {
+    if (isKronorCurrency(invoice?.currency)) {
       if (remaining === null) {
         settle(alloc.amount, label)
         return
       }
-      const oreDiff = roundOre(remaining - alloc.amount)
-      if (oreDiff !== 0 && Math.abs(oreDiff) < 1.0) {
+      const oreDiff = oreSettlementResidual(remaining, alloc.amount)
+      if (oreDiff !== 0) {
         // Whole-krona settlement of an öre total: clear the full remaining and
         // let 3740 carry the residual. Customer short-paid = Dr 3740, over-paid
         // = Cr 3740; supplier is the mirror.
@@ -201,14 +207,14 @@ export function buildBatchAllocationPreview(input: {
 
     // Cross-currency: the receivable/payable was booked at the invoice rate,
     // the bank settled in SEK; the difference is a kursvinst or kursförlust.
-    const currencyLabel = `${label} (${invoice.currency})`
-    if (remaining === null || !usableRate(invoice.exchange_rate)) {
+    const currencyLabel = `${label} (${invoice?.currency})`
+    if (remaining === null || !usableRate(invoice?.exchange_rate)) {
       fx = 'computed_at_commit'
       settle(alloc.amount, currencyLabel)
       return
     }
     if (fx === 'none') fx = 'included'
-    const bookedSek = roundOre(remaining * invoice.exchange_rate)
+    const bookedSek = clearedSek({ amount: remaining, remaining, carried: invoice?.carried_sek ?? null, rate: invoice.exchange_rate })
     const fxDiff = roundOre(bookedSek - alloc.amount)
     settle(bookedSek, currencyLabel)
     if (Math.abs(fxDiff) > 0.005) {

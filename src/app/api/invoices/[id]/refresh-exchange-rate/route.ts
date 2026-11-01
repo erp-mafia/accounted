@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -168,7 +169,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ data: invoice })
     }
 
-    const toSek = (amount: number) => roundOre(amount * rate.rate)
+    const toSek = (amount: number) => sekOfForeign(amount, rate.rate)
 
     const { data: updated, error: updateError } = await supabase
       .from('invoices')

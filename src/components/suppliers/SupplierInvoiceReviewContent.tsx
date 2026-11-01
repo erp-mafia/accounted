@@ -1,5 +1,6 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useTranslations } from 'next-intl'
 import { CalendarDaysIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
@@ -330,14 +331,14 @@ export function SupplierInvoiceReviewContent({
         {currency !== 'SEK' && exchangeRate && (
           <div className="flex justify-between text-muted-foreground">
             <span>{t('review_sek_amount_at_rate', { rate: exchangeRate })}</span>
-            <span className="tabular-nums">{formatCurrency(total * parseFloat(exchangeRate))}</span>
+            <span className="tabular-nums">{formatCurrency(sekOfForeign(total, parseFloat(exchangeRate)))}</span>
           </div>
         )}
       </div>
 
       {/* A block (Spärr) this registration meets: the confirm is its review. */}
       {showsVoucher && (
-        <BookingBlockNotice lines={journalLines} counterparty={supplier.name} amountSek={total * fxRate} />
+        <BookingBlockNotice lines={journalLines} counterparty={supplier.name} amountSek={sekOfForeign(total, fxRate)} />
       )}
 
       {/* Verifikation preview */}

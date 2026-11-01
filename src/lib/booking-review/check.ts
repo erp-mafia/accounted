@@ -4,6 +4,7 @@
  * a bank row without a person's review asks here first and refuses, skips or
  * stages a match; commit_journal_entry asks the same in SQL last.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { Transaction } from '@/types'
@@ -67,7 +68,7 @@ export async function unattendedSettlementMayMatch(
   if (invoice.registration_journal_entry_id) return false
   const rules = await loadActiveBookingReviewRules(supabase, companyId)
   if (rules.length === 0) return false
-  const amountSek = Math.abs(Number(invoice.total_sek ?? Number(invoice.total) * (Number(invoice.exchange_rate) || 1)) || 0)
+  const amountSek = Math.abs(Number(invoice.total_sek ?? sekOfForeign(Number(invoice.total), Number(invoice.exchange_rate) || 1)) || 0)
   const accounts = new Set<string>()
   for (const item of invoice.items ?? []) {
     for (const account of [item.account_number, item.accrual_balance_account]) if (account) accounts.add(account)

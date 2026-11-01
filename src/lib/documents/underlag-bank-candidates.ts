@@ -23,7 +23,7 @@ import {
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { bookDirectDocumentCurrency } from '@/lib/bookkeeping/book-direct-prefill'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { resolveSekAmount, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult } from '@/types'
 
@@ -99,7 +99,7 @@ export function underlagPaymentFacts(extracted: InvoiceExtractionResult | null):
 export function underlagTotalSek(facts: UnderlagPaymentFacts, fxRate: number | null): number | null {
   if (facts.total == null) return null
   if (facts.currency === 'SEK') return facts.total
-  if (fxRate != null) return roundOre(facts.total * fxRate)
+  if (fxRate != null) return sekOfForeign(facts.total, fxRate)
   return null
 }
 

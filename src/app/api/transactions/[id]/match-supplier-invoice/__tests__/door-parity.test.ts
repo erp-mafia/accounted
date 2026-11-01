@@ -54,6 +54,12 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('fp-1'),
   reverseEntry: vi.fn(),
 }))
+// The payment-day rate is a network read; null falls back to the invoice's own.
+const { mockFetchExchangeRate } = vi.hoisted(() => ({ mockFetchExchangeRate: vi.fn() }))
+vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/currency/riksbanken')>()),
+  fetchExchangeRate: mockFetchExchangeRate,
+}))
 vi.mock('@/lib/invoices/match-log', () => ({ logMatchEvent: vi.fn() }))
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: vi.fn(),
@@ -75,6 +81,10 @@ interface Fixture {
   transaction: { amount: number; currency?: string; amount_sek?: number | null }
   invoice: Record<string, unknown>
   accountingMethod?: 'accrual' | 'cash'
+  /** Riksbanken's rate on the payment day. */
+  paymentRate?: number
+  /** What the ledger carries for the invoice. */
+  carriedSek?: number
 }
 
 const ITEMS = [
@@ -87,6 +97,8 @@ const ITEMS = [
 
 function seed(f: Fixture) {
   reset()
+  mockFetchExchangeRate.mockResolvedValue(f.paymentRate ? { currency: 'EUR', rate: f.paymentRate, date: '2026-09-15' } : null)
+  if (f.carriedSek !== undefined) setTable('rpc:document_carried_sek', { data: { ok: true, sek: f.carriedSek } })
   supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'u@example.test' } }, error: null })
   setTable('company_members', { data: { company_id: COMPANY_ID, role: 'owner' } })
   setTable('transactions', {
@@ -268,10 +280,34 @@ const CASES: Array<{
     fixture: {
       transaction: { amount: -1050 },
       invoice: { currency: 'EUR', exchange_rate: 11, total: 100, remaining_amount: 100 },
+      paymentRate: 10.5,
     },
     lines: [['2440', 1100, 0], ['1930', 0, 1050], ['3960', 0, 50]],
     ledger: { status: 'paid', paid_amount: 100, remaining_amount: 0 },
     paymentAmount: 100,
+  },
+  {
+    name: 'a SEK row of half a EUR invoice: a part payment at the payment-day rate',
+    fixture: {
+      transaction: { amount: -525 },
+      invoice: { currency: 'EUR', exchange_rate: 11, total: 100, remaining_amount: 100 },
+      paymentRate: 10.5,
+    },
+    lines: [['2440', 550, 0], ['1930', 0, 525], ['3960', 0, 25]],
+    ledger: { status: 'partially_paid', paid_amount: 50, remaining_amount: 50 },
+    paymentAmount: 50,
+  },
+  {
+    name: 'a full settlement of a EUR invoice clears what 2440 carries',
+    fixture: {
+      transaction: { amount: -1965.43 },
+      invoice: { currency: 'EUR', exchange_rate: 11.123, total: 176.7, remaining_amount: 176.7 },
+      paymentRate: 11.123,
+      carriedSek: 1965.44,
+    },
+    lines: [['2440', 1965.44, 0], ['1930', 0, 1965.43], ['3960', 0, 0.01]],
+    ledger: { status: 'paid', paid_amount: 176.7, remaining_amount: 0 },
+    paymentAmount: 176.7,
   },
   {
     name: 'a kontantmetoden payment with a bank fee on top',

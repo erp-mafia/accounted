@@ -14,7 +14,8 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { normalizeDeliveryAddress, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import {
   isAccruedIncomeAccount,
   pastPeriodDeferralSuggestion,
@@ -717,9 +718,9 @@ export async function buildInvoiceWriteData(params: {
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date
-      subtotalSek = convertToSEK(subtotal, exchangeRate)
-      vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-      totalSek = convertToSEK(total, exchangeRate)
+      subtotalSek = sekOfForeign(subtotal, exchangeRate)
+      vatAmountSek = sekOfForeign(vatAmount, exchangeRate)
+      totalSek = sekOfForeign(total, exchangeRate)
     }
   } else {
     // SEK invoice: the *_sek twins equal their invoice-currency counterparts

@@ -22,7 +22,8 @@ import {
   getPermittedVatRates,
   getVatRules,
 } from '@/lib/invoices/vat-rules'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import {
   applyRecurringPlaceholders,
@@ -386,9 +387,9 @@ export async function executeRecurringSchedule(
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date
-      subtotalSek = convertToSEK(subtotal, exchangeRate)
-      vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-      totalSek = convertToSEK(total, exchangeRate)
+      subtotalSek = sekOfForeign(subtotal, exchangeRate)
+      vatAmountSek = sekOfForeign(vatAmount, exchangeRate)
+      totalSek = sekOfForeign(total, exchangeRate)
     }
   }
 

@@ -670,7 +670,7 @@ import {
   paymentFeeAllowed,
   paymentFeeShortfall,
 } from '@/lib/bookkeeping/payment-fee'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isLedgerCurrency, resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError, capabilityBlockedRefusal } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -11432,7 +11432,7 @@ export const tools: McpTool[] = [
       // (kontantmetoden on a never-booked invoice: bank / revenue / VAT;
       // otherwise bank / 1510), so the approver sees the lines, not prose.
       const paymentPreview = await buildMarkPaidPreview(supabase, companyId, invoice, {
-        booksSaleFirst: salePlan.required,
+        saleFirstReceivableSek: salePlan.required ? salePlan.receivableSek : undefined,
       })
 
       return stage({
@@ -14470,7 +14470,7 @@ export const tools: McpTool[] = [
       if (transaction.amount <= 0) {
         throw codedRefusal(
           'MATCH_INVOICE_NOT_INCOME',
-          'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, or under kontantmetoden the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
+          'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, or from a foreign-currency account or under kontantmetoden the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
         )
       }
 
@@ -14707,10 +14707,14 @@ export const tools: McpTool[] = [
       const txDates = (txs ?? []).map((t) => t.date as string).filter(Boolean).sort()
       const earliestDate = txDates[0]
       const totalSek = (txs ?? []).reduce((s, t) => {
-        const cur = String(t.currency ?? 'SEK').toUpperCase()
-        const sek = cur === 'SEK'
-          ? Math.abs(Number(t.amount))
-          : Math.abs(Number(t.amount_sek ?? Number(t.amount) * Number(t.exchange_rate ?? 1)))
+        const sek = Math.abs(
+          resolveSekAmount(
+            Number(t.amount),
+            t.amount_sek == null ? null : Number(t.amount_sek),
+            t.currency as string | null,
+            Number(t.exchange_rate ?? 1),
+          ),
+        )
         return s + (Number.isFinite(sek) ? sek : 0)
       }, 0)
 

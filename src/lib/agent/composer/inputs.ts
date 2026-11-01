@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SourceSignals } from './schemas'
@@ -219,7 +220,7 @@ function rowSekAmount(row: AmountRow): number | null {
   if (stored != null) return Math.abs(stored)
   const rate = toFiniteNumber(row.exchange_rate)
   if (rate == null || rate <= 0) return null
-  return Math.abs(amount * rate)
+  return sekOfForeign(Math.abs(amount), rate)
 }
 
 interface MagnitudeBucket {
