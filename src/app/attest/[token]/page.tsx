@@ -3,8 +3,7 @@ import { AttestLinkPage } from '@/components/supplier-invoices/AttestLinkPage'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { resolveAttestLink } from '@/lib/supplier-invoices/attest-links'
-import { describeAttestLink } from '@/lib/supplier-invoices/attest-link-route'
-import { loadActiveAttestMembers } from '@/lib/supplier-invoices/attest-service'
+import { attesterCanStillDecide, describeAttestLink } from '@/lib/supplier-invoices/attest-link-route'
 
 // The token is the authentication: no session, no company context. The page
 // is never indexed and the error shell speaks plain Swedish, as the signing
@@ -44,8 +43,7 @@ export default async function AttestPage({
   // anything, and the invoice can still be attested in Accounted.
   const gone = <MessageShell title="Länken är inte längre giltig" body="Länken har redan använts eller gått ut. Logga in för att attestera fakturan." />
   if (!resolved?.ok) return gone
-  const members = await loadActiveAttestMembers(service, resolved.link.company_id)
-  if (!members.has(resolved.link.attester_user_id)) return gone
+  if (!(await attesterCanStillDecide(service, resolved.link))) return gone
 
   const data = await describeAttestLink(service, resolved.link, log)
   const preselected = beslut === 'neka' ? 'reject' : beslut === 'godkann' ? 'approve' : null

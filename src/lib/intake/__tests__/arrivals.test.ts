@@ -89,16 +89,22 @@ describe('source vocabulary', () => {
 
 describe('apiKeyArrivalActor', () => {
   it("names a service account's key as the account, with its sponsor as the person", () => {
-    expect(apiKeyArrivalActor({ userId: 'u-1', apiKeyId: 'k-1', apiKeyName: 'Partner key', serviceAccount: { id: 'sa-1', name: 'Partner' } })).toEqual({
+    expect(apiKeyArrivalActor({ userId: 'u-1', apiKeyId: 'k-1', actor: { type: 'service_account', label: 'Partner' }, serviceAccount: { id: 'sa-1' } })).toEqual({
       type: 'service_account', user_id: 'u-1', api_key_id: 'k-1', service_account_id: 'sa-1', label: 'Partner',
     })
   })
 
   it("names a person's key as the key, labelled with its name", () => {
-    expect(apiKeyArrivalActor({ userId: 'u-1', apiKeyId: 'k-1', apiKeyName: 'My key', serviceAccount: null })).toEqual({
+    expect(apiKeyArrivalActor({ userId: 'u-1', apiKeyId: 'k-1', actor: { type: 'api_key', label: 'My key' }, serviceAccount: null })).toEqual({
       type: 'api_key', user_id: 'u-1', api_key_id: 'k-1', label: 'My key',
     })
-    expect(apiKeyArrivalActor({ userId: 'u-1' })).toEqual({ type: 'api_key', user_id: 'u-1' })
+    expect(apiKeyArrivalActor({ userId: 'u-1', actor: { type: 'api_key' } })).toEqual({ type: 'api_key', user_id: 'u-1' })
+  })
+
+  it('names an OAuth connection the way the commit does', () => {
+    expect(apiKeyArrivalActor({ userId: 'u-1', apiKeyId: 'k-1', actor: { type: 'mcp_oauth', label: 'Claude (Anthropic)' } })).toEqual({
+      type: 'mcp_oauth', user_id: 'u-1', api_key_id: 'k-1', label: 'Claude (Anthropic)',
+    })
   })
 })
 

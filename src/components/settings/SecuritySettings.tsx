@@ -97,11 +97,11 @@ export function SecuritySettings() {
       })
 
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        const body = (await res.json().catch(() => ({}))) as { error?: unknown }
         // Supabase rejects updateUser({password}) with this exact message when
         // the user has a TOTP factor enrolled but is at AAL1. Send them through
         // /mfa/verify to step up; on return they land back here and can retry.
-        if (body.error?.includes('AAL2')) {
+        if (typeof body.error === 'string' && body.error.includes('AAL2')) {
           router.push(
             `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
           )

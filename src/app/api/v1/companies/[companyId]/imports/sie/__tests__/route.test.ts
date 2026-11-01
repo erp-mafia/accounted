@@ -126,7 +126,7 @@ describe('POST /imports/sie', () => {
     expect(submitSIEJobMock.mock.calls[0][8]).toEqual({
       source: 'sie',
       via: 'partner_api',
-      fetchedBy: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1' },
+      fetchedBy: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1', label: 'Unnamed API key' },
     })
   })
 

@@ -6,6 +6,8 @@ import { scopeKind } from '@/lib/auth/scope-catalog'
 import { roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getUserCompanies } from '@/lib/company/context'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
+import { readOnlyRefusal, type ReadOnlyReason } from '@/lib/auth/require-write'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
@@ -494,19 +496,14 @@ export async function resolveMcpCompanyContext(args: {
     throw codedError('NOT_FOUND', 'Company not reachable with this key')
   }
 
-  // One query: the membership row, the archived flag, and both name sources
-  // (company_settings is one-to-one on company_id, so PostgREST embeds it as
-  // an object; the parser below also accepts the array shape).
-  const { data: membership, error } = await args.supabase
-    .from('company_members')
-    .select('company_id, role, companies!inner(archived_at, name, company_settings(company_name))')
-    .eq('user_id', args.userId)
-    .eq('company_id', companyId)
-    .is('companies.archived_at', null)
-    .maybeSingle()
-
-  if (error) {
-    throw codedError('INTERNAL_ERROR', `Failed to resolve company membership: ${error.message}`)
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(args.supabase, args.userId, companyId)
+  } catch (error) {
+    throw codedError(
+      'INTERNAL_ERROR',
+      `Failed to resolve company membership: ${error instanceof Error ? error.message : (error as { message?: string }).message}`
+    )
   }
   if (!membership) {
     throw codedError('NOT_FOUND', 'Company not found')
@@ -514,10 +511,7 @@ export async function resolveMcpCompanyContext(args: {
   if (!isCompanyRole(membership.role)) {
     throw codedError('FORBIDDEN', 'Company membership has an unsupported role')
   }
-  const companyName = displayNameFromMembership(
-    (membership as { companies?: unknown }).companies,
-    companyId
-  )
+  const companyName = membership.companyName ?? companyId
 
   // Multi-user seat gate: the MCP surface is a chokepoint like the HTTP
   // routes, so a non-owner membership in a frozen company (multi_user lapsed
@@ -540,27 +534,6 @@ export async function resolveMcpCompanyContext(args: {
     isDefault: companyId === args.defaultCompanyId,
     keyAccess: isCompanyReadOnly(args.readOnlyCompanyIds, companyId) ? 'read' : 'write',
   }
-}
-
-/**
- * Display name out of the embedded `companies(...)` shape: the settings
- * display name when present, else companies.name, else the id (tests and
- * older mocks embed nothing; a missing name must never fail routing).
- */
-function displayNameFromMembership(embedded: unknown, companyId: string): string {
-  const company = Array.isArray(embedded) ? embedded[0] : embedded
-  if (!company || typeof company !== 'object') return companyId
-  const record = company as { name?: unknown; company_settings?: unknown }
-  const settings = Array.isArray(record.company_settings)
-    ? record.company_settings[0]
-    : record.company_settings
-  const displayName =
-    settings && typeof settings === 'object'
-      ? (settings as { company_name?: unknown }).company_name
-      : undefined
-  if (typeof displayName === 'string' && displayName.trim().length > 0) return displayName
-  if (typeof record.name === 'string' && record.name.trim().length > 0) return record.name
-  return companyId
 }
 
 /** The MCP door's scope: the lib's, which carries `dormant` (the seat gate) itself. */
@@ -639,7 +612,7 @@ function assertIdList(values: unknown[], field: string): string[] {
 }
 
 /** Why the write gate refuses a call: the invoicing-only role, a viewer, or a read-only connection. */
-export type McpWriteRefusal = 'ROLE_SCOPE_LIMITED' | 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+export type McpWriteRefusal = 'ROLE_SCOPE_LIMITED' | ReadOnlyReason
 
 /** The write gate's verdict, null when the call may proceed (assertMcpCompanyWriteAccess throws on it). */
 export function mcpCompanyWriteRefusal(
@@ -697,17 +670,22 @@ export function assertMcpCompanyWriteAccess(
     )
   }
   if (refusal === 'ROLE_READ_ONLY') {
-    throw codedError(
-      'FORBIDDEN',
+    throw readOnlyToolError(
+      refusal,
       `This company membership is read-only (viewer): tools that require the "${scope}" scope change company data and are refused. Use read tools only, or ask a company owner or admin to change the role.`
     )
   }
   if (refusal === 'CONNECTION_READ_ONLY') {
-    throw codedError(
-      'FORBIDDEN',
+    throw readOnlyToolError(
+      refusal,
       `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Settings > API & MCP.`
     )
   }
+}
+
+/** readOnlyRefusal as a thrown tool error: the dispatch carries `details` to the agent (tool-result.ts). */
+function readOnlyToolError(reason: ReadOnlyReason, message: string): Error {
+  return Object.assign(codedError('FORBIDDEN', message), { details: readOnlyRefusal(reason).details })
 }
 
 export function addCompanyToNextHint(next: unknown, companyId: string): unknown {

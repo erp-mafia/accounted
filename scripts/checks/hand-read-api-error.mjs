@@ -17,7 +17,14 @@
  * already call the reader:
  *   1. `x.error || <fallback>` / `x.error ?? <fallback>` (also `.error?.message`)
  *      where the fallback is a translation call or a non-empty string literal;
- *   2. `typeof x.error === 'string' ? x.error ...`, on one line or broken over two.
+ *   2. `typeof x.error === 'string' ? x.error ...`, on one line or broken over two;
+ *   3. a response body's raw `.error` put where it renders: `setError(json.error)`,
+ *      `text: result.error`. A structured body is an object there, and React throws
+ *      on an object child, so a refused button takes the whole page down (2026-11-01).
+ *      Toast titles and descriptions are coerced (coerceToastNode), so they are not
+ *      listed here;
+ *   4. `const { error } = await res.json()`, the same read under a name the rules
+ *      above cannot follow.
  *
  * HAND_READ_ERROR_ALLOWED lists the files whose `.error` is not an API
  * envelope (an SDK result, a domain result field, a reader's own output),
@@ -49,6 +56,11 @@ const FALLBACK_READ = /\.error(?:\?\.message|\.message)?\s*(?:\|\||\?\?)\s*(?:t[
 const TYPEOF_READ = /typeof\s+[\w$?.]+\.error\s*===\s*['"]string['"][^\n]*\?\s*[\w$?.]+\.error\b/
 // 2b. the same ternary broken before its `?` branch
 const TYPEOF_READ_WRAPPED = /typeof\s+[\w$?.]+\.error\s*===\s*['"]string['"][^\n]*\n\s*\?\s*[\w$?.]+\.error\b/g
+// 3. `setError(json.error)`, `text: result.error`; `.error.code` and friends are code reads.
+const RAW_RENDER_READ =
+  /(?:\bset[A-Z]\w*\(\s*|\b(?:text|message)\s*:\s*)(?:body|json|data|result|payload)\??\.error\b(?!\s*(?:\?\.|\.|\[))/
+// 4. `const { error } = await res.json()`, `const { error: msg } = await res.json()`
+const DESTRUCTURED_READ = /\{\s*error(?:\s*:\s*\w+)?\s*\}\s*=\s*await\s+[\w$.]+\.json\(\)/
 
 /** Line numbers (1-based) of hand-rolled error reads in one source. Exported for the unit test. */
 export function findHandReadErrorsInSource(source) {
@@ -56,7 +68,7 @@ export function findHandReadErrorsInSource(source) {
   const hits = new Set()
   lines.forEach((line, i) => {
     if (READER_CALL.test(line) || COMMENT_LINE.test(line)) return
-    if (FALLBACK_READ.test(line) || TYPEOF_READ.test(line)) hits.add(i + 1)
+    if ([FALLBACK_READ, TYPEOF_READ, RAW_RENDER_READ, DESTRUCTURED_READ].some((rule) => rule.test(line))) hits.add(i + 1)
   })
   for (const match of source.matchAll(TYPEOF_READ_WRAPPED)) {
     const line = source.slice(0, match.index ?? 0).split('\n').length

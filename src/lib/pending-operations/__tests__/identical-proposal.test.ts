@@ -22,6 +22,21 @@ describe('supersedeIdenticalProposals', () => {
     expect(findCalls('pending_operations', 'select')).toHaveLength(0)
   })
 
+  it('finds a key by its id, so an older proposal under another actor type is still its own', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+
+    await supersedeIdenticalProposals(
+      supabase as never,
+      'company-1',
+      { id: 'op-new', operationType: 'import_sie', params: {}, batchId: null },
+      { ...REPLACEMENT, stager: { ...STAGER, actorType: 'mcp_oauth' } },
+    )
+
+    const eqs = findCalls('pending_operations', 'eq').map(([column]) => column)
+    expect(eqs).toContain('actor_id')
+    expect(eqs).not.toContain('actor_type')
+  })
+
   it('compares params as stored jsonb returns them, key order and undefined aside', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'op-older', params: { mappings: { '1930': '1930' }, filename: 'a.se' } }], error: null })

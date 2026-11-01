@@ -94,7 +94,11 @@ describe('withRouteContext database round trips before the handler', () => {
     const res = await withRouteContext('test.write', handler, { requireWrite: true })(post(), EMPTY_PARAMS)
 
     expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: 'Du har endast läsbehörighet i detta företag.' })
+    expect((await res.json()).error).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Du har endast läsbehörighet i detta företag.',
+      details: { code: 'ROLE_READ_ONLY' },
+    })
     expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
     expect(handler).not.toHaveBeenCalled()
     expect(db.calls).toEqual(['rpc:resolve_active_company'])

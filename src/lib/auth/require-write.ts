@@ -3,6 +3,34 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/lib/company/context'
 import type { CompanyRole } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const moduleLog = createLogger('auth/require-write')
+
+/** Why a write was refused to a caller who may only read: the role, or what the connection was given. */
+export type ReadOnlyReason = 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+
+const READ_ONLY_MESSAGES: Record<ReadOnlyReason, { messageSv: string; messageEn: string }> = {
+  ROLE_READ_ONLY: {
+    messageSv: 'Du har endast läsbehörighet i detta företag.',
+    messageEn: 'You only have read access in this company.',
+  },
+  CONNECTION_READ_ONLY: {
+    messageSv: 'Den här anslutningen har endast läsbehörighet i detta företag.',
+    messageEn: 'This connection only has read access in this company.',
+  },
+}
+
+/**
+ * The refusal of a write to a read-only caller: one code and one shape at
+ * every door (session routes, the extension dispatcher, v1 and MCP), so a
+ * client branches on `error.details.code`. The envelope's code stays FORBIDDEN,
+ * what v1 has always answered; the reason is the same in all of them. Each door
+ * puts this in its own envelope and may add its own facts to the details.
+ */
+export function readOnlyRefusal(reason: ReadOnlyReason) {
+  return { ...READ_ONLY_MESSAGES[reason], details: { code: reason } }
+}
 
 /**
  * Write-permission guard for API routes.
@@ -44,6 +72,14 @@ export interface KnownRouteContext {
   role?: CompanyRole
 }
 
+/** The session doors' answer to a read-only caller: readOnlyRefusal in the dashboard's envelope. */
+export function readOnlyResponse(
+  log: Parameters<typeof errorResponseFromCode>[1] = moduleLog,
+  requestId?: string,
+): NextResponse {
+  return errorResponseFromCode('FORBIDDEN', log, { requestId, ...readOnlyRefusal('ROLE_READ_ONLY') })
+}
+
 async function selectRole(
   supabase: SupabaseClient,
   companyId: string,
@@ -77,15 +113,7 @@ export async function requireWritePermission(
 
   const role = known?.role ?? (await selectRole(supabase, companyId, userId))
 
-  if (!role || role === 'viewer') {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Du har endast läsbehörighet i detta företag.' },
-        { status: 403 },
-      ),
-    }
-  }
+  if (!role || role === 'viewer') return { ok: false, response: readOnlyResponse() }
 
   return { ok: true }
 }

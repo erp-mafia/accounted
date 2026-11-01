@@ -39,6 +39,7 @@ import {
   planRegistrationBeforeSettlement,
 } from '@/lib/supplier-invoices/registration-first'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',
@@ -503,13 +504,12 @@ export const POST = withRouteContext(
     // Only update when the caller actually picked one: the MCP / agent path
     // sends no payment_account and shouldn't churn this setting.
     if (paymentAccount && paymentAccount !== settings?.last_supplier_payment_account) {
-      const { error: settingsError } = await supabase
-        .from('company_settings')
-        .update({ last_supplier_payment_account: paymentAccount })
-        .eq('company_id', companyId)
-      if (settingsError) {
-        opLog.warn('failed to persist last_supplier_payment_account', settingsError)
-      }
+      const remembered = await writeCompanySettings(
+        { supabase, companyId: companyId!, userId: user.id, log: opLog },
+        { last_supplier_payment_account: paymentAccount },
+      )
+      // A company setting: a member's choice is not kept. Never a failed payment.
+      if (!remembered.ok) opLog.info('last_supplier_payment_account not kept', { code: remembered.code })
     }
 
     return NextResponse.json({

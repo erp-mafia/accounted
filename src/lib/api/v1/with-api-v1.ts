@@ -72,11 +72,10 @@ import {
   type ApiKeyMode,
   type ApiKeyScope,
   type ApiKeyServiceAccount,
-  apiKeyCommitActor,
+  credentialActor,
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
-  OAUTH_MCP_KEY_NAME,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   scopeKind,
   validateApiKey,
@@ -87,6 +86,8 @@ import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { INVOICER_API_SCOPES, INVOICER_ROLE, roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
+import { readOnlyRefusal, type ReadOnlyReason } from '@/lib/auth/require-write'
 import { getEndpointByConcretePath, getEndpointForOperation } from './registry'
 import {
   assertReportQuery,
@@ -140,8 +141,6 @@ export interface ApiV1Context {
   userId: string
   /** API key id of the caller. Used for actor attribution on pending_operations / audit_log. */
   apiKeyId: string | undefined
-  /** API key human name. */
-  apiKeyName: string | undefined
   /**
    * The service account the calling key belongs to (lib/service-accounts), or
    * null for a person's key. For a service account `userId` is its sponsor:
@@ -152,9 +151,7 @@ export interface ApiV1Context {
   /**
    * WHO this request acts as in every record it writes: the commit-actor
    * scope the handler runs in (journal_entries.committed_actor_*, audit_log),
-   * and what a staged operation or a rejection records. `service_account`
-   * labelled with the account's name for a service account's key, else
-   * `api_key` labelled with the key's name.
+   * and what a staged operation or a rejection records (credentialActor).
    */
   actor: CommitActor
   /** Scopes granted to the calling key. */
@@ -538,7 +535,7 @@ async function readBodyForHash(request: Request): Promise<{ body: unknown; clone
 }
 
 /** Why the company gate refuses a write in a company the key reaches. */
-export type CompanyWriteRefusal = 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+export type CompanyWriteRefusal = ReadOnlyReason
 
 /**
  * The two read-only gates of the company gate, as one verdict: the role gate
@@ -608,20 +605,16 @@ async function checkCompanyAccessGate(
 ): Promise<CompanyGateResult> {
   const { supabase, log, requestId, forensic, method, requiredScope } = input
 
-  const { data: membership, error: membershipErr } = await supabase
-    .from('company_members')
-    .select('company_id, role')
-    .eq('user_id', input.userId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  if (membershipErr) {
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(supabase, input.userId, companyId)
+  } catch (membershipErr) {
     log.error('failed to resolve company membership', membershipErr as Error)
     return refuse(await v1ErrorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
   }
 
   if (!membership) {
-    log.warn('user is not a member of the requested company', { companyId, ...forensic })
+    log.warn('user has no live membership in the requested company', { companyId, ...forensic })
     // 404 (not 403) so we don't leak company existence to unauthorized callers.
     return refuse(await v1ErrorResponseFromCode('NOT_FOUND', log, {
       requestId,
@@ -645,7 +638,7 @@ async function checkCompanyAccessGate(
     }))
   }
 
-  const membershipRole = (membership as { role?: string }).role
+  const membershipRole = membership.role
 
   // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
   // invoices and articles, whatever scopes the key holds: this surface runs
@@ -703,12 +696,14 @@ async function checkCompanyAccessGate(
       requiredScope,
       ...forensic,
     })
+    const { details, ...messages } = readOnlyRefusal('ROLE_READ_ONLY')
     return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
       requestId,
       status: 403,
       reason: 'role_read_only',
+      ...messages,
       details: {
-        code: 'ROLE_READ_ONLY',
+        ...details,
         companyId,
         role: READ_ONLY_ROLE,
         required_scope: requiredScope,
@@ -729,12 +724,14 @@ async function checkCompanyAccessGate(
       requiredScope,
       ...forensic,
     })
+    const { details, ...messages } = readOnlyRefusal('CONNECTION_READ_ONLY')
     return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
       requestId,
       status: 403,
       reason: 'connection_read_only',
+      ...messages,
       details: {
-        code: 'CONNECTION_READ_ONLY',
+        ...details,
         companyId,
         required_scope: requiredScope,
         message:
@@ -824,7 +821,6 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           log,
           userId: 'anonymous',
           apiKeyId: undefined,
-          apiKeyName: undefined,
           serviceAccount: null,
           actor: { type: 'api_key', label: 'Anonymous' },
           scopes: [],
@@ -853,9 +849,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               log: log.child({ userId: auth.userId, apiKeyId: auth.apiKeyId, mode: auth.mode }),
               userId: auth.userId,
               apiKeyId: auth.apiKeyId,
-              apiKeyName: auth.apiKeyName,
               serviceAccount: auth.serviceAccount,
-              actor: apiKeyCommitActor(auth),
+              actor: credentialActor(auth),
               scopes: auth.scopes,
               allowedCompanyIds: auth.allowedCompanyIds,
               readOnlyCompanyIds: auth.readOnlyCompanyIds,
@@ -900,6 +895,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         ...(auth.serviceAccount ? { serviceAccountId: auth.serviceAccount.id } : {}),
       })
 
+      const actor = credentialActor(auth)
+
       // The permission shadow: decide() beside the role and access gates
       // below, told what they did. It reads nothing and changes nothing. A
       // missing scope is not compared: scope checks stay at the wire and
@@ -909,11 +906,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         method: request.method,
         userId: auth.userId,
         key: {
-          kind: auth.serviceAccount
-            ? 'service_account'
-            : auth.client || auth.apiKeyName === OAUTH_MCP_KEY_NAME
-              ? 'oauth'
-              : 'manual',
+          kind: actor.type === 'service_account' ? 'service_account' : actor.type === 'mcp_oauth' ? 'oauth' : 'manual',
           scopes: auth.scopes,
           apiKeyId: auth.apiKeyId ?? null,
           agentIdentityId: auth.agentIdentityId ?? null,
@@ -1201,9 +1194,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         log: userLog.child({ companyId }),
         userId: auth.userId,
         apiKeyId: auth.apiKeyId,
-        apiKeyName: auth.apiKeyName,
         serviceAccount: auth.serviceAccount,
-        actor: apiKeyCommitActor(auth),
+        actor,
         scopes: auth.scopes,
         allowedCompanyIds: auth.allowedCompanyIds,
         readOnlyCompanyIds: auth.readOnlyCompanyIds,

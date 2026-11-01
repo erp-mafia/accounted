@@ -121,7 +121,9 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            is: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            }),
           }),
         }),
       }),
@@ -1159,8 +1161,8 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     expect(body.error.details.code).toBe('ROLE_READ_ONLY')
     expect(body.error.details.role).toBe('viewer')
     expect(body.error.details.required_scope).toBe('bookkeeping:write')
-    // Swedish user-facing message from the registry entry.
-    expect(body.error.message).toBe('Du har inte behörighet att utföra denna åtgärd.')
+    // The sentence every door answers (readOnlyRefusal).
+    expect(body.error.message).toBe('Du har endast läsbehörighet i detta företag.')
     expect(body.error.request_id).toMatch(/^req_/)
     expect(handlerSpy).not.toHaveBeenCalled()
     // Refused before the seat gate: no extra read for a refused write.

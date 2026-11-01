@@ -111,14 +111,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ...(body.data.reason ? { reason: body.data.reason } : {}),
       actor: {
         userId: ctx.userId,
-        // A service account's key rejects as the service account, named.
-        type: ctx.serviceAccount ? 'service_account' : 'api_key',
+        type: ctx.actor.type,
         ...(ctx.apiKeyId ? { id: ctx.apiKeyId } : {}),
-        ...(ctx.serviceAccount
-          ? { label: ctx.serviceAccount.name }
-          : ctx.apiKeyName
-            ? { label: ctx.apiKeyName }
-            : {}),
+        ...(ctx.actor.label ? { label: ctx.actor.label } : {}),
       },
       channel: 'api',
     })

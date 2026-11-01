@@ -317,6 +317,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       table_name: 'webhooks',
       record_id: id,
       actor_id: ctx.apiKeyId ?? null,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
       description: `Webhook updated: ${changedFields.join(', ')}`,
       old_state: prior ?? null,
       new_state: {
@@ -407,6 +409,8 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       table_name: 'webhooks',
       record_id: id,
       actor_id: ctx.apiKeyId ?? null,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
       description: p
         ? `Webhook deleted: "${p.name}" (${p.event_type})`
         : `Webhook delete attempted on missing id=${id} (idempotent or cross-tenant)`,

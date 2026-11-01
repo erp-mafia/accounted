@@ -10,6 +10,7 @@ import {
 import { validateQuery } from '@/lib/api/validate'
 import { EventsQuerySchema } from '@/lib/api/schemas'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -151,26 +152,19 @@ export async function GET(request: Request) {
   // company_id on the api_keys row is a snapshot taken when the key was minted.
   // Offboarding a user from a company does not revoke their keys, and the
   // service-role client above bypasses RLS, so without this the key keeps
-  // draining the event log of a company its owner no longer belongs to. Both
-  // sibling call sites already re-check (with-api-v1.ts :349-370 and
-  // mcp-server/company-routing.ts :90-102); this closes the third.
-  //
-  // archived_at IS NULL follows company-routing: an archived company is a
-  // deactivated tenant and should stop feeding automation platforms.
+  // draining the event log of a company its owner no longer belongs to.
+  // readLiveMembership is the read the v1 gate and MCP routing make: an
+  // archived company is a deactivated tenant and stops feeding automation
+  // platforms.
   //
   // The session path is deliberately excluded: it runs on the request-scoped
   // client where RLS (user_company_ids()) already enforces the same rule.
   if (keyCompanyId !== null) {
-    const { data: membership, error: membershipError } = await supabase
-      .from('company_members')
-      .select('company_id, role, companies!inner(archived_at)')
-      .eq('user_id', userId)
-      .eq('company_id', companyId)
-      .is('companies.archived_at', null)
-      .maybeSingle()
-
-    if (membershipError) {
-      log.error('failed to resolve company membership', membershipError)
+    let membership: LiveMembership | null
+    try {
+      membership = await readLiveMembership(supabase, userId, companyId)
+    } catch (membershipError) {
+      log.error('failed to resolve company membership', membershipError as Error)
       return errorResponseFromCode('INTERNAL_ERROR', log, {
         details: { reason: getUserErrorMessage(membershipError) },
       })
@@ -186,7 +180,7 @@ export async function GET(request: Request) {
     // membership in a frozen company (multi_user lapsed past its grace) gets
     // no events either. Owners pass without a read; no read while the gate
     // is off.
-    const role = (membership as { role?: string }).role ?? ''
+    const { role } = membership
     // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
     // invoices and articles; the event log spans the whole company.
     if (!roleAllowsScope(role, REQUIRED_SCOPE)) {

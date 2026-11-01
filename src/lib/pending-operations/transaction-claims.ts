@@ -101,11 +101,11 @@ export type TransactionClaimCheck =
   | { kind: 'claimed'; claims: TransactionClaim[] }
 
 function sameStager(operation: PendingOperation, stager: Stager): boolean {
-  return (
-    operation.user_id === stager.userId &&
-    operation.actor_type === stager.actorType &&
-    (operation.actor_id ?? null) === (stager.actorId ?? null)
-  )
+  if (operation.user_id !== stager.userId) return false
+  // A key is its id: an OAuth key's open proposals from before it staged as
+  // mcp_oauth carry api_key, and are still its own.
+  if (stager.actorId) return operation.actor_id === stager.actorId
+  return operation.actor_type === stager.actorType && (operation.actor_id ?? null) === null
 }
 
 /**

@@ -6,8 +6,7 @@ import {
   RESERVED_OAUTH_KEY_NAME,
   SV_ATTRIBUTION_WORDS,
 } from '../format-actor'
-import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
-import { oauthActorLabel } from '@/lib/agent-skills/provenance'
+import { credentialActor, OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 
@@ -113,10 +112,10 @@ describe('the words', () => {
     expect(RESERVED_OAUTH_KEY_NAME).toBe(OAUTH_MCP_KEY_NAME)
   })
 
-  it("strips every provider suffix the MCP server writes", () => {
+  it('strips every provider suffix the records carry', () => {
     for (const client of ['claude', 'chatgpt', 'grok', 'cursor']) {
-      const label = oauthActorLabel(client, OAUTH_MCP_KEY_NAME)
-      expect(agentDisplayName('api_key', label)).not.toMatch(/\(/)
+      const { type, label } = credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client, serviceAccount: null })
+      expect(agentDisplayName(type, label)).not.toMatch(/\(/)
     }
   })
 

@@ -111,7 +111,7 @@ describe('setSkattekontoAccount', () => {
   it('stores 2012 for an enskild firma, adds 2012 to the chart with the K1 name, and says what stays on 1630', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { entity_type: 'enskild_firma', skattekonto_account: null } }) // before
-    enqueue({ data: null }) // update
+    enqueue({ data: { company_id: COMPANY } }) // update
     enqueue({ data: { entity_type: 'enskild_firma', skattekonto_account: '2012' } }) // after
     balances.set('1630', 500)
     activateMock.mockResolvedValue({ ok: true, data: { accounts: [], activated: 0, reactivated: 0, skipped: 0, unknown: ['2012'] } })

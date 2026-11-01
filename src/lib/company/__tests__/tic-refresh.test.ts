@@ -12,10 +12,11 @@ vi.mock('@/lib/agent/composer/tic-fetch', () => ({ ensureTicSnapshot: mocks.ensu
 
 import { refreshCompanyProfileAction } from '../tic-refresh'
 
-function stored(settings: string | null, company: string | null, entityType = 'aktiebolag') {
+function stored(settings: string | null, company: string | null, entityType = 'aktiebolag', role = 'owner') {
   const mock = createTableMockSupabase({
     company_settings: { data: { org_number: settings, entity_type: entityType }, error: null },
     companies: { data: { org_number: company, entity_type: entityType }, error: null },
+    company_members: { data: { role }, error: null },
   })
   ;(mock.supabase as unknown as { auth: unknown }).auth = {
     getUser: async () => ({ data: { user: { id: 'user-1' } } }),
@@ -68,6 +69,14 @@ describe('refreshCompanyProfileAction', () => {
     expect(result.ok).toBe(true)
     expect(mock.payloads('companies', 'update')).toEqual([{ tic_snapshot_fetched_at: null, org_number: '1212121212' }])
     expect(mock.payloads('company_settings', 'update')).toEqual([{ org_number: '1212121212' }])
+  })
+
+  it('says a member could not fill in the number, instead of fetching as if it was saved', async () => {
+    const mock = stored(null, null, 'enskild_firma', 'member')
+
+    expect(await refreshCompanyProfileAction('co-1', '19121212-1212')).toEqual({ error: 'persist_failed' })
+    expect(mock.payloads('company_settings', 'update')).toEqual([])
+    expect(mocks.ensureTicSnapshot).not.toHaveBeenCalled()
   })
 
   it('refuses a wrong check digit, an invalid stored number typed back, and the wrong legal form', async () => {

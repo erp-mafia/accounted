@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { readOnlyResponse } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -111,12 +112,7 @@ export async function POST(request: Request) {
   if (isInvoicerRole(membership.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
-  if (membership.role === 'viewer') {
-    return NextResponse.json(
-      { error: 'Du har endast läsbehörighet i detta företag.' },
-      { status: 403 },
-    )
-  }
+  if (membership.role === 'viewer') return readOnlyResponse()
 
   // No live composer run for sandbox companies: they ship with a pre-built
   // verified agent_profile so the chrome is visible without burning Bedrock.

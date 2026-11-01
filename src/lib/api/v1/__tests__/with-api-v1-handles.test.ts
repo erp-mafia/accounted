@@ -82,7 +82,11 @@ function membershipStub(seen: string[]) {
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockImplementation((_col: string, companyId: string) => {
             seen.push(companyId)
-            return { maybeSingle: vi.fn().mockResolvedValue({ data: { company_id: companyId, role: 'owner' }, error: null }) }
+            return {
+              is: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: { company_id: companyId, role: 'owner' }, error: null }),
+              }),
+            }
           }),
         }),
       }),

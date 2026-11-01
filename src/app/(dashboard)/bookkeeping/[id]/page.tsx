@@ -209,8 +209,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         setRattelseLog(Array.isArray(rattelsePayload.data) ? rattelsePayload.data : [])
       }
       if (!chainRes.ok) {
-        const { error: msg } = await chainRes.json()
-        setError(msg || t('error_load_failed'))
+        const failure = await chainRes.json().catch(() => null)
+        setError(getErrorMessage(failure, { fallback: t('error_load_failed') }))
         return
       }
       const { data } = await chainRes.json()

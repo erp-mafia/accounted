@@ -57,7 +57,9 @@ function membership(role: string) {
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: { company_id: COMPANY, role }, error: null }),
+            is: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: { company_id: COMPANY, role }, error: null }),
+            }),
           }),
         }),
       }),

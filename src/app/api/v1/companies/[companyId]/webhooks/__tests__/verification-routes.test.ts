@@ -135,7 +135,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/verify', () => {
     const body = await res.json()
     expect(body.data).toMatchObject({ id: WEBHOOK_ID, verification_status: 'verified', verified_at: '2026-10-01T10:00:01Z' })
     expect(mockVerifyNow).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: COMPANY_ID, webhookId: WEBHOOK_ID, actor: { userId: 'user-1', apiKeyId: 'ak_1' } }),
+      expect.objectContaining({ companyId: COMPANY_ID, webhookId: WEBHOOK_ID, actor: expect.objectContaining({ userId: 'user-1', apiKeyId: 'ak_1', credential: expect.objectContaining({ type: 'api_key', label: 'CI key' }) }) }),
     )
   })
 

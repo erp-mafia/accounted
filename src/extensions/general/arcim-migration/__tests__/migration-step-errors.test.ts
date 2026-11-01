@@ -64,6 +64,7 @@ import {
   hydrateSalesInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const VISMA_MODULE_BODY =
   '{"ErrorCode":4002,"DeveloperErrorMessage":"ForbiddenRequestException - No access to module: api_standard","ErrorId":"x","Errors":[]}'
@@ -254,6 +255,61 @@ describe('executeMigration: step error surfacing', () => {
     expect(results.stepErrors![0].step).toBe('companyInfo')
     expect(results.stepErrors![0].code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
     expect(fetchCustomersDirect).toHaveBeenCalledTimes(1)
+  })
+
+  describe('the company fill, which is an owner\'s or admin\'s to make', () => {
+    const fill = (role: string) => {
+      ;(fetchCompanyInfoDirect as Mock).mockResolvedValue({ companyName: 'Bolaget AB', address: {} })
+      return createTableMockSupabase({
+        company_settings: { data: { company_name: null, org_number: null, vat_number: null } },
+        company_members: { data: { role } },
+      })
+    }
+
+    it('says so when a member runs the import, and writes nothing', async () => {
+      const db = fill('member')
+
+      const results = await executeMigration(
+        baseOptions({ importCompanyInfo: true, supabase: db.supabase as unknown as SupabaseClient }),
+      )
+
+      expect(db.findCall('company_settings', 'update')).toBeUndefined()
+      expect(results.companyInfo).toEqual({ imported: false })
+      expect(results.stepErrors).toEqual([
+        {
+          step: 'companyInfo',
+          code: 'FORBIDDEN',
+          message: 'Bara företagets ägare eller en administratör kan ändra företagsinställningarna.',
+        },
+      ])
+    })
+
+    it('says so when the write matched no row', async () => {
+      const db = fill('owner')
+      db.setTable('company_settings', [
+        { data: { company_name: null, org_number: null, vat_number: null } },
+        { data: null },
+      ])
+
+      const results = await executeMigration(
+        baseOptions({ importCompanyInfo: true, supabase: db.supabase as unknown as SupabaseClient }),
+      )
+
+      expect(results.companyInfo).toEqual({ imported: false })
+      expect(results.stepErrors?.[0]).toMatchObject({ step: 'companyInfo', code: 'NOT_FOUND' })
+    })
+
+    it('reports the import when an owner runs it', async () => {
+      const db = fill('owner')
+
+      const results = await executeMigration(
+        baseOptions({ importCompanyInfo: true, supabase: db.supabase as unknown as SupabaseClient }),
+      )
+
+      expect(db.findCall('company_settings', 'update')?.[0]).toMatchObject({ company_name: 'Bolaget AB' })
+      expect(results.companyInfo).toEqual({ imported: true })
+      expect(results.stepErrors).toBeUndefined()
+    })
   })
 
   it('returns no stepErrors when every enabled step succeeds', async () => {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
@@ -67,6 +68,7 @@ export default function AttachmentPreviewSheet({
 }: AttachmentPreviewSheetProps) {
   const t = useTranslations('attachment_preview_sheet')
   const tj = useTranslations('journal_attachments')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(false)
@@ -195,10 +197,10 @@ export default function AttachmentPreviewSheet({
       }
       const res = await postDocumentForm(`/api/documents/${docId}/versions`, new FormData(), prepared.file)
       if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: undefined }))
+        const failure = await res.json().catch(() => null)
         toast({
           title: tj('replace_failed'),
-          description: error || undefined,
+          description: getErrorMessage(failure, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
       } else {

@@ -20,6 +20,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import {
@@ -269,11 +270,8 @@ export async function setVacationLiabilityMethod(
   }
 
   if (input.method !== current) {
-    const { error } = await ctx.supabase
-      .from('company_settings')
-      .update({ salary_vacation_liability_method: input.method })
-      .eq('company_id', ctx.companyId)
-    if (error) return { ok: false, code: 'VACATION_LIABILITY_RECONCILE_FAILED', error }
+    const saved = await writeCompanySettings(ctx, { salary_vacation_liability_method: input.method })
+    if (!saved.ok) return saved
   }
   return { ok: true, data: { method: input.method, previous_method: current, catch_up: catchUp } }
 }

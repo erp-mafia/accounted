@@ -38,6 +38,7 @@ vi.mock('@/lib/company/context', () => ({
 }))
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  getCompanyRole: vi.fn().mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' }),
 }))
 vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),

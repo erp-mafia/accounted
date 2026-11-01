@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { readOnlyResponse } from '@/lib/auth/require-write'
 
 // POST /api/agent/profile/verify
 //
@@ -13,7 +14,7 @@ const BodySchema = z.object({
 })
 
 export const POST = withRouteContext('agent.profile.verify', async (request, ctx) => {
-  const { supabase, companyId: activeCompanyId, user } = ctx
+  const { supabase, companyId: activeCompanyId, user, log, requestId } = ctx
 
   // Tolerant parse: the review card POSTs with an empty body when verifying
   // the active company.
@@ -44,18 +45,7 @@ export const POST = withRouteContext('agent.profile.verify', async (request, ctx
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
-  if (!membership || membership.role === 'viewer') {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'WRITE_PERMISSION_REQUIRED',
-          message: 'Du har endast läsbehörighet i detta företag.',
-          message_en: 'You only have read access in this company.',
-        },
-      },
-      { status: 403 },
-    )
-  }
+  if (!membership || membership.role === 'viewer') return readOnlyResponse(log, requestId)
 
   const { data, error } = await supabase
     .from('agent_profiles')

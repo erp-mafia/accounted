@@ -19,6 +19,7 @@ import { applyCompanyGrant, type GrantCredential, type GrantOutcome } from '@/li
 import { grantsEnabled } from '@/lib/grants/flag'
 import { SILENT_GRANT_REFUSALS } from '@/lib/grants/types'
 import type { Logger } from '@/lib/logger'
+import { mcpCommitActorType } from './commit-actor'
 import { toCanonicalToolName } from './tool-namespace'
 
 /** The actor fields the door reads (server.ts ActorContext). */
@@ -86,11 +87,6 @@ const REFUSAL_NOTES: Record<string, string> = {
   inbox_item_already_claimed: 'another booking of this inbox item is in progress',
   duplicate_invoice_number: "the supplier's invoice number is already registered",
   registration_not_booked: 'the company does not book supplier invoices when they are registered',
-}
-
-function commitActorType(actor: GrantDoorActor): GrantCredential['actorType'] {
-  if (actor.serviceAccountId) return 'service_account'
-  return actor.oauthKey === true ? 'mcp_oauth' : 'api_key'
 }
 
 /** Who a rule is for, as the agent is told: a bank line's counterparty, or a supplier. */
@@ -185,7 +181,7 @@ export async function applyGrantDoor(
       userId: ctx.userId,
       operationId: staged.operation_id,
       credential: {
-        actorType: commitActorType(actor),
+        actorType: mcpCommitActorType(actor) as GrantCredential['actorType'],
         apiKeyId: actor.id,
         ...(actor.label ? { label: actor.label } : {}),
         unattendedCommitLimit: actor.unattendedCommitLimit ?? null,

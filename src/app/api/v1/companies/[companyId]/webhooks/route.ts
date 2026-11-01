@@ -358,6 +358,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       table_name: 'webhooks',
       record_id: created_row.id,
       actor_id: ctx.apiKeyId ?? null,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
       description: `Webhook created: "${body.name}" → ${body.webhook_url} (${eventTypes.join(', ')})`,
       new_state: {
         name: body.name,

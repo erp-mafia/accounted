@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { readOnlyResponse } from '@/lib/auth/require-write'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 
 // GET /api/agent/memory
@@ -80,7 +81,7 @@ export const GET = withRouteContext('agent.memory.list', async (request, ctx) =>
 export const POST = withRouteContext(
   'agent.memory.create',
   async (request, ctx) => {
-    const { supabase, companyId: activeCompanyId, user, log } = ctx
+    const { supabase, companyId: activeCompanyId, user, log, requestId } = ctx
 
     const validation = await validateBody(request, BodySchema, {
       log,
@@ -100,18 +101,7 @@ export const POST = withRouteContext(
       .eq('company_id', companyId)
       .eq('user_id', user.id)
       .maybeSingle()
-    if (!bodyMembership || bodyMembership.role === 'viewer') {
-      return NextResponse.json(
-        {
-          error: {
-            code: 'WRITE_PERMISSION_REQUIRED',
-            message: 'Du har endast läsbehörighet i detta företag.',
-            message_en: 'You only have read access in this company.',
-          },
-        },
-        { status: 403 },
-      )
-    }
+    if (!bodyMembership || bodyMembership.role === 'viewer') return readOnlyResponse(log, requestId)
 
     const { data, error } = await supabase
       .from('agent_memory')

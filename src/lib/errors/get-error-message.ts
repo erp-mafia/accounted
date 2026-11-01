@@ -741,11 +741,14 @@ export function getErrorMessage(
       // payment file whose paying account lacks its IBAN or BIC (crm#1483):
       // both sentences are composed where the request is refused and name
       // who or which account and what to do, so an English UI gets the
-      // English one, not the registry's generic line.
+      // English one, not the registry's generic line. A role refusal is the
+      // same: it says why this person may not (readOnlyRefusal), and without
+      // its own sentence it carries the registry's.
       if (
         locale === 'en' &&
         (structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' ||
-          structured.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS') &&
+          structured.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS' ||
+          structured.code === 'FORBIDDEN') &&
         typeof structured.message_en === 'string' &&
         structured.message_en.trim()
       ) {

@@ -77,6 +77,7 @@ beforeEach(() => {
   mocks.today = '2026-10-27'
   table = createTableMockSupabase({
     company_settings: { data: { salary_vacation_liability_method: 'accrual' } },
+    company_members: { data: { role: 'owner' } },
     vacation_liability_remeasurements: { data: null },
     journal_entries: { data: [] },
   })

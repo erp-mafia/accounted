@@ -21,7 +21,8 @@ import {
   validateScopes,
   hasScope,
   validateApiKey,
-  apiKeyCommitActor,
+  credentialActor,
+  OAUTH_MCP_KEY_NAME,
   findStageApproveConflict,
   DEFAULT_SCOPES,
   DEFAULT_OAUTH_SCOPES,
@@ -353,6 +354,7 @@ describe('validateApiKey', () => {
       serviceAccount: null,
       agentIdentityId: null,
       client: null,
+      clientName: null,
     })
   })
 
@@ -381,6 +383,7 @@ describe('validateApiKey', () => {
       serviceAccount: null,
       agentIdentityId: null,
       client: null,
+      clientName: null,
     })
   })
 
@@ -412,6 +415,7 @@ describe('validateApiKey', () => {
       serviceAccount: null,
       agentIdentityId: null,
       client: null,
+      clientName: null,
     })
   })
 
@@ -522,27 +526,90 @@ describe('validateApiKey', () => {
     })
 
     it('names the actor service_account for a service account key, api_key otherwise', () => {
-      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: { id: 'sa-1', name: 'Synk' } })).toEqual({
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: { id: 'sa-1', name: 'Synk' } })).toEqual({
         type: 'service_account',
         label: 'Synk',
       })
-      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null })).toEqual({
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null })).toEqual({
         type: 'api_key',
         label: 'Nyckel 1',
       })
-      expect(apiKeyCommitActor({ serviceAccount: null })).toEqual({ type: 'api_key', label: 'Unnamed API key' })
+      expect(credentialActor({ serviceAccount: null })).toEqual({ type: 'api_key', label: 'Unnamed API key' })
+    })
+
+    it("reads a registered client's own name once, for the records", async () => {
+      const client = 'registered:11111111-1111-4111-8111-111111111111'
+      const maybeSingle = vi.fn().mockResolvedValue({ data: { client_name: 'Egen klient' }, error: null })
+      const from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }))
+      const rpc = vi.fn().mockResolvedValue({
+        data: [{ user_id: 'user-123', company_id: 'company-456', api_key_name: OAUTH_MCP_KEY_NAME, rate_limited: false, client }],
+        error: null,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+
+      expect(result).toMatchObject({ client, clientName: 'Egen klient (registered client)' })
+      expect(from).toHaveBeenCalledWith('oauth_client_registrations')
+    })
+
+    it('does not look a built-in client up', async () => {
+      const from = vi.fn()
+      const rpc = vi.fn().mockResolvedValue({
+        data: [{ user_id: 'user-123', company_id: 'company-456', api_key_name: OAUTH_MCP_KEY_NAME, rate_limited: false, client: 'claude' }],
+        error: null,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockCreateClient.mockReturnValue({ rpc, from } as any)
+
+      expect(await validateApiKey('gnubok_sk_test-key-value')).toMatchObject({ client: 'claude', clientName: null })
+      expect(from).not.toHaveBeenCalled()
+    })
+
+    it('names an OAuth key mcp_oauth with its client, whichever door reads it', () => {
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'claude', serviceAccount: null })).toEqual({
+        type: 'mcp_oauth',
+        label: 'Claude (Anthropic)',
+      })
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'chatgpt', serviceAccount: null }).label).toBe('ChatGPT (OpenAI)')
+    })
+
+    it('names a registered client by its own name', () => {
+      expect(
+        credentialActor({
+          apiKeyName: OAUTH_MCP_KEY_NAME,
+          client: 'registered:11111111-1111-4111-8111-111111111111',
+          clientName: 'Egen klient (registered client)',
+          serviceAccount: null,
+        }),
+      ).toEqual({ type: 'mcp_oauth', label: 'Egen klient (registered client)' })
+    })
+
+    it('keeps the reserved name on a connector whose client is not known', () => {
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: null, serviceAccount: null })).toEqual({
+        type: 'mcp_oauth',
+        label: OAUTH_MCP_KEY_NAME,
+      })
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'something-new', serviceAccount: null }).label).toBe(OAUTH_MCP_KEY_NAME)
+    })
+
+    it('never names a service account an OAuth key, whatever the key is called', () => {
+      expect(
+        credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, serviceAccount: { id: 'sa-1', name: 'Synk' } }),
+      ).toEqual({ type: 'service_account', label: 'Synk' })
     })
 
     it('carries the key\'s unattended ceiling, so every door the request reaches is bound by it (#125)', () => {
-      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: 5000 })).toEqual({
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: 5000 })).toEqual({
         type: 'api_key',
         label: 'Nyckel 1',
         unattendedCommitLimit: 5000,
       })
       expect(
-        apiKeyCommitActor({ serviceAccount: { id: 'sa-1', name: 'Synk' }, unattendedCommitLimit: 5000 }),
+        credentialActor({ serviceAccount: { id: 'sa-1', name: 'Synk' }, unattendedCommitLimit: 5000 }),
       ).toMatchObject({ type: 'service_account', unattendedCommitLimit: 5000 })
-      expect(apiKeyCommitActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: null })).toEqual({
+      expect(credentialActor({ apiKeyName: 'Nyckel 1', serviceAccount: null, unattendedCommitLimit: null })).toEqual({
         type: 'api_key',
         label: 'Nyckel 1',
       })

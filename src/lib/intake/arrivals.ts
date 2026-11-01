@@ -17,6 +17,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { INTAKE_SOURCE_IDS, isIntakeSourceId, type IntakeSourceId } from '@/lib/intake/sources'
 
 const log = createLogger('intake/arrivals')
@@ -53,14 +54,15 @@ export interface ArrivalActor {
 export function apiKeyArrivalActor(key: {
   userId: string
   apiKeyId?: string | null
-  apiKeyName?: string | null
-  serviceAccount?: { id: string; name: string } | null
+  actor: Pick<CommitActor, 'type' | 'label'>
+  serviceAccount?: { id: string } | null
 }): ArrivalActor {
   const keyId = key.apiKeyId ? { api_key_id: key.apiKeyId } : {}
+  const label = key.actor.label ? { label: key.actor.label } : {}
   if (key.serviceAccount) {
-    return { type: 'service_account', user_id: key.userId, ...keyId, service_account_id: key.serviceAccount.id, label: key.serviceAccount.name }
+    return { type: 'service_account', user_id: key.userId, ...keyId, service_account_id: key.serviceAccount.id, ...label }
   }
-  return { type: 'api_key', user_id: key.userId, ...keyId, ...(key.apiKeyName ? { label: key.apiKeyName } : {}) }
+  return { type: key.actor.type === 'mcp_oauth' ? 'mcp_oauth' : 'api_key', user_id: key.userId, ...keyId, ...label }
 }
 
 export type ArrivalOutputKind = 'document' | 'inbox_item' | 'transaction' | 'journal_entry'

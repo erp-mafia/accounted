@@ -58,7 +58,8 @@ describe('requireWritePermission', () => {
     if (!result.ok) {
       expect(result.response.status).toBe(403)
       const body = await result.response.json()
-      expect(body.error).toContain('läsbehörighet')
+      expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
+      expect(body.error.message).toContain('läsbehörighet')
     }
   })
 

@@ -43,8 +43,12 @@ export interface AgentToolError {
  * VOUCHER_NEEDS_CONFIRMATION carries the booking-time warnings the person
  * must see before a voucher is staged again with acknowledge_warnings
  * (lib/bookkeeping/voucher-warnings-guard.ts).
+ * FORBIDDEN carries why: details.code ROLE_READ_ONLY or CONNECTION_READ_ONLY
+ * (readOnlyRefusal, the same on every door), details.required_roles for an
+ * owner's or admin's write.
  */
 const CODES_WITH_DETAILS = new Set([
+  'FORBIDDEN',
   'PREVIEW_STALE',
   'TRANSACTION_ALREADY_STAGED',
   'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',

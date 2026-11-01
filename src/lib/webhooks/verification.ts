@@ -44,6 +44,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
 import { pinnedHttpsFetch, type PinnedFetchResult } from './pinned-fetch'
 import { createLogger } from '@/lib/logger'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 
 const log = createLogger('webhooks/verification')
 
@@ -257,9 +258,10 @@ export interface VerifiableWebhook {
   verification_grace_ends_at: string | null
 }
 
+/** A key's `credential` is credentialActor's answer, the same name it signs every other record with. */
 export type VerificationActor =
   | { kind: 'cron' }
-  | { kind: 'api_key'; userId: string; apiKeyId: string | null }
+  | { kind: 'api_key'; userId: string; apiKeyId: string | null; credential: CommitActor }
 
 export type VerificationOutcome =
   | { kind: 'verified'; verifiedAt: string }
@@ -375,8 +377,8 @@ async function writeVerifiedAudit(
     table_name: 'webhooks',
     record_id: webhook.id,
     actor_id: actor.kind === 'api_key' ? actor.apiKeyId : null,
-    actor_type: actor.kind === 'api_key' ? 'api_key' : 'cron',
-    actor_label: actor.kind === 'api_key' ? null : 'webhook-verification',
+    actor_type: actor.kind === 'api_key' ? actor.credential.type : 'cron',
+    actor_label: actor.kind === 'api_key' ? (actor.credential.label ?? null) : 'webhook-verification',
     description: `Webhook endpoint verified by challenge-response: ${webhook.webhook_url}`,
     new_state: { webhook_url: webhook.webhook_url, verified_at: verifiedAt },
   })
@@ -496,7 +498,7 @@ export async function verifyWebhookNow(args: {
   supabase: SupabaseClient
   companyId: string
   webhookId: string
-  actor: { userId: string; apiKeyId: string | null }
+  actor: { userId: string; apiKeyId: string | null; credential: CommitActor }
   now?: Date
   pinnedFetchImpl?: typeof pinnedHttpsFetch
 }): Promise<ManualVerificationResult> {
@@ -552,7 +554,7 @@ export async function verifyWebhookNow(args: {
   const outcome = await attemptWebhookVerification({
     supabase: args.supabase,
     webhook,
-    actor: { kind: 'api_key', userId: args.actor.userId, apiKeyId: args.actor.apiKeyId },
+    actor: { kind: 'api_key', ...args.actor },
     now,
     pinnedFetchImpl: args.pinnedFetchImpl,
   })

@@ -28,7 +28,7 @@
  * above are short enough that sharing them would mean moving the tool.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { Logger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { PendingOperation } from '@/types'
@@ -38,13 +38,9 @@ import { requiresWebApproval } from './risk-tiers'
 export interface ApiKeyApprover {
   userId: string
   apiKeyId: string | undefined
-  apiKeyName: string | undefined
+  /** Who the key is in the records (credentialActor); userId is a service account's sponsor. */
+  actor: Pick<CommitActor, 'type' | 'label'>
   unattendedCommitLimit: number | null
-  /**
-   * The service account the approving key belongs to, or null/absent for a
-   * person's key. userId is then the account's sponsor.
-   */
-  serviceAccount?: { id: string; name: string } | null
 }
 
 export type ApiApprovalResult =
@@ -104,13 +100,7 @@ export async function approvePendingOperationAsApiKey(
   if (requiresWebApproval(operation.operation_type, operation.params)) return { kind: 'web_only', operation }
   if (operation.risk_level === 'high' && !confirmed) return { kind: 'confirmation_required', operation }
 
-  const serviceAccount = approver.serviceAccount ?? null
-  const label = serviceAccount ? serviceAccount.name : approver.apiKeyName
-  const commitActorType = serviceAccount
-    ? 'service_account'
-    : label === OAUTH_MCP_KEY_NAME
-      ? 'mcp_oauth'
-      : 'api_key'
+  const { type: commitActorType, label } = approver.actor
   const userEmail = await resolveUserEmail(supabase, approver.userId, log)
 
   const result = await commitPendingOperation(supabase, approver.userId, companyId, operation, {
@@ -140,10 +130,10 @@ export async function approvePendingOperationAsApiKey(
         channel: 'api',
         confirmed,
       },
-      // A service account's key is named as the service account here too,
-      // as on the commit above.
+      // A service account's key is named as the service account here too, as
+      // on the commit above. The history's word for any other key is api_key.
       actor: {
-        type: serviceAccount ? 'service_account' : 'api_key',
+        type: commitActorType === 'service_account' ? 'service_account' : 'api_key',
         id: approver.apiKeyId ?? approver.userId,
         ...(label ? { label } : {}),
       },

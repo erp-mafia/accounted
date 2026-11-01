@@ -940,6 +940,79 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────
+// Who the audit rows name
+// ──────────────────────────────────────────────────────────────────────
+
+describe('webhook audit rows name the credential the one way', () => {
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/webhooks`
+  const json = { 'Content-Type': 'application/json' }
+  const doors: Array<[string, () => Promise<Response>]> = [
+    [
+      'create',
+      () =>
+        createWebhook(
+          makeRequest(url, {
+            method: 'POST',
+            headers: json,
+            body: JSON.stringify({ event_type: 'invoice.paid', webhook_url: 'https://example.com/hooks/gnubok', name: 'CRM sync' }),
+          }),
+          companyParams(COMPANY_ID),
+        ),
+    ],
+    [
+      'update',
+      () =>
+        updateWebhook(
+          makeRequest(`${url}/${WEBHOOK_ID}`, { method: 'PATCH', headers: json, body: JSON.stringify({ active: true }) }),
+          detailParams(COMPANY_ID, WEBHOOK_ID),
+        ),
+    ],
+    ['delete', () => deleteWebhook(makeRequest(`${url}/${WEBHOOK_ID}`, { method: 'DELETE' }), detailParams(COMPANY_ID, WEBHOOK_ID))],
+    [
+      'rotate',
+      () =>
+        rotateSecret(makeRequest(`${url}/${WEBHOOK_ID}/rotate-secret`, { method: 'POST' }), detailParams(COMPANY_ID, WEBHOOK_ID)),
+    ],
+  ]
+
+  it.each(doors)('an OAuth connector on %s', async (_door, call) => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      client: 'claude',
+      clientName: 'Claude (Anthropic)',
+      scopes: ['webhooks:manage'],
+      mode: 'live',
+    })
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      webhooks: { data: { ...SAMPLE_WEBHOOK, name: 'CRM sync' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    expect((await call()).status).toBeLessThan(300)
+    expect(mock.findCall('audit_log', 'insert')?.[0]).toMatchObject({
+      actor_id: 'ak_1',
+      actor_type: 'mcp_oauth',
+      actor_label: 'Claude (Anthropic)',
+    })
+  })
+
+  it('a plain key under its own name', async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      webhooks: { data: { ...SAMPLE_WEBHOOK, name: 'CRM sync' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    await doors[0][1]()
+    expect(mock.findCall('audit_log', 'insert')?.[0]).toMatchObject({ actor_id: 'ak_1', actor_type: 'api_key', actor_label: 'CI key' })
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────
 // Cross-tenant URL guard (wrapper level)
 // ──────────────────────────────────────────────────────────────────────
 

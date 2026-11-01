@@ -78,12 +78,19 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
 
     try {
       const response = await fetch('/api/settings/logo', { method: 'DELETE' })
-      if (!response.ok) throw new Error()
+      if (!response.ok) {
+        const result = await response.json().catch(() => null)
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('logo_delete_failed') }))
+      }
 
       setPreview(null)
       onUpdate(null)
-    } catch {
-      toast({ title: t('logo_delete_failed'), variant: 'destructive' })
+    } catch (error) {
+      toast({
+        title: t('logo_delete_failed'),
+        description: error instanceof Error ? getUserErrorMessage(error) : undefined,
+        variant: 'destructive',
+      })
     }
 
     setIsDeleting(false)

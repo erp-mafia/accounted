@@ -495,7 +495,7 @@ export default function BankingSettingsPanel() {
           error: data.error,
           bankName: bank.name,
         })
-        throw new Error(data.error)
+        throw new Error(getErrorMessage(data))
       }
 
       console.log('[enable-banking] Redirecting to bank authorization', {
@@ -555,7 +555,7 @@ export default function BankingSettingsPanel() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error)
+        throw new Error(getErrorMessage(data))
       }
 
       window.location.href = data.authorization_url

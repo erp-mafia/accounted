@@ -34,6 +34,21 @@ describe('gnubok_create_article: staged with the one rule set', () => {
     expect(staged.preview_data).toMatchObject({ name: 'Takarbete', currency: 'SEK', unit: 'st', notes: null, vat_rate: 25 })
   })
 
+  it('stages an OAuth connection as what the commit will call it', async () => {
+    const { supabase, findCall } = createTableMockSupabase({ pending_operations: { data: { id: 'op-1' } } })
+    await create().execute({ name: 'Takarbete', price_excl_vat: 850 }, 'company-1', 'user-1', supabase as never, {
+      type: 'api_key',
+      id: 'key-oauth',
+      label: 'Claude (Anthropic)',
+      oauthKey: true,
+    })
+    expect(findCall('pending_operations', 'insert')?.[0]).toMatchObject({
+      actor_type: 'mcp_oauth',
+      actor_id: 'key-oauth',
+      actor_label: 'Claude (Anthropic)',
+    })
+  })
+
   it('refuses a posting account outside classes 1-3 at staging', async () => {
     const { supabase, findCall } = createTableMockSupabase({
       chart_of_accounts: { data: { account_class: 5, is_active: true } },
