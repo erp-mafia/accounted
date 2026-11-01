@@ -21,7 +21,7 @@ import type { AllocationTransaction } from '@/components/transactions/MatchAlloc
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import { failedPaymentReasonText, type BankPaymentsTranslator } from '@/lib/payments/orders/failed-payment-reason'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
-import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
 import { SuggestionCards } from './SuggestionCards'
@@ -184,6 +184,13 @@ interface AttGoraSectionProps {
    */
   aiConnection?: AiConnection
   /**
+   * The connected client to ask for a first task, while no agent of this user
+   * has worked (lib/onboarding/ai-clients firstTaskClient). Shown past the
+   * checklist gate: the checklist ticks its step at the sign-in, and nothing
+   * else on the page asks for the first question.
+   */
+  firstTaskClient?: AiClient | null
+  /**
    * What the biggest missing underlag actually need fetching from, derived
    * from the same page of rows the count comes from (lib/worklist/
    * missing-underlag). Renders as the row's detail line so the errand is
@@ -300,6 +307,7 @@ export default function AttGoraSection({
   emptyLedger = false,
   hasActiveBankConnection = true,
   aiConnection = NO_AI_CONNECTION,
+  firstTaskClient = null,
   missingUnderlag,
   hasSkatteverketConnection = false,
   skvOmbudEnabled = false,
@@ -1033,9 +1041,11 @@ export default function AttGoraSection({
             </div>
           )}
       </div>
-      {showKopplingar && (
+      {(showKopplingar || firstTaskClient) && (
         <KopplingarChips
           aiConnection={aiConnection}
+          firstTask={firstTaskClient}
+          firstTaskOnly={!showKopplingar}
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
           skvOmbudEnabled={skvOmbudEnabled}

@@ -16,8 +16,9 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useBranding } from '@/lib/branding/brand-context'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { AI_CLIENTS, agentChipView, aiConnectAction, openAiConnector, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, agentChipView, aiConnectAction, aiPrefilledChatLink, openAiConnector, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
+import { trackInstructions } from '@/components/skills/track'
 
 /**
  * Kopplingar: the three things Att göra can be wired to (an AI agent, the
@@ -32,14 +33,26 @@ import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoi
  * the row. Founder direction 2026-09-14: the connections are part of the Att
  * göra section, in the same visual language, with the connect action as a
  * pill like every other control.
+ *
+ * One connected state does render: `firstTask`, an agent that has a key but
+ * has never been asked anything. That is the exception here, not the normal
+ * state: the sign-in ends on the client's settings page, so this chip is what
+ * turns a connection into a first question. It opens a new chat with a fixed
+ * prompt and goes away by itself after the agent's first working call.
  */
 export function KopplingarChips({
   aiConnection,
+  firstTask = null,
+  firstTaskOnly = false,
   hasBank,
   hasSkatteverket,
   skvOmbudEnabled = false,
 }: {
   aiConnection: AiConnection
+  /** The connected client to ask for a first task (lib/onboarding/ai-clients firstTaskClient). */
+  firstTask?: AiClient | null
+  /** Only that chip: while the checklist is open it carries the connect offers. */
+  firstTaskOnly?: boolean
   hasBank: boolean
   hasSkatteverket: boolean
   /**
@@ -68,10 +81,11 @@ export function KopplingarChips({
   // connected through a client we cannot name still reads as connected. Off,
   // the chip shows the three connectable logos.
   const agentChip = agentChipView(aiConnection)
-  const showAgent = !agentChip.on
+  const showAgent = !firstTaskOnly && !agentChip.on
   const agentLogos = AI_CLIENTS.filter((c) => agentChip.logos.includes(c.id))
-  const showBank = !hasBank
-  const showSkvChip = showSkv && !hasSkatteverket
+  const showBank = !firstTaskOnly && !hasBank
+  const showSkvChip = !firstTaskOnly && showSkv && !hasSkatteverket
+  const firstTaskAgent = AI_CLIENTS.find((c) => c.id === firstTask)
 
   function connect(client: AiClient) {
     const action = aiConnectAction(client, { origin: window.location.origin, appName })
@@ -79,7 +93,12 @@ export function KopplingarChips({
     else openAiConnector(action.open)
   }
 
-  if (!showAgent && !showBank && !showSkvChip) return null
+  function askFirstQuestion(client: AiClient) {
+    trackInstructions('instructions_start_clicked', { item: 'first_task', kind: 'workflow', client, surface: 'hem', target: 'web' })
+    openAiConnector(aiPrefilledChatLink(client, t('kopplingar_agent_first_task_prompt')))
+  }
+
+  if (!showAgent && !firstTaskAgent && !showBank && !showSkvChip) return null
 
   return (
     <div className="px-1 pt-4 pb-2">
@@ -114,6 +133,25 @@ export function KopplingarChips({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+            }
+          />
+        )}
+        {firstTaskAgent && (
+          <Chip
+            // eslint-disable-next-line @next/next/no-img-element
+            icon={<img src={firstTaskAgent.logo} alt="" className="h-4 w-4 rounded-full bg-background ring-1 ring-background" />}
+            name={firstTaskAgent.name}
+            status={t('kopplingar_agent_on')}
+            action={
+              <button
+                type="button"
+                onClick={() => askFirstQuestion(firstTaskAgent.id)}
+                className={pillClass}
+                aria-label={t('kopplingar_agent_first_task_aria', { client: firstTaskAgent.name })}
+                title={t('kopplingar_agent_first_task_hint', { client: firstTaskAgent.name })}
+              >
+                {t('kopplingar_agent_first_task')}
+              </button>
             }
           />
         )}

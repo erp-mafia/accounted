@@ -6,9 +6,16 @@ const warn = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/api-keys', () => ({ OAUTH_MCP_KEY_NAME: 'MCP OAuth' }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ warn, info: vi.fn(), error: vi.fn() }) }))
 
-import { loadAiConnection, loadConnectedAiClients, readAiConnection, readConnectedAiClients } from '../ai-clients.server'
+import {
+  hasAgentWorked,
+  loadAiConnection,
+  loadConnectedAiClients,
+  readAiConnection,
+  readConnectedAiClients,
+  readFirstTaskClient,
+} from '../ai-clients.server'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const client = supabase as unknown as SupabaseClient
 
 describe('connected AI clients read', () => {
@@ -63,5 +70,64 @@ describe('connected AI clients read', () => {
   it('keeps an unknown-client key connected in the lenient connection read', async () => {
     enqueue({ data: [{ client: null }], error: null })
     await expect(loadAiConnection(client, 'user-1')).resolves.toEqual({ connected: true, clients: [] })
+  })
+})
+
+describe('whether an agent has worked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('is true once a key has had a working tool call', async () => {
+    enqueue({ data: [{ sequence: 1 }], error: null })
+    await expect(hasAgentWorked(client, 'user-1')).resolves.toBe(true)
+    expect(supabase.from).toHaveBeenCalledWith('event_log')
+  })
+
+  it('is false for a person whose connector has only listed its tools', async () => {
+    enqueue({ data: [], error: null })
+    await expect(hasAgentWorked(client, 'user-1')).resolves.toBe(false)
+  })
+
+  it('counts only a successful tool call by a key: a connector lists its tools by itself', async () => {
+    enqueue({ data: [], error: null })
+    await hasAgentWorked(client, 'user-1')
+    expect(findCalls('event_log', 'eq')).toEqual([
+      ['user_id', 'user-1'],
+      ['event_type', 'mcp.tool_called'],
+      ['data->>actorType', 'api_key'],
+      ['data->>success', 'true'],
+      ['data->>isError', 'false'],
+    ])
+  })
+
+  it('reads as worked when the read fails: a broken read must not start asking people', async () => {
+    enqueue({ data: null, error: { message: 'connection reset' } })
+    await expect(hasAgentWorked(client, 'user-1')).resolves.toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the first task client', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('names the client of a person whose agent has not worked', async () => {
+    enqueue({ data: [], error: null })
+    await expect(readFirstTaskClient(client, 'user-1', { connected: true, clients: ['claude'] })).resolves.toBe('claude')
+  })
+
+  it('answers null once an agent has worked', async () => {
+    enqueue({ data: [{ sequence: 1 }], error: null })
+    await expect(readFirstTaskClient(client, 'user-1', { connected: true, clients: ['claude'] })).resolves.toBeNull()
+  })
+
+  it('spends no read on a person with no client to name', async () => {
+    await expect(readFirstTaskClient(client, 'user-1', { connected: false, clients: [] })).resolves.toBeNull()
+    await expect(readFirstTaskClient(client, 'user-1', { connected: true, clients: [] })).resolves.toBeNull()
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })
