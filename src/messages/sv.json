@@ -7262,7 +7262,7 @@
   },
   "invoice_link_voucher": {
     "intro": "Välj en befintlig verifikation som krediterar kundfordran (1510). Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",
-    "intro_cash": "Välj en befintlig verifikation som bokför betalningen mot ett likvidkonto (kassa/bank, t.ex. 1930). Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",
+    "intro_cash": "Välj en befintlig verifikation som bokför betalningen mot ett likvidkonto (kassa/bank, t.ex. 1930), eller mot 2013 om kunden betalade till dig privat. Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",
     "search_placeholder": "Sök på verifikatnummer eller beskrivning…",
     "confidence_high": "Hög träff",
     "confidence_medium": "Möjlig träff",
@@ -7270,7 +7270,7 @@
     "period_locked": "Låst period",
     "empty_title": "Inga matchande verifikationer hittades",
     "empty_description": "Det finns ingen bokförd verifikation som krediterar 1510 i fakturans valuta och period. Bokför istället en ny betalning, eller rätta tidigare bokföring först.",
-    "empty_description_cash": "Det finns ingen bokförd verifikation som debiterar ett likvidkonto (19xx) i fakturans valuta och period. Bokför istället en ny betalning, eller rätta tidigare bokföring först.",
+    "empty_description_cash": "Det finns ingen bokförd verifikation som debiterar ett likvidkonto (19xx) eller 2013 i fakturans valuta och period. Är den bokförd i kronor, sök på verifikationsnumret. Bokför annars en ny betalning, eller rätta tidigare bokföring först.",
     "intro_supplier": "Välj en befintlig verifikation som debiterar leverantörsskulder (2440). Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",
     "empty_description_supplier": "Det finns ingen bokförd verifikation som debiterar leverantörsskulder (2440) i fakturans valuta och period. Om kostnaden bokfördes direkt mot t.ex. bank utan 2440 kan den inte länkas som betalning här: bokför istället fakturan från leverantörsfakturor, eller registrera en ny betalning.",
     "intro_supplier_pending": "Välj en befintlig verifikation som redan innehåller betalningen. Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",

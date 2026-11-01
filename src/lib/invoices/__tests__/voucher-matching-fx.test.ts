@@ -601,9 +601,10 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     expect(validated.ok).toBe(true)
   })
 
-  it('on kontantmetoden reads only 19xx lines labelled with the invoice currency', async () => {
+  it('on kontantmetoden reads only 19xx (or 2013) lines labelled with the invoice currency', async () => {
     // Every receipt debits 19xx, so the unfiltered set would be the whole bank
-    // history in the window; only labelled lines are expressible in EUR.
+    // history in the window; only labelled lines are expressible in EUR. A
+    // payment to the owner privately debits 2013 instead (crm#1580).
     const { supabase, queries } = createFilteringSupabase({
       accountingMethod: 'cash',
       entries: [correctEurVoucher],
@@ -616,13 +617,20 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     )
 
     expect(result.map((c) => c.journal_entry_id)).toEqual(['je-correct'])
-    expect(plainFilters(candidateLineQuery(queries))).toEqual(
+    const lineQuery = candidateLineQuery(queries)
+    expect(plainFilters(lineQuery)).toEqual(
       expect.arrayContaining([
-        { op: 'like', column: 'account_number', value: '19%' },
         { op: 'gt', column: 'debit_amount', value: 0 },
         { op: 'eq', column: 'currency', value: 'EUR' },
       ]),
     )
+    expect(lineQuery.filters).toContainEqual({
+      op: 'or',
+      conditions: [
+        { op: 'like', column: 'account_number', value: '19%' },
+        { op: 'eq', column: 'account_number', value: '2013' },
+      ],
+    })
   })
 
   it('keeps a negatively-stored foreign figure inside the floored band', async () => {

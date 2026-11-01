@@ -8254,12 +8254,12 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
   LINK_VOUCHER_NO_AR_CREDIT: {
     httpStatus: 400,
     message_sv:
-      'Verifikationen krediterar inte ett kundfordringskonto (151x). Bokföringen behöver först rättas med en stornoverifikation som krediterar 1510, t.ex. via gnubok_correct_entry.',
+      'Verifikationen har ingen rad som betalar fakturan: en kredit på kundfordringar (151x), eller för en faktura som inte är bokförd under kontantmetoden en debet på 19xx eller på 2013 (kunden betalade till ägaren privat). Rätta bokföringen först, t.ex. via gnubok_correct_entry.',
     message_en:
-      'The journal entry does not credit an accounts-receivable account (151x). Correct the booking first via a storno+correction (gnubok_correct_entry) that credits 1510.',
+      'The journal entry has no line that pays the invoice: a credit on accounts receivable (151x) or, for an invoice not yet booked under kontantmetoden, a debit on 19xx or on 2013 (the customer paid the owner privately). Correct the booking first, e.g. via gnubok_correct_entry.',
     remediation: {
       description:
-        'Use gnubok_correct_entry to storno the existing voucher and re-book the receipt as Dr 1930 / Cr 1510, then link the corrected voucher.',
+        'Use gnubok_correct_entry to storno the existing voucher and re-book the receipt on the invoice\'s settlement side (Dr 1930 / Cr 1510 for a booked invoice; Dr 1930 or 2013 / Cr revenue and VAT for an unbooked kontantmetod invoice), then link the corrected voucher.',
       tool: 'gnubok_correct_entry',
     },
   },

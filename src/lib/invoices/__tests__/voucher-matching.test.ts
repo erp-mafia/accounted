@@ -213,6 +213,45 @@ describe('validateVoucherForInvoiceLink', () => {
     }
   })
 
+  it('cash method: accepts a sale the customer paid to the owner privately (Dr 2013, crm#1580)', async () => {
+    // An enskild firma whose customer paid a private account or wallet books
+    // the sale Dr 2013 / Cr 30xx: the same booking a 1930 receipt is.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = setup()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({
+      data: {
+        id: 'je-1',
+        voucher_series: 'A',
+        voucher_number: 21,
+        entry_date: '2026-10-29',
+        description: '',
+        status: 'posted',
+        source_type: 'manual',
+        fiscal_period_id: 'fp-1',
+        company_id: 'company-1',
+      },
+    })
+    enqueue({
+      data: [
+        { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3308', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_payments already-linked lookup
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      invoice as never,
+      'je-1',
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.arCreditAmount).toBe(1000)
+      expect(result.isFullyPaid).toBe(true)
+    }
+  })
+
   it('cash method: rejects when the voucher has no bank/cash debit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()

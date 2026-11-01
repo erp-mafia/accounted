@@ -252,6 +252,11 @@ export function sekBookedSettlement(
 export interface SettlementSearchSide {
   /** Account prefix of the settlement line: 151, 244 or 19. */
   accountPrefix: string
+  /**
+   * Whole account numbers that settle besides the prefix: 2013 (the owner's
+   * private funds) on the customer 19xx side (settlesOnAccount, crm#1580).
+   */
+  alsoAccounts?: readonly string[]
   /** The side of that line that settles the invoice. */
   entrySide: 'debit' | 'credit'
   /**
@@ -351,7 +356,10 @@ export async function collectSettlementVouchers(
           .lte('entry_date', dateTo.toISOString().slice(0, 10))
       },
       filterLines: (q: EntryLinesQuery) => {
-        const scoped = q.like('account_number', `${side.accountPrefix}%`).gt(amountColumn, 0)
+        const onSide = side.alsoAccounts?.length
+          ? q.or([`account_number.like.${side.accountPrefix}%`, ...side.alsoAccounts.map((a) => `account_number.eq.${a}`)].join(','))
+          : q.like('account_number', `${side.accountPrefix}%`)
+        const scoped = onSide.gt(amountColumn, 0)
         if (!side.bankSide || search.voucher) return scoped
         if (isForeignInvoice) return scoped.eq('currency', invoiceCurrency)
         const band = candidateAmountBand(remainingAmount, invoice.total)
