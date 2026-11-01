@@ -358,6 +358,7 @@ import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -9593,7 +9594,7 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, external_invoice_number, is_self_billed, status, customer_id, total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, credited_invoice_id, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, external_invoice_number, is_self_billed, status, customer_id, total, ore_rounding, deduction_total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, credited_invoice_id, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       // Overdue is derived from the due date and the open remainder
@@ -9630,7 +9631,16 @@ export const tools: McpTool[] = [
       if (error) throw dbError(error)
 
       const rows = data ?? []
-      const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
+      // What each invoice asks the customer for (crm#1568): total is the exact
+      // figure the books carry, amount_to_pay the "Att betala" its PDF prints
+      // (öresavrundning, then any ROT/RUT deduction), from the helper the v1
+      // invoice responses use, so the two surfaces cannot disagree.
+      const priced = await withAmountToPay(
+        supabase,
+        companyId,
+        rows.slice(0, limit) as unknown as Array<AmountToPayRow & Record<string, unknown>>,
+      )
+      const invoices = priced.map((inv) => ({
         id: inv.id,
         invoice_number: inv.invoice_number,
         // A received self-billed sale has no number of ours (invoice_number
@@ -9640,6 +9650,8 @@ export const tools: McpTool[] = [
         status: effectiveInvoiceStatus(inv as unknown as OverdueInvoiceInput, today),
         customer_name: (inv.customers as Record<string, unknown>)?.name ?? null,
         total: inv.total,
+        amount_to_pay: inv.amount_to_pay,
+        ore_rounding_amount: inv.ore_rounding_amount,
         // Same fields and fallbacks as gnubok_get_invoice, so a partially paid
         // invoice shows its residual without a second call.
         paid_amount: inv.paid_amount ?? 0,
@@ -9746,9 +9758,11 @@ export const tools: McpTool[] = [
         currency: { type: 'string' },
         subtotal: { type: 'number' },
         vat_amount: { type: 'number' },
-        total: { type: 'number' },
+        total: { type: 'number', description: 'The exact total the books carry' },
+        amount_to_pay: { type: 'number', description: 'Att betala: what the invoice asks the customer for, total after öresavrundning, minus any ROT/RUT deduction. Report and reconcile payments against it' },
+        ore_rounding_amount: { type: 'number', description: 'The öresavrundning row the invoice prints, 0 when none' },
         paid_amount: { type: 'number' },
-        remaining_amount: { type: ['number', 'null'] },
+        remaining_amount: { type: ['number', 'null'], description: 'Open balance in the ledger, exact öre' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
         invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },
@@ -9811,7 +9825,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, external_invoice_number, status, document_type, valid_until, quote_status, converted_from_id, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, external_invoice_number, status, document_type, valid_until, quote_status, converted_from_id, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, ore_rounding, deduction_total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -9948,6 +9962,12 @@ export const tools: McpTool[] = [
         }
       }
 
+      // crm#1568: what the invoice asks the customer for, from the helper the
+      // v1 invoice responses use (gnubok_list_invoices reports the same).
+      const [{ amount_to_pay, ore_rounding_amount }] = await withAmountToPay(supabase, companyId, [
+        invoice as unknown as AmountToPayRow,
+      ])
+
       return {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
@@ -9969,6 +9989,8 @@ export const tools: McpTool[] = [
         subtotal: invoice.subtotal,
         vat_amount: invoice.vat_amount,
         total: invoice.total,
+        amount_to_pay,
+        ore_rounding_amount,
         paid_amount: invoice.paid_amount ?? 0,
         remaining_amount: invoice.remaining_amount ?? null,
         your_reference: invoice.your_reference ?? null,

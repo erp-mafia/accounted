@@ -1,0 +1,1 @@
+[2026-10-31] What an invoice asks for has one projection outside the app: the MCP invoice reads and the v1 customer expansion carry amount_to_pay via withAmountToPay, the Stripe payment link is priced by invoiceAmountDue; total and remaining_amount stay the exact ledger figures (crm#1568).

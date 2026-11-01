@@ -31,6 +31,7 @@ import {
 import { updateCustomer } from '@/lib/customers/customer-commands'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 
 // v1-only extension: allow PATCH to set archived_at back to null to
 // un-archive a customer. Restricted to literal `null` so the caller can't
@@ -52,8 +53,10 @@ const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 
 const CUSTOMER_DETAIL_COLUMNS = CUSTOMER_RECORD_COLUMNS
 
+// ore_rounding, deduction_total and credited_invoice_id are read for
+// amount_to_pay (crm#1568) and not returned, as on the invoice list.
 const OPEN_INVOICE_COLUMNS =
-  'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
+  'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount, ore_rounding, deduction_total, credited_invoice_id'
 
 registerEndpoint({
   operation: 'customers.get',
@@ -187,7 +190,26 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         invoices = []
         partialExpansions.push('invoices')
       } else {
-        invoices = invs ?? []
+        // What each open invoice asks for, as the invoice endpoints report it
+        // (crm#1568). The company setting is read only for a row without its
+        // own choice; a failed read degrades the expansion like a failed
+        // query, never a figure computed on a guessed setting.
+        try {
+          const priced = await withAmountToPay(
+            ctx.supabase,
+            ctx.companyId!,
+            (invs ?? []) as unknown as Array<AmountToPayRow & Record<string, unknown>>,
+          )
+          invoices = priced.map(
+            ({ ore_rounding: _oreRounding, deduction_total: _deduction, credited_invoice_id: _credited, ...invoice }) => invoice,
+          )
+        } catch (err) {
+          ctx.log.warn('customers.get: open-invoices amount to pay failed', {
+            errMsg: err instanceof Error ? err.message : String(err),
+          })
+          invoices = []
+          partialExpansions.push('invoices')
+        }
       }
     }
 

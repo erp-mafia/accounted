@@ -48,6 +48,8 @@ function makeEligibleInvoice() {
     currency: 'SEK',
     total: 1250,
     remaining_amount: 1250,
+    // Its own öresavrundning choice: no company read unless a test drops it.
+    ore_rounding: true,
     payment_link_url: null,
   })
 }
@@ -125,6 +127,7 @@ describe('stripe payment links', () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: ACTIVE_CONNECTION })
       const invoice = makeEligibleInvoice()
+      invoice.status = 'paid'
       invoice.remaining_amount = 0
       const result = await createInvoicePaymentLink(
         supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
@@ -136,8 +139,9 @@ describe('stripe payment links', () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: ACTIVE_CONNECTION })
       const invoice = makeEligibleInvoice()
-      // ROT/RUT-style payable: remaining is customer share, not the total
+      // ROT/RUT: the customer pays the total less the deduction
       invoice.total = 2000
+      invoice.deduction_total = 765.44
       invoice.remaining_amount = 1234.56
 
       const result = await createInvoicePaymentLink(
@@ -172,14 +176,15 @@ describe('stripe payment links', () => {
       enqueue({ data: ACTIVE_CONNECTION })
       enqueue({ data: ACTIVE_CONNECTION })
       const invoice = makeEligibleInvoice()
-      invoice.remaining_amount = 1250
+      invoice.total = 1250
 
       await createInvoicePaymentLink(
         supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
       )
       // Draft amount changed before a resend: reusing the old key with new
       // parameters would be rejected by Stripe (idempotency_error).
-      invoice.remaining_amount = 999.5
+      invoice.total = 999.5
+      invoice.ore_rounding = false
       await createInvoicePaymentLink(
         supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
       )
@@ -188,6 +193,67 @@ describe('stripe payment links', () => {
       expect(pricesCreate.mock.calls[1][1].idempotencyKey).toBe('acc_inv_price_inv-1_99950')
       expect(paymentLinksCreate.mock.calls[0][1].idempotencyKey).toBe('acc_inv_plink_inv-1_125000')
       expect(paymentLinksCreate.mock.calls[1][1].idempotencyKey).toBe('acc_inv_plink_inv-1_99950')
+    })
+
+    // crm#1568: the link charged remaining_amount, the exact ledger figure, so
+    // an invoice whose PDF asks 3 116 kr charged 3 116,25 kr by card.
+    it('charges what the invoice asks for after öresavrundning, not the exact total', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: ACTIVE_CONNECTION })
+      const invoice = makeEligibleInvoice()
+      invoice.total = 4312.5
+      invoice.remaining_amount = 4312.5
+
+      await createInvoicePaymentLink(
+        supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
+      )
+
+      expect(pricesCreate.mock.calls[0][0].unit_amount).toBe(431300)
+    })
+
+    it('prices a draft without a choice of its own with the company setting', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: ACTIVE_CONNECTION })
+      enqueue({ data: { ore_rounding: false } }) // company_settings
+      const invoice = makeEligibleInvoice()
+      invoice.total = 4312.5
+      invoice.ore_rounding = null
+
+      await createInvoicePaymentLink(
+        supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
+      )
+
+      expect(findCall('company_settings', 'eq')).toEqual(['company_id', 'company-1'])
+      expect(pricesCreate.mock.calls[0][0].unit_amount).toBe(431250)
+    })
+
+    it('creates no link when the company setting cannot be read', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: ACTIVE_CONNECTION })
+      enqueue({ error: { message: 'permission denied' } })
+      const invoice = makeEligibleInvoice()
+      invoice.ore_rounding = null
+
+      await expect(
+        createInvoicePaymentLink(supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice),
+      ).rejects.toThrow(/ore_rounding/)
+      expect(pricesCreate).not.toHaveBeenCalled()
+    })
+
+    it('charges the remainder of a partly paid invoice', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: ACTIVE_CONNECTION })
+      const invoice = makeEligibleInvoice()
+      invoice.status = 'partially_paid'
+      invoice.total = 4312.5
+      invoice.paid_amount = 1000
+      invoice.remaining_amount = 3312.5
+
+      await createInvoicePaymentLink(
+        supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
+      )
+
+      expect(pricesCreate.mock.calls[0][0].unit_amount).toBe(331250)
     })
 
     it('propagates Stripe API failures to the caller', async () => {

@@ -44,24 +44,35 @@ export function invoiceAmountToPayFields(
 }
 
 /**
- * `rows` with the two fields added. The company setting is read only when a
- * row has no choice of its own (a draft); a failed read throws, so a response
- * never carries a figure computed on a guessed setting.
+ * The company setting the figures of `rows` need: read only when a row has no
+ * choice of its own (a draft), else null. A failed read throws, so no figure
+ * is ever computed on a guessed setting.
+ */
+export async function companyOreRoundingFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: ReadonlyArray<{ ore_rounding?: boolean | null }>,
+): Promise<Pick<CompanySettings, 'ore_rounding'> | null> {
+  if (!rows.some((row) => row.ore_rounding == null)) return null
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('ore_rounding')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw new Error(`company_settings.ore_rounding read failed: ${error.message}`)
+  return data as Pick<CompanySettings, 'ore_rounding'> | null
+}
+
+/**
+ * `rows` with the two fields added: the one projection every reader outside
+ * the app gets them from (the v1 invoice and customer responses, the MCP
+ * invoice reads), so no surface reports the exact total as what is owed.
  */
 export async function withAmountToPay<T extends AmountToPayRow>(
   supabase: SupabaseClient,
   companyId: string,
   rows: T[],
 ): Promise<Array<T & InvoiceAmountToPayFields>> {
-  let company: Pick<CompanySettings, 'ore_rounding'> | null = null
-  if (rows.some((row) => row.ore_rounding == null)) {
-    const { data, error } = await supabase
-      .from('company_settings')
-      .select('ore_rounding')
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (error) throw new Error(`company_settings.ore_rounding read failed: ${error.message}`)
-    company = data as Pick<CompanySettings, 'ore_rounding'> | null
-  }
+  const company = await companyOreRoundingFor(supabase, companyId, rows)
   return rows.map((row) => ({ ...row, ...invoiceAmountToPayFields(row, company) }))
 }
