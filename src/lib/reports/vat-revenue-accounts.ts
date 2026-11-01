@@ -5,6 +5,7 @@ import { isAccountVatBox, isVatBoxAccount, vatBoxRutaMapping } from '@/lib/vat/a
 import {
   defaultRateForVatTreatment,
   isAccountVatTreatment,
+  NOT_DOMESTIC_SALE,
   resolveVatTreatmentRuta,
   type AccountVatRutaMapping,
 } from '@/lib/vat/account-vat-treatment'
@@ -15,8 +16,6 @@ export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
 ])
 const RUTA_05_STATIC_RATE_ACCOUNTS = new Set(['3000'])
 const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = { '1': 0.25, '2': 0.12, '3': 0.06 }
-const CONTRADICTING_ACCOUNT_NAME =
-  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|\b0\s*%/i
 
 /**
  * Infer the domestic-sales VAT rate a class 3 account represents from its
@@ -27,7 +26,7 @@ const CONTRADICTING_ACCOUNT_NAME =
  */
 export function inferDomesticSalesRate(accountNumber: string, accountName: string): number | null {
   const accountMatch = /^30\d([123])$/.exec(accountNumber)
-  if (!accountMatch || CONTRADICTING_ACCOUNT_NAME.test(accountName)) return null
+  if (!accountMatch || NOT_DOMESTIC_SALE.test(accountName)) return null
   const expectedRate = DOMESTIC_SALES_RATE_BY_SUFFIX[accountMatch[1]]
   const namedRates = new Set(
     [...accountName.matchAll(/\b(25|12|6)\s*%\s*moms\b/gi)].map((match) => Number(match[1]) / 100),

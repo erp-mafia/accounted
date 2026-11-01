@@ -1,4 +1,4 @@
-import type { CreateJournalEntryLineInput, VatTreatment } from '@/types'
+import type { CreateJournalEntryLineInput, VatJournalLine, VatTreatment } from '@/types'
 import {
   defaultRateForVatTreatment,
   isAccountVatTreatment,
@@ -8,6 +8,9 @@ import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 import { reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
 import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { getOutputVatAccount } from '@/lib/bookkeeping/invoice-accounts'
+import { isRateBearing } from '@/lib/bookkeeping/vat-registration'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -527,6 +530,71 @@ function fiktivMomsLines(
       line_description: `Fiktiv utgående moms ${vatRate * 100}% (${context})`,
     },
   ]
+}
+
+/** What a bank row's business line is: a purchase or a sale. */
+export type BankRowNature = 'expense' | 'income'
+
+/**
+ * The moms lines of a bank row booked by a category or a catalog template, so
+ * the same row books the same moms whichever of the two decided it:
+ *
+ *                     purchase        refund of it      sale     refund of it
+ *   25, 12, 6 %       D 2641          K 2641            K 26x1   D 26x1
+ *   reverse charge    the whole set   the set reversed  none     none
+ *   any other, none   none            none              none     none
+ *
+ * Rate-based moms sits inside the gross. A reversal takes it back on the
+ * account it was booked on (swedish-daily-bookkeeping, payment-providers.md
+ * §10: a refund of a sale reverses the original entry, debit 30xx and 26xx;
+ * swedish-invoice-compliance, invoice-rules.md §5). Reverse charge is the
+ * buyer's self-assessment, so the whole set (generateReverseChargePurchaseLines)
+ * is added on top and a sale carries no Swedish moms in either direction.
+ *
+ * `nature` is what the booking is, which the row's sign alone does not say;
+ * `reversal` is money running against it. `treatment` is the one the booking
+ * resolved (vatTreatmentForRegistration has already run). `vatAmount` is the
+ * underlag's moms in SEK, in place of the rate's. `reverseChargeKind` picks
+ * the basis box of a reverse-charge purchase.
+ */
+export function bankRowVatLines({ treatment, absSek, nature, reversal, vatAmount, reverseChargeKind }: {
+  treatment: string | null | undefined
+  /** The row's gross in SEK: journal lines are always SEK. */
+  absSek: number
+  nature: BankRowNature
+  reversal: boolean
+  vatAmount?: number
+  reverseChargeKind?: ReverseChargeKind | null
+}): VatJournalLine[] {
+  if (treatment === 'reverse_charge') {
+    if (nature === 'income') return []
+    return generateReverseChargePurchaseLines({
+      base: absSek,
+      kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
+    }).map((line) => ({
+      account_number: line.account_number,
+      debit_amount: reversal ? line.credit_amount : line.debit_amount,
+      credit_amount: reversal ? line.debit_amount : line.credit_amount,
+      description: line.line_description || '',
+    }))
+  }
+  if (!isRateBearing(treatment)) return []
+
+  const rate = getVatRate(treatment)
+  const amount = vatAmount ?? grossVat(absSek, rate)
+  if (!(amount > 0)) return []
+
+  const purchase = nature === 'expense'
+  const onDebit = purchase !== reversal
+  const label = purchase
+    ? (reversal ? 'Återföring ingående moms' : 'Ingående moms')
+    : (reversal ? 'Återföring utgående moms' : 'Utgående moms')
+  return [{
+    account_number: purchase ? resolveAccountRole(PINNED_JURISDICTION, 'input_vat') : getOutputVatAccount(treatment),
+    debit_amount: onDebit ? amount : 0,
+    credit_amount: onDebit ? 0 : amount,
+    description: vatAmount === undefined ? `${label} ${rate * 100}%` : `${label} (enligt underlag)`,
+  }]
 }
 
 /**

@@ -454,7 +454,6 @@ describe('representation VAT (reduced 12%, ML 13 kap 24-25 §§)', () => {
   it('getCategoryAccountMapping has vatTreatment: reduced_12 for representation', () => {
     const result = getCategoryAccountMapping('expense_representation', -500, true, 'enskild_firma')
     expect(result.vatTreatment).toBe('reduced_12')
-    expect(result.vatDebitAccount).toBe('2641')
   })
 
   it('buildMappingResultFromCategory generates 12% VAT line for representation', () => {
@@ -484,7 +483,7 @@ describe('income account resolves by VAT treatment', () => {
     ['reduced_6', '3003'],
     ['export', '3305'],
     ['reverse_charge', '3308'],
-    ['exempt', '3004'],
+    ['exempt', '3100'],
   ]
 
   it.each(cases)('income_services with %s maps to %s', (vat, expectedAccount) => {
@@ -492,7 +491,11 @@ describe('income account resolves by VAT treatment', () => {
     expect(result.creditAccount).toBe(expectedAccount)
   })
 
-  it.each(cases)('income_products with %s maps to %s', (vat, expectedAccount) => {
+  it.each([
+    ...cases.filter(([vat]) => vat !== 'export' && vat !== 'reverse_charge'),
+    ['export', '3105'],
+    ['reverse_charge', '3108'],
+  ] as [VatTreatment, string][])('income_products with %s maps to %s', (vat, expectedAccount) => {
     const result = getCategoryAccountMapping('income_products', 1000, true, 'enskild_firma', vat)
     expect(result.creditAccount).toBe(expectedAccount)
   })
@@ -543,18 +546,11 @@ describe('incoming expense refund (positive amount, expense category)', () => {
     expect(result.creditAccount).toBe('5420')
   })
 
-  it('getCategoryAccountMapping sets vatCreditAccount 2641 and clears vatDebitAccount for refund', () => {
-    const result = getCategoryAccountMapping('expense_software', 500, true, 'enskild_firma')
-    expect(result.vatDebitAccount).toBeNull()
-    expect(result.vatCreditAccount).toBe('2641')
-  })
-
-  it('VAT-exempt expense refund (bank_fees) has no VAT accounts', () => {
+  it('VAT-exempt expense refund (bank_fees) has no VAT treatment', () => {
     const result = getCategoryAccountMapping('expense_bank_fees', 100, true, 'enskild_firma')
     expect(result.debitAccount).toBe('1930')
     expect(result.creditAccount).toBe('6570')
-    expect(result.vatDebitAccount).toBeNull()
-    expect(result.vatCreditAccount).toBeNull()
+    expect(result.vatTreatment).toBeNull()
   })
 
   it('buildMappingResultFromCategory generates credit line on 2641 for expense refund', () => {
@@ -698,15 +694,14 @@ describe('VAT registration', () => {
     expect(mapping.vatTreatment).toBe('exempt')
   })
 
-  it('a non-registered company books income as a momsfri supply: 3004 and no utgående moms', () => {
+  it('a non-registered company books income as a momsfri supply: the form\'s momsfri account and no utgående moms', () => {
     const result = buildMappingResultFromCategory(
       'income_services', income, true, 'ideell_forening', undefined, null, false,
     )
-    expect(result.credit_account).toBe('3004')
+    expect(result.credit_account).toBe('3100')
     expect(result.vat_lines).toEqual([])
     const mapping = getCategoryAccountMapping('income_services', 1250, true, 'ideell_forening', undefined, false)
     expect(mapping.vatTreatment).toBe('exempt')
-    expect(mapping.vatCreditAccount).toBeNull()
   })
 
   it('applies to every legal form: an enskild firma or aktiebolag that is not registered books the same way', () => {
@@ -782,18 +777,18 @@ describe('refund to a customer (money out on an income category)', () => {
   // A refund of 125,00 kr. The revenue account follows the treatment for the
   // services and products categories (3001/3002/3003, 3004 momsfri, 3305
   // export, 3308 EU services); income_other stays on 3999.
-  const refunds: Array<{ vat: VatTreatment; revenue: string; vatAccount: string | null; net: number; moms: number }> = [
+  const refunds: Array<{ vat: VatTreatment; revenue: string; goods?: string; vatAccount: string | null; net: number; moms: number }> = [
     { vat: 'standard_25', revenue: '3001', vatAccount: '2611', net: 100, moms: 25 },
     { vat: 'reduced_12', revenue: '3002', vatAccount: '2621', net: 111.61, moms: 13.39 },
     { vat: 'reduced_6', revenue: '3003', vatAccount: '2631', net: 117.92, moms: 7.08 },
-    { vat: 'exempt', revenue: '3004', vatAccount: null, net: 125, moms: 0 },
-    { vat: 'export', revenue: '3305', vatAccount: null, net: 125, moms: 0 },
-    { vat: 'reverse_charge', revenue: '3308', vatAccount: null, net: 125, moms: 0 },
+    { vat: 'exempt', revenue: '3100', vatAccount: null, net: 125, moms: 0 },
+    { vat: 'export', revenue: '3305', goods: '3105', vatAccount: null, net: 125, moms: 0 },
+    { vat: 'reverse_charge', revenue: '3308', goods: '3108', vatAccount: null, net: 125, moms: 0 },
   ]
 
   describe.each(INCOME_CATEGORIES)('%s', (category) => {
-    it.each(refunds)('$vat: debits revenue and the moms it carried, credits the bank', ({ vat, revenue, vatAccount, net, moms }) => {
-      const revenueAccount = category === 'income_other' ? '3999' : revenue
+    it.each(refunds)('$vat: debits revenue and the moms it carried, credits the bank', ({ vat, revenue, goods, vatAccount, net, moms }) => {
+      const revenueAccount = category === 'income_other' ? '3999' : category === 'income_products' ? (goods ?? revenue) : revenue
       const lines = linesFor(category, -125, vat)
 
       expect(lines).toEqual(
@@ -816,18 +811,16 @@ describe('refund to a customer (money out on an income category)', () => {
 
     it('a company that is not VAT-registered refunds gross on the momsfri account, as it sold', () => {
       const lines = linesFor(category, -125, 'standard_25', false)
-      expect(lines).toEqual([[category === 'income_other' ? '3999' : '3004', 125, 0], ['1930', 0, 125]])
+      expect(lines).toEqual([[category === 'income_other' ? '3999' : '3100', 125, 0], ['1930', 0, 125]])
       expect(lines.sort()).toEqual(mirrored(linesFor(category, 125, 'standard_25', false)))
     })
   })
 
-  it('getCategoryAccountMapping puts revenue and its moms account on the debit side', () => {
+  it('getCategoryAccountMapping puts revenue on the debit side', () => {
     expect(getCategoryAccountMapping('income_services', -125, true, 'enskild_firma', 'standard_25')).toEqual({
       debitAccount: '3001',
       creditAccount: '1930',
       vatTreatment: 'standard_25',
-      vatDebitAccount: '2611',
-      vatCreditAccount: null,
     })
   })
 
@@ -856,10 +849,10 @@ describe('refund to a customer (money out on an income category)', () => {
 
   it('a zero amount has no direction and keeps the category\'s own sides', () => {
     expect(getCategoryAccountMapping('income_services', 0, true, 'enskild_firma')).toMatchObject({
-      debitAccount: '1930', creditAccount: '3001', vatDebitAccount: null, vatCreditAccount: '2611',
+      debitAccount: '1930', creditAccount: '3001',
     })
     expect(getCategoryAccountMapping('expense_software', 0, true, 'enskild_firma')).toMatchObject({
-      debitAccount: '5420', creditAccount: '1930', vatDebitAccount: '2641', vatCreditAccount: null,
+      debitAccount: '5420', creditAccount: '1930',
     })
   })
 })
@@ -928,7 +921,7 @@ describe('a category on its own direction, and a refund from a supplier, book as
     ['standard_25', [['1930', 125, 0], ['3001', 0, 100], ['2611', 0, 25]]],
     ['reduced_12', [['1930', 125, 0], ['3002', 0, 111.61], ['2621', 0, 13.39]]],
     ['reduced_6', [['1930', 125, 0], ['3003', 0, 117.92], ['2631', 0, 7.08]]],
-    ['exempt', [['1930', 125, 0], ['3004', 0, 125]]],
+    ['exempt', [['1930', 125, 0], ['3100', 0, 125]]],
     ['export', [['1930', 125, 0], ['3305', 0, 125]]],
     ['reverse_charge', [['1930', 125, 0], ['3308', 0, 125]]],
   ] as Array<[VatTreatment, Line[]]>)('a sale (money in on income_services) at %s', (vat, expected) => {

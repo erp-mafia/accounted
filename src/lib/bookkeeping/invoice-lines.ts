@@ -189,7 +189,7 @@ export function generatePerRateLines(
     // Legacy fallback: single rate from invoice level. All items collapse
     // into one revenue line, so only the invoice default can apply here:
     // legacy rows predate per-item tagging anyway.
-    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType, goodsDeliveryCountry)
+    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType, { goods: !!goodsDeliveryCountry })
     const subtotal = items.reduce((sum, item) => sum + item.line_total, 0)
     const subtotalSek = toSek(subtotal)
     lines.push({
@@ -241,7 +241,7 @@ export function generatePerRateLines(
     const isSpecialTreatment = isZeroRatedInvoiceTreatment(treatment)
     const plAccount = !isSpecialTreatment && item.revenue_account
       ? item.revenue_account
-      : getRevenueAccount(treatment, entityType, goodsDeliveryCountry)
+      : getRevenueAccount(treatment, entityType, { goods: !!goodsDeliveryCountry })
     // Periodiserade lines credit the 29xx interim account (förutbetalda
     // intäkter) instead of revenue; the schedule dissolves it monthly. Output
     // VAT below is untouched. Moms is never deferred. Special treatments are
@@ -780,7 +780,7 @@ export function buildCreditNoteLines(
     // carries them (buildCreditNoteFields). Same strict conversion as the
     // registration fallback above: a rate-less foreign credit note must
     // refuse, not reverse the receivable with a mislabelled number.
-    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.delivery_country)
+    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, { goods: !!creditNote.delivery_country })
     const subtotalSek = headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate)
     const vatSek = headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate)
 
@@ -925,7 +925,7 @@ function headerRecognitionLines(
   defaultDimensions: LineDimensions | undefined,
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = [{
-    account_number: getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country),
+    account_number: getRevenueAccount(invoice.vat_treatment, entityType, { goods: !!invoice.delivery_country }),
     debit_amount: 0,
     credit_amount: headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate),
     line_description: `Försäljning faktura ${tag}`,

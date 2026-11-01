@@ -369,7 +369,7 @@ export function buildCutoffLines(
     const netOre = outstandingOre - vatOre
 
     receivableOre += outstandingOre
-    const revenueAccount = getRevenueAccount(row.vatTreatment, entityType, row.goodsDeliveryCountry ?? null)
+    const revenueAccount = getRevenueAccount(row.vatTreatment, entityType, { goods: !!row.goodsDeliveryCountry })
     revenueByAccount.set(revenueAccount, (revenueByAccount.get(revenueAccount) ?? 0) + netOre)
     if (vatOre !== 0) {
       outputVatByTreatment.set(

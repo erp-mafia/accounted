@@ -184,12 +184,11 @@ export function vatRateFromLabel(label: string): 0.25 | 0.12 | 0.06 | null {
  * elsewhere in the union or by the buyer, or a margin scheme. The specific
  * rules in suggestVatTreatment run first and give most of these their own
  * treatment; this only stops a leftover from being filed in ruta 05 on the
- * strength of its percentage. Mirrors CONTRADICTING_ACCOUNT_NAME in
- * lib/reports/vat-revenue-accounts.ts, which guards the same inference on the
- * declaration side.
+ * strength of its percentage. The one veto of the import suggestion and of
+ * the declaration's inference (inferDomesticSalesRate).
  */
-const NOT_DOMESTIC_SALE =
-  /momsfri|utan moms|\bej moms|undantag|momsbefri|omvänd|\bvmb\b|vinstmarginal|export|utanför|unionsintern|\boss\b|(?<![\d,.])\b0\s*%/
+export const NOT_DOMESTIC_SALE =
+  /momsfri|utan moms|\bej moms|undantag|momsbefri|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|(?<![\d,.])\b0\s*%/i
 
 /**
  * Renting out premises or a dwelling is exempt; it carries moms only under

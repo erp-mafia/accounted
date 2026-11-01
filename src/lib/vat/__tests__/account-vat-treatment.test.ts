@@ -2,11 +2,41 @@ import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
   isVatTreatmentAllowedForAccountClass,
+  NOT_DOMESTIC_SALE,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
   vatRateFromLabel,
   vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
+import { inferDomesticSalesRate } from '@/lib/reports/vat-revenue-accounts'
+
+// One veto: the import suggestion and the declaration's inference used to hold
+// a list each, and each missed words the other had.
+describe('a label that says a class 3 account is no domestic taxable sale', () => {
+  it.each([
+    'Försäljning undantag 25 % moms',
+    'Försäljning momsbefriad 25 % moms',
+    'Försäljning ej moms 25 % moms',
+    'Försäljning eu-land 25 % moms',
+    'Försäljning momsfri 25 % moms',
+    'Försäljning export 25 % moms',
+    'Försäljning 0 % 25 % moms',
+    'FÖRSÄLJNING UNDANTAG 25 % MOMS',
+  ])('%s vetoes the rate on both doors', (label) => {
+    expect(NOT_DOMESTIC_SALE.test(label)).toBe(true)
+    expect(inferDomesticSalesRate('3041', label)).toBeNull()
+    expect(suggestVatTreatment('3041', label)?.treatment).not.toBe('standard_25')
+  })
+
+  it('a plain taxable label keeps its rate on both doors', () => {
+    expect(inferDomesticSalesRate('3041', 'Försäljning tjänster 25 % moms')).toBe(0.25)
+    expect(suggestVatTreatment('3041', 'Försäljning tjänster 25 % moms')).toEqual({ treatment: 'standard_25', rate: 0.25 })
+  })
+
+  it('a decimal that ends in 0 % is no zero rate', () => {
+    expect(NOT_DOMESTIC_SALE.test('Försäljning 1,0 % avgift 25 % moms')).toBe(false)
+  })
+})
 
 describe('resolveVatTreatmentRuta', () => {
   it('maps revenue treatments to their momsdeklaration boxes', () => {
