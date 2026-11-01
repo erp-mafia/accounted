@@ -14,6 +14,21 @@ import {
   type TrialBalanceRowLike,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
+import {
+  K2_BALANSRAKNING_EGET_KAPITAL_SKULDER,
+  K2_BALANSRAKNING_TILLGANGAR,
+  K2_RESULTATRAKNING,
+  K3_BALANSRAKNING_EGET_KAPITAL_SKULDER,
+  K3_BALANSRAKNING_TILLGANGAR,
+  K3_RESULTATRAKNING,
+  renderStatementRows,
+  type StatementNode,
+} from '@/lib/bokslut/ixbrl/document/statements'
+import type { FactWriter } from '@/lib/bokslut/ixbrl/document/ix'
+import { K2_BR_MAPPINGS, K2_RR_MAPPINGS } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { k3ConceptAmounts } from '@/lib/bokslut/ixbrl/k3-adapters'
+import type { ConceptAmounts } from '@/lib/bokslut/ixbrl/types'
+import { toK3Presentation } from '../k3-presentation'
 import { buildRrRows, buildBrRows } from '../statement-rows'
 
 function tbRow(
@@ -274,5 +289,66 @@ describe('buildBrRows', () => {
       previous: 300_000,
     })
     expect(derived.assets.at(-1)).toMatchObject({ label: 'Summa tillgångar', previous: 300_000 })
+  })
+})
+
+describe('one row list for the PDF and the filing', () => {
+  /** A year with every post of the mapper non-zero, and K3's own accounts. */
+  function everyPost(): TrialBalancePair {
+    const row = (account: string, balance: 'debit' | 'credit', amount: number) =>
+      tbRow(account, account, balance === 'debit' ? { debit: amount } : { credit: amount })
+    const full = K2_BR_MAPPINGS.map((m, index) => row(m.ranges[0].start, m.balance, 1_000 + index * 10))
+    const preClosing = K2_RR_MAPPINGS.map((m, index) => row(m.ranges[0].start, m.balance, 2_000 + index * 10))
+    full.push(
+      row('1010', 'debit', 500),
+      row('1370', 'debit', 600),
+      row('1640', 'debit', 700),
+      row('2089', 'credit', 800),
+      row('2096', 'credit', 900),
+      row('2240', 'credit', 950),
+      row('2250', 'credit', 970),
+    )
+    return { full, preClosing }
+  }
+
+  /** What the iXBRL document prints: each row's label and its amounts, in order. */
+  function filedRows(nodes: readonly StatementNode[], amounts: ConceptAmounts, totals: Parameters<typeof renderStatementRows>[3]) {
+    const writer = {
+      money: (_concept: string, _context: string, value: number, options?: { displayMinus?: boolean }) =>
+        `@${options?.displayMinus ? -value : value}@`,
+    } as unknown as FactWriter
+    return renderStatementRows(writer, nodes, amounts, totals, { current: 'c', previous: 'p' }).map((html) => [
+      (/<th[^>]*>(.*?)<\/th>/.exec(html)?.[1] ?? '').replace(/&amp;/g, '&'),
+      [...html.matchAll(/@(-?[0-9.]+)@/g)].map((match) => Number(match[1]))[0] ?? null,
+    ])
+  }
+
+  const printed = (rows: ReturnType<typeof buildRrRows>) => rows.map((row) => [row.label, row.current === null ? null : row.current + 0])
+
+  it('K2: the same posts, labels, order and amounts', () => {
+    const pair = everyPost()
+    const k2 = mapTrialBalancesToK2(pair, pair)
+    const balance = buildBrRows(k2)
+    expect(printed(buildRrRows(k2))).toEqual(filedRows(K2_RESULTATRAKNING, k2.rr, k2.totals))
+    expect(printed(balance.assets)).toEqual(filedRows(K2_BALANSRAKNING_TILLGANGAR, k2.br, k2.totals))
+    expect(printed(balance.equityLiabilities)).toEqual(filedRows(K2_BALANSRAKNING_EGET_KAPITAL_SKULDER, k2.br, k2.totals))
+  })
+
+  it('K3: the same posts, labels, order and amounts, the taxonomy\'s own', () => {
+    const pair = everyPost()
+    const k3 = toK3Presentation(mapTrialBalancesToK2(pair, pair), pair.full, pair.full)
+    const named = k3ConceptAmounts(k3.rr, k3.br)
+    const balance = buildBrRows(k3)
+    expect(printed(buildRrRows(k3))).toEqual(filedRows(K3_RESULTATRAKNING, named.rr, k3.totals))
+    expect(printed(balance.assets)).toEqual(filedRows(K3_BALANSRAKNING_TILLGANGAR, named.br, k3.totals))
+    expect(printed(balance.equityLiabilities)).toEqual(filedRows(K3_BALANSRAKNING_EGET_KAPITAL_SKULDER, named.br, k3.totals))
+  })
+
+  it('hides what the filing hides: a post with nothing in either year, a group whose total is zero', () => {
+    const pair = currentPair()
+    const k2 = mapTrialBalancesToK2(pair, null)
+    const balance = buildBrRows(k2)
+    expect(printed(balance.assets)).toEqual(filedRows(K2_BALANSRAKNING_TILLGANGAR, k2.br, k2.totals))
+    expect(balance.assets.map((row) => row.label)).not.toContain('Varulager m.m.')
   })
 })

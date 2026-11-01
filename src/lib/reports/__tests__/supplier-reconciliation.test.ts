@@ -191,3 +191,53 @@ describe('generateReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 })
+
+describe('generateReconciliation: the reskontra on the year\'s balansdag', () => {
+  // Year 2025, UB 500. Invoice B 500 kr, open at year end, paid in January.
+  // Invoice A 1 000 kr dated after the year: open today, nothing to do with it.
+  it('reads the invoices open on the last day of a past year, not the ones open today', async () => {
+    setBooks({
+      fiscal_periods: [{ id: 'fy2025', period_end: '2025-12-31' }],
+      supplier_invoices: [
+        { id: 'b', invoice_date: '2025-11-01', due_date: '2025-12-01', status: 'paid', total: 500, remaining_amount: 0, paid_at: '2026-01-10' },
+        { id: 'a', invoice_date: '2026-01-15', due_date: '2026-02-15', status: 'approved', total: 1000, remaining_amount: 1000 },
+      ],
+      supplier_invoice_payments: [{ id: 'p1', supplier_invoice_id: 'b', payment_date: '2026-01-10', amount: 500 }],
+    })
+    booked(500)
+
+    const result = await generateReconciliation(supabase, 'company-1', 'fy2025')
+
+    expect(result).toMatchObject({ as_of_date: '2025-12-31', supplier_ledger_total: 500, difference: 0, is_reconciled: true })
+  })
+
+  // The as-of population keeps a paid foreign invoice without a rate. Settled
+  // by the day there is nothing to convert, so it cannot break the card.
+  it('leaves out a foreign invoice without a rate settled by the balansdag', async () => {
+    setBooks({
+      fiscal_periods: [{ id: 'fy2024', period_end: '2024-12-31' }],
+      supplier_invoices: [
+        { id: 'eur', invoice_date: '2024-03-01', due_date: '2024-04-01', status: 'paid', total: 100, remaining_amount: 0, paid_at: '2024-04-01', currency: 'EUR', exchange_rate: null },
+      ],
+      supplier_invoice_payments: [{ id: 'p1', supplier_invoice_id: 'eur', payment_date: '2024-04-01', amount: 100 }],
+    })
+
+    const result = await generateReconciliation(supabase, 'company-1', 'fy2024')
+
+    expect(result).toMatchObject({ supplier_ledger_total: 0, difference: 0, unconverted_fx_count: 0, is_reconciled: true })
+  })
+
+  it('still counts one open on the balansdag: nothing can say what it owes in kronor', async () => {
+    setBooks({
+      fiscal_periods: [{ id: 'fy2024', period_end: '2024-12-31' }],
+      supplier_invoices: [
+        { id: 'eur', invoice_date: '2024-11-01', due_date: '2024-12-01', status: 'paid', total: 100, remaining_amount: 0, paid_at: '2025-01-10', currency: 'EUR', exchange_rate: null },
+      ],
+      supplier_invoice_payments: [{ id: 'p1', supplier_invoice_id: 'eur', payment_date: '2025-01-10', amount: 100 }],
+    })
+
+    const result = await generateReconciliation(supabase, 'company-1', 'fy2024')
+
+    expect(result).toMatchObject({ unconverted_fx_count: 1, is_reconciled: false })
+  })
+})

@@ -1157,7 +1157,7 @@ describe('buildArsredovisningData: K3 balance sheet posts (K3 4.3, ÅRL bilaga 1
     const k2Data = await buildArsredovisningData(k2, 'co1', 'fp1')
     const label = (rows: { label: string; current: number | null }[], name: string) =>
       rows.find((r) => r.label === name)?.current
-    expect(label(k3Data.balansrakning.equity_liabilities, 'Uppskjuten skatteskuld')).toBe(70_600)
+    expect(label(k3Data.balansrakning.equity_liabilities, 'Avsättningar för uppskjutna skatter')).toBe(70_600)
     expect(label(k3Data.balansrakning.equity_liabilities, 'Övriga avsättningar')).toBeUndefined()
     expect(label(k2Data.balansrakning.equity_liabilities, 'Uppskjuten skatteskuld')).toBeUndefined()
     expect(label(k2Data.balansrakning.equity_liabilities, 'Övriga avsättningar')).toBe(70_600)

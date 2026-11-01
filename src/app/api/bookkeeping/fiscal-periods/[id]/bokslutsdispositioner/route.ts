@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
@@ -8,10 +9,6 @@ import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { yearEndDispositionBusinessEvent } from '@/lib/bokslut/dispositions-business-event'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
-import {
-  calculateBolagsskatt,
-  sumPostedYearEndDispositions,
-} from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
 import { saveTaxAdjustments } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
@@ -267,7 +264,7 @@ export const POST = withRouteContext(
           // Its own posting function: the voucher and the items it was
           // computed from in one transaction (commit_deferred_tax).
           const state = await loadDispositionState(supabase, companyId, period)
-          const bolagsskatt = await bolagsskattDisposition(supabase, companyId, state, {
+          const bolagsskatt = bolagsskattDisposition(state, {
             pendingResultEffect: 0,
             schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
           })
@@ -380,7 +377,7 @@ class OveravskrivningarConflictError extends Error {
 
 async function computeProposal(
   item: PostItem,
-  supabase: Parameters<typeof calculateBolagsskatt>[0],
+  supabase: SupabaseClient,
   companyId: string,
   period: ValidatedPeriod,
 ): Promise<ProposedDisposition | null> {
@@ -397,22 +394,19 @@ async function computeProposal(
     case 'bolagsskatt': {
       // The preview's own computation (bolagsskattDisposition) on the ledger
       // as it stands now: bolagsskatt is sorted LAST, so every disposition of
-      // this batch is posted and in postedEffect, nothing is pending.
+      // this batch is posted and in the year's result, nothing is pending.
       const state = await loadDispositionState(supabase, companyId, period)
-      const proposal = await bolagsskattDisposition(supabase, companyId, state, {
+      const proposal = bolagsskattDisposition(state, {
         pendingResultEffect: 0,
         schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
       })
-      const expectedTax = proposal?.amount ?? 0
-      if (state.bookedTax > 0 && state.bookedTax === expectedTax) return null
-      if (state.bookedTax > 0) throw new TaxProvisionConflictError(state.bookedTax, expectedTax)
-      return proposal && proposal.amount > 0 ? proposal : null
+      if (state.bookedTax > 0 && state.bookedTax === proposal.amount) return null
+      if (state.bookedTax > 0) throw new TaxProvisionConflictError(state.bookedTax, proposal.amount)
+      return proposal.amount > 0 ? proposal : null
     }
     case 'sarskild_loneskatt': {
-      // Already posted in this period (resumed run / duplicate POST): the
-      // calculator is not posted-aware and would book the full SLP again.
-      const posted = await sumPostedYearEndDispositions(supabase, companyId, fiscalPeriodId)
-      if (posted.slpPortion !== 0) return null
+      // A resumed run or a duplicate POST proposes nothing: the calculator
+      // subtracts what is already on 7533.
       return calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId, {
         manualAdjustment: item.manualAdjustment,
       })
@@ -422,7 +416,7 @@ async function computeProposal(
       // current ledger so the user cannot sneak in a higher desiredAmount than
       // 25 % of the actual skattemässigt resultat. Återföring, över-
       // avskrivningar and SLP are sorted before avsättning, so they are posted
-      // and in postedEffect: nothing is pending. A posted current-year
+      // and in the year's result: nothing is pending. A posted current-year
       // avsättning is a completed decision: never topped up (null).
       const state = await loadDispositionState(supabase, companyId, period)
       return avsattningDisposition(state, {

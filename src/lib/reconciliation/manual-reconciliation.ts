@@ -3,8 +3,8 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
-import { generateReconciliation as generateSupplierReconciliation } from '@/lib/reports/supplier-reconciliation'
+import { generateARLedger } from '@/lib/reports/ar-ledger'
+import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
 import {
   manualAccountKey,
@@ -33,9 +33,8 @@ const log = createLogger('reconciliation/manual')
  * The outside side comes from a specification the system already keeps
  * (kundreskontra for 1510, leverantörsreskontra for 2440, semesterlöneskuld
  * for 2920/2940) or, for every other account, from the balance the signer
- * states from their underlag when they sign off. The reskontra totals are the
- * open items as they stand today, not as of the balansdag; a per-date
- * reskontra is a follow-up and the bridge label says "idag" until then.
+ * states from their underlag when they sign off. Each specification is read
+ * as of the balansdag: the ledger's reskontra reconstructs any date.
  */
 
 export const BALANCE_TOLERANCE = 0.005
@@ -172,19 +171,19 @@ async function readSpecificationAmounts(
 
   if (wants(RECEIVABLES_ACCOUNT)) {
     tasks.push(
-      generateARReconciliation(supabase, companyId, snapshot.period.id)
+      generateARLedger(supabase, companyId, snapshot.as_of, { strict: true })
         .then((r) => {
-          out.set(RECEIVABLES_ACCOUNT, { amount: roundOre(r.ar_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(RECEIVABLES_ACCOUNT, { amount: roundOre(r.total_outstanding), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AR specification failed', { companyId, error: String(err) })),
     )
   }
   if (wants(PAYABLES_ACCOUNT)) {
     tasks.push(
-      generateSupplierReconciliation(supabase, companyId, snapshot.period.id)
+      generateSupplierLedger(supabase, companyId, snapshot.as_of, { strict: true })
         .then((r) => {
           // Liabilities carry credit balances: negative in ledger sign.
-          out.set(PAYABLES_ACCOUNT, { amount: roundOre(-r.supplier_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(PAYABLES_ACCOUNT, { amount: roundOre(-r.total_outstanding), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AP specification failed', { companyId, error: String(err) })),
     )
@@ -212,8 +211,8 @@ function bridgeFor(
   if (specification) {
     lines.push({
       key: 'specification',
-      label_sv: `${specification.label_sv} (idag)`,
-      label_en: `${specification.label_en} (today)`,
+      label_sv: `${specification.label_sv} per ${snapshot.as_of}`,
+      label_en: `${specification.label_en} as of ${snapshot.as_of}`,
       amount: specification.amount,
       count: null,
       items_bucket: null,

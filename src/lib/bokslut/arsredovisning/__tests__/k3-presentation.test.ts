@@ -93,8 +93,8 @@ describe('buildBrRows with K3 posts', () => {
       'Aktuell skattefordran',
       'Fond för utvecklingsutgifter',
       'Fond för verkligt värde',
-      'Uppskjuten skatteskuld',
-      'Övriga avsättningar för skatter',
+      'Avsättningar för uppskjutna skatter',
+      'Avsättningar för övriga skatter',
     ]
     for (const label of k3Only) {
       expect(labels([...k3Rows.assets, ...k3Rows.equityLiabilities])).toContain(label)

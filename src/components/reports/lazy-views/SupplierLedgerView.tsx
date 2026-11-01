@@ -7,12 +7,13 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import {
   ReportEmptyState,
-  ReportErrorCard,
   ReportLoadingCard,
+  ReskontraErrorCard,
   ReskontraToolbar,
+  agingCell,
 } from '@/components/reports/report-view-shared'
 import { useReportData } from '@/lib/hooks/use-report-data'
-import { formatAmount } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -37,6 +38,7 @@ interface SupplierLedgerData {
   }
   reconciliation: {
     supplier_ledger_total: number
+    as_of_date: string | null
     account_2440_balance: number
     difference: number
     is_reconciled: boolean
@@ -56,7 +58,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReskontraErrorCard message={error} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="supplier-ledger-as-of" exportBase="/api/reports/supplier-ledger" />
   }
 
   if (!data || !data.ledger) {
@@ -163,7 +165,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
           <CardContent>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span>Leverantörsreskontra (summa utestående)</span>
+                <span>Leverantörsreskontra (summa utestående){reconciliation.as_of_date && ` ${formatDate(reconciliation.as_of_date)}`}</span>
                 <span className="tabular-nums">{formatAmount(reconciliation.supplier_ledger_total)} kr</span>
               </div>
               <div className="flex justify-between">
@@ -232,11 +234,11 @@ function SupplierLedgerRow({
       <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
         <td className="py-2">{toggle}</td>
         <td className="py-2">{entry.supplier_name}</td>
-        <td className="py-2 text-right tabular-nums">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
-        <td className="py-2 text-right tabular-nums">{entry.days_1_30 > 0 ? formatAmount(entry.days_1_30) : ''}</td>
-        <td className="py-2 text-right tabular-nums">{entry.days_31_60 > 0 ? formatAmount(entry.days_31_60) : ''}</td>
-        <td className="py-2 text-right tabular-nums">{entry.days_61_90 > 0 ? formatAmount(entry.days_61_90) : ''}</td>
-        <td className="py-2 text-right tabular-nums text-destructive">{entry.days_90_plus > 0 ? formatAmount(entry.days_90_plus) : ''}</td>
+        <td className="py-2 text-right tabular-nums">{agingCell(entry.current)}</td>
+        <td className="py-2 text-right tabular-nums">{agingCell(entry.days_1_30)}</td>
+        <td className="py-2 text-right tabular-nums">{agingCell(entry.days_31_60)}</td>
+        <td className="py-2 text-right tabular-nums">{agingCell(entry.days_61_90)}</td>
+        <td className="py-2 text-right tabular-nums text-destructive">{agingCell(entry.days_90_plus)}</td>
         <td className="py-2 text-right tabular-nums font-semibold">{formatAmount(entry.total_outstanding)}</td>
       </tr>
       {panel(8)}

@@ -4,6 +4,8 @@
  * against each other, and all of them against the answer key.
  */
 import { describe, expect, it } from 'vitest'
+import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
+import { generateReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { SIM_COMPANY } from './generate'
 import { loadSimCompany } from './company'
@@ -82,6 +84,18 @@ describe('the reskontra', () => {
     ])
     expect(customers.total_outstanding ?? customers.total).toBeCloseTo(key.years[year].receivables, 2)
     expect(suppliers.total_outstanding ?? suppliers.total).toBeCloseTo(key.years[year].supplierPayables, 2)
+  })
+
+  it.each(closedYears)('reconcile against 1510 and 2440 at the end of %i', async (year) => {
+    const fiscalPeriodId = state.fiscalPeriods[year]
+    const [customers, suppliers] = await Promise.all([
+      generateARReconciliation(supabase, state.companyId, fiscalPeriodId),
+      generateReconciliation(supabase, state.companyId, fiscalPeriodId),
+    ])
+    expect(customers.ar_ledger_total).toBeCloseTo(key.years[year].receivables, 2)
+    expect(customers.is_reconciled).toBe(true)
+    expect(suppliers.supplier_ledger_total).toBeCloseTo(key.years[year].supplierPayables, 2)
+    expect(suppliers.is_reconciled).toBe(true)
   })
 })
 

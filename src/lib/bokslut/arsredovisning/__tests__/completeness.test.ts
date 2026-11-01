@@ -450,7 +450,7 @@ describe('validateAnnualReportCompleteness', () => {
     value.report.balansrakning.equity_liabilities = balanceRows.equityLiabilities
     value.report.balansrakning.total_assets = mapping.totals.tillgangar.current
     value.report.balansrakning.total_equity_liabilities = mapping.totals.egetKapitalSkulder.current
-    expect(balanceRows.equityLiabilities.some((row) => row.label === 'Uppskjuten skatteskuld')).toBe(true)
+    expect(balanceRows.equityLiabilities.some((row) => row.label === 'Avsättningar för uppskjutna skatter')).toBe(true)
 
     const ixbrl = { rr: mapping.rr, br: mapping.br, totals: mapping.totals }
     expect(

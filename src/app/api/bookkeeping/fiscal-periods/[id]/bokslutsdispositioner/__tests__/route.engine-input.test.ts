@@ -44,16 +44,11 @@ vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) =>
   avsattningDisposition: vi.fn(),
   bolagsskattDisposition: vi.fn(),
 }))
-vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/bokslut/tax-provision/bolagsskatt-calculator')>()),
-  sumPostedYearEndDispositions: vi.fn(),
-}))
 vi.mock('@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator', () => ({ calculateSarskildLoneskatt: vi.fn() }))
 vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({ calculateOveravskrivningar: vi.fn() }))
 
 const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
 const builder = await import('@/lib/bokslut/dispositions-proposal-builder')
-const { sumPostedYearEndDispositions } = await import('@/lib/bokslut/tax-provision/bolagsskatt-calculator')
 const { calculateSarskildLoneskatt } = await import('@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator')
 const { calculateOveravskrivningar } = await import('@/lib/bokslut/reserves/overavskrivningar-calculator')
 const { POST } = await import('../route')
@@ -147,8 +142,7 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
     vi.mocked(builder.loadDispositionState).mockResolvedValue({ bookedTax: 0 } as never)
     vi.mocked(builder.ateforingDispositions).mockReturnValue({ proposals: [ATERFORING_2019, ATERFORING_2020], schablonintaktAmount: 0 } as never)
     vi.mocked(builder.avsattningDisposition).mockReturnValue(AVSATTNING)
-    vi.mocked(builder.bolagsskattDisposition).mockResolvedValue(BOLAGSSKATT)
-    vi.mocked(sumPostedYearEndDispositions).mockResolvedValue({ total: 0, slpPortion: 0, taxProvisionPortion: 0 } as never)
+    vi.mocked(builder.bolagsskattDisposition).mockReturnValue(BOLAGSSKATT)
     vi.mocked(calculateSarskildLoneskatt).mockResolvedValue(SLP)
     vi.mocked(calculateOveravskrivningar).mockResolvedValue({
       status: 'ready',

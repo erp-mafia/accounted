@@ -1,16 +1,18 @@
 /**
  * The resultaträkning and balansräkning as data: one row list per framework
- * (K2 AB risbs 2024-09-12, K3 AB risbs 2021-10-31), one renderer. The K3
- * lists follow the K3 forms' presentation linkbases (fisbn, fbs) in order;
- * the K2 lists reproduce the layout the K2 document has always had.
+ * (K2 AB risbs 2024-09-12, K3 AB risbs 2021-10-31), read by both documents: the
+ * iXBRL below and the PDF (arsredovisning/statement-rows.ts). The K3 lists
+ * follow the K3 forms' presentation linkbases (fisbn, fbs) in order; the K2
+ * lists reproduce the layout the K2 document has always had.
  *
  * Amounts come from the mapper: posts from `rr`/`br` (concept-keyed), sums
  * from `totals`. A group is printed only when its total is non-zero in
- * either year; a post only when it is non-zero, unless `alwaysShow`.
+ * either year; a post only when it is non-zero, unless `alwaysShow`
+ * (printedRows, the one reading of that rule).
  */
 
 import type { K2MappingResult } from '../k2-mapper'
-import type { ConceptAmounts } from '../types'
+import type { ConceptAmount, ConceptAmounts } from '../types'
 import type { FactWriter } from './ix'
 import { moneyRow, sectionRow } from './layout'
 import { el, escapeText } from './xml'
@@ -427,6 +429,24 @@ export const K3_BALANSRAKNING_EGET_KAPITAL_SKULDER: StatementNode[] = [
   grandTotal('Summa eget kapital och skulder', 'EgetKapitalSkulder', 'egetKapitalSkulder'),
 ]
 
+/** What an ekonomisk förening's equity does not hold: no shares, no överkursfond. */
+const NOT_IN_A_FORENING = new Set(['EjRegistreratAktiekapital', 'OverkursfondBunden', 'Overkursfond', 'FondUtvecklingsutgifter'])
+
+/**
+ * The equity and liabilities list of an ekonomisk förening: medlemsinsatser
+ * and förlagsinsatser each on their own under bundet eget kapital (ÅRL 3 kap.
+ * 10 b §), in the place of the share capital.
+ */
+export function foreningEquityAndLiabilities(rows: readonly StatementNode[]): StatementNode[] {
+  return rows.flatMap((row) => {
+    if (row.kind !== 'post') return [row]
+    if (row.concept === 'Aktiekapital') {
+      return [post('Medlemsinsatser', 'Medlemsinsatser', { alwaysShow: true }), post('Förlagsinsatser', 'Forlagsinsatser')]
+    }
+    return NOT_IN_A_FORENING.has(row.concept) ? [] : [row]
+  })
+}
+
 /** Every concept a row list tags, for registry checks in tests. */
 export function statementConcepts(rows: readonly StatementNode[]): string[] {
   return rows.flatMap((row) =>
@@ -434,7 +454,36 @@ export function statementConcepts(rows: readonly StatementNode[]): string[] {
   )
 }
 
-/** Render a row list into table rows (empty strings dropped by the caller). */
+/** Whether an amount is worth a row: non-zero in either year. */
+function hasAmount(amount: ConceptAmount | undefined): boolean {
+  return (amount?.current ?? 0) !== 0 || (amount?.previous ?? 0) !== 0
+}
+
+const NO_AMOUNT: ConceptAmount = { current: 0, previous: null }
+
+type HeadingNode = Extract<StatementNode, { kind: 'heading' }>
+type PostNode = Extract<StatementNode, { kind: 'post' }>
+type SumNode = Extract<StatementNode, { kind: 'sum' }>
+
+/** A row a document prints, with its amount: no group left, no empty post. */
+type PrintedRow = HeadingNode | ((PostNode | SumNode) & { amount: ConceptAmount })
+
+/** What a row list prints for these amounts: the one reading of the hide rules. */
+export function printedRows(
+  rows: readonly StatementNode[],
+  amounts: ConceptAmounts,
+  totals: K2MappingResult['totals'],
+): PrintedRow[] {
+  return rows.flatMap((row): PrintedRow[] => {
+    if (row.kind === 'heading') return [row]
+    if (row.kind === 'group') return hasAmount(totals[row.showIf]) ? printedRows(row.children, amounts, totals) : []
+    if (row.kind === 'sum') return [{ ...row, amount: totals[row.total] }]
+    const amount = amounts[row.concept]
+    return row.alwaysShow || hasAmount(amount) ? [{ ...row, amount: amount ?? NO_AMOUNT }] : []
+  })
+}
+
+/** Render a row list into table rows. */
 export function renderStatementRows(
   writer: FactWriter,
   rows: readonly StatementNode[],
@@ -442,34 +491,13 @@ export function renderStatementRows(
   totals: K2MappingResult['totals'],
   ctx: { current: string; previous: string | null },
 ): string[] {
-  const out: string[] = []
-  for (const row of rows) {
-    if (row.kind === 'heading') {
-      out.push(sectionRow(row.label, row.level))
-    } else if (row.kind === 'post') {
-      out.push(
-        moneyRow(writer, row.label, row.concept, amounts[row.concept], ctx, {
-          indent: row.indent,
-          displayMinus: row.displayMinus,
-          alwaysShow: row.alwaysShow,
-        }),
-      )
-    } else if (row.kind === 'sum') {
-      out.push(
-        moneyRow(writer, row.label, row.concept, totals[row.total], ctx, {
-          rowClass: row.rowClass,
-          displayMinus: row.displayMinus,
-          alwaysShow: true,
-        }),
-      )
-    } else {
-      const total = totals[row.showIf]
-      if (total.current !== 0 || (total.previous ?? 0) !== 0) {
-        out.push(...renderStatementRows(writer, row.children, amounts, totals, ctx))
-      }
-    }
-  }
-  return out
+  return printedRows(rows, amounts, totals).map((row) => {
+    if (row.kind === 'heading') return sectionRow(row.label, row.level)
+    const shared = { displayMinus: row.displayMinus, alwaysShow: true }
+    return row.kind === 'post'
+      ? moneyRow(writer, row.label, row.concept, row.amount, ctx, { ...shared, indent: row.indent })
+      : moneyRow(writer, row.label, row.concept, row.amount, ctx, { ...shared, rowClass: row.rowClass })
+  })
 }
 
 /** Header row: title and the two column labels. */

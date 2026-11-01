@@ -1,0 +1,1 @@
+[2026-11-01] The reskontra card compares generateARLedger and generateSupplierLedger as of a past year's last day with that year's UB, not the invoices open today: every past year read Ej avstämd. A running year still reads the live register. Narrows 2026-10-16 to the current year.

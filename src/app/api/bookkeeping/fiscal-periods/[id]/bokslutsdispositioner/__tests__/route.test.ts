@@ -25,11 +25,10 @@ vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
 vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', () => ({
   calculateBolagsskatt: vi.fn(),
   getBookedBolagsskatt: vi.fn(),
-  sumPostedYearEndDispositions: vi.fn(),
 }))
 
-vi.mock('@/lib/reports/income-statement', () => ({
-  generateIncomeStatement: vi.fn(),
+vi.mock('@/lib/bokslut/tax-provision/result-before-tax', () => ({
+  readYearResult: vi.fn(),
 }))
 
 vi.mock('@/lib/bokslut/reserves/periodiseringsfond-service', async (importOriginal) => {
@@ -72,12 +71,8 @@ import {
   loadTaxAdjustmentSnapshot,
   saveTaxAdjustments,
 } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
-import {
-  calculateBolagsskatt,
-  getBookedBolagsskatt,
-  sumPostedYearEndDispositions,
-} from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { calculateBolagsskatt, getBookedBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import { readYearResult } from '@/lib/bokslut/tax-provision/result-before-tax'
 import {
   listExistingPeriodiseringsfonder,
   SchablonintaktRateNotConfiguredError,
@@ -201,14 +196,7 @@ beforeEach(() => {
     nonTaxableIncome: 0,
     deficitCarryforward: 0,
   })
-  vi.mocked(generateIncomeStatement).mockResolvedValue({
-    net_result: 592_722.21,
-  } as Awaited<ReturnType<typeof generateIncomeStatement>>)
-  vi.mocked(sumPostedYearEndDispositions).mockResolvedValue({
-    total: 0,
-    slpPortion: 0,
-    taxProvisionPortion: 0,
-  })
+  vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 592_722.21, beforeTax: 592_722.21 })
   vi.mocked(getBookedBolagsskatt).mockResolvedValue(0)
   vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([])
   vi.mocked(calculateOveravskrivningar).mockResolvedValue({
@@ -220,7 +208,7 @@ beforeEach(() => {
     targetReserve: 0,
     maximumSignedChange: 0,
   })
-  vi.mocked(calculateBolagsskatt).mockResolvedValue({
+  vi.mocked(calculateBolagsskatt).mockReturnValue({
     kind: 'bolagsskatt',
     label: 'Bolagsskatt 20,6 %',
     description: 'Skatt på årets skattemässiga resultat.',
@@ -499,6 +487,8 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
 
     expect(status).toBe(200)
     expect(body.data.created).toHaveLength(1)
+    // The tax the door books rests on the year's result, read once for every door.
+    expect(calculateBolagsskatt).toHaveBeenCalledWith(expect.objectContaining({ resultBeforeTax: 592_722.21 }))
     expect(createJournalEntry).toHaveBeenCalledOnce()
     expect(createJournalEntry).toHaveBeenCalledWith(
       supabase,
@@ -866,7 +856,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
     // temporary differences and a recognised loss (K3 29.19), never on
     // obeskattade reserver (29.37).
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: periodClient(openPeriod), error: null })
-    vi.mocked(calculateBolagsskatt).mockResolvedValue({
+    vi.mocked(calculateBolagsskatt).mockReturnValue({
       kind: 'bolagsskatt',
       label: 'Bolagsskatt 20,6 %',
       description: 'Ingen skatt.',

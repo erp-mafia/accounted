@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseLedgerAsOfDate } from '@/lib/reports/ledger-as-of'
+import { ledgerAsOfRefusal } from '@/lib/reports/ledger-as-of-refusal'
 import {
   reportToWorkbook,
   textColumn,
@@ -38,9 +40,10 @@ interface InvoiceRow {
   currency: string
 }
 
-export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
-  const asOfDate = searchParams.get('as_of_date') || undefined
+  const asOf = parseLedgerAsOfDate(searchParams.get('as_of_date'))
+  if (!asOf.ok) return ledgerAsOfRefusal(asOf, log, requestId)
 
   const { data: companyRow } = await supabase
     .from('company_settings')
@@ -49,7 +52,7 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
     .single()
 
   try {
-    const ledger = await generateARLedger(supabase, companyId, asOfDate)
+    const ledger = await generateARLedger(supabase, companyId, asOf.asOfDate)
 
     const agingRows: AgingRow[] = ledger.entries.map((e) => ({
       customer_name: e.customer_name,
@@ -138,7 +141,7 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
     const filename = xlsxFilename(
       'kundreskontra',
       companyRow?.company_name ?? '',
-      asOfDate ?? todayIsoStockholm(),
+      asOf.asOfDate ?? todayIsoStockholm(),
     )
     return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {

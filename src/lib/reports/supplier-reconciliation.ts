@@ -1,11 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { fetchSupplierLedgerInvoices } from './supplier-ledger-invoices'
+import { reskontraBalanceDate } from './reskontra-balance-date'
+import { generateSupplierLedger } from './supplier-ledger'
 import { closingBalanceOf } from './trial-balance'
 
 export interface ReconciliationResult {
+  /** The leverantörsreskontra's total on the balance date: the same figure as generateSupplierLedger. */
   supplier_ledger_total: number
+  /** The day the reskontra is read as of: a past year's last day, null while the year runs (today). */
+  as_of_date: string | null
   /** Closing balance (UB, ingående balans included) of 2440, credit minus debit, as the balance sheet shows it. */
   account_2440_balance: number
   difference: number
@@ -20,7 +23,11 @@ export interface ReconciliationResult {
 }
 
 /**
- * Compare sum of open supplier invoices against account 2440 balance.
+ * Compare the leverantörsreskontra with account 2440 at the end of a fiscal
+ * year: generateSupplierLedger as of the year's last day against the UB. While
+ * the year runs that is the live register (the ledger's rule for today or a
+ * date ahead); a past year reads the invoices open on its balansdag, not the
+ * ones open today.
  *
  * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
  * which matches what was originally posted to 2440. This means the report will
@@ -34,14 +41,10 @@ export async function generateReconciliation(
   companyId: string,
   periodId: string
 ): Promise<ReconciliationResult> {
+  const asOfDate = await reskontraBalanceDate(supabase, companyId, periodId)
 
-  // remaining_amount is stored in invoice currency; account 2440 is in SEK
-  // (booked at invoice-date rate), so convert each row before summing.
-  // The open invoices are the live leverantörsreskontra's population (one
-  // read, in id order: supplier-ledger-invoices.ts), and the 2440 balance is
-  // read beside it.
-  const [invoices, debitMinusCredit] = await Promise.all([
-    fetchSupplierLedgerInvoices(supabase, companyId),
+  const [ledger, debitMinusCredit] = await Promise.all([
+    generateSupplierLedger(supabase, companyId, asOfDate ?? undefined, { strict: true }),
     // The booked 2440 balance, read as the balance sheet reads it
     // (closingBalanceOf: the trial balance's UB, ingående balans included,
     // posted and reversed entries both counted so a corrected registration
@@ -57,39 +60,20 @@ export async function generateReconciliation(
     ]),
   ])
 
-  let unconvertedFxCount = 0
-  const supplierLedgerTotal = (invoices || [])
-    .reduce((sum, inv) => {
-      const isFx = inv.currency && inv.currency !== 'SEK'
-      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum: adding raw foreign amounts
-      // to a SEK total is arithmetically unsound. Counted instead.
-      if (isFx && !hasRate) {
-        unconvertedFxCount += 1
-        return sum
-      }
-      const sek = resolveSekAmount(
-        Number(inv.remaining_amount) || 0,
-        null,
-        inv.currency,
-        inv.exchange_rate
-      )
-      return Math.round((sum + sek) * 100) / 100
-    }, 0)
-
   const account2440Balance = 0 - debitMinusCredit
 
-  const difference = Math.round((supplierLedgerTotal - account2440Balance) * 100) / 100
+  const difference = Math.round((ledger.total_outstanding - account2440Balance) * 100) / 100
 
   return {
-    supplier_ledger_total: Math.round(supplierLedgerTotal * 100) / 100,
+    supplier_ledger_total: ledger.total_outstanding,
+    as_of_date: asOfDate,
     account_2440_balance: Math.round(account2440Balance * 100) / 100,
     difference,
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
     // Avstämd: the user must fix the underlying data first.
-    is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
-    unconverted_fx_count: unconvertedFxCount,
+    is_reconciled: Math.abs(difference) < 0.01 && ledger.unconverted_fx_count === 0,
+    unconverted_fx_count: ledger.unconverted_fx_count,
   }
 }
