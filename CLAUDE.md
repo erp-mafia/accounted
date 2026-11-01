@@ -27,6 +27,7 @@ General prohibitions:
 - Don't finish the gnubok → Accounted rename. The `gnubok-company-id` cookie, the `gnubok_sk_`/`gnubok_inv_` prefixes and the `gnubok-mcp` package keep the old name on purpose; renaming them breaks live sessions, API keys, invites and MCP connections. New MCP installs use the additive `accounted-mcp` package and `accounted_*` aliases.
 - Treat `.env.local` as production: no seed, cleanup or repair script against it without explicit confirmation.
 - Keep the diff to the request; no drive-by refactors of untouched code.
+- A business rule has one definition. Before writing a calculation, status, date, default or check, search `scripts/checks/one-definition/`: each file names a rule and its home, and `check:guards` fails a new copy. Giving a rule a home adds a file there.
 - No em dashes (—) or en dashes (–) in code, comments, commits or docs; use a colon, comma, semicolon or plain hyphen. A dash that is itself the subject (a mojibake table, a date-range regex) stays.
 - Never create a file named `NUL` or `nul`: it breaks Windows checkouts.
 
