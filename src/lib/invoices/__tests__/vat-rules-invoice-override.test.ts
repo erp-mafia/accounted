@@ -269,7 +269,7 @@ describe('the header ruta and the booked revenue account always agree', () => {
     const resolved = resolveInvoiceVatRules(customer, override)
     expect(resolved.ok).toBe(true)
     if (!resolved.ok) return
-    const account = getRevenueAccount(resolved.rules.treatment, 'aktiebolag', override?.delivery_country ?? null)
+    const account = getRevenueAccount(resolved.rules.treatment, 'aktiebolag', { goods: !!override?.delivery_country })
     expect(ACCOUNT_RUTA[account]?.box).toBe(`ruta${resolved.rules.momsRuta}`)
   })
 })

@@ -14,6 +14,7 @@ import {
   reverseChargeKindForBasisAccount,
   REVERSE_CHARGE_KINDS,
   generateInputVatLine,
+  bankRowVatLines,
   type ReverseChargeKind,
 } from '../vat-entries'
 
@@ -347,5 +348,63 @@ describe('generateInputVatLine', () => {
   it('defaults to vatRate=0.25 when omitted', () => {
     const line = generateInputVatLine(1250)
     expect(line!.debit_amount).toBe(250)
+  })
+})
+
+describe('bankRowVatLines', () => {
+  const lines = (over: Partial<Parameters<typeof bankRowVatLines>[0]>) =>
+    bankRowVatLines({ treatment: 'standard_25', absSek: 1250, nature: 'expense', reversal: false, ...over })
+  const leg = (account: string, debit: number, credit: number, description: string) => [
+    { account_number: account, debit_amount: debit, credit_amount: credit, description },
+  ]
+
+  it.each([
+    ['standard_25', 1250, 250, '2611', '25%'],
+    ['reduced_12', 1120, 120, '2621', '12%'],
+    ['reduced_6', 1060, 60, '2631', '6%'],
+  ] as const)('%s: the moms inside the gross, on its side', (treatment, absSek, vat, output, rate) => {
+    const base = { treatment, absSek }
+    expect(lines({ ...base, nature: 'expense' })).toEqual(leg('2641', vat, 0, `Ingående moms ${rate}`))
+    expect(lines({ ...base, nature: 'expense', reversal: true })).toEqual(leg('2641', 0, vat, `Återföring ingående moms ${rate}`))
+    expect(lines({ ...base, nature: 'income' })).toEqual(leg(output, 0, vat, `Utgående moms ${rate}`))
+    expect(lines({ ...base, nature: 'income', reversal: true })).toEqual(leg(output, vat, 0, `Återföring utgående moms ${rate}`))
+  })
+
+  it('reverse charge: the whole set on a purchase, reversed on its refund, none on a sale', () => {
+    const purchase = lines({ treatment: 'reverse_charge', absSek: 1000 })
+    expect(purchase.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2645', 250, 0], ['2614', 0, 250], ['4535', 1000, 0], ['4598', 0, 1000],
+    ])
+    const refund = lines({ treatment: 'reverse_charge', absSek: 1000, reversal: true })
+    expect(refund.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2645', 0, 250], ['2614', 250, 0], ['4535', 0, 1000], ['4598', 1000, 0],
+    ])
+    expect(lines({ treatment: 'reverse_charge', nature: 'income' })).toEqual([])
+    expect(lines({ treatment: 'reverse_charge', nature: 'income', reversal: true })).toEqual([])
+  })
+
+  it('reverse charge reports the box of the kind it is told', () => {
+    const accounts = lines({ treatment: 'reverse_charge', absSek: 1000, reverseChargeKind: 'non_eu_services' }).map((l) => l.account_number)
+    expect(accounts).toContain('4531')
+    expect(accounts).toContain('2645')
+  })
+
+  it('books no moms on a treatment without one, or none, and never reads an unknown one as 25 %', () => {
+    for (const treatment of ['exempt', 'export', 'reverse_charge_domestic', 'import_outside_eu', null, undefined]) {
+      for (const nature of ['expense', 'income'] as const) {
+        expect(lines({ treatment, nature })).toEqual([])
+      }
+    }
+  })
+
+  it('a gross too small to carry moms books none', () => {
+    expect(lines({ absSek: 0 })).toEqual([])
+  })
+
+  it('takes the underlag\'s moms over the rate\'s, and says so', () => {
+    expect(lines({ vatAmount: 200 })).toEqual(leg('2641', 200, 0, 'Ingående moms (enligt underlag)'))
+    expect(lines({ vatAmount: 200, nature: 'income', reversal: true })).toEqual(
+      leg('2611', 200, 0, 'Återföring utgående moms (enligt underlag)'),
+    )
   })
 })

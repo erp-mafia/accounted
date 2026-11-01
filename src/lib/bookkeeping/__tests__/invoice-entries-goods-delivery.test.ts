@@ -91,20 +91,20 @@ function expectBalanced(input: CreateJournalEntryInput) {
 
 describe('getRevenueAccount with a goods delivery abroad', () => {
   it('books goods on 3105 / 3108 and services on 3305 / 3308', () => {
-    expect(getRevenueAccount('export', 'aktiebolag', 'NO')).toBe('3105')
-    expect(getRevenueAccount('reverse_charge', 'aktiebolag', 'DE')).toBe('3108')
-    expect(getRevenueAccount('export', 'aktiebolag', null)).toBe('3305')
+    expect(getRevenueAccount('export', 'aktiebolag', { goods: true })).toBe('3105')
+    expect(getRevenueAccount('reverse_charge', 'aktiebolag', { goods: true })).toBe('3108')
+    expect(getRevenueAccount('export', 'aktiebolag', { goods: false })).toBe('3305')
     expect(getRevenueAccount('reverse_charge', 'aktiebolag')).toBe('3308')
   })
 
   it('does not touch the domestic treatments', () => {
-    expect(getRevenueAccount('standard_25', 'aktiebolag', 'NO')).toBe('3001')
-    expect(getRevenueAccount('exempt', 'aktiebolag', 'NO')).toBe('3004')
+    expect(getRevenueAccount('standard_25', 'aktiebolag', { goods: true })).toBe('3001')
+    expect(getRevenueAccount('exempt', 'aktiebolag', { goods: true })).toBe('3004')
   })
 
   it('lands each account in the box the invoice header names', () => {
-    expect(ACCOUNT_RUTA[getRevenueAccount('export', 'aktiebolag', 'NO')].box).toBe('ruta36')
-    expect(ACCOUNT_RUTA[getRevenueAccount('reverse_charge', 'aktiebolag', 'DE')].box).toBe('ruta35')
+    expect(ACCOUNT_RUTA[getRevenueAccount('export', 'aktiebolag', { goods: true })].box).toBe('ruta36')
+    expect(ACCOUNT_RUTA[getRevenueAccount('reverse_charge', 'aktiebolag', { goods: true })].box).toBe('ruta35')
   })
 })
 

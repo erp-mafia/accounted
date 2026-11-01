@@ -2,21 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   TransactionCategory,
   MappingResult,
-  VatJournalLine,
   Transaction,
   EntityType,
   VatTreatment,
   RiskLevel,
 } from '@/types'
-import {
-  getVatRate,
-  generateReverseChargePurchaseLines,
-  reverseChargeKindForSupplierType,
-  generateInputVatLine,
-} from './vat-entries'
+import { bankRowVatLines, reverseChargeKindForSupplierType } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
-import { getOutputVatAccount } from './invoice-accounts'
-import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { templateAccountForForm } from '@/lib/company/entity-type'
 import {
   resolveSkattekontoAccount,
@@ -2681,57 +2673,19 @@ export function buildMappingResultFromTemplate(
     transaction.exchange_rate
   ))
 
-  // Generate VAT lines
-  const vatLines: VatJournalLine[] = []
-  if (isBusiness && vatTreatment && template.deductibility !== 'non_deductible') {
-    const vatRate = getVatRate(vatTreatment)
-
-    if (vatTreatment === 'reverse_charge' && isExpense) {
-      // EU/non-EU/domestic reverse charge: emit BOTH the fiktiv-moms pair
-      // (2645|2647 / 2614) AND the basbelopp pair (44xx|45xx / 4598). The
-      // basbelopp pair populates momsdeklaration rutor 20-24; without it
-      // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
-      // basbelopp i 20-24", ML 13 kap kräver båda sidor).
-      //
-      // A template whose debit account reports the basis itself (4515, or an
-      // account with a reverse-charge momskod) loses the pair, and takes that
-      // account's momssats, when the booking door settles it with the chart
-      // (reconcileRcBasisWithChart): keeping the pair would double-count.
-      const rcLines = generateReverseChargePurchaseLines({
-        base: absAmount,
-        rate: 0.25, // fiktiv moms rate; current templates are 25%
-        kind: reverseChargeKindForSupplierType(template.reverse_charge_supplier_type ?? 'eu_business'),
+  // A reverse-charge template whose debit account reports the basis itself
+  // (4515, or an account with a reverse-charge momskod) loses the basis pair,
+  // and takes that account's momssats, when the booking door settles it with
+  // the chart (reconcileRcBasisWithChart): keeping the pair would double-count.
+  const vatLines = isBusiness && template.deductibility !== 'non_deductible'
+    ? bankRowVatLines({
+        treatment: vatTreatment,
+        absSek: absAmount,
+        nature: isExpense ? 'expense' : 'income',
+        reversal: false,
+        reverseChargeKind: reverseChargeKindForSupplierType(template.reverse_charge_supplier_type ?? 'eu_business'),
       })
-      for (const rcl of rcLines) {
-        vatLines.push({
-          account_number: rcl.account_number,
-          debit_amount: rcl.debit_amount,
-          credit_amount: rcl.credit_amount,
-          description: rcl.line_description || '',
-        })
-      }
-    } else if (vatRate > 0 && isExpense) {
-      // Input VAT deduction
-      const vatLine = generateInputVatLine(absAmount, vatRate)
-      if (vatLine) {
-        vatLines.push({
-          account_number: vatLine.account_number,
-          debit_amount: vatLine.debit_amount,
-          credit_amount: vatLine.credit_amount,
-          description: vatLine.line_description || '',
-        })
-      }
-    } else if (vatRate > 0 && !isExpense) {
-      // Output VAT (income)
-      const vatAmount = grossVat(absAmount, vatRate)
-      vatLines.push({
-        account_number: getOutputVatAccount(vatTreatment),
-        debit_amount: 0,
-        credit_amount: vatAmount,
-        description: `Utgående moms ${vatRate * 100}%`,
-      })
-    }
-  }
+    : []
 
   // Build description
   const description = `${template.name_sv}: ${transaction.description}`

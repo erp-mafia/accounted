@@ -55,17 +55,17 @@ export class InvoiceFxRateMissingError extends Error {
  * For 'exempt': AB uses 3004 (Försäljning inom Sverige, momsfri),
  * EF uses 3100 (Momsfria intäkter, mapped to R2 in NE engine).
  *
- * `goodsDeliveryCountry` is the invoice's delivery_country (#2906): set only
- * when the invoice stated a goods delivery abroad, and then the zero-rated
- * treatments book the goods accounts, which is what puts the sale in the
- * right momsdeklaration box: 3108 (ruta 35, periodisk sammanställning goods)
- * instead of 3308 (ruta 39), 3105 (ruta 36) instead of 3305 (ruta 40). A
- * row without it (every invoice before #2906, every service) is unchanged.
+ * `goods` says the sale is of goods: an invoice that stated a goods delivery
+ * abroad (delivery_country, #2906), a bank row on the income_products
+ * category. The zero-rated treatments then book the goods accounts, which is
+ * what puts the sale in the right momsdeklaration box: 3108 (ruta 35,
+ * periodisk sammanställning goods) instead of 3308 (ruta 39), 3105 (ruta 36)
+ * instead of 3305 (ruta 40). Every other sale books the services accounts.
  */
 export function getRevenueAccount(
   vatTreatment: VatTreatment,
   entityType: EntityType = 'enskild_firma',
-  goodsDeliveryCountry: string | null = null,
+  { goods = false }: { goods?: boolean } = {},
 ): string {
   switch (vatTreatment) {
     case 'standard_25':
@@ -76,13 +76,13 @@ export function getRevenueAccount(
       return '3003' // Försäljning 6%
     case 'reverse_charge':
       // Varor till annat EU-land, momsfri / Försäljning tjänst EU
-      return goodsDeliveryCountry ? '3108' : '3308'
+      return goods ? '3108' : '3308'
     case 'reverse_charge_domestic':
       // Försäljning inom byggsektorn, omvänd betalningsskyldighet (ruta 41)
       return '3231'
     case 'export':
       // Försäljning varor till land utanför EU / Försäljning tjänst Export
-      return goodsDeliveryCountry ? '3105' : '3305'
+      return goods ? '3105' : '3305'
     case 'exempt':
       // Momsfri försäljning: 3004 for a form that books like an aktiebolag
       // (templateColumn 'ab'), 3100 for the others.

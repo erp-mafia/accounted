@@ -1,11 +1,7 @@
-import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, EntityType, VatTreatment } from '@/types'
-import {
-  getVatRate,
-  generateReverseChargePurchaseLines,
-  DEFAULT_REVERSE_CHARGE_KIND,
-  type ReverseChargeKind,
-} from './vat-entries'
+import type { TransactionCategory, MappingResult, Transaction, EntityType, VatTreatment } from '@/types'
+import { bankRowVatLines, getVatRate, type BankRowNature, type ReverseChargeKind } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
+import { getRevenueAccount } from './invoice-accounts'
 import { roundOre } from '@/lib/money'
 import { grossVat } from '@/lib/bookkeeping/gross-split'
 import { ownerSettlementAccount, templateAccountForForm } from '@/lib/company/entity-type'
@@ -37,8 +33,6 @@ interface CategoryAccountMapping {
   debitAccount: string
   creditAccount: string
   vatTreatment: string | null
-  vatDebitAccount: string | null
-  vatCreditAccount: string | null
 }
 
 // Default bank account - typically 1930 (Företagskonto/checkkonto)
@@ -91,37 +85,11 @@ function getExpenseAccount(category: string, entityType: EntityType): string {
 }
 
 /**
- * Get the income account for a category, resolving by VAT treatment.
- * BAS mandates revenue account segregation by VAT rate:
- * 3001=25%, 3002=12%, 3003=6%, 3305=Export, 3308=EU services, 3004=Exempt.
- */
-function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string {
-  // income_other always maps to 3999 regardless of VAT treatment (3900 är gruppkonto)
-  if (category === 'income_other') return '3999'
-
-  if (vatTreatment) {
-    switch (vatTreatment) {
-      case 'standard_25': return '3001'
-      case 'reduced_12': return '3002'
-      case 'reduced_6': return '3003'
-      case 'export': return '3305'
-      case 'reverse_charge': return '3308'
-      case 'exempt': return '3004'
-    }
-  }
-
-  // No vatTreatment provided: fall back to static mapping
-  return INCOME_ACCOUNTS[category] || '3999'
-}
-
-/**
  * What a business category books on its own: an expense category takes money
  * out (debit the cost account, credit the bank), an income category brings
  * money in (debit the bank, credit the revenue account).
  */
-type CategoryNature = 'expense' | 'income'
-
-function categoryNature(category: TransactionCategory): CategoryNature | null {
+function categoryNature(category: TransactionCategory): BankRowNature | null {
   if (category.startsWith('expense_')) return 'expense'
   if (category.startsWith('income_')) return 'income'
   return null
@@ -161,9 +129,9 @@ export function booksReverseChargePurchase(category: TransactionCategory, amount
  * The sides of a business category on a bank row: the one place the sign of
  * the amount meets the category's nature. The business account sits on its
  * own side (debit for an expense, credit for an income) and on the opposite
- * side for a reversal; the bank takes the other side, and the moms account
- * stands beside the business account, so a reversal takes the moms back on
- * the account it was booked on:
+ * side for a reversal; the bank takes the other side, and the moms stands
+ * beside the business account (bankRowVatLines), so a reversal takes the moms
+ * back on the account it was booked on:
  *
  *   expense, money out   D cost     D 2641    K bank   (a purchase)
  *   expense, money in    D bank     K cost    K 2641   (the supplier refunds)
@@ -175,19 +143,16 @@ export function booksReverseChargePurchase(category: TransactionCategory, amount
  * ruta 10 and a debit on 3001 lowers ruta 05 without any tag on the line.
  */
 function orientBusinessMapping(
-  nature: CategoryNature,
+  nature: BankRowNature,
   reversal: boolean,
   businessAccount: string,
   vatTreatment: string | null,
-  vatAccount: string | null,
 ): CategoryAccountMapping {
   const businessOnDebit = (nature === 'expense') !== reversal
   return {
     debitAccount: businessOnDebit ? businessAccount : BANK_ACCOUNT,
     creditAccount: businessOnDebit ? BANK_ACCOUNT : businessAccount,
     vatTreatment,
-    vatDebitAccount: businessOnDebit ? vatAccount : null,
-    vatCreditAccount: businessOnDebit ? null : vatAccount,
   }
 }
 
@@ -219,8 +184,6 @@ export function getCategoryAccountMapping(
       debitAccount: amount < 0 ? privateAccount : BANK_ACCOUNT,
       creditAccount: amount < 0 ? BANK_ACCOUNT : privateAccount,
       vatTreatment: null,
-      vatDebitAccount: null,
-      vatCreditAccount: null,
     }
   }
 
@@ -239,56 +202,23 @@ export function getCategoryAccountMapping(
       vatRegistered,
     )
 
-    // Debiterad ingående moms (2641): debited on a purchase, credited back
-    // when the supplier refunds.
-    return orientBusinessMapping(
-      'expense',
-      isCategoryReversal(category, amount),
-      expenseAccount,
-      resolvedVat,
-      resolvedVat ? '2641' : null,
-    )
+    return orientBusinessMapping('expense', isCategoryReversal(category, amount), expenseAccount, resolvedVat)
   }
 
   // Check if it's an income category
   if (category.startsWith('income_')) {
     // Use provided vatTreatment, or default to standard_25
     const resolvedVat = vatTreatmentForRegistration(vatTreatment ?? 'standard_25', vatRegistered)
-    // A non-registered company's sale carries no moms, which is what the
-    // exempt revenue account (3004) says; a registered company keeps the
-    // static fallback for an omitted treatment.
-    const incomeAccount = getIncomeAccount(
-      category,
-      isNotVatRegistered(vatRegistered) ? resolvedVat : vatTreatment,
-    )
+    // The sale's treatment, legal form and nature pick the revenue account, as
+    // on an invoice. income_other stays on 3999 whatever its treatment
+    // (3900 är gruppkonto): other operating income is not nettoomsättning.
+    const incomeAccount = category === 'income_other'
+      ? INCOME_ACCOUNTS.income_other
+      : getRevenueAccount(resolvedVat, entityType, { goods: category === 'income_products' })
 
-    // Determine output VAT account based on rate
-    let outputVatAccount: string | null = null
-    switch (resolvedVat) {
-      case 'standard_25':
-        outputVatAccount = '2611' // Utgående moms försäljning 25%
-        break
-      case 'reduced_12':
-        outputVatAccount = '2621' // Utgående moms försäljning 12%
-        break
-      case 'reduced_6':
-        outputVatAccount = '2631' // Utgående moms försäljning 6%
-        break
-      default:
-        outputVatAccount = null
-        break
-    }
-
-    // Utgående moms: credited on a sale, debited back on the same account
-    // when the customer is refunded (crm#1136: this branch used to ignore the
-    // sign, so money out booked as a sale with no moms).
-    return orientBusinessMapping(
-      'income',
-      isCategoryReversal(category, amount),
-      incomeAccount,
-      resolvedVat,
-      outputVatAccount,
-    )
+    // crm#1136: this branch used to ignore the sign, so money out booked as a
+    // sale with no moms.
+    return orientBusinessMapping('income', isCategoryReversal(category, amount), incomeAccount, resolvedVat)
   }
 
   // Uncategorized - default to misc expense/income based on amount
@@ -297,16 +227,12 @@ export function getCategoryAccountMapping(
       debitAccount: '6991',
       creditAccount: BANK_ACCOUNT,
       vatTreatment: null,
-      vatDebitAccount: null,
-      vatCreditAccount: null,
     }
   } else {
     return {
       debitAccount: BANK_ACCOUNT,
       creditAccount: '3999',
       vatTreatment: null,
-      vatDebitAccount: null,
-      vatCreditAccount: null,
     }
   }
 }
@@ -355,9 +281,7 @@ export function buildMappingResultFromCategory(
     category, transaction.amount, isBusiness, entityType, vatTreatment, vatRegistered,
   )
 
-  const vatLines: VatJournalLine[] = []
-
-  // Calculate VAT if applicable using the resolved treatment from mapping
+  // The treatment the mapping resolved, for the company's VAT registration.
   const treatment = mapping.vatTreatment as VatTreatment | null
   const hasVatOverride = vatAmountOverride !== undefined && vatAmountOverride !== null
 
@@ -417,57 +341,28 @@ export function buildMappingResultFromCategory(
   // A row against the category's direction: the reversal of its own booking.
   const reversal = isBusiness && isCategoryReversal(category, transaction.amount)
 
-  if (isBusiness && treatment) {
-    const vatRate = getVatRate(treatment)
-    if (treatment === 'reverse_charge' && booksReverseChargePurchase(category, transaction.amount)) {
-      // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
-      // basis pair (45xx/4598) for ruta 20-22, 25% of the SEK value: an EUR
-      // invoice's fiktiv moms posted off the EUR figure would understate
-      // 2614/2645 by the exchange rate. Only a purchase self-assesses: money
-      // out on an income category is a refund of a sale that carried no
-      // Swedish moms, so it books none either.
-      const rcLines = generateReverseChargePurchaseLines({
-        base: absSekAmount,
-        kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
+  // A supplier refund under reverse charge books gross on this path, no
+  // reversed set: the Swedish skills state no posting for it, and changing
+  // that is a tax decision for the founders (decision of 2026-10-10, crm#1136).
+  // Money out on an income category is a refund of a sale that carried no
+  // Swedish moms, so it books none either.
+  const nature = categoryNature(category)
+  const vatLines = isBusiness && nature && (treatment !== 'reverse_charge' || booksReverseChargePurchase(category, transaction.amount))
+    ? bankRowVatLines({
+        treatment,
+        absSek: absSekAmount,
+        nature,
+        reversal,
+        reverseChargeKind,
+        // The override scaled from the transaction's currency to SEK by the
+        // ratio the gross resolved at (amount_sek embeds the bank's actual
+        // settlement rate, so a plain exchange_rate multiply could disagree
+        // with the gross line). absAmount > 0 is guaranteed here: a positive
+        // override on a zero-amount transaction already failed the maxVat
+        // bound above.
+        ...(hasVatOverride ? { vatAmount: roundOre((vatAmountOverride as number) * (absSekAmount / absAmount)) } : {}),
       })
-      for (const rcl of rcLines) {
-        vatLines.push({
-          account_number: rcl.account_number,
-          debit_amount: rcl.debit_amount,
-          credit_amount: rcl.credit_amount,
-          description: rcl.line_description || '',
-        })
-      }
-    } else if (vatRate > 0) {
-      // Override: scale from transaction currency to SEK by the same ratio
-      // the gross resolved at (amount_sek embeds the bank's actual settlement
-      // rate, so a plain exchange_rate multiply could disagree with the gross
-      // line). absAmount > 0 is guaranteed here: a positive override on a
-      // zero-amount transaction already failed the maxVat bound above.
-      const vatAmount = hasVatOverride
-        ? roundOre((vatAmountOverride as number) * (absSekAmount / absAmount))
-        : grossVat(absSekAmount, vatRate)
-
-      // One moms line, on the account and the side getCategoryAccountMapping
-      // gave it: beside the business line, so debited when money goes out
-      // (ingående moms on a purchase, utgående moms taken back on a refund of
-      // a sale) and credited when money comes in (utgående moms on a sale,
-      // ingående moms taken back when the supplier refunds).
-      const vatAccount = mapping.vatDebitAccount ?? mapping.vatCreditAccount
-      if (vatAmount > 0 && vatAccount) {
-        const isInputVat = vatAccount === '2641'
-        const label = reversal
-          ? (isInputVat ? 'Återföring ingående moms' : 'Återföring utgående moms')
-          : (isInputVat ? 'Ingående moms' : 'Utgående moms')
-        vatLines.push({
-          account_number: vatAccount,
-          debit_amount: mapping.vatDebitAccount ? vatAmount : 0,
-          credit_amount: mapping.vatDebitAccount ? 0 : vatAmount,
-          description: hasVatOverride ? `${label} (enligt underlag)` : `${label} ${vatRate * 100}%`,
-        })
-      }
-    }
-  }
+    : []
 
   // Generate description
   const categoryLabels: Record<TransactionCategory, string> = {
