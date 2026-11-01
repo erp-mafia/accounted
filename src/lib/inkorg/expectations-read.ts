@@ -7,6 +7,7 @@
  * Read only. Every query filters by company_id beside RLS, and every read
  * pages through fetchAllRows: PostgREST answers 1000 rows and no more.
  */
+import { chunk as chunks } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addMonthsIso } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -29,12 +30,6 @@ import {
 
 /** Ids per `.in()` filter, so the request line stays well inside URL limits. */
 const ID_CHUNK = 100
-
-function chunks<T>(items: readonly T[]): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += ID_CHUNK) out.push(items.slice(i, i + ID_CHUNK))
-  return out
-}
 
 /**
  * The history the cadence is read from: money out on the company's accounts
@@ -88,7 +83,7 @@ export async function readExpectationHistory(
 
   const supplierIds = [...new Set(supplierInvoices.map((i) => i.supplier_id))]
   const suppliers: HistorySupplier[] = []
-  for (const ids of chunks(supplierIds)) {
+  for (const ids of chunks(supplierIds, ID_CHUNK)) {
     suppliers.push(
       ...(await fetchAllRows<HistorySupplier>(({ from, to }) =>
         supabase
@@ -113,7 +108,7 @@ export async function readDocumentEvidence(
 ): Promise<{ documents: EvidenceDocument[]; items: EvidenceInboxItem[] }> {
   const documents: EvidenceDocument[] = []
   const items: EvidenceInboxItem[] = []
-  for (const ids of chunks(documentIds)) {
+  for (const ids of chunks(documentIds, ID_CHUNK)) {
     const [docs, arrivals] = await Promise.all([
       fetchAllRows<EvidenceDocument>(({ from, to }) =>
         supabase

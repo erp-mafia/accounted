@@ -13,6 +13,7 @@
  * lib/transactions/manage.ts, lib/transactions/link-journal-entry.ts,
  * lib/transactions/match-batch.ts, lib/transactions/bulk-book.ts.
  */
+import { formatAmount } from '@/lib/utils'
 import { z } from 'zod'
 import {
   BulkBookSchema,
@@ -783,7 +784,7 @@ export const transactionsBulkBook = defineOperation({
         const sum = Number(p?.tx_sum ?? 0)
         const amount =
           `${p?.direction === 'income' ? '+' : '-'}` +
-          `${Math.abs(sum).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ` +
+          `${formatAmount(Math.abs(sum))} ` +
           `${String(p?.currency ?? 'SEK')}`
         const lead = String(p?.lead_description ?? '')
         const rest = count > 1 ? ` (+${count - 1} till)` : ''

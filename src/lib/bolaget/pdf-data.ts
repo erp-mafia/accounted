@@ -11,7 +11,7 @@
  * (6:3 allows printed signatures).
  */
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, pdfAmount } from '@/lib/pdf/number-text'
 import { identityText } from './people'
 import type { ReplayResult, ShareAnnotation } from './register-state'
 import type { RoleView, RolesView } from './roles'
@@ -34,7 +34,6 @@ export interface PdfCompany {
 
 const INT = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 })
 const PCT = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const KR = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export function formatCount(n: number): string {
   return pdfNumberText(INT.format(n))
@@ -45,7 +44,7 @@ export function formatPct(n: number): string {
 }
 
 export function formatKr(n: number): string {
-  return `${pdfNumberText(KR.format(n))} kr`
+  return `${pdfAmount(n)} kr`
 }
 
 export function rangeLabel(start: number | null, end: number | null): string {

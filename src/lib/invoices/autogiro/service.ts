@@ -14,6 +14,7 @@
  * Every function returns a result union instead of throwing for what the
  * person can fix: the route maps `code` through errorResponseFromCode.
  */
+import { chunk as chunks } from '@/lib/utils'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateOcrReference, validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -332,11 +333,8 @@ interface AutogiroInvoiceRow {
 const OPEN_STATUSES = ['sent', 'overdue', 'partially_paid']
 const LIVE_DEBIT_STATUSES: DebitStatus[] = ['sent', 'debited']
 
-function chunks<T>(items: readonly T[], size = 100): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
+/** Ids per `.in()` lookup. */
+const ID_CHUNK = 100
 
 /**
  * Every issued invoice that announced Autogiro and still asks for money, not
@@ -369,7 +367,7 @@ export async function loadDueAutogiroInvoices(
 
   const live = new Set<string>()
   const firstSent = new Map<string, string>()
-  for (const part of chunks(ids)) {
+  for (const part of chunks(ids, ID_CHUNK)) {
     const [{ data: debits, error: debitError }, { data: deliveries, error: deliveryError }] = await Promise.all([
       supabase.from('autogiro_debits').select('invoice_id').eq('company_id', companyId).in('invoice_id', part).in('status', LIVE_DEBIT_STATUSES),
       supabase.from('invoice_deliveries').select('invoice_id, sent_at').eq('company_id', companyId).in('invoice_id', part).not('sent_at', 'is', null),
@@ -621,7 +619,7 @@ export async function loadAutogiroOverview(supabase: SupabaseClient, companyId: 
 
   const customerIds = [...new Set(mandates.map((m) => m.customer_id).filter((id): id is string => !!id))]
   const names = new Map<string, string>()
-  for (const part of chunks(customerIds)) {
+  for (const part of chunks(customerIds, ID_CHUNK)) {
     const { data, error } = await supabase.from('customers').select('id, name').eq('company_id', companyId).in('id', part)
     if (error) throw error
     for (const c of (data ?? []) as Array<{ id: string; name: string }>) names.set(c.id, c.name)

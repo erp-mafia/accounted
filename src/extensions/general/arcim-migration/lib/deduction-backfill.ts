@@ -23,6 +23,7 @@
  * minute), an expired token mid-run, a locked or closed period for today's
  * voucher, and the time budget.
  */
+import { chunk as chunks } from '@/lib/utils'
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
@@ -156,12 +157,6 @@ interface InvoiceRow {
   total: number | string
   paid_amount: number | string | null
   deduction_total: number | string | null
-}
-
-function chunks<T>(values: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let index = 0; index < values.length; index += size) out.push(values.slice(index, index + size))
-  return out
 }
 
 function normalizeAccountKey(value: unknown): string {

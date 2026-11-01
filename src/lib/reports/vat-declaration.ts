@@ -13,8 +13,13 @@ import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
+import { calculatePeriodDates } from './period-dates'
 
 const log = createLogger('reports/vat-declaration')
+
+// Calendar period bounds are shared with periodisk sammanställning; re-exported
+// because callers have always imported them from here.
+export { calculatePeriodDates }
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -86,57 +91,6 @@ export const VAT_INPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
  * on one side without the other fails there.
  */
 export const RC_INPUT_VAT_ACCOUNTS = ['2645', '2647'] as const
-
-/**
- * Calculate period start and end dates
- */
-export function calculatePeriodDates(
-  periodType: VatPeriodType,
-  year: number,
-  period: number
-): { start: string; end: string } {
-  let startMonth: number
-  let endMonth: number
-
-  switch (periodType) {
-    case 'monthly':
-      // period is 1-12
-      startMonth = period
-      endMonth = period
-      break
-    case 'quarterly':
-      // period is 1-4
-      startMonth = (period - 1) * 3 + 1
-      endMonth = period * 3
-      break
-    case 'yearly':
-      // period is 1
-      startMonth = 1
-      endMonth = 12
-      break
-    default:
-      startMonth = 1
-      endMonth = 12
-  }
-
-  const startDate = new Date(year, startMonth - 1, 1)
-  const endDate = new Date(year, endMonth, 0) // Last day of end month
-
-  return {
-    start: formatDate(startDate),
-    end: formatDate(endDate),
-  }
-}
-
-/**
- * Format date as YYYY-MM-DD
- */
-function formatDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
 
 /**
  * Round to 2 decimal places

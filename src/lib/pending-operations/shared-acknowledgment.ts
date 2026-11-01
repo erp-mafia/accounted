@@ -21,6 +21,7 @@
  * the dashboard's bulk approval reads this file, and the bulk-commit route
  * re-derives the group from the stored operation: a client cannot widen it.
  */
+import { chunk } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { PendingOperation } from '@/types'
 
@@ -169,7 +170,5 @@ export const BULK_CHUNK_SIZE = 50
 
 /** Split ids into request-sized chunks, in order. */
 export function chunkIds<T>(ids: readonly T[], size: number = BULK_CHUNK_SIZE): T[][] {
-  const chunks: T[][] = []
-  for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size))
-  return chunks
+  return chunk(ids, size)
 }

@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfAmount } from '@/lib/pdf/number-text'
 
 /**
  * Kvittningsavräkning: the underlag of a set-off verifikat.
@@ -35,10 +35,6 @@ export interface SetoffNoteInput {
   payableAccount: string | null
   note: string | null
   generatedAt: string
-}
-
-export function formatNoteAmount(amount: number): string {
-  return pdfNumberText(new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount))
 }
 
 export function setoffNoteFilename(setoffDate: string, invoiceNumber: string | null): string {
@@ -103,7 +99,7 @@ const styles = StyleSheet.create({
 })
 
 function netSentence(input: SetoffNoteInput): string {
-  const amount = `${formatNoteAmount(input.net.amount)} kr`
+  const amount = `${pdfAmount(input.net.amount)} kr`
   const us = input.companyName ?? 'Vi'
   const them = input.counterpartyName ?? 'motparten'
   if (input.net.direction === 'we_pay') return `Efter kvittningen återstår ${amount} som ${us} betalar till ${them}.`
@@ -158,18 +154,18 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
         <View style={styles.row} wrap={false}>
           <Text style={styles.colName}>Kundfaktura {input.invoice.number ?? ''} (vår fordran)</Text>
           <Text style={styles.colDate}>{input.invoice.invoiceDate}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.invoice.total)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.invoice.remainingBefore)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.amount)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.invoice.remainingAfter)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.invoice.total)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingBefore)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingAfter)}</Text>
         </View>
         <View style={styles.row} wrap={false}>
           <Text style={styles.colName}>Leverantörsfaktura {supplierLabel} (vår skuld)</Text>
           <Text style={styles.colDate}>{input.supplierInvoice.invoiceDate}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.supplierInvoice.total)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.supplierInvoice.remainingBefore)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.amount)}</Text>
-          <Text style={styles.colAmount}>{formatNoteAmount(input.supplierInvoice.remainingAfter)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.supplierInvoice.total)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.supplierInvoice.remainingBefore)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(input.supplierInvoice.remainingAfter)}</Text>
         </View>
         <Text style={styles.note}>{netSentence(input)}</Text>
 
@@ -185,20 +181,20 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
             <View style={styles.row} wrap={false}>
               <Text style={styles.colShort}>{input.payableAccount}</Text>
               <Text style={styles.colName}>Leverantörsfaktura {supplierLabel}</Text>
-              <Text style={styles.colAmount}>{formatNoteAmount(input.amount)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
               <Text style={styles.colAmount}></Text>
             </View>
             <View style={styles.row} wrap={false}>
               <Text style={styles.colShort}>{input.receivableAccount}</Text>
               <Text style={styles.colName}>Kundfaktura {input.invoice.number ?? ''}</Text>
               <Text style={styles.colAmount}></Text>
-              <Text style={styles.colAmount}>{formatNoteAmount(input.amount)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
             </View>
             <View style={styles.totalRow}>
               <Text style={styles.colShort}></Text>
               <Text style={[styles.colName, styles.bold]}>Summa</Text>
-              <Text style={[styles.colAmount, styles.bold]}>{formatNoteAmount(input.amount)}</Text>
-              <Text style={[styles.colAmount, styles.bold]}>{formatNoteAmount(input.amount)}</Text>
+              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(input.amount)}</Text>
+              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(input.amount)}</Text>
             </View>
             <Text style={styles.note}>Momsen påverkas inte: den bokfördes när fakturorna registrerades.</Text>
           </View>

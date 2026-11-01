@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -47,10 +48,7 @@ export async function countUnderlagForJournalEntries(
   journalEntryIds: readonly string[],
 ): Promise<UnderlagCounts> {
   const out: UnderlagCounts = { counts: {}, invoice_references: {} }
-  const chunks: string[][] = []
-  for (let i = 0; i < journalEntryIds.length; i += UNDERLAG_COUNTS_CHUNK) {
-    chunks.push(journalEntryIds.slice(i, i + UNDERLAG_COUNTS_CHUNK))
-  }
+  const chunks = chunk(journalEntryIds, UNDERLAG_COUNTS_CHUNK)
   const results = await Promise.all(chunks.map((ids) => countChunk(supabase, companyId, ids)))
   for (const r of results) {
     Object.assign(out.counts, r.counts)

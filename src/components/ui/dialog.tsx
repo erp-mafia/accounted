@@ -146,6 +146,21 @@ const useDashShellInert = (open: boolean) => {
   }, [open])
 }
 
+/**
+ * onEscapeKeyDown for a dialog that holds a form. Escape closes it, as every
+ * overlay does, while nothing would be lost. It is held while the form has
+ * unsaved input (closing is then explicit: the header X), and while a
+ * companion panel is open (a portaled combobox list or help popover, marked
+ * data-dialog-companion): that Escape is meant for the panel, which closes
+ * itself. Nested Radix layers (a select, a confirm dialog) never reach this
+ * handler: Radix hands Escape to the topmost layer only.
+ */
+function holdEscapeWhileUnsaved(event: KeyboardEvent, hasUnsavedInput: boolean): void {
+  if (hasUnsavedInput || document.querySelector('[data-dialog-companion]')) {
+    event.preventDefault()
+  }
+}
+
 const DialogHeader = ({
   className,
   ...props
@@ -216,6 +231,7 @@ export {
   DialogContent,
   DialogVeil,
   useDashShellInert,
+  holdEscapeWhileUnsaved,
   DialogHeader,
   DialogFooter,
   DialogTitle,

@@ -39,23 +39,13 @@ import {
 } from '@/lib/auth/scope-catalog'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { presetScopes, readLockedBy, readScopeOf, toggleScope, type ScopePreset } from '@/components/settings/scope-selection'
+import { groupLabelKey, scopeLabelKey, scopeVerb } from '@/components/settings/scope-labels'
 
 type Scope = ApiKeyScope
 
-/** i18n key for a scope card: `scope_<domain>_<verb>`. */
-const scopeLabelKey = (scope: Scope) => `scope_${scope.replace(':', '_')}`
-/** i18n key for a group heading: `group_<domain>`. */
-const groupLabelKey = (group: ScopeGroup) => `group_${group.domain}`
 /** A group with no MCP tool behind any of its scopes only gates REST endpoints. */
 const isRestOnlyGroup = (group: ScopeGroup) =>
   group.scopes.every((scope) => TOOL_COUNT_BY_SCOPE[scope] === 0)
-
-
-/** Verb of a scope card label ("Skriv: skapa ..." -> "Skriv"). */
-function scopeVerb(label: string): string {
-  const sepIdx = label.indexOf(': ')
-  return sepIdx > 0 ? label.slice(0, sepIdx) : label
-}
 
 /** One scope in the picker; exported for its render test. */
 export function ScopeCard({

@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, pdfAmount } from '@/lib/pdf/number-text'
 import { STOCK_CATEGORY_ACCOUNTS, type CategoryTotal, type StockCategory } from './valuation'
 
 /**
@@ -42,10 +42,6 @@ export interface StockCountPdfInput {
 /** The statement the signer makes (LIV 2 §). */
 export const STOCK_COUNT_HONOUR_STATEMENT =
   'Jag intygar på heder och samvete att varulagret har inventerats och att uppgifterna i denna inventeringslista är riktiga.'
-
-function amount(n: number): string {
-  return pdfNumberText(new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n))
-}
 
 function quantity(n: number): string {
   return pdfNumberText(new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(n))
@@ -154,9 +150,9 @@ export function StockCountPDF({ input }: { input: StockCountPdfInput }) {
             <Text style={styles.colKind}>{label(row.category)}</Text>
             <Text style={styles.colUnit}>{row.unit ?? ''}</Text>
             <Text style={styles.colNum}>{quantity(row.quantity)}</Text>
-            <Text style={styles.colNum}>{amount(row.unit_cost)}</Text>
+            <Text style={styles.colNum}>{pdfAmount(row.unit_cost)}</Text>
             <Text style={styles.colPct}>{percent(row.write_down_percent)}</Text>
-            <Text style={styles.colAmount}>{amount(row.value)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(row.value)}</Text>
           </View>
         ))}
 
@@ -170,16 +166,16 @@ export function StockCountPDF({ input }: { input: StockCountPdfInput }) {
         {input.totals.map((t) => (
           <View key={t.category} style={styles.row} wrap={false}>
             <Text style={styles.colName}>{label(t.category)}</Text>
-            <Text style={styles.colAmount}>{amount(t.cost)}</Text>
-            <Text style={styles.colAmount}>{amount(t.write_down)}</Text>
-            <Text style={styles.colAmount}>{amount(t.value)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(t.cost)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(t.write_down)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(t.value)}</Text>
           </View>
         ))}
         <View style={styles.totalRow} wrap={false}>
           <Text style={[styles.colName, styles.bold]}>Varulager totalt</Text>
           <Text style={styles.colAmount}></Text>
           <Text style={styles.colAmount}></Text>
-          <Text style={[styles.colAmount, styles.bold]}>{amount(input.totalValue)}</Text>
+          <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(input.totalValue)}</Text>
         </View>
         <Text style={styles.paragraph}>
           Varulagret är värderat till det lägsta av anskaffningsvärdet och nettoförsäljningsvärdet på balansdagen.

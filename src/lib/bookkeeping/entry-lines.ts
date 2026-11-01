@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -117,10 +118,7 @@ export async function fetchLinesByEntryIds<TLine extends { id?: unknown }>(
 
   const select = ensureColumns(lineColumns, ['id', 'journal_entry_id'])
 
-  const chunks: string[][] = []
-  for (let i = 0; i < entryIds.length; i += ENTRY_ID_CHUNK_SIZE) {
-    chunks.push(entryIds.slice(i, i + ENTRY_ID_CHUNK_SIZE))
-  }
+  const chunks = chunk(entryIds, ENTRY_ID_CHUNK_SIZE)
 
   const allLines: TLine[] = []
   for (let i = 0; i < chunks.length; i += CHUNK_BATCH_SIZE) {

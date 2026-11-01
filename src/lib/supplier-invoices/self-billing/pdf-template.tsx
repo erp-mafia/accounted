@@ -1,5 +1,5 @@
 import { Document, Image, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, pdfAmount } from '@/lib/pdf/number-text'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { roundOre } from '@/lib/money'
 import type { SelfBillingParty, SelfBillingSnapshot } from './snapshot'
@@ -71,10 +71,7 @@ export function selfBillingVatSummary(items: SelfBillingPdfItem[]): Array<{ rate
 }
 
 /** "18 563,00": the Swedish amount, safe for a standard PDF font. */
-const amount = (value: number, sign: 1 | -1): string =>
-  pdfNumberText(
-    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(roundOre(value * sign)),
-  )
+const amount = (value: number, sign: 1 | -1): string => pdfAmount(roundOre(value * sign))
 
 /** The date as stored, YYYY-MM-DD. */
 const pdfDate = (date: string): string => date.slice(0, 10)

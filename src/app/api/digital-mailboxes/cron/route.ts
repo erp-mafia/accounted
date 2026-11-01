@@ -12,7 +12,9 @@ export const maxDuration = 300
  * (lib/digital-mailboxes/sweep.ts): pending Kivra connections are looked up,
  * active ones read since their receive_since, each document filed once (the
  * arrival is the key). The provider webhooks make arrival prompt; this pass
- * makes it certain. A truthful no-op when no provider is configured.
+ * makes it certain. An active Kivra mailbox the webhook is proven to carry is
+ * read about once a day (the safety net Kivra advises); until then, every run.
+ * A truthful no-op when no provider is configured.
  */
 export const GET = withCronContext('cron.digital_mailboxes', async (_request, ctx) => {
   const summary = await sweepDigitalMailboxes(createServiceClientNoCookies(), { log: ctx.log })

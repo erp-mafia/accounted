@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import { supportsUnderlagImport, type UnderlagImportProvider } from '@/lib/providers/underlag-import'
 import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
 
@@ -569,8 +570,6 @@ export const ARCIM_DOCUMENT_IMPORT_STALLED = 'ARCIM_DOCUMENT_IMPORT_STALLED'
  * patience outlives that without hiding a real outage for long.
  */
 export const DOCUMENT_IMPORT_RETRY_DELAYS_MS: readonly number[] = [2_000, 10_000, 30_000]
-
-const sleep = (ms: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms))
 
 /**
  * Run the real import to completion: the route works through one time-budgeted

@@ -6,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
+import { formatDateSv, pdfAmount } from '@/lib/pdf/number-text'
 import type { KassaflodesanalysFullReport } from './kassaflodesanalys'
 import {
   KASSAFLODESANALYS_LAYOUT,
@@ -186,17 +186,6 @@ const styles = StyleSheet.create({
   noteText: { fontSize: 9, color: '#444', marginTop: 4 },
 })
 
-function formatAmount(n: number): string {
-  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
-  // so a negative cash flow would print as positive (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n),
-  )
-}
-
 /** A financial year's column heading: 2026, or 2025/26 for a broken year. */
 function yearLabel(year: KassaflodesanalysYear): string {
   const start = year.period_start.slice(0, 4)
@@ -239,8 +228,8 @@ export function KassaflodesanalysPDF({
     : row.label
   const amountCells = (pick: (year: KassaflodesanalysYear) => number, style: typeof styles.yearAmount) => (
     <>
-      <Text style={style}>{formatAmount(pick(current))}</Text>
-      {previous && <Text style={style}>{formatAmount(pick(previous))}</Text>}
+      <Text style={style}>{pdfAmount(pick(current))}</Text>
+      {previous && <Text style={style}>{pdfAmount(pick(previous))}</Text>}
     </>
   )
   const renderRow = (row: KassaflodesanalysLayoutRow) => (
@@ -331,25 +320,25 @@ export function KassaflodesanalysPDF({
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Ingående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(current.amounts.likvida_medel_ib)}
+              {pdfAmount(current.amounts.likvida_medel_ib)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Utgående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(current.amounts.likvida_medel_ub)}
+              {pdfAmount(current.amounts.likvida_medel_ub)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Faktisk förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_actual)}
+              {pdfAmount(recon.delta_actual)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Beräknad förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_calculated)}
+              {pdfAmount(recon.delta_calculated)}
             </Text>
           </View>
           {!recon.is_reconciled && (
@@ -362,7 +351,7 @@ export function KassaflodesanalysPDF({
               <Text
                 style={[styles.reconciliationAmount, styles.reconciliationMismatch]}
               >
-                {formatAmount(recon.mismatch_amount)}
+                {pdfAmount(recon.mismatch_amount)}
               </Text>
             </View>
           )}
