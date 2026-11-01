@@ -64,10 +64,10 @@ describe('proposeBankMatchesForArrivedRows', () => {
     expect(log.warn).toHaveBeenCalledWith('inbox bank match: items not refreshed', { companyId: 'company-1', failed: 1 })
   })
 
-  it('never throws', async () => {
+  it('a failed pass throws to its caller, the event bus, instead of a warning nobody reads', async () => {
     refreshInboxBankMatchesForTransactions.mockRejectedValue(new Error('down'))
-    await expect(proposeBankMatchesForArrivedRows(supabase, 'company-1', rows, log)).resolves.toBeUndefined()
-    expect(log.warn).toHaveBeenCalled()
+    await expect(proposeBankMatchesForArrivedRows(supabase, 'company-1', rows, log)).rejects.toThrow('down')
+    expect(log.warn).not.toHaveBeenCalled()
   })
 })
 

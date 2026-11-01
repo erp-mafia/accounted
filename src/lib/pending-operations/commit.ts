@@ -287,7 +287,12 @@ import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
-import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
+import {
+  RECURRING_ARTICLE_INVALID_MESSAGE,
+  findForeignRecurringArticleIds,
+  insertRecurringScheduleItems,
+  toRecurringScheduleItemRow,
+} from '@/lib/invoices/recurring-schedule-items'
 import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
 import {
   BulkBookInboxSchema,
@@ -939,6 +944,12 @@ async function commitCreateRecurringSchedule(
     }
   }
 
+  const articleCheck = await findForeignRecurringArticleIds(supabase, companyId, validated.items)
+  if (articleCheck.error) return { error: articleCheck.error.message, status: 500 }
+  if (articleCheck.invalidArticleIds.length > 0) {
+    return { error: RECURRING_ARTICLE_INVALID_MESSAGE, status: 400 }
+  }
+
   const nextRunDate = computeInitialRunDate(
     new Date(),
     validated.day_of_month,
@@ -975,9 +986,7 @@ async function commitCreateRecurringSchedule(
 
   const itemRows = validated.items.map((item, idx) => toRecurringScheduleItemRow(schedule.id, item, idx))
 
-  const { error: itemsError } = await supabase
-    .from('recurring_invoice_schedule_items')
-    .insert(itemRows)
+  const { error: itemsError } = await insertRecurringScheduleItems(supabase, itemRows)
 
   if (itemsError) {
     // Roll back the parent so a half-created schedule doesn't ship: an
@@ -1039,6 +1048,14 @@ async function commitUpdateRecurringSchedule(
 
   if (existingError) return { error: existingError.message, status: 500 }
   if (!existing) return { error: 'Recurring schedule not found', status: 404 }
+
+  if (items) {
+    const articleCheck = await findForeignRecurringArticleIds(supabase, companyId, items)
+    if (articleCheck.error) return { error: articleCheck.error.message, status: 500 }
+    if (articleCheck.invalidArticleIds.length > 0) {
+      return { error: RECURRING_ARTICLE_INVALID_MESSAGE, status: 400 }
+    }
+  }
 
   // Same rule as PATCH /api/invoices/recurring/[id]: period placeholders in
   // the texts that will be in effect need a period_start in effect.

@@ -30,7 +30,7 @@ export const GET = withServiceCronContext('cron.stripe_transaction_sync', async 
     // The runner counts inserted rows; a feed row is imported, never updated.
     sync: async (supabase, connection, log, deadlineMs) => {
       const summary = await syncStripeBalanceTransactions(supabase, connection, log, deadlineMs)
-      return { inserted: summary.imported, updated: 0, deadlineReached: summary.deadlineReached, revoked: summary.revoked }
+      return { inserted: summary.imported, updated: 0, errors: summary.errors, deadlineReached: summary.deadlineReached, revoked: summary.revoked }
     },
   })
 }, { requireExtension: 'stripe' })

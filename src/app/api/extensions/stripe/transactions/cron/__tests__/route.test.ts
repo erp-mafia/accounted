@@ -6,6 +6,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const logMock = vi.hoisted(() => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+  log.child.mockImplementation(() => log)
+  return log
+})
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 const verifyCronSecret = vi.fn<(request: Request) => Response | null>(() => null)
 vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: (request: Request) => verifyCronSecret(request),
@@ -77,6 +84,7 @@ beforeEach(() => {
     imported: 2,
     duplicates: 1,
     errors: 0,
+    foreignCurrency: 0,
   })
 })
 
@@ -168,7 +176,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
   it('marks a connection Stripe reports as revoked', async () => {
     rangeResult.mockResolvedValueOnce({ data: [makeConnection('conn-1', 'company-1')], error: null })
     vi.mocked(syncStripeBalanceTransactions).mockResolvedValueOnce({
-      fetched: 0, imported: 0, duplicates: 0, errors: 0, revoked: true,
+      fetched: 0, imported: 0, duplicates: 0, errors: 0, foreignCurrency: 0, revoked: true,
     })
 
     const json = await (await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))).json()
@@ -183,7 +191,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
     })
     vi.mocked(syncStripeBalanceTransactions)
       .mockRejectedValueOnce(new Error('stripe boom'))
-      .mockResolvedValueOnce({ fetched: 1, imported: 1, duplicates: 0, errors: 0 })
+      .mockResolvedValueOnce({ fetched: 1, imported: 1, duplicates: 0, errors: 0, foreignCurrency: 0 })
 
     const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
@@ -194,5 +202,26 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       { connectionId: 'conn-1', inserted: 0, updated: 0, status: 'error' },
       { connectionId: 'conn-2', inserted: 1, updated: 0, status: 'synced' },
     ])
+  })
+
+  it('reports rows the sync could not import as an error, not as a clean sync', async () => {
+    rangeResult.mockResolvedValueOnce({ data: [makeConnection('conn-1', 'company-1')], error: null })
+    vi.mocked(syncStripeBalanceTransactions).mockResolvedValueOnce({ fetched: 4, imported: 2, duplicates: 0, errors: 2, foreignCurrency: 0 })
+
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
+
+    expect(response.status).toBe(200)
+    expect(logMock.error).toHaveBeenCalledWith('stripe sync left rows unwritten', {
+      connectionId: 'conn-1',
+      companyId: 'company-1',
+      errors: 2,
+    })
+    expect(logMock.info).toHaveBeenCalledWith('stripe order sync summary', expect.objectContaining({ rowErrors: 2 }))
+  })
+
+  it('logs no error for a clean sync', async () => {
+    rangeResult.mockResolvedValueOnce({ data: [makeConnection('conn-1', 'company-1')], error: null })
+    await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
+    expect(logMock.error).not.toHaveBeenCalled()
   })
 })

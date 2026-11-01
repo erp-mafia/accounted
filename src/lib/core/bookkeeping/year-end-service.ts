@@ -239,8 +239,9 @@ export async function validateYearEndReadiness(
     })
   }
 
-  // Check: no draft entries
-  const { count: draftCount } = await supabase
+  // Check: no draft entries. Fails closed: a failed count used to read as 0
+  // drafts, so the year could close with drafts left in it.
+  const { count: draftCount, error: draftError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
@@ -248,7 +249,13 @@ export async function validateYearEndReadiness(
     .eq('status', 'draft')
 
   const drafts = draftCount ?? 0
-  if (drafts > 0) {
+  if (draftError) {
+    log.error('year-end readiness: draft count failed, blocking', draftError, { companyId, fiscalPeriodId })
+    blockers.push({
+      code: 'DRAFT_CHECK_FAILED',
+      message: 'Kontrollen av utkast i perioden kunde inte genomföras: försök igen',
+    })
+  } else if (drafts > 0) {
     blockers.push({
       code: 'DRAFT_ENTRIES',
       message: `${drafts} utkast måste bokföras eller raderas innan bokslut`,
@@ -287,19 +294,21 @@ export async function validateYearEndReadiness(
     })
   }
 
-  // Check: sequence counter reconciliation
+  // Check: sequence counter reconciliation. Fails closed like the gap check
+  // above: a failed read used to count as 0 and could pass the gate.
   const sequenceMismatches: SequenceMismatch[] = []
+  const uncheckedSeries: string[] = []
   if (sequenceSeries.length > 0) {
     for (const series of sequenceSeries) {
-      const { data: seqData } = await supabase
+      const { data: seqData, error: seqError } = await supabase
         .from('voucher_sequences')
         .select('last_number')
         .eq('company_id', companyId)
         .eq('fiscal_period_id', fiscalPeriodId)
         .eq('voucher_series', series)
-        .single()
+        .maybeSingle()
 
-      const { data: maxData } = await supabase
+      const { data: maxData, error: maxError } = await supabase
         .from('journal_entries')
         .select('voucher_number')
         .eq('company_id', companyId)
@@ -309,6 +318,16 @@ export async function validateYearEndReadiness(
         .order('voucher_number', { ascending: false })
         .limit(1)
         .maybeSingle()
+
+      if (seqError || maxError) {
+        log.error('year-end readiness: sequence counter check failed, blocking', seqError ?? maxError, {
+          companyId,
+          fiscalPeriodId,
+          series,
+        })
+        uncheckedSeries.push(series)
+        continue
+      }
 
       const sequenceCounter = seqData?.last_number ?? 0
       const actualMax = maxData?.voucher_number ?? 0
@@ -332,6 +351,12 @@ export async function validateYearEndReadiness(
         }
       }
     }
+  }
+  if (uncheckedSeries.length > 0) {
+    blockers.push({
+      code: 'VOUCHER_GAP_CHECK_FAILED',
+      message: `Kontrollen av nummerräknaren i serie ${uncheckedSeries.join(', ')} kunde inte genomföras: försök igen`,
+    })
   }
 
   // Check: trial balance is balanced

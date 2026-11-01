@@ -35,6 +35,7 @@ import { eventBus } from '@/lib/events/bus'
 import {
   STRIPE_IMPORT_SOURCE,
   STRIPE_LEDGER_ACCOUNT,
+  isLedgerCurrency,
   mapBalanceTransaction,
   stripeExternalId,
   stripeFeeExternalId,
@@ -648,6 +649,80 @@ describe('syncStripeBalanceTransactions', () => {
     })
   })
 
+  describe('non-SEK balance transactions (accounted#58 P1.10)', () => {
+    it('ingests only the SEK rows and counts the rest as foreignCurrency', async () => {
+      // A Stripe account holding a USD balance: Stripe states those balance
+      // transactions in USD and gives no kronor value, and the 1686 cash
+      // account is kept in SEK, where the bank-booking guards refuse them.
+      stubList([
+        makeCharge(),
+        makeCharge({ id: 'txn_usd_1', currency: 'usd' }),
+        makePayoutTxn({ id: 'txn_usd_po', currency: 'usd' }),
+      ])
+      const { supabase } = createCaptureSupabase({
+        company_settings: [{ data: null, error: null }],
+      })
+      const warn = vi.fn()
+      const log = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION }, log)
+
+      expect(summary).toMatchObject({ fetched: 3, foreignCurrency: 2 })
+      const rows = vi.mocked(ingestTransactions).mock.calls[0][3] as Array<{ currency: string; external_id: string }>
+      expect(rows.map((r) => r.currency)).toEqual(['SEK', 'SEK'])
+      expect(rows.map((r) => r.external_id)).toEqual([
+        stripeExternalId('acct_1', 'txn_charge_1'),
+        stripeFeeExternalId('acct_1', 'txn_charge_1'),
+      ])
+      expect(warn).toHaveBeenCalledWith('non-SEK balance transactions left out of the feed', {
+        connectionId: 'conn-1',
+        currencies: { USD: 2 },
+      })
+    })
+
+    it('ingests nothing for a run with only non-SEK rows but still moves the cursor past them', async () => {
+      stubList([makeCharge({ id: 'txn_eur_1', currency: 'eur' })])
+      const { supabase, queriesFor, op } = createCaptureSupabase({
+        company_settings: [{ data: null, error: null }],
+      })
+
+      const summary = await syncStripeBalanceTransactions(supabase, {
+        ...CONNECTION,
+        last_balance_txn_synced_at: '2026-07-10T00:00:00.000Z',
+      })
+
+      expect(summary).toMatchObject({ fetched: 1, imported: 0, foreignCurrency: 1 })
+      expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
+      // Left out is processed: the cursor moves on to the run start, so the
+      // next run does not list them again.
+      const updates = queriesFor('stripe_connections')
+      expect(updates).toHaveLength(1)
+      const iso = (op(updates[0], 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
+      expect(Math.abs(Date.parse(iso) - Date.now())).toBeLessThan(60_000)
+    })
+
+    it('reports zero foreignCurrency for an all-SEK run', async () => {
+      stubList([makeCharge()])
+      const { supabase } = createCaptureSupabase({
+        company_settings: [{ data: null, error: null }],
+      })
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+
+      expect(summary.foreignCurrency).toBe(0)
+      expect(vi.mocked(ingestTransactions)).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('isLedgerCurrency', () => {
+    it('accepts SEK in any case and nothing else', () => {
+      expect(isLedgerCurrency({ currency: 'sek' })).toBe(true)
+      expect(isLedgerCurrency({ currency: 'SEK' })).toBe(true)
+      expect(isLedgerCurrency({ currency: 'usd' })).toBe(false)
+      expect(isLedgerCurrency({ currency: 'chf' })).toBe(false)
+    })
+  })
+
   it('advances the cursor to the newest processed transaction', async () => {
     stubList([makeCharge(), makePayoutTxn()])
     const { supabase, queriesFor, op } = createCaptureSupabase({
@@ -675,6 +750,33 @@ describe('syncStripeBalanceTransactions', () => {
     expect(op(chunk, 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date(CREATED * 1000).toISOString() })
     const iso = (op(watermark, 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
     expect(Math.abs(Date.parse(iso) - Date.now())).toBeLessThan(60_000)
+  })
+
+  it('holds the cursor below a chunk with a row that failed to insert, so the next run retries it', async () => {
+    // Moving on would leave a row that fails two runs in a row outside the 24h overlap for good.
+    stubList([makeCharge()])
+    const { supabase, queriesFor, op } = createCaptureSupabase({
+      company_settings: [{ data: null, error: null }],
+    })
+    vi.mocked(ingestTransactions).mockResolvedValue({
+      imported: 1, duplicates: 0, reconciled: 0, auto_categorized: 0,
+      auto_matched_invoices: 0, errors: 1, transaction_ids: ['t1'],
+      first_error: { message: 'statement timeout', code: '57014' },
+    } as never)
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+
+    const summary = await syncStripeBalanceTransactions(
+      supabase, { ...CONNECTION, last_balance_txn_synced_at: '2026-07-05T00:00:00.000Z' }, log as never,
+    )
+
+    expect(summary.errors).toBe(1)
+    // Up to just below the failed chunk, and no run-start watermark past it.
+    const updates = queriesFor('stripe_connections')
+    expect(updates).toHaveLength(1)
+    expect(op(updates[0], 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date((CREATED - 1) * 1000).toISOString() })
+    expect(log.warn).toHaveBeenCalledWith('balance-transaction rows not imported; cursor held below them', {
+      connectionId: 'conn-1', errors: 1, code: '57014', reason: 'statement timeout',
+    })
   })
 
   it('moves a quiet account\'s cursor to the run start on a later run', async () => {

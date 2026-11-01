@@ -29,6 +29,7 @@ import {
   buildRecurringPlaceholderValues,
 } from '@/lib/invoices/recurring-placeholders'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
+import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
@@ -276,8 +277,28 @@ export async function executeRecurringSchedule(
   // (ruta 40) or reverse-charge header (crm#1285). A domestic customer's
   // default set holds 25/12/6/0, so its stored rates are kept as they are.
   const adoptableRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
-  const lineRate = (item: RecurringInvoiceScheduleItem): number =>
-    item.vat_rate != null && adoptableRates.has(item.vat_rate) ? item.vat_rate : vatRules.rate
+  // A line picked from the artikelregister (accounted#52) becomes an invoice
+  // line with that article, as the invoice editor writes one: the article's
+  // number and revenue account are copied when this invoice is created, and a
+  // line without a rate of its own takes the article's rate under the same
+  // adoption rule. The read is company-scoped, so a link to another
+  // company's article, or one deleted since, leaves the line unlinked.
+  const articles = await loadScheduleArticles(supabase, schedule.company_id, schedule.items || [])
+  // The article accounts buildInvoiceWriteData would accept on a hand-written
+  // line: active class 1-3 accounts of this company (a balance-sheet account
+  // only on a 0 % line, checked per line below). Read before anything is
+  // written, so a failed read leaves no half-made invoice.
+  const validRevenueAccounts = await loadActivePostingAccounts(
+    supabase,
+    schedule.company_id,
+    Array.from(articles.values()).map((a) => a.revenue_account).filter((a): a is string => !!a),
+  )
+  const articleOf = (item: RecurringInvoiceScheduleItem): ScheduleArticle | undefined =>
+    item.article_id ? articles.get(item.article_id) : undefined
+  const lineRate = (item: RecurringInvoiceScheduleItem): number => {
+    const stored = item.vat_rate ?? articleOf(item)?.vat_rate ?? null
+    return stored != null && adoptableRates.has(stored) ? stored : vatRules.rate
+  }
 
   // 2. Compute amounts (mirrors POST /api/invoices). Text rows carry no
   //    amounts and never book: they are copied onto the invoice as text rows
@@ -420,12 +441,10 @@ export async function executeRecurringSchedule(
     throw new Error(`failed to insert invoice from schedule: ${invoiceError?.message ?? 'unknown'}`)
   }
 
-  // 6. Insert items.
-  // NOTE (artikelregister Phase 2): recurring schedule template items have no
-  // article_id / revenue_account columns (see recurring_invoice_schedule_items),
-  // so generated invoices fall back to the VAT-treatment-derived revenue account.
-  // Wiring per-article overrides into recurring invoices needs a schema change
-  // and is deliberately out of the artikelregister MVP scope.
+  // 6. Insert items. An article's revenue account is used only where
+  //    buildInvoiceWriteData would accept it on a hand-written line (see
+  //    validRevenueAccounts above); otherwise the line books by VAT treatment,
+  //    as every recurring line did before article links.
   const itemRows = allItems.map((item, index) => {
     const description = applyRecurringPlaceholders(item.description, placeholderValues)
     if (isTextLine(item)) {
@@ -443,11 +462,22 @@ export async function executeRecurringSchedule(
         vat_rate: 0,
         vat_amount: 0,
         dimensions: {},
+        article_id: null,
+        article_number: null,
+        revenue_account: null,
       }
     }
     const itemRate = lineRate(item)
     const lineTotal = computeLineNet(item.quantity, item.unit_price)
     const itemVat = computeLineVat(lineTotal, itemRate)
+    const article = articleOf(item)
+    const articleAccount = article?.revenue_account ?? null
+    const revenueAccount =
+      articleAccount
+      && validRevenueAccounts.has(articleAccount)
+      && !(isBalanceSheetAccount(articleAccount) && itemRate > 0)
+        ? articleAccount
+        : null
     return {
       invoice_id: invoice.id,
       sort_order: index,
@@ -460,6 +490,9 @@ export async function executeRecurringSchedule(
       vat_rate: itemRate,
       vat_amount: itemVat,
       dimensions: item.dimensions ?? {},
+      article_id: article?.id ?? null,
+      article_number: article?.article_number?.trim() || null,
+      revenue_account: revenueAccount,
     }
   })
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
@@ -541,6 +574,58 @@ export async function executeRecurringSchedule(
     autoSent,
     warning,
   }
+}
+
+interface ScheduleArticle {
+  id: string
+  article_number: string | null
+  revenue_account: string | null
+  vat_rate: number | null
+}
+
+/** This company's articles linked from the schedule's product lines, by id. */
+async function loadScheduleArticles(
+  supabase: SupabaseClient,
+  companyId: string,
+  items: RecurringInvoiceScheduleItem[],
+): Promise<Map<string, ScheduleArticle>> {
+  const ids = Array.from(
+    new Set(
+      items
+        .filter((item) => !isTextLine(item))
+        .map((item) => item.article_id)
+        .filter((id): id is string => !!id),
+    ),
+  )
+  if (ids.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('articles')
+    .select('id, article_number, revenue_account, vat_rate')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  // A failed read must not quietly book linked lines by VAT treatment.
+  if (error) throw new Error(`article read failed: ${error.message}`)
+  return new Map(((data ?? []) as ScheduleArticle[]).map((row) => [row.id, row]))
+}
+
+/** The given accounts that are active class 1-3 accounts in the company's chart. */
+async function loadActivePostingAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  accounts: string[],
+): Promise<Set<string>> {
+  const unique = Array.from(new Set(accounts))
+  if (unique.length === 0) return new Set()
+  const { data, error } = await supabase
+    .from('chart_of_accounts')
+    .select('account_number')
+    .eq('company_id', companyId)
+    .gte('account_class', 1)
+    .lte('account_class', 3)
+    .eq('is_active', true)
+    .in('account_number', unique)
+  if (error) throw new Error(`chart of accounts read failed: ${error.message}`)
+  return new Set(((data ?? []) as Array<{ account_number: string }>).map((row) => row.account_number))
 }
 
 /**

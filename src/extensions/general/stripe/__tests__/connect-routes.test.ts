@@ -321,6 +321,7 @@ describe('stripe POST /backfill', () => {
       imported: 9,
       duplicates: 0,
       errors: 0,
+      foreignCurrency: 0,
     })
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-01-01' }),
@@ -362,6 +363,7 @@ describe('stripe POST /backfill', () => {
       imported: 2,
       duplicates: 0,
       errors: 0,
+      foreignCurrency: 0,
     })
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-10-17' }),

@@ -207,6 +207,26 @@ describe('matchSkattekontoToEntry', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('refuses to link when the rows already on the verifikat cannot be read (accounted#58)', async () => {
+    // Read as "none linked", a verifikat another row already explains would
+    // settle this row too and take a second link.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({
+      data: {
+        id: 'je-1',
+        status: 'posted',
+        lines: [{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }],
+      },
+    })
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout' } })
+
+    await expect(matchSkattekontoToEntry(supabase as never, COMPANY, TX_ID, 'je-1')).rejects.toThrow(
+      /redan är kopplade till verifikatet/,
+    )
+    expect(findCalls('skattekonto_transactions', 'update')).toHaveLength(0)
+  })
+
   it('throws TRANSACTION_NOT_FOUND when the SKV row is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'not found' } })
@@ -329,6 +349,17 @@ describe('findMatchSuggestionsBulk', () => {
 
     expect(suggestions.size).toBe(1)
     expect(suggestions.get('skv-1')).toMatchObject({ journal_entry_id: 'je-unique' })
+  })
+
+  it('proposes nothing when the rows already linked to the candidates cannot be read (accounted#58)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueLines(enqueue, [lineRow({ entryId: 'je-unique', debit: 5000, entryDate: '2026-03-16' })])
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout' } })
+
+    const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [
+      { id: 'skv-1', transaktionsdatum: '2026-03-17', belopp_skatteverket: 5000, journal_entry_id: null },
+    ])
+    expect(suggestions.size).toBe(0)
   })
 
   it('returns no suggestion when there are TWO candidates (ambiguous)', async () => {

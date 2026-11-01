@@ -248,6 +248,12 @@ describe('followReceiptsOfSupplierInvoice: a registered invoice paid later takes
     const { ctx } = setup({})
     expect(await followReceiptsOfSupplierInvoice(ctx, 'si-other')).toEqual([])
   })
+
+  it('a failed read of the items throws to the event consumer instead of a warning nobody reads', async () => {
+    const mock = createTableMockSupabase({ invoice_inbox_items: { data: null, error: { message: 'statement timeout' } } })
+    const ctx = { supabase: mock.supabase as never, companyId: COMPANY, userId: 'user-1', log }
+    await expect(followReceiptsOfSupplierInvoice(ctx, 'si-1')).rejects.toThrow('could not be read: statement timeout')
+  })
 })
 
 describe('the other way round, and a locked period (one half booked before pairs existed)', () => {

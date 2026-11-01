@@ -255,6 +255,13 @@ export interface PeppolTransport {
   registerRecipient?(input: PeppolRecipientRegistrationInput): Promise<PeppolRecipientRegistration>
   unregisterRecipient?(participant: PeppolParticipant): Promise<void>
   listInboundDocuments?(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]>
+  /**
+   * True when listing hands the documents over for good (Qvalia's read
+   * endpoint marks a listed page read): a document the caller fails to
+   * archive is not listed again, so the caller must not stop the page at it.
+   * Absent for a cursor-based listing, which lists it again next run.
+   */
+  readonly inboundListingConsumes?: boolean
   /** The exact received document, for the archive (räkenskapsinformation). */
   fetchInboundDocumentXml?(
     providerDocumentId: string,

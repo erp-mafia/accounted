@@ -73,6 +73,8 @@ export interface StripeSyncPayload {
     imported?: number
     duplicates?: number
     errors?: number
+    /** Left out for not being in SEK: 1686 is kept in kronor. */
+    foreignCurrency?: number
     revoked?: boolean
     /**
      * Only set when the caller passes a time budget. The manual button's route
@@ -87,5 +89,5 @@ export type StripeSyncSummary = FeedSyncOutcome
 
 /** Turn the sync route's success body into the single sentence the user gets. */
 export function syncSummary(payload: StripeSyncPayload | null): StripeSyncSummary {
-  return feedSyncOutcome(payload, { importedField: 'imported' })
+  return feedSyncOutcome(payload, { importedField: 'imported', extraCounts: ['foreignCurrency'] })
 }

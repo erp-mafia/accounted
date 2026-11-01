@@ -351,6 +351,41 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses a rate-less foreign row booked with its foreign amount as kronor, before any draft (accounted#58)', async () => {
+    enqueue({
+      data: makeTransaction({ id: 'tx-1', amount: -500, currency: 'EUR', amount_sek: null, exchange_rate: null, journal_entry_id: null }),
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.message).toContain('som om det vore kronor')
+    expect(body.error.details).toEqual({ currency: 'EUR', settlement_account: '1930' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books a rate-less foreign row when the kronor were typed from the bank statement', async () => {
+    enqueue({
+      data: makeTransaction({ id: 'tx-1', amount: -50, currency: 'EUR', amount_sek: null, exchange_rate: null, journal_entry_id: null }),
+      error: null,
+    })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { body } = await parseJsonResponse<{ error?: { code: string } }>(response)
+
+    expect(body.error?.code).not.toBe('TX_MISSING_SEK_VALUE')
+    expect(mockCreateJournalEntry).toHaveBeenCalled()
+  })
+
   it('answers a named database refusal at commit with its own code and message, not the generic conflict', async () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
     mockCreateJournalEntry.mockRejectedValue(

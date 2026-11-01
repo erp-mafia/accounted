@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 import { eventBus } from '../bus'
 import type { JournalEntry } from '@/types'
 
 const fakeEntry = { id: 'e1' } as JournalEntry
 
 beforeEach(() => {
+  vi.clearAllMocks()
   eventBus.clear()
 })
 
@@ -47,6 +52,44 @@ describe('EventBus', () => {
 
     expect(failingHandler).toHaveBeenCalled()
     expect(goodHandler).toHaveBeenCalled()
+  })
+
+  it('a failing handler is logged as an error with the event type and the handler name', async () => {
+    const failing = vi.fn().mockRejectedValue(new Error('boom'))
+    Object.defineProperty(failing, 'name', { value: 'attest-notify' })
+    eventBus.on('journal_entry.committed', failing)
+
+    await eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry: fakeEntry, userId: 'u1', companyId: 'company-1' },
+    })
+
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({
+      eventType: 'journal_entry.committed',
+      handler: 'attest-notify',
+      companyId: 'company-1',
+    }))
+  })
+
+  it('a handler that throws synchronously neither reaches the emitter nor skips the handlers after it', async () => {
+    const throwing = vi.fn(() => {
+      throw new Error('sync boom')
+    })
+    Object.defineProperty(throwing, 'name', { value: 'sync-consumer' })
+    const after = vi.fn()
+    eventBus.on('journal_entry.committed', throwing)
+    eventBus.on('journal_entry.committed', after)
+
+    await expect(eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry: fakeEntry, userId: 'u1', companyId: 'company-1' },
+    })).resolves.toBeUndefined()
+
+    expect(after).toHaveBeenCalledOnce()
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({
+      eventType: 'journal_entry.committed',
+      handler: 'sync-consumer',
+    }))
   })
 
   it('emit() with no handlers is a no-op', async () => {

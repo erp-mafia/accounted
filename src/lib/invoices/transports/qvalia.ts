@@ -86,6 +86,9 @@ import {
   type PeppolVerifiedEvent,
   type PeppolWebhookRequest,
 } from '@/lib/invoices/peppol-transport'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('peppol/qvalia')
 
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
@@ -345,7 +348,9 @@ function firstRecord(value: unknown): Record<string, unknown> | null {
 function extractIntegrationId(message: unknown): string | null {
   const record = asRecord(message)
   if (!record) return null
-  return asString(record.integrationId) ?? asString(asRecord(record.Invoice)?.integrationId)
+  return asString(record.integrationId)
+    ?? asString(asRecord(record.Invoice)?.integrationId)
+    ?? asString(asRecord(record.CreditNote)?.integrationId)
 }
 
 function participantsEqual(a: PeppolParticipant, b: PeppolParticipant): boolean {
@@ -900,7 +905,15 @@ export function createQvaliaTransport(
     for (const item of items) {
       const record = asRecord(item)
       const integrationId = extractIntegrationId(record)
-      if (!record || !integrationId) continue
+      if (!record || !integrationId) {
+        // The read endpoint has already marked it read: skipped silently, it was gone for good.
+        log.error('Qvalia listed an inbound document without an integrationId; it is not archived', {
+          documentType: options.documentType,
+          markedRead: !options.includeRead,
+          keys: record ? Object.keys(record).slice(0, 20) : null,
+        })
+        continue
+      }
       messages.push({
         provider: QVALIA_PROVIDER,
         providerDocumentId: integrationId,
@@ -977,6 +990,8 @@ export function createQvaliaTransport(
     registerRecipient,
     unregisterRecipient,
     listInboundDocuments,
+    // readinvoices / readcreditnotes mark every listed document read.
+    inboundListingConsumes: true,
     fetchInboundDocumentXml,
     pollDeliveryStatus,
   }

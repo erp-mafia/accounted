@@ -13,7 +13,11 @@
  *     the cap or touching its cursor, so a front of such rows cannot starve
  *     the entitled ones behind it;
  *   - at most MAX_SYNCED syncs inside a 240 s budget, shared with each sync,
- *     which stops between pages and keeps its cursor for the next run.
+ *     which stops between pages and keeps its cursor for the next run;
+ *   - rows a sync could not write (OrderSyncSummary.errors) are logged as an
+ *     error per connection: the sync logs each at warn and holds its cursor
+ *     below a failed write, so before this a failing connection read as
+ *     synced.
  *
  * Read-only against the stores, and it never posts to the journal: rows land
  * unbooked (webshop_orders; the Stripe feed's transactions). Emits no events.
@@ -40,6 +44,8 @@ export const TIME_BUDGET_MS = 240_000
 export interface OrderSyncSummary {
   inserted: number
   updated: number
+  /** Rows the sync could not write (or skipped as unreadable); its own warnings say which. */
+  errors?: number
   deadlineReached?: boolean
   revoked?: boolean
   /** A manual sync holds the claim; it advances the cursor itself. */
@@ -128,6 +134,7 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
 
   const results: ConnectionResult[] = []
   let scanned = 0
+  let rowErrors = 0
   for (const connection of candidates) {
     if (results.length >= MAX_SYNCED) break
     if (now() >= deadlineMs) {
@@ -152,6 +159,14 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
           connectionId: connection.id,
         })
       }
+      if (summary.errors) {
+        rowErrors += summary.errors
+        ctx.log.error(`${spec.extensionId} sync left rows unwritten`, {
+          connectionId: connection.id,
+          companyId: connection.company_id,
+          errors: summary.errors,
+        })
+      }
       results.push({
         connectionId: connection.id,
         inserted: summary.inserted,
@@ -173,6 +188,7 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
     scanned,
     totalInserted,
     failed: results.filter((r) => r.status === 'error').length,
+    rowErrors,
   })
 
   return NextResponse.json({ processed: results.length, inserted: totalInserted, results })

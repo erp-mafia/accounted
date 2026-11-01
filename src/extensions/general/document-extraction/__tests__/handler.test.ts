@@ -181,11 +181,11 @@ describe('document-extraction handler', () => {
     expect(lastStamp()).toBe('failed:no_raw_text')
   })
 
-  it('stamps failed:exception when the extraction throws', async () => {
+  it('stamps failed:exception when the extraction throws, then throws to the event bus (nothing retries it)', async () => {
     extractMock.mockRejectedValue(new Error('pdfjs blew up'))
     enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
     enqueue({ data: null })
-    await handler(payload())
+    await expect(handler(payload())).rejects.toThrow('pdfjs blew up')
     expect(lastStamp()).toBe('failed:exception')
   })
 

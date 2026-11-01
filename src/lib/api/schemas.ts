@@ -1263,6 +1263,10 @@ export const RecurringScheduleItemSchema = z
     // Copied onto the generated invoice_items.dimensions; merges over the
     // schedule's default_dimensions on that item's revenue line.
     dimensions: DimensionsBagSchema.optional(),
+    // Article the line was picked from (accounted#52). Every door checks it
+    // belongs to the company; the spawn copies it onto the invoice line with
+    // the article's number and revenue account. Ignored on text rows.
+    article_id: uuid.nullable().optional(),
   })
   .superRefine((item, ctx) => {
     if (item.line_type === 'text') return

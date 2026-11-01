@@ -76,8 +76,9 @@ function escapeHtml(s: string): string {
  * Every report an agent files through gnubok_feedback becomes a support
  * ticket, so it is read and answered instead of waiting for the weekly
  * event_log triage. The chat's thumbs-up/down (actorType 'user') carries no
- * text and stays telemetry, as does praise without a suggestion. Best effort: a failed relay is logged and the
- * report is still in event_log, where the weekly loop reads it.
+ * text and stays telemetry, as does praise without a suggestion. Best effort: a failed relay throws to the
+ * event bus, which logs it as an error with the event type and this consumer's name and keeps it from the
+ * feedback call (lib/events/bus.ts); the report is still in event_log, where the weekly loop reads it.
  */
 export function registerAgentFeedbackRelayHandler(): () => void {
   return eventBus.on('agent.feedback', relayAgentFeedback)
@@ -89,27 +90,25 @@ export async function relayAgentFeedback(feedback: AgentFeedback): Promise<void>
   if (!to || !isRelayWorthy(feedback)) return
   const email = await getEmailService()
   if (!email.isConfigured()) return
-  try {
-    const service = createServiceClientNoCookies()
-    const [{ data: userData }, { data: company }] = await Promise.all([
-      service.auth.admin.getUserById(feedback.userId),
-      service.from('companies').select('name').eq('id', feedback.companyId).maybeSingle(),
-    ])
-    const from = userData?.user?.email
-    if (!from) {
-      log.warn('agent feedback not relayed: reporter has no email', { company: feedback.companyId })
-      return
-    }
-    const mail = composeAgentFeedbackMail(feedback, { email: from, companyName: company?.name ?? null })
-    const sent = await email.sendEmail({
-      to,
-      subject: `[${getBranding().appName.toLowerCase()} support] ${mail.subject}`,
-      replyTo: from,
-      text: mail.text,
-      html: mail.html,
-    })
-    if (!sent.success) log.warn('agent feedback relay failed', { company: feedback.companyId, error: sent.error })
-  } catch (err) {
-    log.warn('agent feedback relay failed', { company: feedback.companyId, error: err instanceof Error ? err.message : String(err) })
+  const service = createServiceClientNoCookies()
+  const [{ data: userData, error: userError }, { data: company }] = await Promise.all([
+    service.auth.admin.getUserById(feedback.userId),
+    service.from('companies').select('name').eq('id', feedback.companyId).maybeSingle(),
+  ])
+  // A failed lookup is not "no email": the report would never reach the desk.
+  if (userError) throw new Error(`agent feedback relay: reporter lookup failed: ${userError.message}`)
+  const from = userData?.user?.email
+  if (!from) {
+    log.warn('agent feedback not relayed: reporter has no email', { company: feedback.companyId })
+    return
   }
+  const mail = composeAgentFeedbackMail(feedback, { email: from, companyName: company?.name ?? null })
+  const sent = await email.sendEmail({
+    to,
+    subject: `[${getBranding().appName.toLowerCase()} support] ${mail.subject}`,
+    replyTo: from,
+    text: mail.text,
+    html: mail.html,
+  })
+  if (!sent.success) throw new Error(`agent feedback relay: send failed: ${sent.error ?? 'unknown'}`)
 }

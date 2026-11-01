@@ -230,7 +230,8 @@ describe('buildLedgerContext', () => {
           last_used: '2026-07-01',
         })),
         counterparty_patterns: Array.from({ length: 25 }, (_, i) => ({
-          counterparty: `Leverantör Aktiebolag med långt namn nr ${i}`,
+          // At the RPC's 60-character display cap: a bank text can be longer.
+          counterparty: `Leverantör Aktiebolag med långt namn nr ${i}`.padEnd(60, '.'),
           counterparty_key: `leverantör aktiebolag med långt namn nr ${i}`,
           occurrences: 100 - i,
           last_booked: '2026-07-01',

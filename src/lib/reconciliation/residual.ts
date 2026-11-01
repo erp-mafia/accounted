@@ -6,6 +6,7 @@ import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { matchPairs, unmatchLink, type AppliedLink, type SkippedPair } from './actions'
@@ -56,6 +57,7 @@ export type ResidualErrorCode =
   | 'RESIDUAL_NO_PERIOD'
   | 'RESIDUAL_LINK_FAILED'
   | 'RESIDUAL_INVALID_DATE'
+  | 'RESIDUAL_FOREIGN_CURRENCY'
 
 export class ReconciliationResidualError extends Error {
   readonly code: ResidualErrorCode
@@ -194,6 +196,17 @@ export async function bookResidualAndLink(
   if (!account) return null
   const ledgerAccount = account.ledger_account
   const currency = account.currency ?? 'SEK'
+  // The residual is the rows' sum minus the verifikat's bank leg. On a
+  // foreign account the rows are in its currency and the lines in kronor, so
+  // the difference mixes the two (+101 EUR against a 1,150 kr leg read as a
+  // 1,049 kr residual), and a fee there is an amount in that currency, not a
+  // kronor line. Refused before anything is read or booked (accounted#58).
+  if (!isKronorCurrency(currency)) {
+    throw new ReconciliationResidualError(
+      `Restbelopp bokförs bara på bankkonton i kronor. Kontot är i ${currency}: bokför avgiften eller räntan som ett eget verifikat med beloppet i kronor och koppla transaktionerna till verifikaten.`,
+      'RESIDUAL_FOREIGN_CURRENCY',
+    )
+  }
 
   const ids = [...new Set(input.external_ids)]
   if (ids.length === 0 || ids.length > 50) {
