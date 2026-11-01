@@ -91,8 +91,9 @@ describe('correction-bank-leg-moved.pg (crm#1433)', () => {
       )
       await client.query('ROLLBACK TO SAVEPOINT relink')
 
-      // Before the fix the row stopped here: on the reversed original, booked.
-      expect(await rowOf(client, txId)).toEqual({ journal_entry_id: originalId, is_business: true, booked: true })
+      // Before the fix the row stopped here, on the reversed original. Nothing
+      // books its money: the correction has no bank line.
+      expect(await rowOf(client, txId)).toEqual({ journal_entry_id: originalId, is_business: true, booked: false })
 
       const released = await client.query<{ r: { released: number; dropped: number } }>(
         `SELECT public.release_reversed_entry_transactions($1, $2) AS r`,

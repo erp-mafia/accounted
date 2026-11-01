@@ -222,16 +222,28 @@ describe('a row that is still anchored, or was never the lie, is left alone', ()
     const main = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
     const residual = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 2 })
     const tx = await insertHandledTx({ companyId, userId, journalEntryId: main })
-    await insertVoucherLink({ companyId, userId, transactionId: tx, journalEntryId: residual, role: 'other' })
+    await insertVoucherLink({ companyId, userId, transactionId: tx, journalEntryId: residual })
 
     await hardDeleteEntries([main])
 
-    // Mirrors is_transaction_booked(): every junction role counts as an anchor.
     expect(await txState(tx)).toMatchObject({
       journal_entry_id: null,
       is_business: true,
       category: 'expense_office',
     })
+  })
+
+  it('pointer deleted with only a supplementary link left: released, it books no bank amount', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const main = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
+    const residual = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 2 })
+    const tx = await insertHandledTx({ companyId, userId, journalEntryId: main })
+    await insertVoucherLink({ companyId, userId, transactionId: tx, journalEntryId: residual, role: 'other' })
+
+    await hardDeleteEntries([main])
+
+    // Mirrors public.bank_row_anchors: only a bank_line link anchors a row.
+    expect(await txState(tx)).toMatchObject(RELEASED)
   })
 
   it('a link deleted while the pointer names ANOTHER verifikat: not released', async () => {
@@ -246,7 +258,7 @@ describe('a row that is still anchored, or was never the lie, is left alone', ()
     expect(await txState(tx)).toMatchObject({ journal_entry_id: main, is_business: true })
   })
 
-  it('a payment row still names the bank row: not released (the payment register owns that)', async () => {
+  it('a payment row that lost its verifikat holds nothing: released, and the payment register keeps its row', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId })
     const tx = await insertHandledTx({ companyId, userId, journalEntryId: entryId })
@@ -271,19 +283,21 @@ describe('a row that is still anchored, or was never the lie, is left alone', ()
 
     await hardDeleteEntries([entryId])
 
-    // The FK nulls the payment row's verifikat but the row stays, and
-    // is_transaction_booked() keeps calling the bank row booked. Releasing it
-    // here would recreate the half-anchored state of #2061 (worklist says att
-    // bokfora, payment readers say booked). Deciding the invoice's fate is the
-    // payment register's job, so this boundary is asserted, not hidden.
-    const state = await txState(tx)
-    expect(state.journal_entry_id).toBeNull()
-    expect(state.is_business).toBe(true)
+    // The FK nulls the payment row's verifikat, so it names no verifikat at all
+    // and the bank row's money is on no ledger: every reader answers open, as
+    // public.bank_row_anchors does. The invoice's fate stays the payment
+    // register's job: its row is not touched.
+    expect(await txState(tx)).toMatchObject(RELEASED)
     const { rows } = await getPool().query<{ booked: boolean }>(
       `SELECT public.is_transaction_booked($1) AS booked`,
       [tx],
     )
-    expect(rows[0].booked).toBe(true)
+    expect(rows[0].booked).toBe(false)
+    const payments = await getPool().query<{ journal_entry_id: string | null; transaction_id: string }>(
+      `SELECT journal_entry_id, transaction_id FROM public.invoice_payments WHERE invoice_id = $1`,
+      [invoiceId],
+    )
+    expect(payments.rows).toEqual([{ journal_entry_id: null, transaction_id: tx }])
   })
 
   it('a private row (is_business = false) is never touched', async () => {

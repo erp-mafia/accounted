@@ -122,13 +122,18 @@ describe('public.is_booked(transactions)', () => {
     expect(await verdicts()).toEqual({ functional: false, attribute: false, rule: false })
   })
 
-  it.each<Anchor>(['pointer', 'link-bank-line', 'link-clearing', 'invoice-payment', 'supplier-invoice-payment'])(
+  it.each<Anchor>(['pointer', 'link-bank-line', 'invoice-payment', 'supplier-invoice-payment'])(
     'is true for a row anchored by %s, agreeing with is_transaction_booked',
     async (kind) => {
       await anchor(kind)
       expect(await verdicts()).toEqual({ functional: true, attribute: true, rule: true })
     },
   )
+
+  it('is false for a row with only a clearing link: a supplementary link books no bank amount', async () => {
+    await anchor('link-clearing')
+    expect(await verdicts()).toEqual({ functional: false, attribute: false, rule: false })
+  })
 
   it('filters a list server-side: the work queue keeps only the unanchored row', async () => {
     const otherId = randomUUID()

@@ -481,22 +481,11 @@ describe('getReconciliationStatus over get_bank_reconciliation_facts', () => {
     const pointed = await onBank(b, '2026-03-12', 400)
     const april = await onBank(b, '2026-04-02', 100)
     await junction(b, await bankRow(b, '2026-03-10', 500, { entry: pointed }), april, 100)
-    // Linked only to a verifikat with no line on the account (a clearing
-    // link; a bank_line link needs one): its own date.
-    const elsewhere = await verifikat(b, '2026-04-20', [
-      { account: '1910', debit: 50 },
-      { account: '3001', credit: 50 },
-    ])
-    await junction(b, await bankRow(b, '2026-03-15', 50), elsewhere, 50, 'clearing')
-    // A stornerad verifikat still anchors the row linked to it.
-    const reversed = await onBank(b, '2026-05-05', 70, { status: 'reversed' })
-    await junction(b, await bankRow(b, '2026-04-28', 70), reversed, 70)
 
     const bankIn = async (from: string, to: string) => (await bothPaths(b, () => facts(b, from, to))).bank
     expect(await bankIn('2026-02-01', '2026-02-28')).toMatchObject({ count: 0, total: 0 })
-    expect(await bankIn('2026-03-01', '2026-03-31')).toMatchObject({ count: 2, total: 550, matched_count: 2 })
+    expect(await bankIn('2026-03-01', '2026-03-31')).toMatchObject({ count: 1, total: 500, matched_count: 1 })
     expect(await bankIn('2026-04-01', '2026-04-30')).toMatchObject({ count: 1, total: 500, matched_count: 1 })
-    expect(await bankIn('2026-05-01', '2026-05-31')).toMatchObject({ count: 1, total: 70, matched_count: 1 })
     await expectFactsUnchanged(b, [
       [null, null],
       ['2026-01-01', '2026-12-31'],
@@ -508,12 +497,30 @@ describe('getReconciliationStatus over get_bank_reconciliation_facts', () => {
     ])
   })
 
+  it('counts a row whose link books nothing as open, on its own date', async () => {
+    const b = await books()
+    // A clearing link books no bank amount, wherever its verifikat sits.
+    const elsewhere = await verifikat(b, '2026-04-20', [
+      { account: '1910', debit: 50 },
+      { account: '3001', credit: 50 },
+    ])
+    await junction(b, await bankRow(b, '2026-03-15', 50), elsewhere, 50, 'clearing')
+    // A stornerad verifikat books nothing.
+    const reversed = await onBank(b, '2026-05-05', 70, { status: 'reversed' })
+    await junction(b, await bankRow(b, '2026-04-28', 70), reversed, 70)
+
+    const bankIn = async (from: string, to: string) => (await bothPaths(b, () => facts(b, from, to))).bank
+    expect(await bankIn('2026-03-01', '2026-03-31')).toMatchObject({ count: 1, total: 50, matched_count: 0, unmatched_count: 1 })
+    expect(await bankIn('2026-04-01', '2026-04-30')).toMatchObject({ count: 1, total: 70, matched_count: 0, unmatched_count: 1 })
+    expect(await bankIn('2026-05-01', '2026-05-31')).toMatchObject({ count: 0, total: 0 })
+  })
+
   it('still drops an unlinked row dated before the opening balance floor', async () => {
     const b = await books()
-    await onBank(b, '2026-07-30', 1000, { sourceType: 'opening_balance' })
-    const deposit = await onBank(b, '2026-08-01', 25000)
-    await bankRow(b, '2026-07-17', 25000, { entry: deposit })
-    await bankRow(b, '2026-07-10', 999)
+    await onBank(b, '2026-01-01', 1000, { sourceType: 'opening_balance' })
+    const deposit = await onBank(b, '2026-01-05', 25000)
+    await bankRow(b, '2025-12-17', 25000, { entry: deposit })
+    await bankRow(b, '2025-12-10', 999)
 
     expect(await status(b)).toMatchObject({
       gl_1930_opening_balance: 1000,

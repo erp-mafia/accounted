@@ -59,6 +59,8 @@ export interface RpcCase {
   usedBy: string
   /** Known to take most of a second or more: five runs, and left out of mixed mode so it does not set the load. */
   heavy?: boolean
+  /** A view read instead of an RPC, with the door's filters: `rpc` names the relation and `args` stays empty. */
+  read?: { sql: string; values: unknown[] }
 }
 
 /** The fixed momsdeklaration accounts, derived as src/lib/reports/vat-declaration.ts derives VAT_ACCOUNTS. */
@@ -494,6 +496,81 @@ export function buildCases(ctx: BenchContext): RpcCase[] {
         p_own_transaction_ids: ctx.openBankRows.ids,
       },
       usedBy: 'avstämning 1930: the covering-set check of the open rows',
+    },
+    {
+      id: 'bank.open_rows.month_count',
+      rpc: 'open_bank_rows',
+      args: {},
+      read: {
+        sql: `SELECT count(*) FROM public.open_bank_rows t
+              WHERE t.company_id = $1 AND t.is_business IS NULL AND t.date >= $2 AND t.date <= $3`,
+        values: [co, month.start, month.end],
+      },
+      usedBy: 'countUnbookedBankTransactions on a range: the period lock, data_status on every report read, the VAT close',
+    },
+    {
+      id: 'bank.open_rows.count',
+      rpc: 'open_bank_rows',
+      args: {},
+      read: {
+        sql: `SELECT count(*) FROM public.open_bank_rows t WHERE t.company_id = $1 AND t.is_business IS NULL`,
+        values: [co],
+      },
+      usedBy: 'countUnbookedBankTransactions with no range: Hem, the MCP briefing, recent activity',
+    },
+    {
+      id: 'bank.open_rows.page',
+      rpc: 'open_bank_rows',
+      args: {},
+      read: {
+        sql: `SELECT t.id, t.date, t.amount FROM public.open_bank_rows t
+              WHERE t.company_id = $1 ORDER BY t.date DESC, t.id LIMIT 501`,
+        values: [co],
+      },
+      usedBy: 'GET /api/transactions?unmatched=true: Bokför direkt, the receipt matcher',
+    },
+    {
+      id: 'bank.open_rows.oldest',
+      rpc: 'open_bank_rows',
+      args: {},
+      read: {
+        sql: `SELECT t.id, t.date, t.amount FROM public.open_bank_rows t
+              WHERE t.company_id = $1 ORDER BY t.date ASC LIMIT 20`,
+        values: [co],
+      },
+      usedBy: 'the MCP attention resource: the oldest open rows',
+    },
+    {
+      id: 'bank.is_booked.page',
+      rpc: 'is_booked',
+      args: {},
+      read: {
+        sql: `SELECT t.id, public.is_booked(t) AS is_booked FROM public.transactions t
+              WHERE t.company_id = $1 ORDER BY t.date DESC, t.id LIMIT 50`,
+        values: [co],
+      },
+      usedBy: '/transactions: a page of bank rows',
+    },
+    {
+      id: 'bank.is_booked.booked_page',
+      rpc: 'is_booked',
+      args: {},
+      read: {
+        sql: `SELECT t.id FROM public.transactions t
+              WHERE t.company_id = $1 AND public.is_booked(t) = true
+              ORDER BY t.date DESC, t.id LIMIT 501`,
+        values: [co],
+      },
+      usedBy: 'GET /transactions?status=booked in v1, /api/transactions?reconciled=true',
+    },
+    {
+      id: 'bank.balance_facts',
+      rpc: 'get_bank_balance_facts',
+      args: {
+        p_company_id: co, p_cash_account_id: ctx.cashAccountId, p_include_unassigned: true, p_currency: 'SEK',
+        p_through: ctx.today,
+      },
+      usedBy: 'the bank balance check, the rail',
     },
     {
       id: 'yearend.bank_facts',
