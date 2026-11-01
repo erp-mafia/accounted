@@ -7732,6 +7732,7 @@
     "remove_attachment": "Ta bort bilaga"
   },
   "journal_list": {
+    "rattelse_flags_failed": "Kunde inte läsa vilka verifikat som är rättade",
     "import_attn": "Listan innehåller verifikat från en SIE-import. Blev något fel kan hela importen ångras.",
     "import_attn_action": "Visa importhistorik",
     "import_missing_attn": "{count, plural, one {# importerat verifikat saknar} other {# importerade verifikat saknar}} underlag i Accounted.",
