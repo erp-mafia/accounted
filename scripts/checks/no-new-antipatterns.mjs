@@ -269,6 +269,9 @@
  *      scripts/checks/one-definition/, each naming its home and why it has
  *      one. Implementation and rationale in one-definition.mjs. Allowed
  *      sites may only shrink.
+ *   33. migration-version: two files in supabase/migrations with one version,
+ *      which aborts the production push after the merge. Implementation and
+ *      rationale in migration-version.mjs. No baseline: any hit fails.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -297,6 +300,7 @@ import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findClientServerOnlyReachers } from './client-server-only.mjs'
 import { findConsentTokenAccess, CONSENT_TOKEN_HINT } from './consent-token-access.mjs'
 import { findOneDefinitionFindings, loadOneDefinitionRules, ONE_DEFINITION_HINT } from './one-definition.mjs'
+import { findDuplicateMigrationVersions, MIGRATION_VERSION_HINT } from './migration-version.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
@@ -1621,6 +1625,13 @@ if (current.clientNodeBuiltins.length) {
 // 1b3a. consent-token-access: provider_consent_tokens read or written outside
 // lib/providers/consent-tokens.ts, the one module that seals the tokens
 // (accounted#58). No baseline: 0 today, any finding is a hard failure.
+const duplicateMigrationVersions = findDuplicateMigrationVersions(ROOT)
+if (duplicateMigrationVersions.length) {
+  failed = true
+  console.error(`\n✗ migration-version: ${duplicateMigrationVersions.length} version(s) held by more than one migration:`)
+  for (const d of duplicateMigrationVersions) console.error(`    ${d.version}: ${d.files.join(', ')}`)
+  console.error(MIGRATION_VERSION_HINT)
+}
 const oneDefinition = findOneDefinitionFindings(SOURCE_ROOT, await loadOneDefinitionRules())
 if (oneDefinition.findings.length) {
   failed = true
