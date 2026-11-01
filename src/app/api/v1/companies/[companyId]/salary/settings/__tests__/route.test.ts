@@ -428,6 +428,71 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     expect(supabaseMock.payloads('company_settings', 'insert')).toHaveLength(0)
   })
 
+  // Service role, so no RLS: this gate is all that holds a member's key to what
+  // the member's session gets from PUT /api/settings.
+  describe.each(['member', 'invoicer', 'viewer'] as const)('a %s key', (role) => {
+    const asRole = () => {
+      withScopes(['payroll:write', 'payroll:read'])
+      const supabaseMock = createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role }, error: null },
+        company_settings: { data: SAMPLE_ROW, error: null },
+      })
+      mockServiceClient.mockReturnValue(supabaseMock.supabase)
+      return supabaseMock
+    }
+
+    it('is refused and writes nothing', async () => {
+      const supabaseMock = asRole()
+
+      const res = await updateSalarySettings(makePatchRequest(URL, { salary_pay_day: 27 }), companyParams(COMPANY_ID))
+
+      expect(res.status).toBe(403)
+      const body = await res.json()
+      expect(body.error.code).toBe('FORBIDDEN')
+      expect(supabaseMock.payloads('company_settings', 'update')).toHaveLength(0)
+      expect(supabaseMock.payloads('company_settings', 'insert')).toHaveLength(0)
+    })
+
+    it('is refused a dry run too', async () => {
+      asRole()
+
+      const res = await updateSalarySettings(
+        makePatchRequest(`${URL}?dry_run=true`, { salary_pay_day: 27 }),
+        companyParams(COMPANY_ID),
+      )
+
+      expect(res.status).toBe(403)
+    })
+  })
+
+  it('names the roles it wants in the refusal, as the dashboard does', async () => {
+    withScopes(['payroll:write'])
+    const supabaseMock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'member' }, error: null },
+      company_settings: { data: SAMPLE_ROW, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
+
+    const res = await updateSalarySettings(makePatchRequest(URL, { salary_pay_day: 27 }), companyParams(COMPANY_ID))
+    const body = await res.json()
+
+    expect(body.error.details.required_roles).toEqual(['owner', 'admin'])
+  })
+
+  it('refuses a member the row it would create on a company without one', async () => {
+    withScopes(['payroll:write'])
+    const supabaseMock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'member' }, error: null },
+      company_settings: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
+
+    const res = await updateSalarySettings(makePatchRequest(URL, { salary_pay_day: 27 }), companyParams(COMPANY_ID))
+
+    expect(res.status).toBe(403)
+    expect(supabaseMock.payloads('company_settings', 'insert')).toHaveLength(0)
+  })
+
   it('updates the existing row, merges the voucher series into the map and returns the full resource', async () => {
     const updatedRow = {
       ...SAMPLE_ROW,
@@ -490,10 +555,10 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
         salary_payment: 'L',
       },
     })
-    // The write reads the row back with the same projection as GET.
+    // The read before the write, then the one gated writer reading the row back.
     expect(supabaseMock.payloads('company_settings', 'select').filter((c) => typeof c === 'string')).toEqual([
       SALARY_SETTINGS_SELECT,
-      SALARY_SETTINGS_SELECT,
+      '*',
     ])
   })
 
@@ -794,7 +859,7 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
-    expect(body.error.details).toEqual({ resource: 'company_settings' })
+    expect(body.error.details.resource).toBe('company_settings')
   })
 
   it('returns the error envelope when the write fails', async () => {

@@ -253,7 +253,7 @@ async function v1StageResponse(
   op: AnyOperation,
   opCtx: OperationContext,
   input: Record<string, unknown>,
-  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'previewToken' | 'apiKeyId' | 'apiKeyName' | 'serviceAccount'>,
+  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'previewToken' | 'apiKeyId' | 'actor'>,
   agentReason: string | null = null,
 ): Promise<NextResponse> {
   // withApiV1 already refused stage=true here; kept so the handler never
@@ -265,11 +265,7 @@ async function v1StageResponse(
     op,
     opCtx,
     input,
-    // A service account's key stages as the service account, named; its
-    // sponsor is the user the row carries.
-    ctx.serviceAccount
-      ? { type: 'service_account', id: ctx.apiKeyId ?? null, label: ctx.serviceAccount.name }
-      : { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
+    { type: ctx.actor.type, id: ctx.apiKeyId ?? null, label: ctx.actor.label ?? null },
     { dryRun: ctx.dryRun, previewToken: ctx.previewToken, agentReason },
   )
   if (!staged.ok) return v1OutcomeResponse(staged.outcome, ctx)

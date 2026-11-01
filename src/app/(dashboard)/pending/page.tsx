@@ -221,9 +221,9 @@ const PENDING_API_MAX_LIMIT = 100
  * chat themselves (a colleague or consultant did), so the raw actor_label is
  * not enough context: name the agent and the person it worked for ("Claude
  * åt Jonas Ek", lib/attribution), never the credential it came through.
- * The claude.ai MCP connector mints a gnubok_sk_ key, so MCP traffic arrives
- * as actor_type='api_key' with the connector's label; op.user_id is the
- * person (a service account's sponsor, whoever chatted).
+ * A connector arrives as actor_type='mcp_oauth' (api_key on rows staged before
+ * 2026-11-01) with its client's label; op.user_id is the person (a service
+ * account's sponsor, whoever chatted).
  */
 function originLabel(
   op: PendingOperation,

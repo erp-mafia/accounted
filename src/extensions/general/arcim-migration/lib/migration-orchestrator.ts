@@ -43,6 +43,8 @@ import {
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { createLogger } from '@/lib/logger'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
+import type { CompanySettings } from '@/types'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { completeInvoiceRows, type CompleteInvoiceRowsTrail } from '@/lib/invoices/complete-invoice-rows'
 import {
@@ -449,7 +451,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             .eq('company_id', companyId)
             .single()
 
-          const updates: Record<string, unknown> = {}
+          const updates: Partial<CompanySettings> = {}
           if (!existing?.company_name && mapped.company_name) updates.company_name = mapped.company_name
           if (!existing?.org_number && mapped.org_number) updates.org_number = mapped.org_number
           if (!existing?.vat_number && mapped.vat_number) {
@@ -479,10 +481,24 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           if (mapped.phone) updates.phone = mapped.phone
           if (mapped.email) updates.email = mapped.email
 
-          if (Object.keys(updates).length > 0) {
-            await supabase.from('company_settings').update(updates).eq('company_id', companyId)
+          // Any writer may run the import; the company's own settings are an
+          // owner's or admin's. A fill that did not land is a step that says
+          // so, never `imported: true`.
+          const written =
+            Object.keys(updates).length > 0
+              ? await writeCompanySettings({ supabase, companyId, userId, log }, updates)
+              : null
+          if (written && !written.ok) {
+            results.companyInfo = { imported: false }
+            results.stepErrors = results.stepErrors ?? []
+            results.stepErrors.push({
+              step: 'companyInfo',
+              code: written.code,
+              message: written.messageSv ?? 'Företagsinformationen kunde inte sparas.',
+            })
+          } else {
+            results.companyInfo = { imported: true }
           }
-          results.companyInfo = { imported: true }
         }
       } catch (err) {
         console.error('Failed to import company info:', err)

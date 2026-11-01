@@ -101,6 +101,23 @@ describe('rejectPendingOperations', () => {
     )
   })
 
+  it('records an OAuth connection as a key in the history row, which has no word of its own for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'create_invoice', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectPendingOperations(supabase as never, {
+      companyId: 'company-1',
+      ids: ['op-1'],
+      actor: { userId: 'user-1', type: 'mcp_oauth', id: 'key-1', label: 'Claude (Anthropic)' },
+      channel: 'api',
+    })
+
+    expect(mockAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: 'api_key', id: 'key-1', label: 'Claude (Anthropic)' } }),
+    )
+  })
+
   it("records a service account's key as service_account in the history row, named after the account", async () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([

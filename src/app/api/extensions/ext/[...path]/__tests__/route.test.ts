@@ -516,10 +516,10 @@ describe('Extension Catch-All Route', () => {
         await asRole('viewer')
 
         const response = await call(method)
-        const { status, body } = await parseJsonResponse<{ error: string }>(response)
+        const { status, body } = await parseJsonResponse<{ error: { code: string; details: { code: string } } }>(response)
 
         expect(status).toBe(403)
-        expect(body.error).toBe('Du har endast läsbehörighet i detta företag.')
+        expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
         expect(handler).not.toHaveBeenCalled()
       },
     )

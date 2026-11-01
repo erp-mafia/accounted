@@ -144,9 +144,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           userId: ctx.userId,
           transactionId: txId,
           booking: parsed.data,
-          actor: ctx.serviceAccount
-            ? { type: 'service_account', id: ctx.apiKeyId ?? null, label: ctx.serviceAccount.name }
-            : { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
+          actor: { type: ctx.actor.type, id: ctx.apiKeyId ?? null, label: ctx.actor.label ?? null },
           log: txLog,
         })
         if (staged) {

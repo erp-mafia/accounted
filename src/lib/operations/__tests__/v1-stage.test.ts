@@ -427,6 +427,19 @@ describe('v1 stage mode', () => {
     })
   })
 
+  it('an OAuth key stages as what it is in every other record, not as its reserved name', async () => {
+    mockValidate.mockResolvedValue({ ...auth(), apiKeyName: 'MCP-klient (OAuth)', client: 'claude' })
+    const mock = client()
+
+    await POST_STAGED(post('widgets', { name: 'Acme' }, { query: '?stage=true' }), params)
+
+    expect(mock.payloads('pending_operations', 'insert')[0]).toMatchObject({
+      actor_type: 'mcp_oauth',
+      actor_id: 'key-flow',
+      actor_label: 'Claude (Anthropic)',
+    })
+  })
+
   it('without the flag the same write commits directly and stages nothing', async () => {
     const mock = client()
     const res = await POST_STAGED(post('widgets', { name: 'Acme' }), params)

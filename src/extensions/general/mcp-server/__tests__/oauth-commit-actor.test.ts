@@ -1,11 +1,9 @@
 /**
  * WHO stamps on an approval made through an OAuth connector (claude.ai,
- * ChatGPT). handleMcpRequest renames the OAuth key's reserved name
- * (OAUTH_MCP_KEY_NAME) to the client's display name ('Claude (Anthropic)')
- * for the label column. The commit stamp used to compare that label with the
- * reserved name, so after the rename every connector commit said api_key
- * instead of mcp_oauth. The classification is now decided before the rename
- * and carried on the actor (oauthKey); the display name stays the label.
+ * ChatGPT). credentialActor (lib/auth/api-keys.ts) names the key, on this door
+ * as on v1: mcp_oauth, labelled with the client's display name. The stamp used
+ * to compare the label with the reserved name, so every connector commit said
+ * api_key.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
@@ -40,11 +38,9 @@ const keyFixture = vi.hoisted(() => ({
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   const { createTableMockSupabase } = await import('@/tests/helpers')
-  // Each table answers with the row it holds: api_keys the key's provider,
-  // company_members an owner seat, pending_operations the staged operation;
-  // everything else nothing.
+  // Each table answers with the row it holds: company_members an owner seat,
+  // pending_operations the staged operation; everything else nothing.
   const { supabase } = createTableMockSupabase({
-    api_keys: () => ({ data: { client: keyFixture.client } }),
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' } },
     pending_operations: {
       data: {
@@ -66,6 +62,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       scopes: ['pending_operations:approve', 'pending_operations:read'],
       apiKeyId: 'key-oauth-1',
       apiKeyName: keyFixture.apiKeyName,
+      client: keyFixture.client,
       mode: 'live',
       serviceAccount: keyFixture.serviceAccount,
       unattendedCommitLimit: keyFixture.unattendedCommitLimit,
@@ -140,6 +137,7 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
 
   it('keeps api_key for a key a person created, whatever it is called', async () => {
     keyFixture.apiKeyName = 'Claude (Anthropic)'
+    keyFixture.client = null
     const options = await approveAndReadCommitOptions()
     expect(options.actor).toMatchObject({ type: 'api_key', label: 'Claude (Anthropic)' })
   })
@@ -159,6 +157,7 @@ describe('MCP approval through an OAuth connector: commit actor', () => {
 
   it('keeps api_key in the processing history for a person key', async () => {
     keyFixture.apiKeyName = 'Integration'
+    keyFixture.client = null
     await approveAndReadCommitOptions()
     expect(appendProcessingHistory).toHaveBeenCalledWith(
       expect.objectContaining({ actor: { type: 'api_key', id: 'key-oauth-1', label: 'Integration' } }),
@@ -203,6 +202,7 @@ describe('MCP tool call: the actor scope it runs in', () => {
 
   it("leaves the key's unattended ceiling out of the scope: direct MCP writes were never bound by it", async () => {
     keyFixture.apiKeyName = 'Integration'
+    keyFixture.client = null
     keyFixture.unattendedCommitLimit = 5000
     const seen = await actorDuringToolCall()
     expect(seen).toEqual({ type: 'api_key', label: 'Integration', userId: 'user-1' })

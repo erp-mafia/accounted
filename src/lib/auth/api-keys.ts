@@ -210,26 +210,54 @@ export interface ApiKeyServiceAccount {
  */
 export type ApiKeyRefusalCode = 'AGENT_PAUSED' | 'SERVICE_ACCOUNT_SUSPENDED'
 
-/**
- * WHO a validated key acts as on the v1 surface: a service account's key as
- * `service_account`, labelled with the account's name (the rows it writes
- * carry its sponsor as user_id, the person it acts for), every other key as
- * `api_key` labelled with its own name. The key's unattended ceiling rides
- * along when it has one: the engine and the attest service read it off the
- * actor of the request's scope (lib/bookkeeping/unattended-ceiling.ts). So
- * does the key's user, the person it acts for (a service account's sponsor):
- * the audit log names them for the request's writes (lib/supabase/actor-header.ts).
- */
-export function apiKeyCommitActor(auth: {
+/** What a connector is called in the records, by the provider that minted its key (api_keys.client). */
+const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
+  claude: 'Claude (Anthropic)',
+  chatgpt: 'ChatGPT (OpenAI)',
+  grok: 'Grok (xAI)',
+  cursor: 'Cursor',
+}
+
+/** The facts of a validated key that decide who it is. */
+export interface CredentialFacts {
   userId?: string
   apiKeyName?: string
   serviceAccount: ApiKeyServiceAccount | null
+  client?: string | null
+  clientName?: string | null
   unattendedCommitLimit?: number | null
-}): { type: 'service_account' | 'api_key'; label: string; userId?: string; unattendedCommitLimit?: number } {
-  const ceiling = typeof auth.unattendedCommitLimit === 'number' ? { unattendedCommitLimit: auth.unattendedCommitLimit } : {}
-  const person = auth.userId ? { userId: auth.userId } : {}
-  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name, ...person, ...ceiling }
-  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key', ...person, ...ceiling }
+}
+
+/**
+ * WHO a validated key acts as, the same way in every record it writes,
+ * whichever door it came through: a service account's key as
+ * `service_account` with the account's name (its rows carry the sponsor as
+ * user_id, the person it acts for), a key minted by the OAuth sign-in as
+ * `mcp_oauth` with its client's name, any other key as `api_key` with its own
+ * name. An OAuth key is told by its client or, older than that column, by the
+ * reserved name, which it then keeps as its label ("AI-anslutning" in
+ * lib/attribution).
+ *
+ * The key's unattended ceiling rides along when it has one: the engine and the
+ * attest service read it off the actor of the request's scope
+ * (lib/bookkeeping/unattended-ceiling.ts). So does the key's user, the person
+ * it acts for: the audit log names them for the request's writes
+ * (lib/supabase/actor-header.ts).
+ */
+export function credentialActor(key: CredentialFacts): {
+  type: 'service_account' | 'mcp_oauth' | 'api_key'
+  label: string
+  userId?: string
+  unattendedCommitLimit?: number
+} {
+  const ceiling = typeof key.unattendedCommitLimit === 'number' ? { unattendedCommitLimit: key.unattendedCommitLimit } : {}
+  const person = key.userId ? { userId: key.userId } : {}
+  if (key.serviceAccount) return { type: 'service_account', label: key.serviceAccount.name, ...person, ...ceiling }
+  if (key.client || key.apiKeyName === OAUTH_MCP_KEY_NAME) {
+    const label = key.clientName ?? (key.client ? CONNECTOR_LABELS[key.client] : undefined) ?? OAUTH_MCP_KEY_NAME
+    return { type: 'mcp_oauth', label, ...person, ...ceiling }
+  }
+  return { type: 'api_key', label: key.apiKeyName ?? 'Unnamed API key', ...person, ...ceiling }
 }
 
 export async function validateApiKey(
@@ -296,6 +324,11 @@ export async function validateApiKey(
        * without the migration. Optional for the same reason.
        */
       client?: string | null
+      /**
+       * The name a 'registered:<id>' client gave itself, with the suffix the
+       * records carry. Null for every other key.
+       */
+      clientName?: string | null
     }
   | { error: string; status: number; code?: ApiKeyRefusalCode }
 > {
@@ -354,6 +387,7 @@ export async function validateApiKey(
 
   const companyId: string | null =
     row.company_id ?? (await bindUnboundKey(supabase, row.user_id, row.api_key_id))
+  const client = nonEmptyString(row.client)
 
   return {
     userId: row.user_id,
@@ -376,8 +410,18 @@ export async function validateApiKey(
     readOnlyCompanyIds,
     serviceAccount: parseServiceAccount(row.service_account_id, row.service_account_name),
     agentIdentityId: nonEmptyString(row.agent_identity_id),
-    client: nonEmptyString(row.client),
+    client,
+    clientName: await registeredClientName(supabase, client),
   }
+}
+
+/** The client's own name for a 'registered:<id>' client, as the records name it. A failed read keeps the reserved name. */
+async function registeredClientName(supabase: SupabaseClient, client: string | null): Promise<string | null> {
+  const id = client?.match(/^registered:([0-9a-f-]{36})$/i)?.[1]
+  if (!id) return null
+  const { data } = await supabase.from('oauth_client_registrations').select('client_name').eq('id', id).maybeSingle()
+  const name = nonEmptyString((data as { client_name?: unknown } | null)?.client_name)
+  return name ? `${name} (registered client)` : null
 }
 
 const CODED_REFUSALS: Record<ApiKeyRefusalCode, string> = {

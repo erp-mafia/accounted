@@ -2,9 +2,9 @@
  * Tests for /api/calendar/feed/[token] (public ICS serve route).
  *
  * The membership check matters most: the token is the only authentication,
- * so removal from company_members must stop the feed. Without the check an
- * offboarded consultant's subscribed calendar keeps receiving the company's
- * deadlines and invoice details indefinitely.
+ * so removal from company_members, and archiving the company, must stop the
+ * feed. Without the check an offboarded consultant's subscribed calendar keeps
+ * receiving the company's deadlines and invoice details indefinitely.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -16,6 +16,8 @@ vi.mock('@/lib/supabase/service-client', () => ({
 }))
 
 import { GET } from '../route'
+
+const MEMBERSHIP = { company_id: 'company-1', role: 'member', companies: { archived_at: null, name: 'Bolaget AB' } }
 
 const FEED = {
   id: 'feed-1',
@@ -58,15 +60,38 @@ describe('GET /api/calendar/feed/[token]', () => {
 
   it('returns 404 when the feed creator is no longer a company member', async () => {
     enqueue({ data: FEED }) // calendar_feeds lookup
-    enqueue({ data: null }) // company_members lookup: offboarded
+    enqueue({ data: null }) // company_members lookup: offboarded, or archived
     const [req, ctx] = tokenRequest('22222222-2222-2222-2222-222222222222')
     const res = await GET(req, ctx)
     expect(res.status).toBe(404)
   })
 
+  it('asks through the one live-membership read, so an archived company reads as no member', async () => {
+    enqueue({ data: FEED }) // calendar_feeds lookup
+    enqueue({ data: null }) // the archived filter leaves no row
+    const [req, ctx] = tokenRequest('11111111-1111-1111-1111-111111111111')
+    const res = await GET(req, ctx)
+    expect(res.status).toBe(404)
+    expect(findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+    expect(findCalls('company_members', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['user_id', 'user-1'],
+        ['company_id', 'company-1'],
+      ]),
+    )
+  })
+
+  it('answers 500, not "feed gone", when the membership could not be read', async () => {
+    enqueue({ data: FEED }) // calendar_feeds lookup
+    enqueue({ data: null, error: { message: 'connection reset' } })
+    const [req, ctx] = tokenRequest('11111111-1111-1111-1111-111111111111')
+    const res = await GET(req, ctx)
+    expect(res.status).toBe(500)
+  })
+
   it('serves an ICS calendar while the creator is still a member', async () => {
     enqueue({ data: FEED }) // calendar_feeds lookup
-    enqueue({ data: { user_id: 'user-1' } }) // company_members lookup
+    enqueue({ data: MEMBERSHIP }) // company_members lookup
     enqueue({ data: null }) // access tracking update
     enqueue({ data: [] }) // deadlines page 1 (empty: pagination stops)
     const [req, ctx] = tokenRequest('33333333-3333-3333-3333-333333333333')
@@ -85,7 +110,7 @@ describe('GET /api/calendar/feed/[token]', () => {
 describe('GET /api/calendar/feed/[token]: invoices', () => {
   it('lists real invoices only: never a credit note, whatever its status (crm#1435)', async () => {
     enqueue({ data: { ...FEED, include_invoices: true } }) // calendar_feeds lookup
-    enqueue({ data: { user_id: 'user-1' } }) // company_members lookup
+    enqueue({ data: MEMBERSHIP }) // company_members lookup
     enqueue({ data: null }) // access tracking update
     enqueue({ data: [] }) // deadlines page 1
     enqueue({ data: [] }) // invoices page 1
@@ -109,7 +134,7 @@ describe('GET /api/calendar/feed/[token]: window from the Swedish day', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(instant))
     enqueue({ data: FEED }) // calendar_feeds lookup
-    enqueue({ data: { user_id: 'user-1' } }) // company_members lookup
+    enqueue({ data: MEMBERSHIP }) // company_members lookup
     enqueue({ data: null }) // access tracking update
     enqueue({ data: [] }) // deadlines page 1
     const [req, ctx] = tokenRequest(token)

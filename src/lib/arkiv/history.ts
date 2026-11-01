@@ -37,9 +37,9 @@ type ProcessingRow = { event_id: string; event_type: string; aggregate_id: strin
 type ActivityRow = { id: string; document_id: string | null; kind: string; started_at: string }
 type ClassificationRow = { id: string; document_id: string; doc_type: string | null; decided_by: string; created_at: string }
 
-/** A key's kind as the log names it: a service account's key, or a person's. */
+/** A key's kind as the log names it: a service account's key, or a person's (an OAuth connection is one). */
 const keyKind = (type: string | null | undefined): 'api_key' | 'service_account' | null =>
-  type === 'api_key' || type === 'service_account' ? type : null
+  type === 'service_account' ? type : type === 'api_key' || type === 'mcp_oauth' ? 'api_key' : null
 
 const personOrSystem = (row: AuditRow): HistoryEvent['actor'] => {
   const key = keyKind(row.actor_type)

@@ -10,7 +10,7 @@
  * per-token budget bounds a leaked link; the clear token is never logged
  * (the logger gets the link id). Every way a token fails (malformed,
  * unknown, expired, used) answers the same 404, and so does a link whose
- * attester is no longer a member who may write.
+ * attester is no longer a member who may write, or whose company is archived.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -18,15 +18,23 @@ import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { readLiveMembership } from '@/lib/company/company-access'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { OperationContext } from '@/lib/operations/types'
 import { isValidAttestTokenFormat, resolveAttestLink, type AttestLinkRow } from './attest-links'
-import { getSupplierInvoiceAttestState, loadActiveAttestMembers, loadAttestPeople } from './attest-service'
+import { getSupplierInvoiceAttestState, loadAttestPeople } from './attest-service'
 
 // 30 requests per token per 10 minutes: one page, the PDF, one decision and
 // a few reloads. Process-local, like the signatory link's limiter.
 const limiter = createTokenRateLimiter({ max: 30, windowMs: 10 * 60_000 })
+
+/** The link's attester still writes in a company that is still live: what opens the link, page and routes alike. */
+export async function attesterCanStillDecide(service: SupabaseClient, link: AttestLinkRow): Promise<boolean> {
+  const membership = await readLiveMembership(service, link.attester_user_id, link.company_id)
+  return membership !== null && isBookkeepingWriterRole(membership.role)
+}
 
 export interface AttestLinkRouteContext {
   link: AttestLinkRow
@@ -57,9 +65,8 @@ export function withAttestLinkToken<P extends { token: string }>(operation: stri
       if (!resolved.ok) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: `attest link ${resolved.reason}` })
       const { link } = resolved
       const linkLog = log.child({ companyId: link.company_id, attestLinkId: link.id })
-      const members = await loadActiveAttestMembers(service, link.company_id)
-      if (!members.has(link.attester_user_id)) {
-        return errorResponseFromCode('NOT_FOUND', linkLog, { requestId, reason: 'attest link of someone no longer a writing member' })
+      if (!(await attesterCanStillDecide(service, link))) {
+        return errorResponseFromCode('NOT_FOUND', linkLog, { requestId, reason: 'attest link of someone no longer a writing member of a live company' })
       }
       return await handler(
         request,

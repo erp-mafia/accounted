@@ -75,9 +75,11 @@ export async function supersedeIdenticalProposals(
       .eq('operation_type', staged.operationType)
       .eq('status', 'pending')
       .eq('user_id', stager.userId)
-      .eq('actor_type', stager.actorType)
       .neq('id', staged.id)
-    query = stager.actorId ? query.eq('actor_id', stager.actorId) : query.is('actor_id', null)
+    // A key is its id, whichever type its older proposals carry (transaction-claims.ts).
+    query = stager.actorId
+      ? query.eq('actor_id', stager.actorId)
+      : query.eq('actor_type', stager.actorType).is('actor_id', null)
     query = staged.batchId ? query.eq('batch_id', staged.batchId) : query.is('batch_id', null)
     const { data, error } = await query.order('created_at', { ascending: true }).limit(CANDIDATE_LIMIT)
     if (error) throw new Error(error.message)

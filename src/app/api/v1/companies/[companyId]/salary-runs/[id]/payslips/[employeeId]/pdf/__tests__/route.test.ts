@@ -63,7 +63,9 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
     select: vi.fn().mockReturnValue({
       eq: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
-          maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+          is: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+          }),
         }),
       }),
     }),
@@ -72,7 +74,7 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
 }
 
 /**
- * Every query resolves by table: select/eq chain to themselves, maybeSingle ends.
+ * Every query resolves by table: select/eq/is chain to themselves, maybeSingle ends.
  * A table named in `errors` answers that error instead of its row.
  */
 function makeTableStub(rows: Record<string, unknown>, errors: Record<string, unknown> = {}) {
@@ -80,6 +82,7 @@ function makeTableStub(rows: Record<string, unknown>, errors: Record<string, unk
     const chain: Record<string, unknown> = {}
     chain.select = vi.fn(() => chain)
     chain.eq = vi.fn(() => chain)
+    chain.is = vi.fn(() => chain)
     chain.maybeSingle = vi.fn(async () =>
       table in errors ? { data: null, error: errors[table] } : { data: rows[table] ?? null, error: null },
     )

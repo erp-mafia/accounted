@@ -45,6 +45,7 @@ vi.mock('@/lib/company/context', () => ({
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  getCompanyRole: vi.fn().mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' }),
 }))
 
 const mockCreateSupplierInvoicePaymentEntry = vi.fn()
@@ -101,6 +102,7 @@ import {
 } from '@/lib/supplier-invoices/registration-first'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
+import { getCompanyRole } from '@/lib/auth/require-write'
 import { POST } from '../route'
 
 describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
@@ -836,6 +838,34 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
   })
 
+  it('pays for a member and leaves the remembered account alone: it is a company setting', async () => {
+    vi.mocked(getCompanyRole).mockResolvedValueOnce({ ok: true, role: 'member', companyId: 'company-1' })
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      supplier: makeSupplier({ name: 'Hi3G Access AB' }),
+      items: [],
+    })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+        method: 'POST',
+        body: { force: true, payment_date: '2026-05-12', payment_account: '1930' },
+      }),
+      createMockRouteParams({ id: 'si-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(findCalls('company_settings', 'update')).toHaveLength(0)
+  })
+
   it('proceeds when force=true even with candidates present, and records the bypass', async () => {
     const supplier = makeSupplier({ name: 'Hi3G Access AB' })
     const invoice = makeSupplierInvoice({
@@ -867,6 +897,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.success).toBe(true)
     expect(body.status).toBe('paid')
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    expect(findCalls('company_settings', 'update')).toEqual([[{ last_supplier_payment_account: '1930' }]])
     // BFNAR 2013:2 p. 9.16: the override leaves a durable record naming the
     // voucher it produced, not just a server log line.
     expect(recordSupplierInvoiceDuplicateGuardBypass).toHaveBeenCalledWith(

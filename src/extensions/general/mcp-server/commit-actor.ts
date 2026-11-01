@@ -16,12 +16,10 @@ export interface McpActorFacts {
 
 /**
  * Every MCP key is `type: 'api_key'` on the connection, which decides company
- * access and limits. In the records: a service account's key acts as
- * service_account, a key minted by the OAuth sign-in as mcp_oauth (read off
- * actor.oauthKey, decided from the key's reserved name before
- * handleMcpRequest swaps the label for the client's display name), any other
- * key as api_key. Anything that is not a key (the in-app chat dispatching the
- * same tools) is the user.
+ * access and limits. In the records it is what credentialActor (lib/auth/
+ * api-keys.ts) made it when handleMcpRequest built the connection: oauthKey,
+ * serviceAccountId and the label come from there. Anything that is not a key
+ * (the in-app chat dispatching the same tools) is the user.
  */
 export function mcpCommitActorType(actor: McpActorFacts | undefined): CommitActor['type'] {
   if (actor?.type !== 'api_key') return 'user'

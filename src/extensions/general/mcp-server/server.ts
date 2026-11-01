@@ -34,7 +34,7 @@ import {
   validateApiKey,
   createServiceClientNoCookies,
   hasScope,
-  OAUTH_MCP_KEY_NAME,
+  credentialActor,
   RATE_LIMIT_RETRY_AFTER_SECONDS,
   TOOL_SCOPE_MAP,
   UNSCOPED_TOOLS,
@@ -280,7 +280,7 @@ import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
-import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
+import { loadSkillProvenance, skillBodyHash } from '@/lib/agent-skills/provenance'
 import { formatActorAttribution } from '@/lib/attribution/format-actor'
 import { resolvePersonNames } from '@/lib/attribution/person-names'
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
@@ -999,10 +999,8 @@ export interface ActorContext {
   pinnedCompanyId?: string | null
   /**
    * True when the key was minted by the OAuth sign-in (a connector such as
-   * claude.ai or ChatGPT), false or absent for a key a person created.
-   * Decided from the key's reserved name (OAUTH_MCP_KEY_NAME) before
-   * handleMcpRequest replaces the label with the client's display name, so
-   * the commit stamp never reads the classification off a display string.
+   * claude.ai or ChatGPT), false or absent for a key a person created:
+   * credentialActor decides it, here and on every other door.
    * Only meaningful for `type: 'api_key'`.
    */
   oauthKey?: boolean
@@ -1833,10 +1831,18 @@ async function findCompletedDocumentInboxItem(
 /** Who fetched an MCP upload, in the arrival's actor shape. */
 function mcpArrivalActor(actor: ActorContext | undefined, userId: string): ArrivalActor {
   if (actor?.serviceAccountId) {
-    return apiKeyArrivalActor({ userId, apiKeyId: actor.id, serviceAccount: { id: actor.serviceAccountId, name: actor.label ?? '' } })
+    return apiKeyArrivalActor({
+      userId,
+      apiKeyId: actor.id,
+      actor: { type: 'service_account', label: actor.label },
+      serviceAccount: { id: actor.serviceAccountId },
+    })
   }
-  const type: ArrivalActor['type'] =
-    actor?.type === 'mcp_oauth' || actor?.type === 'user' || actor?.type === 'cron' ? actor.type : 'api_key'
+  const type: ArrivalActor['type'] = actor?.oauthKey
+    ? 'mcp_oauth'
+    : actor?.type === 'mcp_oauth' || actor?.type === 'user' || actor?.type === 'cron'
+      ? actor.type
+      : 'api_key'
   return {
     type,
     user_id: userId,
@@ -2345,9 +2351,9 @@ async function stagePendingOperation(
   //    operation names are refused, a dry run included, whatever force
   //    says; the same proposal again is answered below as a replay; this
   //    stager's own older proposals the new one fully covers are superseded
-  //    once it is staged. A service account's key stages as the service
-  //    account, every other connection as its own type.
-  const stagedActorType = actor.type === 'api_key' && actor.serviceAccountId ? 'service_account' : actor.type
+  //    once it is staged. A key stages as what it is in the records
+  //    (./commit-actor.ts), every other connection as its own type.
+  const stagedActorType = actor.type === 'api_key' ? mcpCommitActorType(actor) : actor.type
   const stager = { userId, actorType: stagedActorType, actorId: actor.id ?? null }
   const claim = await checkTransactionClaims(supabase, companyId, operationType, params, stager)
   if (claim.kind === 'claimed') throw transactionAlreadyStagedRefusal(claim.claims)
@@ -4873,13 +4879,10 @@ async function commitStagedOperation(params: {
   const commitMethod =
     actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
   // WHO, for the immutable layer: a key minted by the OAuth sign-in commits
-  // as mcp_oauth. Read off actor.oauthKey, which handleMcpRequest decides
-  // from the key's reserved name before it swaps the label for the client's
-  // display name ('Claude (Anthropic)'); comparing the label here made every
-  // claude.ai and ChatGPT commit say api_key. Named here, on the commit
-  // actor, and not on the connection's ActorContext, whose type 'api_key'
-  // decides company access and limits. The same definition names the actor
-  // scope of every tool call (./commit-actor.ts).
+  // as mcp_oauth (credentialActor decided it when the connection was built).
+  // Named here, on the commit actor, and not on the connection's ActorContext,
+  // whose type 'api_key' decides company access and limits. The same
+  // definition names the actor scope of every tool call (./commit-actor.ts).
   const commitActorType = mcpCommitActorType(actor)
 
   const result = await commitPendingOperation(supabase, userId, companyId, operation, {
@@ -27339,8 +27342,7 @@ export const tools: McpTool[] = [
         reason,
         actor: {
           userId,
-          // A service account's key rejects as the service account, as on v1.
-          type: actor?.type === 'api_key' && actor.serviceAccountId ? 'service_account' : (actor?.type ?? 'user'),
+          type: actor?.type === 'api_key' ? mcpCommitActorType(actor) : (actor?.type ?? 'user'),
           ...(actor?.id ? { id: actor.id } : {}),
           ...(actor?.label ? { label: actor.label } : {}),
         },
@@ -29017,7 +29019,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let companyId: string | null = null
   let keyScopes: ApiKeyScope[] = []
   let apiKeyId: string | undefined
-  let apiKeyName: string | undefined
+  let credential: ReturnType<typeof credentialActor> | null = null
+  let oauthProvider: string | null = null
   let keyMode: ApiKeyMode = 'live'
   let unattendedCommitLimit: number | null = null
   let allowedCompanyIds: string[] | null = null
@@ -29056,19 +29059,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       companyId,
       scopes: keyScopes,
       apiKeyId,
-      apiKeyName,
       mode: keyMode,
       unattendedCommitLimit,
       allowedCompanyIds,
       readOnlyCompanyIds,
     } = authResult)
     agentIdentityId = authResult.agentIdentityId ?? null
-    // A service account's key is labelled with the account's name: it is the
-    // actor every record names (the key's own name is only a key label).
-    if (authResult.serviceAccount) {
-      serviceAccountId = authResult.serviceAccount.id
-      apiKeyName = authResult.serviceAccount.name
-    }
+    serviceAccountId = authResult.serviceAccount?.id ?? null
+    // Who the key is in every record it writes, the same on every door.
+    credential = credentialActor(authResult)
+    // The provider also labels telemetry for a connector URL without ?client=.
+    if (credential.type === 'mcp_oauth') oauthProvider = authResult.client ?? null
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
     // No-op without Upstash (self-hosted), like the OAuth register endpoint.
@@ -29088,25 +29089,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     quiet: body.method !== 'tools/call',
   })
   const supabase = createServiceClientNoCookies()
-  // Classify the key BEFORE its label is replaced below: the reserved name is
-  // the OAuth key's only marker, and the commit stamp reads this flag rather
-  // than the display label (actor.oauthKey).
-  // A service account's key is never an OAuth connection, whatever its name.
-  const oauthKey = Boolean(apiKeyId) && !serviceAccountId && apiKeyName === OAUTH_MCP_KEY_NAME
-  // Keep the OAuth key's classification name stable: onboarding depends on it.
-  // Display identity comes from the server-stored provider, never a client header.
-  // The same provider labels telemetry for a connector URL without ?client=.
-  let oauthProvider: string | null = null
-  if (oauthKey && apiKeyId && apiKeyName) {
-    const { data: key } = await supabase.from('api_keys').select('client').eq('id', apiKeyId).maybeSingle()
-    oauthProvider = typeof key?.client === 'string' ? key.client : null
-    apiKeyName = oauthActorLabel(key?.client, apiKeyName)
-    if (typeof key?.client === 'string' && /^registered:[0-9a-f-]{36}$/i.test(key.client)) {
-      const { data: registration } = await supabase.from('oauth_client_registrations')
-        .select('client_name').eq('id', key.client.slice('registered:'.length)).maybeSingle()
-      if (registration?.client_name) apiKeyName = `${registration.client_name} (registered client)`
-    }
-  }
+  const oauthKey = credential?.type === 'mcp_oauth'
 
   // ── Company pin ──
   // `?company=<uuid>` pins the whole connection to one company: it becomes
@@ -29182,7 +29165,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     : {
         type: 'api_key',
         id: apiKeyId,
-        label: apiKeyName ?? 'Unnamed API key',
+        label: credential?.label ?? 'Unnamed API key',
         unattendedCommitLimit,
         sessionId,
         client,

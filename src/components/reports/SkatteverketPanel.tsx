@@ -224,12 +224,14 @@ function SkatteverketPanelInner({
    * has expired/been revoked/lost scope, immediately reflect that in the
    * local status so the "Förnya session" CTA appears next to the message:
    * the user shouldn't have to wait for /status to catch up.
-   * Extension routes return a FLAT { error: string, code } shape, unlike the
-   * core routes' nested envelope: do not unify the parsers.
+   * The Skatteverket routes answer a FLAT { error: string, code }, shown
+   * verbatim; the dispatcher in front of them refuses with the nested envelope
+   * (a viewer's read-only refusal), and `text` is rendered, so an object here
+   * takes the whole page down.
    */
-  const applyApiError = useCallback((result: { error?: string; code?: string } | null) => {
+  const applyApiError = useCallback((result: { error?: unknown; code?: string } | null) => {
     if (!result?.error) return false
-    setNotice({ kind: 'error', text: result.error })
+    setNotice({ kind: 'error', text: typeof result.error === 'string' ? result.error : getErrorMessage(result) })
     if (result.code && AUTH_RECONNECT_CODES.has(result.code)) {
       setStatus((prev) => prev ? { ...prev, expired: true } : prev)
     }

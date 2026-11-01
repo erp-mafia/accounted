@@ -63,7 +63,7 @@ import {
 import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
-import { requireCompanyAdmin } from '@/lib/operations/access'
+import { requireSettingsAdmin } from '@/lib/company/settings-writer'
 import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/company/invoice-number-series'
 import { resolveOrgNumberChange } from '@/lib/company/org-number'
 import { billingIdentityChanged, syncCompanyStripeIdentity } from '@/lib/stripe/customer-identity'
@@ -383,10 +383,7 @@ export async function updateCompanySettings(
     || changesInvoicePaymentInstructions
     || changesPaymentFileIds
   ) {
-    const denied = await requireCompanyAdmin(
-      ctx,
-      'Bara företagets ägare eller en administratör kan ändra företagsinställningarna.',
-    )
+    const denied = await requireSettingsAdmin(ctx)
     if (denied) return denied
   }
 

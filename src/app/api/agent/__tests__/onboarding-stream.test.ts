@@ -88,6 +88,6 @@ describe('POST /api/agent/onboarding/stream', () => {
     const req = createMockRequest('/api/agent/onboarding/stream', { method: 'POST', body: {} })
     const { status, body } = await parseJsonResponse<{ error: string }>(await POST(req))
     expect(status).toBe(403)
-    expect(body.error).toContain('läsbehörighet')
+    expect(body.error).toMatchObject({ code: 'FORBIDDEN', details: { code: 'ROLE_READ_ONLY' } })
   })
 })

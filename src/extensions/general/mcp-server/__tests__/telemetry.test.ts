@@ -10,8 +10,6 @@ import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
 import { OAUTH_MCP_KEY_NAME, validateApiKey } from '@/lib/auth/api-keys'
 
-const oauthKeyRow = vi.hoisted(() => ({ client: null as string | null }))
-
 // ── Mocks (mirrors receipt-matcher.test.ts setup) ────────────
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -39,13 +37,6 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     // filter has data to work against.
     createServiceClientNoCookies: vi.fn(() => ({
       from: vi.fn((table: string) => {
-        // The provider an OAuth key was minted for (api_keys.client).
-        if (table === 'api_keys') {
-          const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-          for (const method of ['select', 'eq']) chain[method] = vi.fn(() => chain)
-          chain.maybeSingle = vi.fn().mockResolvedValue({ data: { client: oauthKeyRow.client }, error: null })
-          return chain
-        }
         if (table === 'company_skills') {
           const chain: Record<string, ReturnType<typeof vi.fn>> = {}
           for (const method of ['select', 'eq', 'order']) chain[method] = vi.fn(() => chain)
@@ -587,7 +578,6 @@ describe('client label fallback without a marker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     eventBus.clear()
-    oauthKeyRow.client = null
   })
 
   it('maps a known User-Agent into the marker vocabulary', async () => {
@@ -670,13 +660,13 @@ describe('client label fallback without a marker', () => {
   })
 
   it('uses the provider an OAuth key was minted for before any client-supplied name', async () => {
-    oauthKeyRow.client = 'chatgpt'
     vi.mocked(validateApiKey).mockResolvedValueOnce({
       userId: 'user-1',
       companyId: '11111111-1111-4111-8111-111111111111',
       scopes: ['reports:read'],
       apiKeyId: 'key-oauth',
       apiKeyName: OAUTH_MCP_KEY_NAME,
+      client: 'chatgpt',
     } as Awaited<ReturnType<typeof validateApiKey>>)
     const eventPromise = captureNextToolCalledEvent()
 

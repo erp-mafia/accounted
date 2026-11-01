@@ -32,8 +32,3 @@ export async function loadSkillProvenance(
   return { skills_loaded: [...seen], skill_retrievals: retrievals,
     skills_provenance: (data?.length ?? 0) > 100 ? 'recent_session_truncated' : 'recent_session' }
 }
-
-export function oauthActorLabel(client: string | null | undefined, fallback: string): string {
-  const names: Record<string, string> = { claude: 'Claude (Anthropic)', chatgpt: 'ChatGPT (OpenAI)', grok: 'Grok (xAI)', cursor: 'Cursor' }
-  return client ? names[client] ?? fallback : fallback
-}

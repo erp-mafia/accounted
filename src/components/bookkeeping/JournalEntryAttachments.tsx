@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
@@ -77,6 +78,7 @@ export default function JournalEntryAttachments({
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
   const { appName } = useBranding()
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -219,10 +221,10 @@ export default function JournalEntryAttachments({
     try {
       const res = await fetch(`/api/documents/${doc.id}/detach`, { method: 'POST' })
       if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: undefined }))
+        const failure = await res.json().catch(() => null)
         toast({
           title: t('detach_failed'),
-          description: typeof error === 'string' ? error : undefined,
+          description: getErrorMessage(failure, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
       } else {
@@ -258,10 +260,10 @@ export default function JournalEntryAttachments({
       }
       const res = await postDocumentForm(`/api/documents/${docId}/versions`, new FormData(), prepared.file)
       if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: undefined }))
+        const failure = await res.json().catch(() => null)
         toast({
           title: t('replace_failed'),
-          description: error || undefined,
+          description: getErrorMessage(failure, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
       } else {

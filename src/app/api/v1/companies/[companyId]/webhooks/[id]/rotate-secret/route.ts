@@ -111,6 +111,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       table_name: 'webhooks',
       record_id: id,
       actor_id: ctx.apiKeyId ?? null,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
       description: `Webhook secret rotated: "${w.name}"`,
       new_state: { event: 'secret_rotated', rotated_at: rotatedAt },
     })

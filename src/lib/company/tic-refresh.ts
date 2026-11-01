@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
+import { createLogger } from '@/lib/logger'
 import {
   decideOrgNumberChange,
   validStoredOrgNumber,
@@ -19,6 +21,8 @@ export interface RefreshCompanyProfileResult {
   //   persist_failed | not_found
   error?: string
 }
+
+const log = createLogger('company/tic-refresh')
 
 const REFUSAL_ERRORS: Record<OrgNumberRefusalCode, string> = {
   SETTINGS_ORG_NUMBER_LOCKED: 'org_number_locked',
@@ -90,11 +94,8 @@ export async function refreshCompanyProfileAction(
   // A fill-in goes to the settings copy too: it leads for the form and every
   // bank call, and its audit trigger records the change (who, when, old, new).
   if (change.kind === 'fill') {
-    const { error: settingsWriteError } = await supabase
-      .from('company_settings')
-      .update({ org_number: change.value })
-      .eq('company_id', companyId)
-    if (settingsWriteError) return { error: 'persist_failed' }
+    const saved = await writeCompanySettings({ supabase, companyId, userId: user.id, log }, { org_number: change.value })
+    if (!saved.ok) return { error: 'persist_failed' }
   }
 
   const { snapshot, source } = await ensureTicSnapshot({

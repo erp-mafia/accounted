@@ -17,12 +17,10 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => ({
 const approveSupplierInvoice = vi.fn()
 const rejectSupplierInvoice = vi.fn()
 const getSupplierInvoiceAttestState = vi.fn()
-const loadActiveAttestMembers = vi.fn()
 vi.mock('@/lib/supplier-invoices/attest-service', () => ({
   approveSupplierInvoice: (...args: unknown[]) => approveSupplierInvoice(...args),
   rejectSupplierInvoice: (...args: unknown[]) => rejectSupplierInvoice(...args),
   getSupplierInvoiceAttestState: (...args: unknown[]) => getSupplierInvoiceAttestState(...args),
-  loadActiveAttestMembers: (...args: unknown[]) => loadActiveAttestMembers(...args),
   loadAttestPeople: async (_s: unknown, ids: string[]) => new Map(ids.map((id) => [id, { user_id: id, name: `Namn ${id}`, email: null }])),
 }))
 
@@ -45,12 +43,13 @@ const link = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 const params = (token = TOKEN) => createMockRouteParams({ token })
+const writingMember = { data: { company_id: 'company-1', role: 'member', companies: { archived_at: null, name: 'Testbolaget AB' } } }
 
 describe('the attest link token door', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     service.reset()
-    loadActiveAttestMembers.mockResolvedValue(new Set([ATTESTER]))
+    service.setTable('company_members', writingMember)
   })
 
   it('answers 404 for a malformed, unknown, used or expired token, and for an attester who left', async () => {
@@ -66,8 +65,31 @@ describe('the attest link token door', () => {
     expect((await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())).status).toBe(404)
 
     service.setTable('supplier_invoice_attest_links', { data: link() })
-    loadActiveAttestMembers.mockResolvedValue(new Set(['someone-else']))
+    service.setTable('company_members', { data: null })
     expect((await readLink(createMockRequest('/api/attest/t'), params())).status).toBe(404)
+    expect(approveSupplierInvoice).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 to a viewer, who keeps no attest', async () => {
+    service.setTable('supplier_invoice_attest_links', { data: link() })
+    service.setTable('company_members', { data: { ...writingMember.data, role: 'viewer' } })
+    const res = await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())
+    expect(res.status).toBe(404)
+    expect(approveSupplierInvoice).not.toHaveBeenCalled()
+  })
+
+  it('asks through the one live-membership read, so an archived company takes no decision', async () => {
+    service.setTable('supplier_invoice_attest_links', { data: link() })
+    service.setTable('company_members', { data: null }) // the archived filter leaves no row
+    const res = await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())
+    expect(res.status).toBe(404)
+    expect(service.findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+    expect(service.findCalls('company_members', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['user_id', ATTESTER],
+        ['company_id', 'company-1'],
+      ]),
+    )
     expect(approveSupplierInvoice).not.toHaveBeenCalled()
   })
 

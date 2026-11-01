@@ -130,9 +130,15 @@ export async function rejectPendingOperations(
           },
           actor: {
             // A key records its own kind: a service account's key as
-            // service_account (labelled with the account's name), a person's
-            // key as api_key; everything else is a person.
-            type: actor.type === 'api_key' || actor.type === 'service_account' ? actor.type : 'user',
+            // service_account (labelled with the account's name), any other
+            // key as api_key, the history's word for one; everything else is
+            // a person.
+            type:
+              actor.type === 'service_account'
+                ? 'service_account'
+                : actor.type === 'api_key' || actor.type === 'mcp_oauth'
+                  ? 'api_key'
+                  : 'user',
             id: actor.id ?? actor.userId,
             ...(actor.label ? { label: actor.label } : {}),
           },

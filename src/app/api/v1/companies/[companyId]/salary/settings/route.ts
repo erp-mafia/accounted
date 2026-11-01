@@ -7,9 +7,10 @@
  *        row yet answers with the engine defaults (pay day 25, same_month,
  *        pain001, no bank, no öre rounding, series A: the resolver fallback
  *        when there is no row to read).
- * PATCH: partial update. Upserts: the row is updated when it exists and
- *        inserted (company_id + user_id + the supplied columns, DB defaults
- *        for the rest) when it does not. Idempotent (mandatory
+ * PATCH: partial update, owner or admin only, as the dashboard's save
+ *        (lib/company/settings-writer.ts). Upserts: the row is updated when it
+ *        exists and inserted (company_id + user_id + the supplied columns, DB
+ *        defaults for the rest) when it does not. Idempotent (mandatory
  *        Idempotency-Key). Dry-runnable.
  *
  * `salary_voucher_series` is not a column. It is
@@ -53,6 +54,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
+import { requireSettingsAdmin, writeCompanySettings } from '@/lib/company/settings-writer'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 import {
   resolveDefaultSeriesForSource,
   STANDARD_VOUCHER_SERIES_MAP,
@@ -345,6 +348,7 @@ registerEndpoint({
   doNotUseFor:
     'Invoice payment and contact details (PATCH /api/v1/companies/{companyId}/settings). Changing the payment date or deviation window of an existing run (PATCH /salary-runs/{id}, or explicit deviation_period_start/end on POST). Changing the conventions of a run that is already calculated (recalculate the draft, or :correct a booked run). Tax and legal profile changes (not on the public API).',
   pitfalls: [
+    'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN, on a dry run too.',
     'Idempotency-Key is mandatory; calls without it return 400.',
     'At least one field must be supplied; an empty body returns 400. Unknown fields return 400 (strict body), also inside salary_calculation_policy.',
     ...SHARED_PITFALLS,
@@ -429,6 +433,14 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    const opCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log }
+
+    // This door runs as the service role: nothing but this keeps a member's
+    // key from what the member's session may not do. Before the dry run, so
+    // it previews only what the caller may write; and before the insert below.
+    const denied = await requireSettingsAdmin(opCtx)
+    if (denied) return v1OutcomeResponse(denied, ctx)
+
     // Read the current row first: the voucher series merges into the
     // existing map, and a missing row switches the write from update to
     // insert. Literal projection for the schema guard (see GET).
@@ -450,47 +462,25 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
       )
     }
 
-    // Literal payloads (not the parsed object) so the schema guard can
-    // statically verify every column name. Fields the caller did not supply
-    // are `undefined` and dropped by supabase-js JSON serialization, so only
-    // supplied columns are written; explicit null (salary_default_bank)
-    // still clears. Shared by the normal update path and the insert-race
-    // retry below, so the series map is always merged into the row that is
-    // actually there.
+    // Fields the caller did not supply are `undefined` and dropped by
+    // supabase-js JSON serialization, so only supplied columns are written;
+    // explicit null (salary_default_bank) still clears. Shared by the normal
+    // update path and the insert-race retry below, so the series map is always
+    // merged into the row that is actually there.
     const updateExisting = async (existing: SalarySettingsRow) => {
-      const { data, error } = await ctx.supabase
-        .from('company_settings')
-        .update({
-          salary_pay_day: changes.salary_pay_day,
-          salary_deviation_period: changes.salary_deviation_period,
-          preferred_payment_format: changes.preferred_payment_format,
-          salary_default_bank: changes.salary_default_bank,
-          salary_net_rounding: changes.salary_net_rounding,
-          salary_payslip_show_employer_cost: changes.salary_payslip_show_employer_cost,
-          salary_payslip_show_breakdown: changes.salary_payslip_show_breakdown,
-          salary_calculation_policy: nextCalculationPolicy(existing, changes.salary_calculation_policy),
-          default_voucher_series_per_source_type: nextVoucherSeriesMap(existing, changes.salary_voucher_series),
-        })
-        .eq('company_id', ctx.companyId!)
-        .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_payslip_show_employer_cost, salary_payslip_show_breakdown, salary_calculation_policy, default_voucher_series_per_source_type')
-        .maybeSingle()
-
-      if (error) {
-        return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-      }
-      if (!data) {
-        // The row was there a moment ago; a concurrent delete is the only
-        // way here. Same answer as the general settings endpoint.
-        ctx.log.warn('salary.settings.update: settings row vanished before write', {
-          companyId: ctx.companyId,
-        })
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { resource: 'company_settings' },
-        })
-      }
-
-      return ok(toSalarySettingsResource(ctx.companyId!, data as SalarySettingsRow), {
+      const written = await writeCompanySettings(opCtx, {
+        salary_pay_day: changes.salary_pay_day,
+        salary_deviation_period: changes.salary_deviation_period,
+        preferred_payment_format: changes.preferred_payment_format,
+        salary_default_bank: changes.salary_default_bank,
+        salary_net_rounding: changes.salary_net_rounding,
+        salary_payslip_show_employer_cost: changes.salary_payslip_show_employer_cost,
+        salary_payslip_show_breakdown: changes.salary_payslip_show_breakdown,
+        salary_calculation_policy: nextCalculationPolicy(existing, changes.salary_calculation_policy),
+        default_voucher_series_per_source_type: nextVoucherSeriesMap(existing, changes.salary_voucher_series),
+      })
+      if (!written.ok) return v1OutcomeResponse(written, ctx)
+      return ok(toSalarySettingsResource(ctx.companyId!, written.data as unknown as SalarySettingsRow), {
         requestId: ctx.requestId,
       })
     }

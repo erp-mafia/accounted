@@ -8,6 +8,7 @@ import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { fileResponse } from '@/lib/api/file-response'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
 
 const log = createLogger('api/calendar/feed-token')
 
@@ -62,16 +63,17 @@ export async function GET(
     return new NextResponse('Feed token has expired', { status: 410 })
   }
 
-  // The token authenticates the feed, but the feed's creator must still be a
-  // member of the company: offboarding (removal from company_members) must
-  // stop the feed, or an ex-member's subscribed calendar keeps receiving the
-  // company's deadlines and invoice details indefinitely.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('user_id')
-    .eq('company_id', feed.company_id)
-    .eq('user_id', feed.user_id)
-    .maybeSingle()
+  // The token authenticates the feed, but the feed's creator must still reach
+  // the company: offboarding (removal from company_members) and archiving must
+  // both stop the feed, or a subscribed calendar keeps receiving the company's
+  // deadlines and invoice details indefinitely.
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(supabase, feed.user_id, feed.company_id)
+  } catch (error) {
+    log.error('Error reading the feed creator\'s membership', error as Error, { feedId: feed.id })
+    return new NextResponse('Failed to generate calendar feed', { status: 500 })
+  }
 
   if (!membership) {
     return new NextResponse('Feed not found or inactive', { status: 404 })

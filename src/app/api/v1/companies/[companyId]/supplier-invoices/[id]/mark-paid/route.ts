@@ -776,8 +776,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         actor: {
           user_id: ctx.userId,
           actor_id: ctx.apiKeyId ?? null,
-          actor_type: ctx.apiKeyId ? 'api_key' : 'user',
-          actor_label: ctx.apiKeyName ?? null,
+          actor_type: ctx.actor.type,
+          actor_label: ctx.actor.label ?? null,
         },
       })
     }

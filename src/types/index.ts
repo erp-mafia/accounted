@@ -811,6 +811,8 @@ export interface CompanySettings {
   // through POST /api/salary/vacation-liability/method, which books the
   // catch-up first.
   salary_vacation_liability_method?: import('@/lib/salary/vacation-liability-method').VacationLiabilityMethod
+  /** The ledger account the skattekonto runs on (lib/skatteverket/skattekonto-account.ts); null until chosen or derived. */
+  skattekonto_account?: string | null
 
   // Sandbox
   is_sandbox: boolean

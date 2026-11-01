@@ -20,6 +20,7 @@ import { activateAccounts, createAccount } from '@/lib/bookkeeping/chart-of-acco
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { requireCompanyAdmin } from '@/lib/operations/access'
@@ -199,11 +200,8 @@ export async function setSkattekontoAccount(
   const chartFailure = await ensureChartAccount(ctx, account)
   if (chartFailure) return chartFailure
 
-  const { error } = await ctx.supabase
-    .from('company_settings')
-    .update({ skattekonto_account: account })
-    .eq('company_id', ctx.companyId)
-  if (error) return { ok: false, code: 'UNKNOWN_ERROR', error }
+  const saved = await writeCompanySettings(ctx, { skattekonto_account: account })
+  if (!saved.ok) return saved
   ctx.log.info('skattekonto account chosen', { companyId: ctx.companyId, account, previous })
 
   const after = await readState(ctx, asOf)

@@ -72,11 +72,12 @@ describe('PATCH /api/agent/profile', () => {
       method: 'PATCH',
       body: { profile_summary: 'Nytt sammandrag' },
     })
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { code: string } } }>(
       await PATCH(req, routeParams)
     )
     expect(status).toBe(403)
-    expect(body.error.code).toBe('WRITE_PERMISSION_REQUIRED')
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
   })
 
   it('returns 404 when the company has no agent_profile row', async () => {
@@ -128,11 +129,12 @@ describe('POST /api/agent/profile/verify', () => {
     enqueue({ data: { role: 'viewer' } })
 
     const req = createMockRequest('/api/agent/profile/verify', { method: 'POST', body: {} })
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { code: string } } }>(
       await VERIFY(req, routeParams)
     )
     expect(status).toBe(403)
-    expect(body.error.code).toBe('WRITE_PERMISSION_REQUIRED')
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.code).toBe('ROLE_READ_ONLY')
   })
 
   it('stamps verified_at for a non-viewer member', async () => {

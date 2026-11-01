@@ -312,7 +312,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         senderName: fields.sender_name ?? null,
         subject: fields.subject ?? null,
         receivedAt: fields.received_at ? new Date(fields.received_at).toISOString() : null,
-        channelContext: partnerChannelContext({ keyLabel: ctx.apiKeyName, externalRef: fields.external_ref }),
+        channelContext: partnerChannelContext({ keyLabel: ctx.actor.label, externalRef: fields.external_ref }),
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown'

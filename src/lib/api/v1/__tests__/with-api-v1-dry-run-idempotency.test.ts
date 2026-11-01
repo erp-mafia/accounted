@@ -111,7 +111,9 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            is: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            }),
           }),
         }),
       }),

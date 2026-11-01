@@ -18,6 +18,27 @@ describe('hand-read-api-error', () => {
     expect(scan(`const m =\n  typeof json.error === 'string'\n    ? json.error\n    : t('x')`)).toEqual([2])
   })
 
+  it('flags a body field put where it renders, which throws on a structured body', () => {
+    expect(scan(`setNotice({ kind: 'error', text: result.error })`)).toEqual([1])
+    expect(scan(`setError(json.error)`)).toEqual([1])
+    expect(scan(`setError(body?.error ?? null)`)).toEqual([1])
+    expect(scan(`return { ok: false, message: data.error }`)).toEqual([1])
+  })
+
+  it('flags the field destructured out of the response', () => {
+    expect(scan(`const { error } = await res.json()`)).toEqual([1])
+    expect(scan(`const { error: msg } = await chainRes.json()`)).toEqual([1])
+  })
+
+  it('leaves a domain result, a code read and a toast alone', () => {
+    expect(scan(`setError(update.error)`)).toEqual([])
+    expect(scan(`setSendError(outcome.error)`)).toEqual([])
+    expect(scan(`setCode(json.error?.code)`)).toEqual([])
+    expect(scan(`toast({ title: data.error, variant: 'destructive' })`)).toEqual([])
+    expect(scan(`const { error: uploadError } = await storage.upload(path, file)`)).toEqual([])
+    expect(scan(`setNotice({ text: typeof result.error === 'string' ? result.error : getErrorMessage(result) })`)).toEqual([])
+  })
+
   it('leaves the reader, code reads, conditions and comments alone', () => {
     expect(scan(`toast({ title: getErrorMessage(json, { locale: errorLocale, fallback: t('x') }) })`)).toEqual([])
     expect(scan(`setError(getUserErrorMessage(body?.error ?? body) || 'x')`)).toEqual([])

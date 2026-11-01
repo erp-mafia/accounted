@@ -91,21 +91,23 @@ describe('listArchiveHistory', () => {
       data: [
         { id: 's1', action: 'INSERT', record_id: 'd7', user_id: 'sponsor-1', actor_type: 'service_account', actor_label: 'Nattlig synk', old_state: null, new_state: { file_name: 'faktura.pdf' }, created_at: '2026-10-16T08:00:00Z' },
         { id: 's2', action: 'INSERT', record_id: 'd8', user_id: 'u1', actor_type: 'api_key', actor_label: 'Integration', old_state: null, new_state: { file_name: 'kvitto.pdf' }, created_at: '2026-10-16T07:00:00Z' },
+        { id: 's3', action: 'INSERT', record_id: 'd9', user_id: 'u1', actor_type: 'mcp_oauth', actor_label: 'Claude (Anthropic)', old_state: null, new_state: { file_name: 'avtal.pdf' }, created_at: '2026-10-16T06:00:00Z' },
       ],
     })
     enqueue({ data: [{ event_id: 'p7', event_type: 'TransactionDocumentReplaced', aggregate_id: 'd7', payload: {}, actor: { type: 'service_account', id: 'key-sa', label: 'Nattlig synk' }, occurred_at: '2026-10-16T09:00:00Z' }] })
     enqueue({ data: [] })
     enqueue({ data: [] })
-    enqueue({ data: [{ id: 'd7', file_name: 'faktura.pdf', mime_type: 'application/pdf' }, { id: 'd8', file_name: 'kvitto.pdf', mime_type: 'application/pdf' }] })
+    enqueue({ data: [{ id: 'd7', file_name: 'faktura.pdf', mime_type: 'application/pdf' }, { id: 'd8', file_name: 'kvitto.pdf', mime_type: 'application/pdf' }, { id: 'd9', file_name: 'avtal.pdf', mime_type: 'application/pdf' }] })
 
     const events = await listArchiveHistory(supabase, 'co-1', 50)
     expect(events.map((e) => [e.kind, e.actor.kind, e.actor.label, e.document?.file_name])).toEqual([
       ['replaced', 'service_account', 'Nattlig synk', 'faktura.pdf'],
       ['ingested', 'service_account', 'Nattlig synk', 'faktura.pdf'],
       ['ingested', 'api_key', 'Integration', 'kvitto.pdf'],
+      ['ingested', 'api_key', 'Claude (Anthropic)', 'avtal.pdf'],
     ])
     // The person a key acted for travels with it, for the attribution line.
-    expect(events.filter((e) => e.id.startsWith('audit:')).map((e) => e.actor.user_id)).toEqual(['sponsor-1', 'u1'])
+    expect(events.filter((e) => e.id.startsWith('audit:')).map((e) => e.actor.user_id)).toEqual(['sponsor-1', 'u1', 'u1'])
   })
 
   it('throws with the failing read', async () => {

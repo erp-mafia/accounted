@@ -17,7 +17,8 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 const requireWritePermissionMock = vi.fn()
-vi.mock('@/lib/auth/require-write', () => ({
+vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/require-write')>()),
   requireWritePermission: (...args: unknown[]) => requireWritePermissionMock(...args),
 }))
 

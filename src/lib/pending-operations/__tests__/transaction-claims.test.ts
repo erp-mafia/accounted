@@ -127,6 +127,20 @@ describe('checkTransactionClaims', () => {
     })
   })
 
+  it("knows an OAuth key's own older proposal, which carries api_key from before it staged as mcp_oauth", async () => {
+    const stager = { userId: 'user-1', actorType: 'mcp_oauth', actorId: 'key-1' }
+    const { result } = await check([op({ params: { tx_ids: [TX_1] } })], 'bulk_book_transactions', { tx_ids: [TX_1, TX_2] }, stager)
+
+    expect(result.kind).toBe('supersede')
+  })
+
+  it('does not take a proposal with no key for the key that stages now', async () => {
+    const stager = { userId: 'user-1', actorType: 'mcp_oauth', actorId: 'key-1' }
+    const { result } = await check([op({ actor_id: null })], 'categorize_transaction', { transaction_id: TX_1 }, stager)
+
+    expect(result.kind).toBe('claimed')
+  })
+
   it("refuses another user's proposal and a person's own in the app", async () => {
     const other = await check([op({ user_id: 'user-2' })], 'categorize_transaction', { transaction_id: TX_1 })
     expect(other.result.kind).toBe('claimed')
