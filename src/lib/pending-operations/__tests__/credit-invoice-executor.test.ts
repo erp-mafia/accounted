@@ -64,6 +64,8 @@ describe('commitPendingOperation: credit_invoice through creditInvoice', () => {
 
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ credit_note_id: 'cn-1', journal_entry_id: 'je-1' })
+    // The door says what the one-call credit did not do: nothing reached the customer.
+    expect((result.data as { warning?: string }).warning).toContain('inte skickats till kunden')
     expect(mockCreditInvoice).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
       'inv-1',

@@ -803,7 +803,7 @@ const PROFILE_READ = `companies: eq id "${COMPANY}"`
 const SWITCH_READ = `company_capability_config: eq company_id "${COMPANY}"; in capability_key ["package:customer-invoices","package:supplier-invoices-and-payments"]`
 /** Kundfakturor's obligation probes (lib/modules/obligations.ts), read only once it is switched off. */
 const CUSTOMER_INVOICE_PROBES = [
-  `invoices: eq company_id "${COMPANY}"; in status ["sent","overdue","partially_paid"]; eq document_type "invoice"; is credited_invoice_id null; gt remaining_amount 0`,
+  `invoices: eq company_id "${COMPANY}"; in status ["sent","overdue","partially_paid"]; eq document_type "invoice"; is credited_invoice_id null; gte total 0; gt remaining_amount 0`,
   `recurring_invoice_schedules: eq company_id "${COMPANY}"; eq status "active"`,
   `collection_cases: eq company_id "${COMPANY}"; eq is_open true`,
   `rot_rut_payout_requests: eq company_id "${COMPANY}"; in status ["generated","submitted","paid","partially_paid"]; is settlement_journal_entry_id null`,

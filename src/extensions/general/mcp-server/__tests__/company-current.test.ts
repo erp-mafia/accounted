@@ -210,6 +210,20 @@ describe('Accounted://company/current query shape', () => {
     expect(invoices).toBeDefined()
     expect(argsOf(invoices, 'eq')).toContainEqual(['document_type', 'invoice'])
   })
+
+  // It counted drafts and left a part paid invoice out: what is owed has one
+  // population (filterOwedInvoices), the count an agent reads included.
+  it('counts what customers owe: a part paid invoice in, a draft and a credit note out', async () => {
+    const { supabase, calls } = createRecordingSupabase(emptyResults())
+
+    await companyCurrentResource.read(ctx(supabase))
+
+    const [invoices] = findCall(calls, 'invoices')
+    expect(argsOf(invoices, 'in')).toEqual([['status', ['sent', 'overdue', 'partially_paid']]])
+    expect(argsOf(invoices, 'is')).toContainEqual(['credited_invoice_id', null])
+    expect(argsOf(invoices, 'gte')).toContainEqual(['total', 0])
+    expect(argsOf(invoices, 'gt')).toContainEqual(['remaining_amount', 0])
+  })
 })
 
 describe('Accounted://company/current intake', () => {

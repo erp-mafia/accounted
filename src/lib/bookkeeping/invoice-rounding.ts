@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { Invoice, CompanySettings } from '@/types'
 
 /**
@@ -88,7 +89,7 @@ export function getAmountToPay(
   company: CompanyRoundingShape | null | undefined,
 ): AmountToPay {
   const rounding = getDisplayTotal(invoice, company)
-  const deductionApplies = !invoice.credited_invoice_id && (invoice.deduction_total ?? 0) > 0
+  const deductionApplies = !isCreditNoteDocument(invoice) && (invoice.deduction_total ?? 0) > 0
   const toPay = deductionApplies
     ? Math.round((rounding.displayed - (invoice.deduction_total ?? 0)) * 100) / 100
     : rounding.displayed

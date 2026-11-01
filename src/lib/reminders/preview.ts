@@ -2,7 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { resolveInvoiceReplyTo } from '@/lib/invoices/email-recipients'
-import { filterOverdueInvoices, OWED_INVOICE_STATUSES } from '@/lib/invoices/overdue'
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { loadReminderContext } from './facts'
 import { decideReminder, reminderSchedule, type ReminderDecision, type ReminderLevel } from './policy'
 import { FINAL_REMINDER_PAY_WITHIN_DAYS, renderReminderEmail } from './templates'
@@ -46,13 +48,14 @@ async function sampleInvoiceId(db: SupabaseClient, companyId: string, today: str
   if (overdue.error) throw new Error(`invoice lookup failed: ${overdue.error.message}`)
   const first = (overdue.data ?? [])[0] as { id: string } | undefined
   if (first) return first.id
-  const latest = await db
-    .from('invoices')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
+  const latest = await excludeCreditNotes(
+    db
+      .from('invoices')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('document_type', 'invoice')
+      .in('status', [...OWED_INVOICE_STATUSES, 'paid']),
+  )
     .order('invoice_date', { ascending: false })
     .limit(1)
   if (latest.error) throw new Error(`invoice lookup failed: ${latest.error.message}`)

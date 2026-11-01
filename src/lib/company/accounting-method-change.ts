@@ -37,6 +37,8 @@
  * already holds from the invoice flows stay as they are; a warning names them
  * for review.
  */
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createServiceClient } from '@/lib/supabase/server'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -47,9 +49,6 @@ export const ACCOUNTING_METHOD_MID_YEAR_GUARD = 'accounting_method_mid_year' as 
 
 /** The settings-body field that carries the reason for a correction. */
 export const ACCOUNTING_METHOD_CORRECTION_REASON_FIELD = 'accounting_method_correction_reason' as const
-
-/** Open customer invoices: issued, not settled in full (credit notes and quotes are not invoices here). */
-const OPEN_INVOICE_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
 
 /** Open supplier invoices: registered and still owed. */
 const OPEN_SUPPLIER_INVOICE_STATUSES = ['registered', 'approved', 'overdue', 'disputed', 'partially_paid'] as const
@@ -120,14 +119,15 @@ export async function checkAccountingMethodChange(
   // Every switch, free or corrected: an open invoice without a verifikat of
   // its own is the one row the method books differently at payment.
   const [invoicesRes, supplierRes] = await Promise.all([
-    supabase
-      .from('invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .eq('document_type', 'invoice')
-      .in('status', [...OPEN_INVOICE_STATUSES])
-      .is('journal_entry_id', null)
-      .is('credited_invoice_id', null),
+    excludeCreditNotes(
+      supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('document_type', 'invoice')
+        .in('status', [...OWED_INVOICE_STATUSES])
+        .is('journal_entry_id', null),
+    ),
     supabase
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })

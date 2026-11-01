@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { documentCurrency } from '@/lib/bookkeeping/ledger-line-amount'
 import { roundOre } from '@/lib/money'
 
@@ -94,7 +95,7 @@ export function creditNoteCreditUsed(
   const noteByEntry = new Map<string, CreditNoteSettlementRow | null>()
   const linksByEntry = new Map<string, readonly CreditNoteLink[]>()
   for (const row of rows) {
-    if (!row.journal_entry_id || !((Number(row.total) || 0) < 0)) continue
+    if (!row.journal_entry_id || !isCreditNoteDocument(row)) continue
     noteByEntry.set(row.journal_entry_id, noteByEntry.has(row.journal_entry_id) ? null : row)
     if (!linksByEntry.has(row.journal_entry_id)) linksByEntry.set(row.journal_entry_id, row.credit_links ?? [])
   }

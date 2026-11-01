@@ -2,6 +2,7 @@ import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import {
   ACCRUAL_RELEASE_FAILED_WARNING,
   createSchedulesForCustomerInvoice,
@@ -43,6 +44,66 @@ export interface IssuePartialFailure {
 export type IssuableInvoice = Invoice & {
   customer?: (Customer & { name?: string }) | null
   items?: InvoiceItem[] | null
+}
+
+/** Why a door refuses, as a code of the error registry. */
+export interface IssueRefusal {
+  code: string
+  details?: Record<string, unknown>
+}
+
+/**
+ * Whether this draft can be issued, the one answer of mark-sent, the email
+ * send, bulk Bokför and the digital mailboxes. Each door asks before a number
+ * is taken, and after the payee snapshot: the payment account reads the
+ * frozen payee. A linked credit note has its own issue step, so a door routes
+ * it there first (a door without one refuses it); what reaches this question
+ * with a total below zero has no original to name (ML 17 kap 22 §).
+ */
+export function issuable(
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type' | 'total'> & Partial<Pick<Invoice, 'payment_details'>>,
+  settings: CompanySettings,
+): IssueRefusal | null {
+  if (isCreditNoteDocument(invoice)) return { code: 'INVOICE_CREDIT_NOTE_NOT_ISSUABLE' }
+  if (!hasRequiredInvoicePaymentAccount(settings, invoice)) {
+    return { code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', details: { currency: invoice.currency } }
+  }
+  if (!hasRequiredSellerVatNumber(settings, invoice)) return { code: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
+  return null
+}
+
+/**
+ * Whether a document can go out by email. A följesedel travels with the goods:
+ * it is marked sent, never emailed (emailBlockReason, the editor's reading).
+ */
+export function emailRefusal(invoice: Pick<Invoice, 'document_type'>): IssueRefusal | null {
+  return invoice.document_type === 'delivery_note' ? { code: 'INVOICE_SEND_DELIVERY_NOTE' } : null
+}
+
+/**
+ * A draft with no moms_ruta that is not a momsfri sale: an imported draft, as
+ * every write path stamps one. A momsfri sale is the one sale with no ruta to
+ * state, a seller outside the VAT register and no VAT on the row:
+ * deriveInvoiceVatHeader writes null for it, and recreating it writes null
+ * again. The treatment alone does not say that: `exempt` also comes from an
+ * imported 0 % line, which the mapper cannot tell from reverse charge or
+ * export, and from a seller leaving the register with a VAT-bearing draft
+ * open. PATCH with items re-derives the header, so those have a way out.
+ *
+ * v1 mark-sent and v1 send refuse it. No other door reads the column (nor do
+ * the books or the declaration, which follow the accounts), so it is not part
+ * of issuable until the founders choose: see
+ * docs/decisions/2026-11/2026-11-01-issue-null-ruta.md.
+ */
+export function lacksMomsRuta(
+  invoice: Pick<Invoice, 'moms_ruta' | 'vat_amount' | 'vat_treatment'>,
+  settings: Pick<CompanySettings, 'vat_registered'>,
+): boolean {
+  if (invoice.moms_ruta) return false
+  const momsfriSale = settings.vat_registered === false
+    && invoice.vat_treatment === 'exempt'
+    && Number(invoice.vat_amount) === 0
+  return !momsfriSale
 }
 
 export type IssueAndBookResult =
@@ -147,7 +208,7 @@ export async function archiveIssuedInvoicePdf(args: {
       invoiceId: invoice.id,
       invoiceDate: invoice.invoice_date,
       documentType: invoice.document_type,
-      isCreditNote: !!invoice.credited_invoice_id,
+      isCreditNote: isCreditNoteDocument(invoice),
     })
 
     const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
@@ -552,17 +613,8 @@ export async function issueAndBookInvoice(
   }
   ;(invoice as Invoice).payment_details = payeeSnapshot.payee
 
-  if (!hasRequiredInvoicePaymentAccount(settings, invoice as Invoice)) {
-    return {
-      ok: false,
-      errorCode: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
-      details: { currency: (invoice as Invoice).currency },
-    }
-  }
-
-  if (!hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
-    return { ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
-  }
+  const refused = issuable(invoice, settings)
+  if (refused) return { ok: false, errorCode: refused.code, details: refused.details }
 
   // Assign the number only after all payment-instruction guards pass.
   try {

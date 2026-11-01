@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planCreditNoteRefund } from '../credit-note-refund-plan'
+import { creditNoteRefundedAmount, planCreditNoteRefund } from '../credit-note-refund-plan'
 
 const creditNote = (over: Record<string, unknown> = {}) => ({
   status: 'sent',
@@ -9,6 +9,17 @@ const creditNote = (over: Record<string, unknown> = {}) => ({
   journal_entry_id: 'je-credit',
   deduction_total: 0,
   ...over,
+})
+
+describe('creditNoteRefundedAmount', () => {
+  it('reads what the refund door paid back on a linked credit note', () => {
+    expect(creditNoteRefundedAmount({ credited_invoice_id: 'inv-1', paid_amount: -500 })).toBe(500)
+    expect(creditNoteRefundedAmount({ credited_invoice_id: 'inv-1', paid_amount: null })).toBeCloseTo(0)
+  })
+
+  it('is nothing on a note imported without a link: the provider netted it, nobody refunded it', () => {
+    expect(creditNoteRefundedAmount({ credited_invoice_id: null, paid_amount: -500 })).toBe(0)
+  })
 })
 
 describe('planCreditNoteRefund', () => {

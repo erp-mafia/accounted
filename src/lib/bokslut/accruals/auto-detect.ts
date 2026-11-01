@@ -1,3 +1,4 @@
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
@@ -300,7 +301,7 @@ export async function detectPeriodisering(
       .eq('document_type', 'invoice')
       .gte('invoice_date', periodStart)
       .lte('invoice_date', periodEnd)
-      .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])
+      .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
       .order('invoice_date', { ascending: true })
       .order('id', { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: InvoiceRow[] | null; error: { message: string } | null }>,

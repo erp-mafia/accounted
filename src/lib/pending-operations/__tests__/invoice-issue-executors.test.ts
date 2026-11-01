@@ -11,6 +11,12 @@ import { eventBus } from '@/lib/events'
 import { MandatoryDimensionMissingError } from '@/lib/bookkeeping/dimension-errors'
 import type { PendingOperation } from '@/types'
 
+// The sandbox read in front of a paid operation: an ordinary company here.
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   hasCapability: vi.fn().mockResolvedValue(true),
@@ -447,6 +453,35 @@ describe('commitPendingOperation: an invoice without a customer is refused befor
     expect(result.code).toBe('INVOICE_CUSTOMER_MISSING')
     expect(result.error).toContain('Fakturan saknar kund')
     expect(vi.mocked(ensureInvoiceNumber)).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: what no door issues as an ordinary invoice', () => {
+  it.each(['send_invoice', 'mark_invoice_sent'] as const)('%s refuses a credit note imported without a link', async (type) => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { ...draftInvoice(), total: -500 }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op(type))
+
+    expect(result.status).toBe('rejected')
+    expect(result.error).toContain('Credit notes must be issued')
+    expect(findCalls('invoices', 'update')).toEqual([])
+    expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
+  })
+
+  it('send_invoice refuses a delivery note: it is marked sent, never emailed', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { ...draftInvoice(), document_type: 'delivery_note' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op('send_invoice'))
+
+    expect(result.code).toBe('INVOICE_SEND_DELIVERY_NOTE')
     expect(findCalls('invoices', 'update')).toEqual([])
     expect(mocks.sendTrackedInvoiceEmail).not.toHaveBeenCalled()
   })

@@ -1,3 +1,4 @@
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { dbError } from '@/lib/errors/db-error'
@@ -33,7 +34,6 @@ export type SuggestedMatch =
 // The statuses the match routes accept (match-supplier-invoice and
 // match-invoice): anything else is settled, credited or not yet sent.
 const OPEN_SUPPLIER_STATUSES = new Set(['registered', 'approved', 'partially_paid', 'overdue'])
-const OPEN_CUSTOMER_STATUSES = new Set(['sent', 'overdue', 'partially_paid'])
 
 /** The SELECT columns the pointers live in, to add to a transactions read. */
 export const SUGGESTION_POINTER_COLUMNS =
@@ -82,7 +82,7 @@ export async function loadSuggestedMatches(
       .in('id', invoiceIds)
     if (error) throw dbError(error)
     for (const i of (data ?? []) as Array<{ id: string; invoice_number: string | null; remaining_amount: unknown; status: string }>) {
-      if (OPEN_CUSTOMER_STATUSES.has(i.status)) invoices.set(i.id, i)
+      if (isOwedInvoiceStatus(i.status)) invoices.set(i.id, i)
     }
   }
 

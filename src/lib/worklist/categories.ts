@@ -32,7 +32,7 @@ import {
 import { matchRowsToInvoiceCombinations, type CombinationInvoice } from '@/lib/transactions/invoice-combination'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { todayIsoStockholm, previousMonthEndIso } from '@/lib/dates/iso'
-import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { filterOverdueInvoices, filterOwedInvoices } from '@/lib/invoices/overdue'
 import { summarizeOverdueInvoices } from './overdue-summary'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
 import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type BatchRemoval } from '@/lib/collections/batch'
@@ -1084,15 +1084,12 @@ export async function listInvoiceCombinationSuggestions(
     // (lib/invoices/open-invoice-search.ts): real invoices, the statuses the
     // batch RPC takes, something still owed.
     const [customerRes, supplierRes] = await Promise.all([
-      supabase
-        .from('invoices')
-        .select('id, customer_id, invoice_number, remaining_amount, currency, invoice_date, due_date, status, customer:customers(name)')
-        .eq('company_id', companyId)
-        .eq('document_type', 'invoice')
-        .is('credited_invoice_id', null)
-        .in('status', [...MATCHABLE_INVOICE_STATUSES])
-        .gt('remaining_amount', 0)
-        .limit(INVOICE_COMBINATION_POOL_LIMIT),
+      filterOwedInvoices(
+        supabase
+          .from('invoices')
+          .select('id, customer_id, invoice_number, remaining_amount, currency, invoice_date, due_date, status, customer:customers(name)')
+          .eq('company_id', companyId),
+      ).limit(INVOICE_COMBINATION_POOL_LIMIT),
       supabase
         .from('supplier_invoices')
         .select('id, supplier_id, supplier_invoice_number, arrival_number, remaining_amount, currency, invoice_date, due_date, status, supplier:suppliers(name)')

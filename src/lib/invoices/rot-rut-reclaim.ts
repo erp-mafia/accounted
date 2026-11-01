@@ -42,6 +42,7 @@
  * operation. Everything after the voucher is best-effort-with-loud-logging,
  * never an unbook (the voucher is immutable per BFL).
  */
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DeductionType } from '@/types'
 import { createRotRutReclaimEntry, type RotRutReclaimLeg } from '@/lib/bookkeeping/rot-rut-entries'
@@ -90,7 +91,7 @@ export type ReclaimRotRutRefusalOutcome =
   | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update' }
 
 /** Invoice statuses a refused share can reopen. */
-const REOPENABLE_INVOICE_STATUSES = ['paid', 'partially_paid', 'sent', 'overdue'] as const
+const REOPENABLE_INVOICE_STATUSES = ['paid', ...OWED_INVOICE_STATUSES] as const
 
 interface RequestRow {
   id: string

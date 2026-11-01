@@ -121,6 +121,7 @@ describe('loadReminderContext', () => {
 
   it('tells a credit note, a quote and a credited invoice apart from an owed one', async () => {
     expect((await load({ invoice: invoiceRow({ credited_invoice_id: 'inv-0' }) })).facts.kind).toBe('other')
+    expect((await load({ invoice: invoiceRow({ total: -500 }) })).facts.kind).toBe('other')
     expect((await load({ invoice: invoiceRow({ document_type: 'quote' }) })).facts.kind).toBe('other')
     expect((await load({ invoice: invoiceRow(), creditNotes: [{ status: 'draft' }] })).facts.credited).toBe(true)
   })

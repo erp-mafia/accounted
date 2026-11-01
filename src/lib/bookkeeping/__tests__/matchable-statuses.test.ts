@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
+  OWED_INVOICE_STATUSES,
   getInvoiceMatchTargetState,
   getSupplierInvoiceMatchTargetState,
 } from '../matchable-statuses'
@@ -13,6 +14,10 @@ import {
 describe('matchable status lists', () => {
   it('mirrors the customer-invoice route guard', () => {
     expect([...MATCHABLE_INVOICE_STATUSES]).toEqual(['sent', 'overdue', 'partially_paid'])
+  })
+
+  it('is what is owed: one list, not two that agree', () => {
+    expect(MATCHABLE_INVOICE_STATUSES).toBe(OWED_INVOICE_STATUSES)
   })
 
   it('mirrors the supplier-invoice route guard', () => {

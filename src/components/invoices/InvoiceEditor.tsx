@@ -5,6 +5,7 @@ import { Fragment, useState, useEffect, useRef, useMemo, useId } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
 import { Reorder } from 'motion/react'
@@ -3044,7 +3045,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     mailboxReady: resolveMailboxReady({
       activeProviders: mailboxProviders,
       documentType: watchDocumentType,
-      isCreditNote: Boolean(initial?.credited_invoice_id),
+      isCreditNote: isCreditNoteDocument(initial ?? {}),
       currency: watchCurrency,
       customer: selectedCustomer,
     }),

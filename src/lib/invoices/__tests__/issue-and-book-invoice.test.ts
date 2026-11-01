@@ -57,10 +57,17 @@ vi.mock('@/lib/invoices/settle-invoice-payment', () => ({
   settleInvoicePayment: (...args: unknown[]) => mockSettleInvoicePayment(...args),
 }))
 
-import { archiveIssuedInvoicePdf, issueAndBookInvoice, markInvoiceSentAndBook } from '../issue-and-book-invoice'
+import {
+  archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
+  issueAndBookInvoice,
+  lacksMomsRuta,
+  markInvoiceSentAndBook,
+} from '../issue-and-book-invoice'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import type { CompanySettings } from '@/types'
+import type { CompanySettings, VatTreatment } from '@/types'
 
 const log: Logger = {
   info: vi.fn(),
@@ -97,6 +104,103 @@ function issue(invoice = makeDraft(), theSettings = settings) {
     log,
   })
 }
+
+describe('issuable', () => {
+  const settings = makeCompanySettings({ bankgiro: '123-4567', vat_registered: true, vat_number: 'SE556677889901' })
+
+  it('passes an ordinary draft', () => {
+    expect(issuable(makeInvoice({ status: 'draft', total: 1250 }), settings)).toBeNull()
+  })
+
+  it('refuses a credit note without a link: it has no original to name', () => {
+    expect(issuable(makeInvoice({ status: 'draft', total: -1250, credited_invoice_id: null }), settings)).toEqual({
+      code: 'INVOICE_CREDIT_NOTE_NOT_ISSUABLE',
+    })
+  })
+
+  it('refuses a company with no payment account, naming the currency', () => {
+    const noAccount = makeCompanySettings({ bankgiro: null, plusgiro: null, iban: null, bank_name: null, clearing_number: null, account_number: null, vat_registered: false })
+    expect(issuable(makeInvoice({ status: 'draft', total: 1250, currency: 'SEK' }), noAccount)).toEqual({
+      code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
+      details: { currency: 'SEK' },
+    })
+  })
+
+  it('refuses a registered company with no VAT number', () => {
+    const noVatNumber = makeCompanySettings({ bankgiro: '123-4567', vat_registered: true, vat_number: null })
+    expect(issuable(makeInvoice({ status: 'draft', total: 1250 }), noVatNumber)).toEqual({
+      code: 'INVOICE_SEND_VAT_NUMBER_MISSING',
+    })
+  })
+
+  it('reads the frozen payee: run after the snapshot, an account on the invoice counts', () => {
+    const noAccount = makeCompanySettings({ bankgiro: null, plusgiro: null, iban: null, bank_name: null, clearing_number: null, account_number: null, vat_registered: false })
+    const withPayee = makeInvoice({ status: 'draft', total: 1250, payment_details: { bankgiro: '123-4567' } as never })
+    expect(issuable(withPayee, noAccount)).toBeNull()
+  })
+})
+
+describe('emailRefusal', () => {
+  it('refuses a följesedel, only that', () => {
+    expect(emailRefusal({ document_type: 'delivery_note' })).toEqual({ code: 'INVOICE_SEND_DELIVERY_NOTE' })
+    for (const document_type of ['invoice', 'proforma', 'quote'] as const) {
+      expect(emailRefusal({ document_type }), document_type).toBeNull()
+    }
+  })
+})
+
+describe('lacksMomsRuta', () => {
+  const momsfriSale = { vat_treatment: 'exempt', moms_ruta: null, vat_amount: 0 } as const
+  const outsideTheRegister = { vat_registered: false }
+  const registered = { vat_registered: true }
+
+  it('is false for a momsfri sale: a seller outside the VAT register, exempt, no VAT', () => {
+    expect(lacksMomsRuta(momsfriSale, outsideTheRegister)).toBe(false)
+  })
+
+  it('is false for any row with a ruta, whoever sells', () => {
+    for (const settings of [registered, outsideTheRegister]) {
+      expect(lacksMomsRuta({ ...momsfriSale, moms_ruta: '05', vat_treatment: 'standard_25' }, settings)).toBe(false)
+    }
+  })
+
+  it('is true for an exempt row at a registered seller: the treatment of a 0 % import is a guess', () => {
+    expect(lacksMomsRuta(momsfriSale, registered)).toBe(true)
+  })
+
+  it('is true for an exempt row with VAT on it, whoever sells', () => {
+    for (const settings of [registered, outsideTheRegister]) {
+      expect(lacksMomsRuta({ ...momsfriSale, vat_amount: 152 }, settings)).toBe(true)
+    }
+  })
+
+  it('is true for a row read without its VAT', () => {
+    const { vat_amount: _unread, ...row } = momsfriSale
+    expect(lacksMomsRuta(row as typeof momsfriSale, outsideTheRegister)).toBe(true)
+  })
+
+  // A Record, so a new treatment does not compile until it says whether its
+  // sale states a ruta: lacksMomsRuta itself would refuse it without a word.
+  const STATES_A_RUTA: Record<VatTreatment, boolean> = {
+    standard_25: true,
+    reduced_12: true,
+    reduced_6: true,
+    reverse_charge: true,
+    reverse_charge_domestic: true,
+    export: true,
+    exempt: false,
+  }
+
+  it.each(Object.keys(STATES_A_RUTA).filter((treatment) => STATES_A_RUTA[treatment as VatTreatment]))(
+    'is true for %s, which states one, whoever sells',
+    (treatment) => {
+      const vat_treatment = treatment as VatTreatment
+      for (const settings of [registered, outsideTheRegister]) {
+        expect(lacksMomsRuta({ ...momsfriSale, vat_treatment }, settings)).toBe(true)
+      }
+    },
+  )
+})
 
 describe('issueAndBookInvoice', () => {
   beforeEach(() => {

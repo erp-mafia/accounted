@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import type { Invoice } from '@/types'
@@ -61,7 +62,7 @@ export async function maybeCreatePaymentLinkForInvoice(
   if (invoice.payment_link_url) return null
   if (invoice.payment_link_auto === false) return null
   if (invoice.document_type && invoice.document_type !== 'invoice') return null
-  if (invoice.credited_invoice_id) return null
+  if (isCreditNoteDocument(invoice)) return null
 
   const provider = (await extensionRegistry.getAll())
     .find((ext) => typeof ext.services?.[CREATE_INVOICE_PAYMENT_LINK_SERVICE] === 'function')

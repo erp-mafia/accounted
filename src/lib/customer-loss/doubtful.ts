@@ -15,6 +15,7 @@
  * excess comes back (Dr 1519 / Cr 6352, kind reversed_doubtful) in the same
  * run as the payment: releaseDoubtfulReserve().
  */
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
@@ -26,7 +27,7 @@ import {
   vatSharesOfPart,
   type VatShare,
 } from './amounts'
-import { OPEN_CLAIM_STATUSES, openClaimRefusal } from './eligibility'
+import { openClaimRefusal } from './eligibility'
 import type { CustomerLossErrorCode, CustomerLossOutcome } from './errors'
 import { bookDecision } from './record'
 import { loadCustomerLossState, type CustomerLossState } from './state'
@@ -142,7 +143,7 @@ export async function releaseDoubtfulReserve(
 
   const stillOpen =
     state.booked &&
-    (OPEN_CLAIM_STATUSES as readonly string[]).includes(state.invoice.status) &&
+    isOwedInvoiceStatus(state.invoice.status) &&
     state.invoice.remaining_amount > 0
   const target = stillOpen ? reserveTarget(state.openVat, state.basis, state.invoice.remaining_amount) : 0
   const release = roundOre(state.reserve - target)

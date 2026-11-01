@@ -13,6 +13,12 @@ import { eventBus } from '@/lib/events'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import type { Invoice, PendingOperation } from '@/types'
 
+// The sandbox read in front of a paid operation: an ordinary company here.
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   hasCapability: vi.fn().mockResolvedValue(true),

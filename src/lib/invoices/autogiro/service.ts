@@ -14,6 +14,7 @@
  * Every function returns a result union instead of throwing for what the
  * person can fix: the route maps `code` through errorResponseFromCode.
  */
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { chunk as chunks } from '@/lib/utils'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -330,7 +331,6 @@ interface AutogiroInvoiceRow {
 }
 
 /** Issued statuses that still ask for money. */
-const OPEN_STATUSES = ['sent', 'overdue', 'partially_paid']
 const LIVE_DEBIT_STATUSES: DebitStatus[] = ['sent', 'debited']
 
 /** Ids per `.in()` lookup. */
@@ -355,7 +355,7 @@ export async function loadDueAutogiroInvoices(
       )
       .eq('company_id', companyId)
       .not('autogiro_payer_number', 'is', null)
-      .in('status', OPEN_STATUSES)
+      .in('status', OWED_INVOICE_STATUSES)
     if (onlyInvoiceIds) query = query.in('id', [...onlyInvoiceIds])
     return query.order('due_date', { ascending: true }).order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
       data: AutogiroInvoiceRow[] | null

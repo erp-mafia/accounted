@@ -358,6 +358,7 @@ import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
+import { emailRefusal } from '@/lib/invoices/issue-and-book-invoice'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 import {
   ensureCompanyDimensions,
@@ -11493,6 +11494,10 @@ export const tools: McpTool[] = [
       }
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
+
+      // Refused at staging by the rule the approval applies.
+      const notEmailed = emailRefusal(invoice)
+      if (notEmailed) throw registryError(notEmailed.code)
 
       // The customer was deleted while the draft pointed at it (crm#263).
       if (invoiceLacksCustomer(invoice)) throw registryError('INVOICE_CUSTOMER_MISSING')

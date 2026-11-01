@@ -425,6 +425,33 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('refuses a delivery note before anything is issued: it is marked sent, never emailed', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, document_type: 'delivery_note' }), error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_DELIVERY_NOTE')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('refuses a credit note imported without a link before a number is taken', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, invoice_number: null, total: -500, credited_invoice_id: null }), error: null })
+    enqueue({ data: company, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_NOTE_NOT_ISSUABLE')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('rejects custom recipients from a non-admin company member before allocation', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

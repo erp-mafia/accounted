@@ -56,6 +56,7 @@
  * (creditBooksOriginalFirst, accounted#45): a missing link means unbooked only
  * where the company books in a separate step.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
@@ -71,6 +72,7 @@ export interface SaleFirstInvoice {
   journal_entry_id?: string | null
   document_type?: string | null
   credited_invoice_id?: string | null
+  total?: number | null
 }
 
 type BookingSettings = Parameters<typeof invoiceBookingMoment>[0]
@@ -80,7 +82,7 @@ type BookingSettings = Parameters<typeof invoiceBookingMoment>[0]
  * credit note, proforma, quote or delivery note is left to its own flow.
  */
 function lacksOwnVerifikat(invoice: SaleFirstInvoice | null | undefined): invoice is SaleFirstInvoice {
-  if (!invoice || invoice.journal_entry_id || invoice.credited_invoice_id) return false
+  if (!invoice || invoice.journal_entry_id || isCreditNoteDocument(invoice)) return false
   return !invoice.document_type || invoice.document_type === 'invoice'
 }
 
@@ -245,7 +247,7 @@ export async function planSaleBeforeSettlementById(
     if (invoiceBookingMoment(read.settings) !== 'manual') return NOT_REQUIRED
     const { data, error } = await ctx.supabase
       .from('invoices')
-      .select('id, journal_entry_id, document_type, credited_invoice_id')
+      .select('id, journal_entry_id, document_type, credited_invoice_id, total')
       .eq('id', invoiceId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
@@ -374,7 +376,7 @@ export async function planSalesBeforeBatchSettlement(
     for (const part of chunk(ids, ID_READ_CHUNK)) {
       const { data, error } = await ctx.supabase
         .from('invoices')
-        .select('id, journal_entry_id, document_type, credited_invoice_id')
+        .select('id, journal_entry_id, document_type, credited_invoice_id, total')
         .in('id', part)
         .eq('company_id', ctx.companyId)
       if (error) {

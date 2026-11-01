@@ -288,14 +288,22 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('rejects delivery notes with VALIDATION_ERROR (regardless of status)', async () => {
-    // Critical: the delivery-note guard must run BEFORE the status check
-    // so a sent delivery note still returns 400 (per the documented
-    // contract) rather than 409 INVOICE_UPDATE_NOT_DRAFT.
+  // A följesedel is never emailed, only marked sent (lib/invoices/editor/channel.ts):
+  // a door that can create one issues one, as the dashboard's own button does.
+  it('marks a delivery note sent: no verifikat, no F-number taken', async () => {
+    const note = { ...DRAFT_INVOICE, document_type: 'delivery_note', invoice_number: 'D-1', total: 0 }
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        invoices: { data: { ...DRAFT_INVOICE, document_type: 'delivery_note', status: 'sent' }, error: null },
+        invoices: [
+          { data: note, error: null },
+          { data: note, error: null },
+          { data: { ...note, status: 'sent' }, error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
       }).supabase,
     )
 
@@ -306,10 +314,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       detailParams(COMPANY_ID, INVOICE_ID),
     )
 
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.field).toBe('document_type')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe('sent')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('rejects credit notes (credited_invoice_id set) with VALIDATION_ERROR', async () => {
@@ -341,6 +348,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null }, error: null },
+        company_settings: { data: { vat_registered: true, bankgiro: '123-4567' }, error: null },
       }).supabase,
     )
 
@@ -355,6 +363,86 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('moms_ruta')
+  })
+
+  // A company outside the VAT register: POST /invoices stamps the sale exempt
+  // with no ruta (deriveInvoiceVatHeader), so a refusal here could never be
+  // cured by the "re-create the draft" it advises.
+  it('issues a momsfri sale, which states no ruta', async () => {
+    const momsfri = { ...DRAFT_INVOICE, vat_treatment: 'exempt', moms_ruta: null, vat_amount: 0, total: 10000 }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: momsfri, error: null },
+          { data: momsfri, error: null },
+          { data: { ...momsfri, status: 'sent', invoice_number: '2026-0042' }, error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567', vat_registered: false },
+          error: null,
+        },
+      }).supabase,
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+
+  // `exempt` reaches a draft other ways than a momsfri sale: a treatment alone
+  // would issue each of these with no ruta, the last booked outside ruta 39.
+  it.each([
+    ['an import with VAT on the row', { vat_amount: 152 }, true],
+    ['a draft left with VAT when its seller left the register', { vat_amount: 2500 }, false],
+    ['a 0 % import at a registered seller, its treatment a guess', { vat_amount: 0 }, true],
+  ])('refuses %s: it is no momsfri sale', async (_name, row, vat_registered) => {
+    const invoice = { ...DRAFT_INVOICE, vat_treatment: 'exempt', moms_ruta: null, ...row }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: invoice, error: null },
+        company_settings: { data: { vat_registered, bankgiro: '123-4567' }, error: null },
+      }).supabase,
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.details.field).toBe('moms_ruta')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a credit note imported without a link: it is no ordinary invoice', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, total: -500 }, error: null },
+      }).supabase,
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   // Fail closed (founder decision 2026-10-13): no sent invoice without its

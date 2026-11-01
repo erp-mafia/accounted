@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { EligibilityBlock } from './eligibility'
 import { bankCheckState, handoverCanSend, handoverRequestBody, type OpenCaseBody, type StartStep } from './handover-dialog'
 import type { CollectionReadinessView } from './invoice-collection'
@@ -24,6 +25,7 @@ export interface BulkListInvoice {
   remaining_amount?: number | null
   document_type?: string | null
   credited_invoice_id?: string | null
+  total?: number | null
 }
 
 /**
@@ -31,7 +33,7 @@ export interface BulkListInvoice {
  * a customer invoice still owed past its due date with no open case.
  */
 export function bulkSendable(invoice: BulkListInvoice, context: { today: string; openCaseIds: ReadonlySet<string> }): boolean {
-  if ((invoice.document_type ?? 'invoice') !== 'invoice' || invoice.credited_invoice_id) return false
+  if ((invoice.document_type ?? 'invoice') !== 'invoice' || isCreditNoteDocument(invoice)) return false
   if (context.openCaseIds.has(invoice.id)) return false
   return isOverdueUnpaid(invoice, context.today)
 }

@@ -47,7 +47,7 @@ function fakeSupabase(tables: Record<string, Result[]> = {}) {
     // The trailing empty answer sticks once the configured ones are used up.
     mock.setTable(table, [...results, { data: null, error: null }])
   }
-  return { supabase: mock.supabase as unknown as SupabaseClient, tablesRead: mock.tables }
+  return { supabase: mock.supabase as unknown as SupabaseClient, tablesRead: mock.tables, findCalls: mock.findCalls }
 }
 
 const silentLog: Logger = {
@@ -108,6 +108,7 @@ describe('settlementBooksSaleFirst', () => {
 
   it('is false for a booked invoice, a credit note and documents that are not fakturor', () => {
     expect(settlementBooksSaleFirst(DEFERRING, { ...UNBOOKED, journal_entry_id: 'je-1' })).toBe(false)
+    expect(settlementBooksSaleFirst(DEFERRING, { ...UNBOOKED, total: -500 })).toBe(false)
     expect(settlementBooksSaleFirst(DEFERRING, { ...UNBOOKED, credited_invoice_id: 'inv-0' })).toBe(false)
     for (const documentType of ['proforma', 'quote', 'delivery_note']) {
       expect(settlementBooksSaleFirst(DEFERRING, { ...UNBOOKED, document_type: documentType })).toBe(false)
@@ -287,6 +288,25 @@ describe('planSaleBeforeSettlementById', () => {
       invoices: [{ data: null, error: null }],
     })
     expect(await planSaleBeforeSettlementById(ctxFor(missing.supabase), 'inv-1')).toEqual(SALE_FIRST_NOT_REQUIRED)
+    expect(bookInvoice).not.toHaveBeenCalled()
+  })
+
+  // settlementBooksSaleFirst reads the identity, and an imported credit note
+  // says what it is by its total alone: a read without it calls it a sale.
+  it('reads the total the identity needs, on one invoice and on a batch', async () => {
+    const one = fakeSupabase({
+      company_settings: [{ data: DEFERRING, error: null }],
+      invoices: [{ data: { ...UNBOOKED, total: -500 }, error: null }],
+    })
+    expect(await planSaleBeforeSettlementById(ctxFor(one.supabase), 'inv-1')).toEqual(SALE_FIRST_NOT_REQUIRED)
+    expect(String(one.findCalls('invoices', 'select')[0][0])).toMatch(/\btotal\b/)
+
+    const batch = fakeSupabase({
+      company_settings: [{ data: DEFERRING, error: null }],
+      invoices: [{ data: [{ ...UNBOOKED, total: -500 }], error: null }],
+    })
+    await planSalesBeforeBatchSettlement(ctxFor(batch.supabase), ['inv-1'], { settlementDate: vi.fn(async () => '2026-10-10') })
+    expect(String(batch.findCalls('invoices', 'select')[0][0])).toMatch(/\btotal\b/)
     expect(bookInvoice).not.toHaveBeenCalled()
   })
 

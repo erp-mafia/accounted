@@ -1,4 +1,5 @@
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -213,8 +214,8 @@ export async function getOpenForeignCurrencyReceivables(
         .in(
           'status',
           historical
-            ? ['sent', 'overdue', 'partially_paid', 'paid']
-            : ['sent', 'overdue', 'partially_paid']
+            ? [...OWED_INVOICE_STATUSES, 'paid']
+            : OWED_INVOICE_STATUSES
         )
       const scoped = asOfDate != null ? base.lte('invoice_date', asOfDate) : base
       return scoped.order('id', { ascending: true }).range(from, to)

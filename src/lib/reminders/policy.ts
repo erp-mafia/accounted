@@ -1,3 +1,4 @@
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { InvoiceDeliveryProviderStatus } from '@/types'
 import type { DeliveryEvidence } from '@/lib/collections/eligibility'
 import { addDaysIso, todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
@@ -145,9 +146,6 @@ export type ReminderDecision =
   /** `nextOn` (YYYY-MM-DD) for not_due: the day the next level falls due. */
   | { kind: 'skip'; reason: ReminderSkipReason; nextOn?: string }
 
-/** The statuses of an issued invoice that may still be owed (the collections rule). */
-const OWED_STATUSES = new Set(['sent', 'overdue', 'partially_paid'])
-
 /** Provider outcomes that mean the reminder did not reach the customer. */
 const UNDELIVERED = new Set<InvoiceDeliveryProviderStatus>(['bounced', 'complained', 'failed', 'suppressed'])
 
@@ -171,7 +169,7 @@ export function decideReminder(input: ReminderDecisionInput): ReminderDecision {
   // Owed, issued and overdue.
   if (invoice.kind !== 'invoice') return skip('not_invoice')
   if (invoice.credited) return skip('credited')
-  if (!OWED_STATUSES.has(invoice.status)) return skip(invoice.status === 'paid' ? 'paid' : 'not_sent')
+  if (!isOwedInvoiceStatus(invoice.status)) return skip(invoice.status === 'paid' ? 'paid' : 'not_sent')
   if (invoice.remaining <= 0) return skip('paid')
   if (!isPastDue(invoice.dueDate, today)) return skip('not_overdue')
 

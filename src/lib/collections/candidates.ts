@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import type { CollectionConnectionRow } from './connection'
 import { evaluateEligibility, type Eligibility, type EligibilityBlockCode } from './eligibility'
 import { deliveryEvidence, isClosedPaid, toHandoverCustomer, type HandoverInvoice } from './readiness'
@@ -67,17 +68,16 @@ export async function scanCollectionCandidates(db: Pick<SupabaseClient, 'from'>,
   const now = input.now ?? new Date()
   const today = todayIsoStockholm(now)
   const { companyId } = input
-  let query = db
-    .from('invoices')
-    // One literal string, so the schema guard checks every column.
-    .select(
-      'id, company_id, customer_id, status, document_type, credited_invoice_id, is_self_billed, currency, invoice_number, invoice_date, due_date, total, vat_amount, paid_amount, paid_at, remaining_amount, deduction_total, deduction_reclaimed_total, ore_rounding, payment_cash_account_id, your_reference, customer:customers(id, name, customer_type, country, address_line1, address_line2, postal_code, city, org_number, vat_number, customer_number, email, phone, collections_excluded)',
-    )
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
-    .lt('due_date', today)
+  let query = filterOverdueInvoices(
+    db
+      .from('invoices')
+      // One literal string, so the schema guard checks every column.
+      .select(
+        'id, company_id, customer_id, status, document_type, credited_invoice_id, is_self_billed, currency, invoice_number, invoice_date, due_date, total, vat_amount, paid_amount, paid_at, remaining_amount, deduction_total, deduction_reclaimed_total, ore_rounding, payment_cash_account_id, your_reference, customer:customers(id, name, customer_type, country, address_line1, address_line2, postal_code, city, org_number, vat_number, customer_number, email, phone, collections_excluded)',
+      )
+      .eq('company_id', companyId),
+    today,
+  )
   if (input.dueOnOrBefore) query = query.lte('due_date', input.dueOnOrBefore)
   const { data, error } = await query.order('due_date', { ascending: true }).limit(CANDIDATE_SCAN_LIMIT)
   if (error) throw new Error(`invoice candidates lookup failed: ${error.message}`)

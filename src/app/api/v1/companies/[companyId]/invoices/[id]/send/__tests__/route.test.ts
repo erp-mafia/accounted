@@ -951,6 +951,110 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.error.details.field).toBe('credited_invoice_id')
   })
 
+  it('rejects a credit note imported without a link: it is no ordinary invoice', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, total: -500 }, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+  })
+
+  it('refuses a delivery note: it is marked sent, never emailed', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, document_type: 'delivery_note' }, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVOICE_SEND_DELIVERY_NOTE')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('refuses a missing ruta', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null }, error: null },
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.details.field).toBe('moms_ruta')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  // A company outside the VAT register: POST /invoices stamps the sale exempt
+  // with no ruta, so the "re-create the draft" this used to answer could not help.
+  it('sends a momsfri sale, which states no ruta', async () => {
+    const momsfri = { ...DRAFT_INVOICE, vat_treatment: 'exempt', moms_ruta: null, vat_amount: 0, total: 10000 }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: momsfri, error: null },
+          { data: { invoice_number: '2026-0042' }, error: null },
+        ],
+        company_settings: { data: { ...COMPANY_SETTINGS, vat_registered: false }, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  // `exempt` reaches a draft other ways than a momsfri sale: a treatment alone
+  // would send each of these with no ruta, the last booked outside ruta 39.
+  it.each([
+    ['an import with VAT on the row', { vat_amount: 152 }, true],
+    ['a draft left with VAT when its seller left the register', { vat_amount: 2500 }, false],
+    ['a 0 % import at a registered seller, its treatment a guess', { vat_amount: 0 }, true],
+  ])('refuses %s: it is no momsfri sale', async (_name, row, vat_registered) => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, vat_treatment: 'exempt', moms_ruta: null, ...row }, error: null },
+        company_settings: { data: { ...COMPANY_SETTINGS, vat_registered }, error: null },
+      }).supabase,
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.details.field).toBe('moms_ruta')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('a concurrent issuer (status flip matches 0 rows) stops the send before any email', async () => {
     // The issue step runs before delivery: its compare-and-set is the
     // single-winner lock, so the losing request neither books nor emails.

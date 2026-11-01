@@ -186,7 +186,7 @@ export async function matchTransactionBatch(
     for (const part of chunk(customerInvoiceIds, ID_READ_CHUNK)) {
       const { data, error: docError } = await supabase
         .from('invoices')
-        .select('id, document_type, credited_invoice_id, credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+        .select('id, document_type, credited_invoice_id, total, credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
         .in('id', part)
         .eq('company_id', companyId)
       if (docError) {

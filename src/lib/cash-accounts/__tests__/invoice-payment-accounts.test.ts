@@ -194,6 +194,7 @@ describe('invoice payment accounts', () => {
 
   it('requires payment accounts only for payable invoice documents', () => {
     expect(invoiceRequiresPaymentAccount(makeInvoice())).toBe(true)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ total: -500 }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ credited_invoice_id: 'invoice-original' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'delivery_note' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'proforma' }))).toBe(false)

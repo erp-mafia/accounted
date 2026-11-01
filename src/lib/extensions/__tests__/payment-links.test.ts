@@ -71,6 +71,7 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
     ['the per-invoice toggle is off', { payment_link_auto: false }],
     ['the document is a proforma', { document_type: 'proforma' as const }],
     ['the document is a credit note', { credited_invoice_id: 'orig-1' }],
+    ['the document is a credit note imported without a link', { total: -500 }],
   ])('skips the provider when %s', async (_label, overrides) => {
     const create = vi.fn()
     registerProvider(create)

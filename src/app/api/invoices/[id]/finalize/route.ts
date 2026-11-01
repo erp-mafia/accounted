@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -27,7 +28,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: invoice, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, document_type, is_self_billed, customer_id')
+      .select('id, status, invoice_number, document_type, is_self_billed, customer_id, credited_invoice_id, total')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -50,6 +51,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       invoice.is_self_billed
     ) {
       return errorResponseFromCode('INVOICE_FINALIZE_NOT_DRAFT', log, { requestId })
+    }
+
+    // An F-number is not a credit note's: one issued in-app has its own number
+    // from the start, and one imported without a link has no original to name
+    // (ML 17 kap 22 §), so it would hold a number no door can issue.
+    if (isCreditNoteDocument(invoice)) {
+      return errorResponseFromCode('INVOICE_CREDIT_NOTE_NOT_ISSUABLE', log, { requestId })
     }
 
     // A number is only spent on an invoice with a buyer: a draft whose

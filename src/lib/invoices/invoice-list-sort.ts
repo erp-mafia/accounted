@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { Invoice, InvoiceStatus } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -40,14 +41,14 @@ function displayedDueDate(invoice: Invoice): string | null {
   // The list shows a quote's "Giltig till" in the date column (a quote stays
   // a draft, so the draft rule below would blank it).
   if (invoice.document_type === 'quote') return invoice.valid_until || null
-  if (invoice.credited_invoice_id || invoice.status === 'draft') return null
+  if (isCreditNoteDocument(invoice) || invoice.status === 'draft') return null
   return invoice.due_date || null
 }
 
 function displayedStatusRank(invoice: Invoice, today: string): number {
   if (invoice.status === 'cancelled') return statusRank.cancelled
+  if (isCreditNoteDocument(invoice)) return 5
   if (invoice.status === 'paid') return statusRank.paid
-  if (invoice.credited_invoice_id) return 5
   // The status the row shows: a sent invoice past its due date sorts as overdue (lib/invoices/overdue.ts).
   return statusRank[effectiveInvoiceStatus(invoice, today) as InvoiceStatus]
 }

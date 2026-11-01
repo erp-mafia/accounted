@@ -36,6 +36,7 @@ import { normalizeOcrReference } from './duplicate-payment-guard'
 import { invoiceDocumentRefusal } from '@/lib/transactions/invoice-document-refusal'
 import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 
 export interface InvoiceMatch {
@@ -355,13 +356,14 @@ export async function loadInvoiceMatchPool(
   let invoices: Array<Invoice & { customer?: { name?: string | null } | null }>
   try {
     invoices = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('invoices')
-        .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
-        .eq('company_id', companyId)
-        .eq('document_type', 'invoice')
-        .is('credited_invoice_id', null)
-        .in('status', [...MATCHABLE_INVOICE_STATUSES])
+      excludeCreditNotes(
+        supabase
+          .from('invoices')
+          .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+          .eq('company_id', companyId)
+          .eq('document_type', 'invoice')
+          .in('status', [...MATCHABLE_INVOICE_STATUSES]),
+      )
         .order('id', { ascending: true })
         .range(from, to),
     )

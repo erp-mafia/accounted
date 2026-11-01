@@ -272,3 +272,35 @@ describe('one door for Förfallna and Hos inkasso', () => {
     expect(segmentViewActive('overdue', false)).toBe(false)
   })
 })
+
+// Three of four credit notes in production carry no link to their original
+// (the provider named none, or the import predates the pairing): every view
+// reads the one identity, a link or a total below zero.
+describe('matchesInvoiceListTab: a credit note imported without a link', () => {
+  const imported = (status: Row['status'], extra: Partial<Row> = {}) =>
+    row({ status, invoice_number: 'K1', total: -500, due_date: '2026-01-01', remaining_amount: 0, ...extra })
+
+  it('is in Kreditfakturor, whatever status the import gave it', () => {
+    for (const status of ['paid', 'credited', 'draft', 'overdue', 'sent'] as const) {
+      expect(tabsFor(imported(status)), status).toEqual(['all', 'credit'])
+    }
+  })
+
+  it('leaves Kreditfakturor when it is cancelled, like a linked one', () => {
+    expect(tabsFor(imported('cancelled'))).toEqual(['cancelled'])
+  })
+
+  it('a zero total is no credit note', () => {
+    expect(tabsFor(row({ status: 'paid', total: 0 }))).toEqual(['all', 'paid'])
+  })
+})
+
+// Decided for the founders to settle (MR text): Obetalda keeps leaving a part
+// paid invoice out, so one not yet due sits in Alla only. This pins today's
+// view so the consolidation of the owed statuses cannot move it by accident.
+describe('matchesInvoiceListTab: a part paid invoice', () => {
+  it('stays out of Obetalda', () => {
+    const partly = row({ status: 'partially_paid', invoice_number: 'F1', due_date: '2026-12-01', remaining_amount: 400 })
+    expect(tabsFor(partly)).toEqual(['all'])
+  })
+})

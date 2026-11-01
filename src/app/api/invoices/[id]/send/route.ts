@@ -13,6 +13,8 @@ import {
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
   archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
   type IssuableInvoice,
@@ -43,11 +45,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
-import {
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/cash-accounts/invoice-payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -125,6 +123,9 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_CANCELLED', opLog, { requestId })
     }
 
+    const notEmailed = emailRefusal(invoice)
+    if (notEmailed) return errorResponseFromCode(notEmailed.code, opLog, { requestId })
+
     // Only drafts may enter the send pipeline. The UI already hides Send for
     // non-drafts, but a direct POST against an issued invoice would re-email
     // the customer and post a SECOND revenue verifikat
@@ -200,24 +201,16 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
     }
 
-    const invoiceCurrency = (invoice as Invoice).currency
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
     if (!payeeSnapshot.ok) {
       return errorResponseFromCode(payeeSnapshot.code, opLog, { requestId, details: payeeSnapshot.details })
     }
     ;(invoice as Invoice).payment_details = payeeSnapshot.payee
-    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
-        requestId,
-        details: { currency: invoiceCurrency },
-      })
-    }
-
-    if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
-      return errorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', opLog, { requestId })
-    }
+    // A linked credit note takes its own issue step below.
+    const refused = isCreditNote ? null : issuable(invoice as Invoice, company as CompanySettings)
+    if (refused) return errorResponseFromCode(refused.code, opLog, { requestId, details: refused.details })
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
 
     const hasAdditionalRecipients =
       (bodyResult.data.additional_cc?.length ?? 0) > 0

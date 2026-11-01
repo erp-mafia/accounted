@@ -1,3 +1,5 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { roundOre } from '@/lib/money'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
@@ -219,7 +221,7 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
   const block = (code: EligibilityBlockCode, params?: EligibilityBlock['params']) => blocks.push(params ? { code, params } : { code })
 
   // 1. A customer invoice of our own, not a credit note, quote, proforma or delivery note.
-  const isCreditNote = !!invoice.credited_invoice_id
+  const isCreditNote = isCreditNoteDocument(invoice)
   if (isCreditNote) block('elig_credit_note')
   else if ((invoice.document_type ?? 'invoice') !== 'invoice' || invoice.is_self_billed) block('elig_not_invoice')
   if (facts.creditNotes.some((c) => c.status === 'draft')) block('elig_credit_draft')
@@ -227,7 +229,7 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
 
   // 2. Issued and still owed.
   const claim = collectionClaim(invoice, facts.companyOreRounding)
-  if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+  if (!isOwedInvoiceStatus(invoice.status)) {
     block(invoice.status === 'paid' ? 'elig_paid' : 'elig_not_sent')
   } else if (claim.remaining <= 0 || invoice.remaining_amount <= 0) {
     block('elig_paid')

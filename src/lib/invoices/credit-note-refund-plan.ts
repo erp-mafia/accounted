@@ -78,6 +78,17 @@ export const REFUNDABLE_CREDIT_NOTE_STATUSES = ['sent', 'overdue'] as const
 const num = (value: number | string | null | undefined): number => Number(value ?? 0) || 0
 
 /**
+ * What was paid back on a credit note, in kronor. Only the refund door pays
+ * one back and it takes linked notes only: the paid_amount of a note imported
+ * without a link is the provider's netting, no refund anyone made.
+ */
+export function creditNoteRefundedAmount(
+  creditNote: { credited_invoice_id?: string | null; paid_amount?: number | null },
+): number {
+  return creditNote.credited_invoice_id ? roundOre(-(Number(creditNote.paid_amount) || 0)) : 0
+}
+
+/**
  * The refund still owed on a credit note.
  *
  * Both documents are read the reskontra's way, outstanding = total -

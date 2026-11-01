@@ -1,5 +1,6 @@
 'use client'
 
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { groupRows, ungrouped } from '@/lib/lists/group-rows'
@@ -378,7 +379,7 @@ export default function InvoicesPage() {
     invoices.some(
       (invoice) =>
         invoice.document_type === 'invoice' &&
-        !invoice.credited_invoice_id &&
+        !isCreditNoteDocument(invoice) &&
         invoice.status !== 'draft' &&
         invoice.status !== 'cancelled' &&
         isPastDue(invoice.due_date, today),
@@ -696,7 +697,7 @@ export default function InvoicesPage() {
     }
     if (!bulkMode) return false
     const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-    if (docType !== 'invoice' || invoice.credited_invoice_id) return false
+    if (docType !== 'invoice' || isCreditNoteDocument(invoice)) return false
     if (bulkMode === 'issue') return invoice.status === 'draft'
     return ['sent', 'overdue'].includes(invoice.status) && !invoice.journal_entry_id
   }
@@ -1182,7 +1183,7 @@ export default function InvoicesPage() {
                 const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 const status = statusDescriptor(invoice)
                 const rotRutState = showRotRut ? rotRutListStateOf(invoice) : null
-                const isCreditNote = !!invoice.credited_invoice_id
+                const isCreditNote = isCreditNoteDocument(invoice)
                 const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
                 const displayedTotal = getDisplayTotal(
                   { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },

@@ -1,4 +1,5 @@
 import type { InvoiceStatus } from '@/types'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { OVERDUE_CHIP, type StatusChip, type StatusDisplay } from '@/lib/status-display'
 import { isUnsentNumberedInvoice } from './invoice-list-tabs'
 import { invoiceDaysOverdue, isInvoiceOverdue, type OverdueInvoiceInput } from './overdue'
@@ -82,9 +83,10 @@ function fromDisplay(kind: InvoiceRowStatusKind, status: InvoiceStatus): Invoice
  * remainder (lib/invoices/overdue.ts), never the stored status alone.
  */
 export function invoiceRowStatus(invoice: InvoiceRowStatusInput, today?: string): InvoiceRowStatus {
-  const isCreditNote = !!invoice.credited_invoice_id
   if (invoice.status === 'cancelled') return fromDisplay('cancelled', 'cancelled')
-  if (isCreditNote && invoice.status !== 'paid') {
+  // Whatever status an import gave it: invoices_credit_note_not_paid keeps a
+  // linked one out of 'paid', an unlinked one can carry it.
+  if (isCreditNoteDocument(invoice)) {
     return { kind: 'credit_note', labelKey: 'badge_credit', chip: 'destructive' }
   }
   if (invoice.status === 'credited') return fromDisplay('credited', 'credited')

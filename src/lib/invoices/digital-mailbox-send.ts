@@ -18,6 +18,8 @@
  * Every attempt, sent or failed, is a digital_mailbox_dispatches row: how
  * the invoice reached its customer.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
@@ -89,13 +91,13 @@ export interface DigitalMailboxSendContext {
 type LoadedInvoice = Invoice & { customer: Customer | null; items: InvoiceItem[] | null }
 
 /** Statuses an invoice can be sent to a mailbox from: a draft (issued on the way) or an issued, unpaid one. */
-const SENDABLE_STATUSES = new Set(['draft', 'sent', 'overdue', 'partially_paid'])
+const SENDABLE_STATUSES = new Set(['draft', ...OWED_INVOICE_STATUSES])
 
 /** Why the invoice itself cannot go to a mailbox, or null. Pure: the editor's readiness reads it too. */
 export function invoiceMailboxBlock(
-  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'currency'>,
+  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'currency' | 'total'>,
 ): 'DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE' | 'DIGITAL_MAILBOX_CURRENCY_UNSUPPORTED' | null {
-  if ((invoice.document_type || 'invoice') !== 'invoice' || invoice.credited_invoice_id) {
+  if ((invoice.document_type || 'invoice') !== 'invoice' || isCreditNoteDocument(invoice)) {
     return 'DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE'
   }
   if (!SENDABLE_STATUSES.has(invoice.status)) return 'DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE'

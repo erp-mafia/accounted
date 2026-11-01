@@ -31,6 +31,7 @@
  * Pure: no I/O. The personnummer leaves here in plain text for the apply
  * service to encrypt; it must never reach a response or a log.
  */
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { DeductionType } from '@/types'
 import type { HouseholdDeductionDto, SalesInvoiceDto } from '@/lib/providers/dto'
 import { roundOre } from '@/lib/money'
@@ -137,7 +138,6 @@ export type MigratedDeductionPlan =
   /** Applied here earlier, and the provider has since sent it to Skatteverket. */
   | { outcome: 'double_request'; invoiceId: string; deductionTotal: number }
 
-const OPEN_STATUSES = ['sent', 'overdue', 'partially_paid']
 const HOUR_UNITS = /^(h|hr|hrs|tim|tim\.|timme|timmar|hour|hours)$/i
 /** invoice_items.labor_hours is NUMERIC(5,2). */
 const MAX_LABOR_HOURS = 999.99
@@ -271,7 +271,7 @@ function planOpen(
   options: { today: string; now?: Date },
 ): MigratedDeductionPlan {
   const invoiceId = invoice.id
-  if (!OPEN_STATUSES.includes(invoice.status) || !(total > 0)) {
+  if (!isOwedInvoiceStatus(invoice.status) || !(total > 0)) {
     return { outcome: 'skip', invoiceId, reason: 'not_open' }
   }
   const statusRepair: MigratedDeductionPlan | null =

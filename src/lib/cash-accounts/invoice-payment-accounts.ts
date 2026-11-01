@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import {
   CURRENCIES,
   type CompanySettings,
@@ -164,9 +165,9 @@ export function hasUsableInvoicePaymentAccount(
 }
 
 export function invoiceRequiresPaymentAccount(
-  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'>,
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'> & Partial<Pick<Invoice, 'total'>>,
 ): boolean {
-  return !invoice.credited_invoice_id
+  return !isCreditNoteDocument(invoice)
     && invoice.document_type !== 'delivery_note'
     && invoice.document_type !== 'proforma'
     // A quote (offert) is never a payment request: nothing to pay to.
@@ -176,7 +177,7 @@ export function invoiceRequiresPaymentAccount(
 export function hasRequiredInvoicePaymentAccount(
   company: CompanySettings,
   invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type'>
-    & Partial<Pick<Invoice, 'payment_details'>>,
+    & Partial<Pick<Invoice, 'payment_details' | 'total'>>,
 ): boolean {
   return !invoiceRequiresPaymentAccount(invoice)
     || hasUsableInvoicePaymentAccount(

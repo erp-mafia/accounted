@@ -15,3 +15,10 @@ describe('paidAtIssueBlockReason: the date', () => {
     expect(paidAtIssueBlockReason({ items: [] })).toBeNull()
   })
 })
+
+describe('paidAtIssueBlockReason: a credit note', () => {
+  it('reads the one identity: a link or a total below zero', () => {
+    expect(paidAtIssueBlockReason({ credited_invoice_id: 'inv-0' })).toBe('credit_note')
+    expect(paidAtIssueBlockReason({ total: -500 })).toBe('credit_note')
+  })
+})

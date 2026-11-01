@@ -115,6 +115,15 @@ describe('snapshotInvoicePayee', () => {
     expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
   })
 
+  it('skips a credit note imported without a link: its total says what it is', async () => {
+    const result = await snapshotInvoicePayee(supabase as never, 'company-1', {
+      id: 'kr-2', currency: 'SEK', payment_cash_account_id: CA_1, credited_invoice_id: null, total: -500,
+      payment_details: null,
+    })
+    expect(result).toEqual({ ok: true, payee: null })
+    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+  })
+
   it('refreshes and persists the payee from the account as it is at issue', async () => {
     enqueue({ data: account({ plusgiro: '123456-7' }) })
     enqueue({ data: null }) // update

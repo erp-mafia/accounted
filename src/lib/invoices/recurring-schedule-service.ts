@@ -38,6 +38,7 @@ import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   archiveIssuedInvoicePdf,
+  issuable,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
 } from '@/lib/invoices/issue-and-book-invoice'
@@ -64,11 +65,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
-import {
-  hasRequiredInvoicePaymentAccount,
-} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import {
@@ -706,17 +703,9 @@ async function sendInvoiceFromSchedule(
     return { sent: false }
   }
   invoice.payment_details = payeeSnapshot.payee
-  if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
-    log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
-      invoiceId: invoice.id,
-      currency: invoice.currency,
-    })
-    return { sent: false }
-  }
-  if (!hasRequiredSellerVatNumber(company, invoice)) {
-    log.warn('registered company has no VAT number; recurring schedule cannot auto-send', {
-      invoiceId: invoice.id,
-    })
+  const refused = issuable(invoice, company)
+  if (refused) {
+    log.warn('recurring schedule cannot auto-send', { invoiceId: invoice.id, code: refused.code, ...refused.details })
     return { sent: false }
   }
   const recipients = resolveInvoiceEmailRecipients({

@@ -2701,6 +2701,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'Fakturan skickades men en efterföljande åtgärd misslyckades (verifikation eller PDF-bilaga).',
     message_en: 'Invoice was sent but a follow-up step (journal entry or PDF) failed.',
   },
+  INVOICE_SEND_DELIVERY_NOTE: {
+    httpStatus: 400,
+    message_sv: 'En följesedel skickas inte med e-post. Markera den som skickad.',
+    message_en: 'A delivery note is not emailed; mark it as sent instead.',
+  },
+  INVOICE_CREDIT_NOTE_NOT_ISSUABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Det här är en kreditfaktura utan koppling till originalfakturan, så den kan inte utfärdas som en vanlig faktura. Ta bort utkastet och kreditera originalfakturan.',
+    message_en:
+      'This is a credit note with no link to its original, so it cannot be issued as an ordinary invoice. Delete the draft and credit the original invoice.',
+  },
   INVOICE_SEND_CANCELLED: {
     httpStatus: 400,
     message_sv: 'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',

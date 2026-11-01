@@ -1,15 +1,25 @@
 /**
- * Invoice statuses a bank transaction can still be matched against.
+ * Statuses of an invoice the customer still owes, the one list for every
+ * reader: reminders, collections, the reskontra, the year-end reads. In a
+ * query, filterOwedInvoices (lib/invoices/overdue.ts) adds what else makes an
+ * invoice owed: a real faktura with something remaining. SQL spells the same
+ * list out (match_batch_allocate, the link RPCs, book_counterparty_setoff).
+ *
+ * Dependency-free on purpose: client components import this too.
+ */
+export const OWED_INVOICE_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
+
+/**
+ * Invoice statuses a bank transaction can still be matched against: what is
+ * owed takes a payment.
  *
  * The match routes' CAS guards (dashboard and v1 match-invoice and
  * match-supplier-invoice), the link to an existing verifikat, the agent's
  * match tools, the suggestion passes and the pickers all read these lists, so
  * a surface cannot offer a target the confirm refuses with
  * MATCH_INVOICE_ALREADY_PAID / MATCH_SI_ALREADY_PAID, nor hide one it takes.
- *
- * Dependency-free on purpose: client components import this too.
  */
-export const MATCHABLE_INVOICE_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
+export const MATCHABLE_INVOICE_STATUSES = OWED_INVOICE_STATUSES
 
 export const MATCHABLE_SUPPLIER_INVOICE_STATUSES = [
   'registered',
@@ -18,10 +28,13 @@ export const MATCHABLE_SUPPLIER_INVOICE_STATUSES = [
   'partially_paid',
 ] as const
 
-/** Whether a customer invoice in this status can still take a matched payment. */
-export function isMatchableInvoiceStatus(status: string | null | undefined): boolean {
-  return (MATCHABLE_INVOICE_STATUSES as readonly string[]).includes(status ?? '')
+/** Whether the customer still owes on an invoice in this status. */
+export function isOwedInvoiceStatus(status: string | null | undefined): boolean {
+  return (OWED_INVOICE_STATUSES as readonly string[]).includes(status ?? '')
 }
+
+/** Whether a customer invoice in this status can still take a matched payment. */
+export const isMatchableInvoiceStatus = isOwedInvoiceStatus
 
 /** Whether a supplier invoice in this status can still take a matched payment. */
 export function isMatchableSupplierInvoiceStatus(status: string | null | undefined): boolean {

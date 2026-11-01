@@ -431,6 +431,19 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
 // crm#1202: sending a quote sends the quote. It books nothing even under
 // faktureringsmetoden, and its next step is the customer's answer, never a
 // payment.
+describe('gnubok_send_invoice: a delivery note', () => {
+  it('is refused at staging by the rule the approval applies: it is marked sent, never emailed', async () => {
+    const { supabase } = setup(
+      { accounting_method: 'accrual', defer_invoice_booking: false },
+      sentInvoice({ status: 'draft', invoice_number: 'D-1', document_type: 'delivery_note' }),
+    )
+
+    await expect(
+      sendInvoice.execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_SEND_DELIVERY_NOTE' })
+  })
+})
+
 describe('gnubok_send_invoice: a quote', () => {
   it('stages the quote with no verifikat and points at the decision, not at payment', async () => {
     const { supabase, findCall } = setup(

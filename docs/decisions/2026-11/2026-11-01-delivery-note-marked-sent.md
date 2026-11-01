@@ -1,0 +1,1 @@
+[2026-11-01] A följesedel is marked sent, never emailed, on every door: v1 mark-sent stopped refusing one, the session and MCP send started to. The stricter v1 copy was the wrong one: mark-sent is the dashboard's only way out of draft, and a door that creates a document must be able to issue it.

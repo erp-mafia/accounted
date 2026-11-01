@@ -41,9 +41,8 @@ import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { bookInvoiceDeferred, INVOICE_BOOKABLE_STATUSES } from '@/lib/invoices/book-invoice-deferred'
-import { issueAndBookInvoice, type IssuableInvoice } from '@/lib/invoices/issue-and-book-invoice'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { issuable, issueAndBookInvoice, type IssuableInvoice } from '@/lib/invoices/issue-and-book-invoice'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
 import { roundOre } from '@/lib/money'
@@ -144,7 +143,7 @@ export async function bookInvoice(
 
   if (!invoice) return { ok: false, code: 'INVOICE_NOT_FOUND' }
   if (invoice.journal_entry_id) return { ok: false, code: 'INVOICE_BOOK_ALREADY_BOOKED' }
-  if (!isRealInvoice(invoice) || invoice.credited_invoice_id) {
+  if (!isRealInvoice(invoice) || isCreditNoteDocument(invoice)) {
     return { ok: false, code: 'INVOICE_BOOK_NOT_BOOKABLE' }
   }
   if (!INVOICE_BOOKABLE_STATUSES.includes(invoice.status)) {
@@ -335,7 +334,7 @@ export async function bulkBookInvoices(
       push(failItem(id, 'INVOICE_NOT_FOUND'))
       continue
     }
-    if (!isRealInvoice(invoice) || invoice.credited_invoice_id) {
+    if (!isRealInvoice(invoice) || isCreditNoteDocument(invoice)) {
       push(failItem(id, 'INVOICE_BOOK_NOT_BOOKABLE'))
       continue
     }
@@ -375,12 +374,9 @@ export async function bulkBookInvoices(
     if (options.dryRun) {
       // The issuance guards that need no write; the payee snapshot (which
       // writes the frozen payee onto the draft) runs at commit only.
-      if (action === 'issue_and_book' && !hasRequiredInvoicePaymentAccount(settings, invoice as Invoice)) {
-        push(failItem(id, 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'))
-        continue
-      }
-      if (action === 'issue_and_book' && !hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
-        push(failItem(id, 'INVOICE_SEND_VAT_NUMBER_MISSING'))
+      const refused = action === 'issue_and_book' ? issuable(invoice as Invoice, settings) : null
+      if (refused) {
+        push(failItem(id, refused.code))
         continue
       }
       const preview = await previewInvoiceEntry(ctx, invoice, entityType)

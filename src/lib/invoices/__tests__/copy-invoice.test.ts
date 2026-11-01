@@ -31,6 +31,7 @@ describe('canCopyInvoice', () => {
 
   it('rejects drafts, credit notes, other document types, and self-billing invoices', () => {
     expect(canCopyInvoice(makeInvoice({ status: 'draft' }))).toBe(false)
+    expect(canCopyInvoice(makeInvoice({ status: 'paid', total: -500 }))).toBe(false)
     expect(canCopyInvoice(makeInvoice({ status: 'sent', credited_invoice_id: 'invoice-original' }))).toBe(false)
     expect(canCopyInvoice(makeInvoice({ status: 'sent', document_type: 'proforma' }))).toBe(false)
     expect(canCopyInvoice(makeInvoice({ status: 'sent', is_self_billed: true }))).toBe(false)

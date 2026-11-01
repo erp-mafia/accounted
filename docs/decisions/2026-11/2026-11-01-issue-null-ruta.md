@@ -1,0 +1,1 @@
+[2026-11-01] A null moms_ruta refuses on v1 mark-sent and send unless the sale is momsfri (seller outside the VAT register, exempt, no VAT); treatment alone also passed imported 0 % sales. It stayed out of issuable for the founders: no other door reads the column, so a refusal there would be new.

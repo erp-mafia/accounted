@@ -1,3 +1,4 @@
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CollectionsAction, CollectionsCaseActionRequest } from '@accounted/connect-contract'
 import { roundOre } from '@/lib/money'
@@ -110,7 +111,6 @@ const ACTION_PATHS: Record<CollectionsAction, CollectionsPath> = {
 
 export { MAX_PAUSE_DAYS, MIN_ACTION_MESSAGE }
 
-const OWED_STATUSES: ReadonlySet<string> = new Set(['sent', 'overdue', 'partially_paid'])
 
 /** What an escalation of a case is decided on: what the books say is still owed, and the bank. */
 export interface EscalationCheck {
@@ -147,7 +147,7 @@ export async function loadLedgerRemaining(
   // about: comparing it with remaining_amount would read the öresavrundning
   // as an unreported payment.
   const ledgerRemaining =
-    OWED_STATUSES.has(invoice.status) && invoice.remaining_amount > 0 ? collectionClaim(invoice, companyOreRounding).remaining : 0
+    isOwedInvoiceStatus(invoice.status) && invoice.remaining_amount > 0 ? collectionClaim(invoice, companyOreRounding).remaining : 0
   return { invoice, customerRow, ledgerRemaining }
 }
 

@@ -105,6 +105,34 @@ describe('POST /api/invoices/[id]/finalize ("Granska & skapa")', () => {
     expect(emitSpy).not.toHaveBeenCalled()
   })
 
+  // The F-series is not a credit note's: a linked one has its own number, and
+  // one imported without a link would hold a number no door can issue.
+  it.each([
+    ['imported without a link', { total: -500, credited_invoice_id: null }],
+    ['linked to its original', { total: -500, credited_invoice_id: 'inv-0' }],
+  ])('refuses a credit note %s and spends no number on it', async (_name, facts) => {
+    const draft = makeInvoice({
+      id: 'inv-1',
+      invoice_number: null,
+      status: 'draft',
+      document_type: 'invoice',
+      ...facts,
+    })
+    enqueue({ data: draft, error: null })
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/finalize', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_NOTE_NOT_ISSUABLE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(emitSpy).not.toHaveBeenCalled()
+  })
+
   it('refuses a draft whose customer was deleted and spends no number on it (crm#263)', async () => {
     const draft = makeInvoice({
       id: 'inv-1',

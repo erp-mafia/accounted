@@ -1,0 +1,1 @@
+[2026-11-01] isCreditNoteDocument lives in lib/bookkeeping/credit-note-state.ts, not lib/invoices as planned, and OWED_INVOICE_STATUSES in lib/bookkeeping/matchable-statuses.ts: the reports and the kontantmetod cut-off read both, and the module ratchet forbids the ledger importing lib/invoices.

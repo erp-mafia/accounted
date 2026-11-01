@@ -66,9 +66,13 @@ import {
   generateInvoiceEmailSubject,
   generateInvoiceEmailText,
 } from '@/lib/email/invoice-templates'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
   archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
+  lacksMomsRuta,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
 } from '@/lib/invoices/issue-and-book-invoice'
@@ -95,11 +99,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
-import {
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/cash-accounts/invoice-payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -159,7 +159,7 @@ registerEndpoint({
   useWhen:
     'You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request or under Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol); senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:
-    'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).',
+    'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (400 INVOICE_SEND_DELIVERY_NOTE: it is marked sent with :mark-sent, never emailed). Sending a credit note (use the :credit endpoint to issue the kreditfaktura, then deliver its PDF yourself).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL (or an SMTP relay via EMAIL_PROVIDER=smtp) the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
@@ -308,42 +308,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const bodyResult = InvoiceSendBody.safeParse(rawBody)
     if (!bodyResult.success) return v1ValidationError(ctx, bodyResult.error)
 
-    // Reject delivery notes: they have a different (D-series) lifecycle.
-    if (typed.document_type === 'delivery_note') {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'document_type',
-          message: 'Delivery notes are not sent via this endpoint; use the dashboard or a custom channel.',
-        },
-      })
-    }
+    const notEmailed = emailRefusal(typed)
+    if (notEmailed) return v1ErrorResponseFromCode(notEmailed.code, ctx.log, { requestId: ctx.requestId })
 
     // Reject credit notes. `:credit` creates them atomically in 'sent' state
     // with their own number: there is no v1 path that produces a draft
-    // credit note, so reaching :send with credited_invoice_id set is either
-    // a misuse or a manual DB edit. Allowing it would give a credit note
-    // an F-series number; ML 17 kap 22-23§ require (a) a distinct
-    // kreditfaktura series and (b) an explicit back-reference to the
-    // original invoice's löpnummer: neither enforced by this route.
-    // Any future "send a credit note" v1 path MUST honor both.
-    if (typed.credited_invoice_id) {
+    // credit note, so reaching :send with one is an import or a misuse.
+    // Allowing it would give a credit note an F-series number; ML 17 kap
+    // 22-23§ require (a) a distinct kreditfaktura series and (b) an explicit
+    // back-reference to the original invoice's löpnummer: neither enforced by
+    // this route. Any future "send a credit note" v1 path MUST honor both.
+    if (isCreditNoteDocument(typed)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
           field: 'credited_invoice_id',
           message:
-            'Credit notes cannot be sent via this endpoint. Use POST /invoices/{id}/credit, which creates and sends the credit note atomically.',
-        },
-      })
-    }
-
-    if (!typed.moms_ruta) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'moms_ruta',
-          message: 'Invoice has no moms_ruta set; re-create the draft via POST /invoices.',
+            'Credit notes cannot be sent via this endpoint. Use POST /invoices/{id}/credit, which creates and issues the credit note atomically. It sends nothing to the customer: deliver its PDF yourself.',
         },
       })
     }
@@ -381,6 +362,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    if (lacksMomsRuta(typed, settings)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set: send its items with PATCH /invoices/{id} or re-create it via POST /invoices.',
+        },
+      })
+    }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
@@ -391,16 +381,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     typed.payment_details = payeeSnapshot.payee
-    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+    const refused = issuable(typed, settings)
+    if (refused) {
+      return v1ErrorResponseFromCode(refused.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { currency: typed.currency },
-      })
-    }
-
-    if (!hasRequiredSellerVatNumber(settings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
-        requestId: ctx.requestId,
+        details: refused.details,
       })
     }
 

@@ -9,6 +9,7 @@
  * is no payment target. An original with an active credit note is on its way
  * to being cancelled: its receivable is the credit note's business now.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 
 interface CreditNoteRow {
   status: string
@@ -18,6 +19,7 @@ interface CreditNoteRow {
 export interface InvoiceDocumentFields {
   document_type?: string | null
   credited_invoice_id?: string | null
+  total?: number | string | null
   /**
    * The read's embed `credit_notes:invoices!credited_invoice_id(id, status,
    * creation_complete)`. A read without it sees no credit note.
@@ -40,7 +42,7 @@ export type InvoiceDocumentRefusal =
 export function invoiceDocumentRefusal(invoice: InvoiceDocumentFields): InvoiceDocumentRefusal | null {
   const documentType = invoice.document_type ?? 'invoice'
   if (documentType !== 'invoice') return { code: 'MATCH_INVOICE_NOT_INVOICE_TYPE', details: { documentType } }
-  if (invoice.credited_invoice_id) return { code: 'MATCH_INVOICE_CREDIT_NOTE' }
+  if (isCreditNoteDocument(invoice)) return { code: 'MATCH_INVOICE_CREDIT_NOTE' }
   if (hasActiveCreditNote(invoice)) {
     return { code: 'MATCH_INVOICE_CREDIT_NOTE', details: { reason: 'active_credit_note' } }
   }

@@ -621,6 +621,7 @@ describe('generatePeppolBisBillingInvoice', () => {
         ...makeValidInput().invoice,
         credited_invoice_id: '22222222-2222-4222-8222-222222222222',
       }),
+      makeInvoice({ ...makeValidInput().invoice, total: -500 }),
       makeInvoice({ ...makeValidInput().invoice, is_self_billed: true }),
     ]) {
       const input = makeValidInput()

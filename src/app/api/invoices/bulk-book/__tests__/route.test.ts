@@ -267,6 +267,20 @@ describe('POST /api/invoices/bulk-book', () => {
     expect(mockBookDeferred).not.toHaveBeenCalled()
   })
 
+  it('rejects a credit note imported without a link per item, before anything is issued', async () => {
+    enqueue({ data: accrualSettings, error: null })
+    enqueue({ data: [{ ...makeDraft(UUID_1), total: -500 }], error: null })
+
+    const { body } = await parseJsonResponse<{
+      data: { results: Array<{ id: string; status: string; error_code?: string }> }
+    }>(await bulkRequest([UUID_1]))
+
+    expect(body.data.results).toEqual([
+      expect.objectContaining({ id: UUID_1, status: 'failed', error_code: 'INVOICE_BOOK_NOT_BOOKABLE' }),
+    ])
+    expect(mockIssueAndBook).not.toHaveBeenCalled()
+  })
+
   it('rejects credit notes and non-invoice document types per item', async () => {
     enqueue({ data: accrualSettings, error: null })
     enqueue({
