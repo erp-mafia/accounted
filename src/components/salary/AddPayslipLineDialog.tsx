@@ -35,6 +35,7 @@ import {
 } from '@/lib/salary/manual-payslip-lines'
 import { TEXT_ROW_MAX_LENGTH, isTextRow } from '@/lib/salary/text-rows'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
+import { isDeductionLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
 import { LineAccountField } from '@/components/salary/LineAccountField'
 
@@ -105,7 +106,7 @@ export function AddPayslipLineDialog({
   // nattraktamente is a traktamente row (manual-payslip-lines.ts).
   const storedType = storedLineItemType(type)
   const isForeign = spec.foreign === true
-  const isForeignTaxFree = isForeign && !spec.flags.is_taxable
+  const isForeignTaxFree = isForeign && !payslipLineFlags(storedType).is_taxable
   // A Textrad is words only: no quantity, no à-pris, no amount.
   const isText = isTextRow({ item_type: type })
   // Semester needs its days; the amount is optional.
@@ -206,14 +207,13 @@ export function AddPayslipLineDialog({
   }
 
   // A benefit is added to the tax base, not to the payout.
-  const hintKey =
-    spec.sign === 'none'
-      ? 'add_line_hint_text'
-      : isBenefitItemType(type)
-        ? 'add_line_hint_benefit'
-        : spec.sign === 'deduction'
+  const hintKey = isText
+    ? 'add_line_hint_text'
+    : isBenefitItemType(type)
+      ? 'add_line_hint_benefit'
+      : isDeductionLineType(storedType)
         ? 'add_line_hint_deduction'
-        : spec.sign === 'signed'
+        : spec.typedSign
           ? 'add_line_hint_signed'
           : 'add_line_hint_addition'
 

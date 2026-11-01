@@ -19,7 +19,8 @@ import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { runDeviationWindow } from '@/lib/salary/deviation-period'
 import { HOURS_WORKED_MAX, SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/base-salary-line'
-import type { SalaryLineItemType } from '@/types'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+import { baseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 
 export type RunEmployeeResult<T> =
   | { ok: true; data: T }
@@ -170,8 +171,7 @@ export async function addEmployeeToRun(
 
   // Seed the base salary line so the run displays a sensible gross before
   // the first :calculate.
-  const baseSalaryType: SalaryLineItemType =
-    emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
+  const baseSalaryType = baseSalaryLineType(emp.salary_type)
   const baseAmount =
     emp.salary_type === 'monthly'
       ? degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
@@ -185,9 +185,7 @@ export async function addEmployeeToRun(
     quantity: emp.salary_type === 'hourly' ? args.hoursWorked ?? null : null,
     unit_price: emp.salary_type === 'hourly' ? emp.hourly_rate : null,
     amount: baseAmount,
-    is_taxable: true,
-    is_avgift_basis: true,
-    is_vacation_basis: true,
+    ...payslipLineFlags(baseSalaryType),
     account_number: null,
     sort_order: 0,
   })
@@ -389,6 +387,11 @@ export async function setRunEmployeeSalary(
     return { ok: true, data }
   }
 
+  // This month's salary or hours is an input: approve and book refuse the row
+  // until a calculation has run against it.
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunEmployeeId: row.id })
+  if (invalidated) return invalidated
+
   // Refresh the stale snapshot and swap the Grundlön/Timlön display line
   // before the write below prices it.
   if (snapshotStale) {
@@ -411,22 +414,17 @@ export async function setRunEmployeeSalary(
     }
   }
 
-  // Clearing calculation_breakdown is what makes a stale booking impossible:
-  // both book preflights (MCP gnubok_book_salary_run and the v1/UI path via
-  // advanceAndBookSalaryRun) refuse roster rows without a breakdown, so a
-  // salary change after a calculation forces a recalculation before booking
-  // instead of silently booking gross/tax derived from the old salary.
   // Two literal payloads (not one conditional expression) so the
   // no-phantom-columns scanner can resolve every column statically.
   const { error: updError } = hasHours
     ? await supabase
         .from('salary_run_employees')
-        .update({ hours_worked: hours, calculation_breakdown: null })
+        .update({ hours_worked: hours })
         .eq('id', row.id)
         .eq('company_id', args.companyId)
     : await supabase
         .from('salary_run_employees')
-        .update({ monthly_salary: monthly, calculation_breakdown: null })
+        .update({ monthly_salary: monthly })
         .eq('id', row.id)
         .eq('company_id', args.companyId)
 
@@ -477,9 +475,10 @@ export async function setRunEmployeeSalary(
  * whose pay type changed takes the employee's at its next calculation.
  *
  * Compare-and-set in one statement, so a salary typed in the run meanwhile
- * is never overwritten. The calculation is cleared, as a per-run salary
- * edit clears it, so booking needs a recalculation first. Approved and
- * booked runs are never touched.
+ * is never overwritten. The caller has cleared the calculation
+ * (updateEmployee: invalidate-calculation.ts), as a per-run salary edit
+ * clears it, so booking needs a recalculation first. Approved and booked
+ * runs are never touched.
  */
 export async function followEmployeeSalaryInDraftRuns(
   supabase: SupabaseClient,
@@ -509,7 +508,7 @@ export async function followEmployeeSalaryInDraftRuns(
 
   const { data: followed, error: followError } = await supabase
     .from('salary_run_employees')
-    .update({ monthly_salary: salary, calculation_breakdown: null })
+    .update({ monthly_salary: salary })
     .eq('company_id', args.companyId)
     .eq('employee_id', args.employeeId)
     .in('salary_run_id', draftRunIds)
@@ -567,6 +566,10 @@ export async function removeEmployeeFromRun(
   if (args.dryRun) {
     return { ok: true, data: { deleted: true, employee_id: args.employeeId } }
   }
+
+  // The roster is an input: the run's totals still hold this employee.
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunId: args.salaryRunId })
+  if (invalidated) return invalidated
 
   // Cascades to salary_line_items via ON DELETE CASCADE.
   const { error } = await supabase

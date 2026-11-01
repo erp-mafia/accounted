@@ -17,6 +17,7 @@ import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { eventBus } from '@/lib/events'
 import { EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS } from '@/lib/salary/employee-update-rules'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 
 vi.mock('@/lib/company/context', () => ({
   getCompanyEntityType: vi.fn().mockResolvedValue('aktiebolag'),
@@ -29,6 +30,12 @@ import {
   sealPersonnummer,
   updateEmployee,
 } from '@/lib/salary/employee-commands'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -287,9 +294,9 @@ describe('updateEmployee: a corrected monthly salary reaches draft runs (crm#133
     const result = await updateEmployee(supabase, args({ monthly_salary: 38000 }))
 
     expect(result.ok).toBe(true)
-    expect(mock.findCall('salary_run_employees', 'update')).toEqual([
-      { monthly_salary: 38000, calculation_breakdown: null },
-    ])
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ monthly_salary: 38000 }])
+    // The calculation is cleared by the one step, before anything is written.
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, expect.anything(), { employeeId: expect.any(String) })
     // Only rows still on the old salary follow.
     expect(mock.findCalls('salary_run_employees', 'eq')).toContainEqual(['monthly_salary', 35000])
   })

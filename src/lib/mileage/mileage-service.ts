@@ -7,6 +7,8 @@ import type {
 } from '@/types'
 import { loadPayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
 import { baseLineItemAccount } from '@/lib/salary/account-mapping'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { roundOre } from '@/lib/money'
@@ -548,6 +550,12 @@ export async function pushMileageToSalaryRun(
     return { ok: false, code: 'CLAIM_LOST' }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, companyId, { salaryRunEmployeeId: sre.id })
+  if (invalidated) {
+    await revertClaim()
+    throw new Error(`Failed to invalidate the salary run's calculation: ${invalidated.details.message}`)
+  }
+
   const { error: itemError } = await supabase.from('salary_line_items').insert(
     summaries.map((s, index) => ({
       salary_run_employee_id: sre.id,
@@ -557,9 +565,7 @@ export async function pushMileageToSalaryRun(
       quantity: s.total_mil,
       unit_price: s.rate_per_mil,
       amount: s.amount,
-      is_taxable: false,
-      is_avgift_basis: false,
-      is_vacation_basis: false,
+      ...payslipLineFlags('mileage_taxfree'),
       account_number: MILEAGE_TAXFREE_ACCOUNT,
       sort_order: 100 + index,
     }))

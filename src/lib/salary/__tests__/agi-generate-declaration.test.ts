@@ -133,6 +133,43 @@ beforeEach(() => {
   eventBus.clear()
 })
 
+describe('generateAgiDeclaration: a stale run', () => {
+  it('declares nothing for a run in review whose inputs moved after its calculation', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, status: 'review' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
+    ])
+
+    const result = await generateAgiDeclaration({ ...ARGS, supabase: supabase as never })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALARY_RUN_NOT_CALCULATED' })
+    expect(findCall('agi_declarations', 'insert')).toBeUndefined()
+  })
+
+  it('declares an approved run as it stands: its calculation is frozen', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
+      { data: [] }, // salary_absence_days
+      { data: null }, // agi_declarations maybeSingle
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+
+    const result = await generateAgiDeclaration({ ...ARGS, supabase: supabase as never })
+
+    expect(result.ok).toBe(true)
+  })
+})
+
 describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', () => {
   function enqueueWithSettings(
     enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
@@ -1747,6 +1784,24 @@ describe('generateAgiDeclaration: a filed declaration is never rewritten (#58)',
     expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
     expect(db.findCall('salary_runs', 'update')).toBeUndefined()
   }
+
+  it('still answers a filed run in review with its stored XML when an input moved after the calculation', async () => {
+    const db = createQueuedMockSupabase()
+    db.enqueueMany([
+      { data: { ...FILED_RUN, status: 'review' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
+      { data: [] }, // salary_absence_days
+      { data: FILED_ROW },
+    ])
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, xml: FILED_XML, unchanged: true, filed: true })
+    expectNothingWritten(db)
+  })
 
   it('answers a filed run with its stored XML and writes, restamps and emits nothing', async () => {
     const db = createQueuedMockSupabase()

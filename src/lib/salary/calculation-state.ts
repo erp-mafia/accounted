@@ -6,12 +6,10 @@
  * the run-level snapshot every calculation freezes (an empty roster, a
  * nolldeklaration, included), and it is never cleared again.
  * salary_run_employees.calculation_breakdown is the per-employee proof that
- * the engine ran against the current inputs: a write that changes an input
- * the engine reads clears it (the payment date, lib/salary/update-run.ts and
- * the run PATCH routes; this month's salary or hours,
- * lib/salary/run-employees.ts), and an employee added after the calculation
- * arrives without one. The approve and book steps refuse a roster row
- * without a breakdown.
+ * the engine ran against the current inputs: every write that changes an
+ * input the engine reads clears it (invalidate-calculation.ts), and an
+ * employee added after the calculation arrives without one. The approve and
+ * book steps refuse a roster row without a breakdown.
  *
  * The run page used to read only the run-level snapshot, so after a payment
  * date change it kept the old figures on screen, offered "Till granskning",
@@ -40,7 +38,7 @@ export interface RosterCalculationSource {
  * refused any roster row without a breakdown, and a booked run's figures are
  * what was posted, so they are current by definition.
  */
-const PRE_APPROVAL_STATUSES: ReadonlySet<string> = new Set(['draft', 'review'])
+export const PRE_APPROVAL_STATUSES = ['draft', 'review'] as const
 
 /** Roster rows the engine has no current calculation for. */
 export function rosterRowsWithoutCalculation<T extends RosterCalculationSource>(
@@ -60,7 +58,7 @@ export function runCalculationState(
   roster: readonly RosterCalculationSource[],
 ): RunCalculationState {
   if (run.calculation_params == null) return 'not_calculated'
-  if (PRE_APPROVAL_STATUSES.has(run.status) && rosterRowsWithoutCalculation(roster).length > 0) {
+  if ((PRE_APPROVAL_STATUSES as readonly string[]).includes(run.status) && rosterRowsWithoutCalculation(roster).length > 0) {
     return 'stale'
   }
   return 'current'

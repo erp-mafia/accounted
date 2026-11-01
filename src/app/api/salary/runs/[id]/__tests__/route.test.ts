@@ -31,6 +31,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { DELETE, GET, PATCH } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 // ── Test data ────────────────────────────────────────────────
 
@@ -227,13 +234,12 @@ describe('PATCH /api/salary/runs/[id]', () => {
   })
 
   it('updates payment_date on a draft and clears roster calculation_breakdown', async () => {
-    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
     authorize(supabase)
 
     enqueueMany([
       { data: DRAFT_RUN }, // lookup
       { data: { ...DRAFT_RUN, payment_date: '2026-07-23' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -248,9 +254,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
     // The new date invalidates any existing calculation: skatteavdrag and the
     // AGI redovisningsperiod follow the payment month, and the book preflights
     // refuse roster rows without a breakdown until a recalculation runs.
-    expect(findCall('salary_run_employees', 'update')).toEqual([
-      { calculation_breakdown: null },
-    ])
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, expect.anything(), { salaryRunId: 'run-1' })
   })
 
   it('does not clear calculations when only notes change', async () => {
@@ -282,7 +286,6 @@ describe('PATCH /api/salary/runs/[id]', () => {
     enqueueMany([
       { data: DRAFT_RUN }, // lookup: period 2026-07, paid 2026-07-25
       { data: { ...DRAFT_RUN, payment_date: '2026-08-25' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -305,7 +308,6 @@ describe('PATCH /api/salary/runs/[id]', () => {
     enqueueMany([
       { data: { ...DRAFT_RUN, payment_date: '2026-08-05' } }, // period 2026-07, paid in August
       { data: { ...DRAFT_RUN, payment_date: '2026-08-07' } }, // update
-      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
@@ -316,7 +318,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+    expect(findCall('salary_runs', 'update')).toEqual([expect.objectContaining({ payment_date: '2026-08-07' })])
   })
 
   it('rejects an invalid voucher_series value', async () => {

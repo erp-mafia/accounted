@@ -46,7 +46,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/lines/:lineId',
   summary: 'Update a payslip line in a draft salary run.',
   description:
-    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year\'s paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.',
+    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, item_type, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. The flags follow from item_type: flags in the patch are ignored, and a changed item_type brings its own. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year\'s paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.',
   useWhen:
     'You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.',
   doNotUseFor:
@@ -54,12 +54,12 @@ registerEndpoint({
   pitfalls: [
     'Draft-only: 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.',
     'A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.',
-    'Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.',
+    'Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards. Until then the calculation is stale, and approve and book refuse the run.',
     'A line the calculation owns (absence, Övertid 50/100 % and OB rows, förmån and recurring-line rows, the engine\'s semesterersättning and öresavrundning rows), or a patch changing item_type to such a type, returns 400 SALARY_LINE_CALCULATED: the next :calculate would overwrite the edit. Change the source (absence, worked hours, the förmån, the recurring line) instead.',
-    'The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.',
+    'The row is validated as it reads after the patch: changing item_type to one that cannot carry engångsskatt, or making the amount non-positive, on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.',
     'vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.',
-    'A patch that sets amount, quantity or item_type is checked as the line will read: a 0 kr amount is refused with 400 VALIDATION_ERROR (details.field amount) on every line but a text row, except a vacation line carrying its days in quantity. For words without money use a text row.',
-    'A text row (item_type text) takes description and sort_order: a non-zero amount, a quantity or a unit_price is refused with 400 VALIDATION_ERROR, and flags or account_number in the patch are ignored (stored false and null). A line never changes into or out of a text row (400 VALIDATION_ERROR, details.field item_type): DELETE it and POST a new one.',
+    'A patch that sets amount, quantity or item_type is checked as the line will read: a 0 kr amount is refused with 400 VALIDATION_ERROR (details.field amount) on every line but a text row, except a vacation line carrying its days in quantity, and so is a sign the type cannot mean (a positive bruttolöneavdrag, a negative skattefri ersättning or förmån). For words without money use a text row.',
+    'A text row (item_type text) takes description and sort_order: a non-zero amount, a quantity or a unit_price is refused with 400 VALIDATION_ERROR, and account_number in the patch is ignored (stored null). A line never changes into or out of a text row (400 VALIDATION_ERROR, details.field item_type): DELETE it and POST a new one.',
   ],
   example: {
     request: { amount: 5500 },
@@ -116,8 +116,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const parsed = UpdateSalaryLineItemSchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
-    // Zod .default() materializes flags the caller never sent; strip anything
-    // not explicitly present so a PATCH can't silently reset flags. (Same
+    // Zod .default() materializes a sort_order the caller never sent; strip
+    // anything not explicitly present so a PATCH can't silently reset it. (Same
     // explicit-keys defense as the salary-runs PATCH.)
     const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
     const rawKeys =

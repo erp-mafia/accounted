@@ -4,7 +4,9 @@ import { validateBody } from '@/lib/api/validate'
 import { BatchUpsertWorkedDaysSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { findRunLockingDates } from '@/lib/salary/register-locks'
+import { defaultDayHours } from '@/lib/salary/work-schedule'
 import { assertWorkedDaysEmployee, mapWorkedDaysWriteError } from '@/lib/salary/worked-days'
 
 interface BatchConflict {
@@ -38,6 +40,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Dedupe dates so the user can pass an array with accidental duplicates
     // (e.g. shift-clicking over the same date twice).
     const uniqueDates = Array.from(new Set(body.dates))
+    const hours = body.hours ?? defaultDayHours(employee.data.hours_per_week, employee.data.workdays_per_week)
 
     // This route keeps its own write algorithm, so it asks the register lock
     // itself: dates a run in review, approved, paid or booked has already
@@ -78,6 +81,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       ((existingRows ?? []) as ExistingWorkedDay[]).map((row) => [row.work_date, row]),
     )
 
+    const sortedDates = [...uniqueDates].sort()
+    const invalidated = await invalidateRunCalculation(supabase, companyId, {
+      employeeId,
+      workedDays: { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] },
+    })
+    if (invalidated) {
+      return NextResponse.json({ error: getUserErrorMessage(invalidated.details) }, { status: 500 })
+    }
+
     // A supplied shift window applies to every date in the batch; an omitted one
     // leaves each day's stored window alone. Resolved as a pair so a body start
     // time is never mixed with a stored end time (the schema pairs them too).
@@ -111,7 +123,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             employee_id: employeeId,
             work_date: date,
             // hours is the point of the batch: it always overwrites.
-            hours: body.hours,
+            hours,
             // Everything else: the body wins when it carries a value, otherwise
             // the day keeps what it already had.
             notes: body.notes ?? existing?.notes ?? null,

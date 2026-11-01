@@ -42,6 +42,7 @@ import {
   type UpdateEmployeeBenefitSchema,
 } from '@/lib/api/schemas'
 import { calculateBikeBenefit } from '@/lib/salary/benefits'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 
 export type EmployeeBenefitResult<T> =
   | { ok: true; data: T }
@@ -250,6 +251,9 @@ export async function createEmployeeBenefit(
     return { ok: true, data: { committed: false, preview } }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   // Object literal, not a spread: tests/schema/no-phantom-columns can only
   // check payload keys it can read statically.
   const { data, error } = await supabase
@@ -362,6 +366,9 @@ export async function updateEmployeeBenefit(
     return { ok: true, data: { committed: true, row: existing } }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('employee_benefits')
     // Literal keys so the phantom-column scanner can verify every column;
@@ -424,6 +431,9 @@ export async function deleteEmployeeBenefit(
     }
     return { ok: true, data: { committed: false, preview: data as unknown as EmployeeBenefitRow } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
 
   // Referenced: keep the row and switch it off, so the chain from a (possibly
   // booked) verifikat back to its förmån stays intact (BFL 5 kap 6-7 §,

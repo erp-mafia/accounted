@@ -2,9 +2,16 @@
  * updateDraftSalaryRun (lib/salary/update-run.ts): the one draft-header edit
  * behind the dashboard PATCH, the v1 PATCH and the MCP update tool.
  */
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { invalidateRunCalculation } from '../invalidate-calculation'
 import { updateDraftSalaryRun } from '../update-run'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const DRAFT = {
   id: 'run-1',
@@ -18,13 +25,13 @@ const DRAFT = {
 const ARGS = { companyId: 'company-1', salaryRunId: 'run-1' }
 
 describe('updateDraftSalaryRun', () => {
+  beforeEach(() => {
+    vi.mocked(invalidateRunCalculation).mockClear()
+  })
+
   it('writes the patch on a draft, locked on status, and clears the calculation for a supplied payment date', async () => {
     const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
-    enqueueMany([
-      { data: DRAFT },
-      { data: { ...DRAFT, payment_date: '2026-07-23' } },
-      { data: null }, // calculation_breakdown clear
-    ])
+    enqueueMany([{ data: DRAFT }, { data: { ...DRAFT, payment_date: '2026-07-23' } }])
 
     const result = await updateDraftSalaryRun(supabase as never, { ...ARGS, patch: { payment_date: '2026-07-23' } })
 
@@ -36,7 +43,31 @@ describe('updateDraftSalaryRun', () => {
     }
     expect(findCall('salary_runs', 'update')).toEqual([{ payment_date: '2026-07-23' }])
     expect(findCalls('salary_runs', 'eq')).toContainEqual(['status', 'draft'])
-    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, 'company-1', { salaryRunId: 'run-1' })
+  })
+
+  it('leaves the calculation alone when the patch names no payment date', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: DRAFT }, { data: { ...DRAFT, notes: 'Julbonus' } }])
+
+    await updateDraftSalaryRun(supabase as never, { ...ARGS, patch: { notes: 'Julbonus' } })
+
+    expect(invalidateRunCalculation).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing when the calculation could not be cleared', async () => {
+    vi.mocked(invalidateRunCalculation).mockResolvedValueOnce({
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: 'boom' },
+    })
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: DRAFT })
+
+    const result = await updateDraftSalaryRun(supabase as never, { ...ARGS, patch: { payment_date: '2026-07-23' } })
+
+    expect(result).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
   it('reads and returns the caller\'s columns as the row', async () => {
@@ -103,12 +134,11 @@ describe('updateDraftSalaryRun', () => {
   })
 
   it('answers SALARY_RUN_PATCH_NOT_DRAFT when the run left draft between the read and the write', async () => {
-    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([{ data: DRAFT }, { data: null }])
 
     const result = await updateDraftSalaryRun(supabase as never, { ...ARGS, patch: { payment_date: '2026-07-23' } })
 
     expect(result).toEqual({ ok: false, code: 'SALARY_RUN_PATCH_NOT_DRAFT', details: { reason: 'race' } })
-    expect(findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 })

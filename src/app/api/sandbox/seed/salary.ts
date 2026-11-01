@@ -38,6 +38,7 @@ import { roundOre } from '@/lib/money'
 import { lastDayOfMonth, pad2 } from './date-utils'
 import { lineItemAccount } from '@/lib/salary/account-mapping'
 import { calculateSalary, type SalaryCalculationResult } from '@/lib/salary/calculation-engine'
+import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { serializePayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
 import type { TaxTableRate } from '@/lib/salary/tax-tables'
 import type { SalaryLineItemType } from '@/types'
@@ -648,11 +649,7 @@ export function buildSandboxSalaryLineItems({
       quantity: isAnna ? 1 : ERIK_HOURS_WORKED,
       unit_price: isAnna ? ANNA_MONTHLY_SALARY : ERIK_HOURLY_RATE,
       amount: isAnna ? payroll.anna.grossSalary : payroll.erik.grossSalary,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: true,
-      is_gross_deduction: false,
-      is_net_deduction: false,
+      ...payslipLineFlags(itemType),
       account_number:
         sre.salary_run_id === bookedRunId ? lineItemAccount(itemType, { employmentType: 'employee' }) : null,
       sort_order: 0,

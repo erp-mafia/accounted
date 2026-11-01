@@ -14,8 +14,15 @@ import {
   updatePayslipLine,
   deletePayslipLine,
 } from '@/lib/salary/payslip-lines'
+import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { TEXT_ROW_RETYPE_MESSAGE, VACATION_ROW_MESSAGE, ZERO_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE } from '@/lib/salary/line-account-override'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -217,7 +224,7 @@ describe('updatePayslipLine', () => {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
       lineId: LINE_ID,
-      patch: { item_type: 'net_deduction_union', amount: -300, is_net_deduction: true, is_taxable: false, is_avgift_basis: false, is_vacation_basis: false },
+      patch: { item_type: 'net_deduction_union', amount: -300 },
     })
 
     expect(result.ok).toBe(true)
@@ -357,7 +364,7 @@ describe('engångsskatt (one_off_tax_percent)', () => {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
       target: { employeeId: EMPLOYEE_ID },
-      input: { ...BASE_INPUT, item_type: 'net_deduction_union', amount: -300, is_net_deduction: true, one_off_tax_percent: 30 },
+      input: { ...BASE_INPUT, item_type: 'net_deduction_union', amount: -300, one_off_tax_percent: 30 },
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -375,7 +382,7 @@ describe('engångsskatt (one_off_tax_percent)', () => {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
       lineId: LINE_ID,
-      patch: { is_net_deduction: true },
+      patch: { item_type: 'net_deduction_other', amount: -500 },
       dryRun: true,
     })
     expect(result.ok).toBe(false)
@@ -389,7 +396,7 @@ describe('engångsskatt (one_off_tax_percent)', () => {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
       lineId: LINE_ID,
-      patch: { is_net_deduction: true, one_off_tax_percent: null },
+      patch: { item_type: 'net_deduction_other', amount: -500, one_off_tax_percent: null },
       dryRun: true,
     })
     expect(result.ok).toBe(true)
@@ -499,6 +506,7 @@ describe('vacation_category on payslip lines', () => {
     expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
       vacation_category: null,
       vacation_saved_year: null,
+      ...payslipLineFlags('vacation'),
     })
   })
 
@@ -518,6 +526,7 @@ describe('vacation_category on payslip lines', () => {
       expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
         vacation_category: category,
         vacation_saved_year: null,
+        ...payslipLineFlags('vacation'),
       })
     }
   })
@@ -659,104 +668,18 @@ describe('lines the calculation owns (#3185)', () => {
   })
 })
 
-describe('is_avgift_basis=false on a line the avgiftsunderlag always includes (agent feedback seq 947288)', () => {
-  const BENEFIT_INPUT = {
-    ...BASE_INPUT,
-    item_type: 'benefit_meals' as const,
-    description: 'Kostförmån',
-    amount: 500,
-    is_vacation_basis: false,
-  }
-
-  it('refuses a taxable benefit line with the flag, before any write', async () => {
+describe('the avgiftsunderlag of a line (agent feedback seq 947288)', () => {
+  it('follows the type: a caller cannot take a taxable line out of the underlag it is charged on', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
     const result = await createPayslipLine(supabase, {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
       target: { employeeId: EMPLOYEE_ID },
-      input: { ...BENEFIT_INPUT, is_avgift_basis: false },
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      expect(result.code).toBe('VALIDATION_ERROR')
-      expect(result.details?.field).toBe('is_avgift_basis')
-      expect(String(result.details?.message)).toMatch(/granskningssteget/)
-    }
-    expect(mock.findCalls('salary_line_items', 'insert')).toHaveLength(0)
-  })
-
-  it('refuses a taxable addition (bonus) with the flag', async () => {
-    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
-    const result = await createPayslipLine(supabase, {
-      companyId: COMPANY_ID,
-      salaryRunId: RUN_ID,
-      target: { employeeId: EMPLOYEE_ID },
-      input: { ...BASE_INPUT, is_avgift_basis: false },
+      input: { ...BASE_INPUT, item_type: 'benefit_meals', is_avgift_basis: false } as never,
       dryRun: true,
     })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.details?.field).toBe('is_avgift_basis')
-  })
-
-  it('accepts the same benefit line without the flag', async () => {
-    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
-    const result = await createPayslipLine(supabase, {
-      companyId: COMPANY_ID,
-      salaryRunId: RUN_ID,
-      target: { employeeId: EMPLOYEE_ID },
-      input: BENEFIT_INPUT,
-      dryRun: true,
-    })
-    expect(result.ok).toBe(true)
-  })
-
-  it('accepts the flag where nothing ignores it: a tax-free reimbursement and a net deduction', async () => {
-    for (const input of [
-      { ...BASE_INPUT, item_type: 'expense_reimbursement' as const, is_taxable: false, is_avgift_basis: false, is_vacation_basis: false },
-      { ...BASE_INPUT, item_type: 'net_deduction_other' as const, amount: -200, is_taxable: false, is_avgift_basis: false, is_vacation_basis: false, is_net_deduction: true },
-    ]) {
-      mock.reset()
-      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-      mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
-      const result = await createPayslipLine(supabase, {
-        companyId: COMPANY_ID,
-        salaryRunId: RUN_ID,
-        target: { employeeId: EMPLOYEE_ID },
-        input,
-        dryRun: true,
-      })
-      expect(result.ok).toBe(true)
-    }
-  })
-
-  it('refuses a patch that clears the flag on a taxable addition', async () => {
-    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-    mock.enqueue({ data: EXISTING_LINE })
-    const result = await updatePayslipLine(supabase, {
-      companyId: COMPANY_ID,
-      salaryRunId: RUN_ID,
-      lineId: LINE_ID,
-      patch: { is_avgift_basis: false },
-      dryRun: true,
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.details?.field).toBe('is_avgift_basis')
-  })
-
-  it('lets an unrelated patch through on a row stored with the flag before the refusal', async () => {
-    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-    mock.enqueue({ data: { ...EXISTING_LINE, is_avgift_basis: false } })
-    const result = await updatePayslipLine(supabase, {
-      companyId: COMPANY_ID,
-      salaryRunId: RUN_ID,
-      lineId: LINE_ID,
-      patch: { amount: 6000 },
-      dryRun: true,
-    })
-    expect(result.ok).toBe(true)
+    expect(result).toMatchObject({ ok: true, data: { is_avgift_basis: true, is_vacation_basis: false } })
   })
 })
 
@@ -896,21 +819,18 @@ describe('text rows and the zero-amount rule (crm#1076)', () => {
     expect(result).toMatchObject({ ok: false, details: { field: 'item_type' } })
   })
 
-  it('a patch on a text row keeps it words only: flags forced false, account null, text normalised', async () => {
+  it('a patch on a text row keeps it words only: no flags, account null, text normalised', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: TEXT_LINE })
     mock.enqueue({ data: { ...TEXT_LINE, salary_run_employee: undefined } })
-    const result = await update({ description: 'Ny\ntext', is_taxable: true, account_number: '7210' })
+    const result = await update({ description: 'Ny\ntext', is_taxable: true, account_number: '7210' } as never)
     expect(result.ok).toBe(true)
-    expect(mock.findCall('salary_line_items', 'update')?.[0]).toMatchObject({
+    expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
       description: 'Ny text',
-      is_taxable: false,
-      is_avgift_basis: false,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
       account_number: null,
+      ...payslipLineFlags('text'),
     })
+    expect(payslipLineFlags('text')).toMatchObject({ is_taxable: false, is_avgift_basis: false, is_vacation_basis: false })
   })
 
   it('refuses an amount patched onto a text row', async () => {
@@ -1020,7 +940,10 @@ describe('accounts the run books itself (2710-2739)', () => {
       mock.enqueue({ data: { ...NET_LINE, account_number, salary_run_employee: undefined } })
       const result = await update({ account_number })
       expect(result.ok).toBe(true)
-      expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({ account_number })
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
+        account_number,
+        ...payslipLineFlags(NET_LINE.item_type),
+      })
     }
   })
 

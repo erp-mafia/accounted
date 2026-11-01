@@ -44,6 +44,7 @@ import {
 } from '@/lib/salary/employee-update-rules'
 import { recordSammaloneregelnKollektivavtal } from '@/lib/salary/sammaloneregeln-kollektivavtal-record'
 import { followEmployeeSalaryInDraftRuns } from '@/lib/salary/run-employees'
+import { changesCalculationInput, invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -413,6 +414,11 @@ export async function updateEmployee(
       ok: true,
       data: { ...summaryOf(masked, args.employeeId), row: project(masked, args.columns), previous, changes: updates },
     }
+  }
+
+  if (changesCalculationInput(stored, writes)) {
+    const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+    if (invalidated) return invalidated
   }
 
   const { data, error } = await supabase

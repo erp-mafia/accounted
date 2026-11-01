@@ -1,5 +1,5 @@
 import type { SalaryLineItemType } from '@/types'
-import { TEXT_ROW_AMOUNT_MESSAGE, TEXT_ROW_FLAGS, TEXT_ROW_ITEM_TYPE } from '@/lib/salary/text-rows'
+import { TEXT_ROW_AMOUNT_MESSAGE, TEXT_ROW_ITEM_TYPE } from '@/lib/salary/text-rows'
 
 /**
  * Recurring payroll lines (issue #2042): standing per-employee payslip rows
@@ -7,12 +7,21 @@ import { TEXT_ROW_AMOUNT_MESSAGE, TEXT_ROW_FLAGS, TEXT_ROW_ITEM_TYPE } from '@/l
  * bike bruttolöneavdrag of -670,17 kr/month, or a text row explaining how the
  * salary is built up.
  *
- * This module is pure: item-type whitelist, flag derivation and amount-sign
- * validation. The DB derivation lives in run-calculation.ts (step 8d3) and
- * mirrors the employee_benefits step 8d lifecycle via
- * salary_line_items.source_recurring_line_id. Every other list of recurring
- * types (the Zod enum, the dashboard panel) is derived from
+ * This module is pure: item-type whitelist and amount-sign validation. The
+ * flags come from the type (line-item-roles.ts). The DB derivation lives in
+ * run-calculation.ts (step 8d3) and mirrors the employee_benefits step 8d
+ * lifecycle via salary_line_items.source_recurring_line_id. Every other list
+ * of recurring types (the Zod enum, the dashboard panel) is derived from
  * RECURRING_LINE_ITEM_TYPES and RECURRING_LINE_LABELS here.
+ *
+ * Recurring ADDITIONS ('other', a "Personligt tillägg" next to Grundlön) are
+ * deliberately not supported. Proration for a partial month, absence
+ * deductions, sjuklön, semestertillägg and the OB hourly rate all read only
+ * monthly_salary, so a standing tillägg row would be paid in full through
+ * sick leave. A standing raise belongs on monthly_salary; the payslip can
+ * explain how it is built up with a text row. Nor is a standing repayment:
+ * every non-text recurring row is a deduction, so its amount is negative,
+ * stricter than a one-off nettolöneavdrag (line-item-roles.ts payslipLineSign).
  */
 
 /** Item types a recurring line may use. Mirrors the table CHECK constraint. */
@@ -38,56 +47,6 @@ export const RECURRING_LINE_LABELS: Record<Exclude<RecurringLineItemType, 'text'
   net_deduction_union: 'Fackavgift',
   net_deduction_benefit_payment: 'Nettolöneavdrag förmån',
   net_deduction_other: 'Nettolöneavdrag',
-}
-
-export interface RecurringLineFlags {
-  is_taxable: boolean
-  is_avgift_basis: boolean
-  is_vacation_basis: boolean
-  is_gross_deduction: boolean
-  is_net_deduction: boolean
-}
-
-/**
- * Derive the salary_line_items flags from the item type instead of storing
- * them: a gross deduction that is not tax-reducing (or a net deduction that
- * is) cannot be expressed, so the payslip math stays consistent by
- * construction.
- *
- * Gross deductions carry the sick-karens convention: negative amount with
- * is_taxable + is_avgift_basis true, so they reduce both the tax base and the
- * arbetsgivaravgift base. Net deductions only move money after tax. Neither
- * touches the semester base (is_vacation_basis false on the deduction row:
- * the loneväxling-style choice recorded in DECISIONS.md).
- *
- * A text row carries no flags at all (lib/salary/text-rows.ts): it never
- * reaches the engine or the booking.
- *
- * Recurring ADDITIONS ('other', a "Personligt tillägg" next to Grundlön) are
- * deliberately not supported. Proration for a partial month, absence
- * deductions, sjuklön, semestertillägg and the OB hourly rate all read only
- * monthly_salary, so a standing tillägg row would be paid in full through
- * sick leave. A standing raise belongs on monthly_salary;
- * the payslip can explain how it is built up with a text row.
- */
-export function recurringLineFlags(itemType: RecurringLineItemType): RecurringLineFlags {
-  if (itemType === TEXT_ROW_ITEM_TYPE) return { ...TEXT_ROW_FLAGS }
-  if (itemType === 'gross_deduction_pension' || itemType === 'gross_deduction_other') {
-    return {
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
-      is_gross_deduction: true,
-      is_net_deduction: false,
-    }
-  }
-  return {
-    is_taxable: false,
-    is_avgift_basis: false,
-    is_vacation_basis: false,
-    is_gross_deduction: false,
-    is_net_deduction: true,
-  }
 }
 
 /** Shared 400 copy: schema, route backstop and UI hint say the same thing. */

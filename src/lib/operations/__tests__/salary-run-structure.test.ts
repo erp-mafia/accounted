@@ -67,6 +67,12 @@ import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/lines/[lineId]/route
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/correct/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/mark-paid/route'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const USER_ID = 'user-1'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -439,16 +445,10 @@ const LINE_ROW = {
 }
 
 describe('salary-runs.lines.create', () => {
-  it('accepts pay, deductions and vacation days, filling the flag defaults', () => {
-    expect(salaryRunsLinesCreate.input.parse(BONUS)).toMatchObject({
-      ...BONUS,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: true,
-      is_gross_deduction: false,
-      is_net_deduction: false,
-      sort_order: 0,
-    })
+  it('accepts pay, deductions and vacation days; the flags are the type\'s, not the input\'s', () => {
+    const parsed = salaryRunsLinesCreate.input.parse({ ...BONUS, is_taxable: false })
+    expect(parsed).toMatchObject({ ...BONUS, sort_order: 0 })
+    expect(parsed).not.toHaveProperty('is_taxable')
     expect(
       accepts(salaryRunsLinesCreate, {
         salary_run_id: RUN_ID,
@@ -456,10 +456,6 @@ describe('salary-runs.lines.create', () => {
         item_type: 'net_deduction_advance',
         description: 'Avdrag förskott',
         amount: -2000,
-        is_taxable: false,
-        is_avgift_basis: false,
-        is_vacation_basis: false,
-        is_net_deduction: true,
         account_number: '1613',
       }),
     ).toBe(true)

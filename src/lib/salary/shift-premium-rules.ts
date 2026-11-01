@@ -28,6 +28,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ShiftPremiumAmountForm, ShiftPremiumRule } from '@/types'
+import { invalidateRunCalculation } from './invalidate-calculation'
 import {
   shiftPremiumAmountFieldError,
   shiftPremiumAmountMessage,
@@ -184,6 +185,9 @@ export async function createShiftPremiumRule(
     employeeIds: input.applies_to_employee_ids,
   })
   if (!employeesOk.ok) return employeesOk
+
+  const invalidated = await invalidateRunCalculation(supabase, companyId, { everyRun: true })
+  if (invalidated) return invalidated
 
   const { data, error } = await supabase
     .from('shift_premium_rules')
@@ -346,6 +350,9 @@ export async function updateShiftPremiumRule(
   if (!merged.ok) return merged
   const { patch } = merged.data
 
+  const invalidated = await invalidateRunCalculation(supabase, companyId, { everyRun: true })
+  if (invalidated) return invalidated
+
   // Literal keys with undefined for untouched fields: JSON serialisation
   // drops them, so PostgREST only sees the patched columns, and the phantom
   // column scanner can read every key.
@@ -402,6 +409,9 @@ export async function deleteShiftPremiumRule(
   supabase: SupabaseClient,
   args: { companyId: string; ruleId: string },
 ): Promise<ShiftPremiumRuleResult<ShiftPremiumRuleDeletion>> {
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { everyRun: true })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('shift_premium_rules')
     .delete()

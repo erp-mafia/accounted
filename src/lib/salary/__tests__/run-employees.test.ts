@@ -15,6 +15,12 @@ import {
   setRunEmployeeSalary,
 } from '@/lib/salary/run-employees'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -217,9 +223,7 @@ describe('followEmployeeSalaryInDraftRuns (crm#1337)', () => {
       ['company_id', COMPANY_ID],
       ['status', 'draft'],
     ])
-    expect(mock.findCall('salary_run_employees', 'update')).toEqual([
-      { monthly_salary: 32000, calculation_breakdown: null },
-    ])
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ monthly_salary: 32000 }])
     expect(mock.findCalls('salary_run_employees', 'eq')).toEqual([
       ['company_id', COMPANY_ID],
       ['employee_id', EMPLOYEE_ID],
@@ -507,7 +511,7 @@ describe('setRunEmployeeSalary', () => {
     const sreUpdates = mock.findCalls('salary_run_employees', 'update').map((a) => a[0])
     expect(sreUpdates).toEqual([
       { salary_type: 'monthly', monthly_salary: 30000 },
-      { monthly_salary: 30000, calculation_breakdown: null },
+      { monthly_salary: 30000 },
     ])
     expect(mock.findCalls('salary_line_items', 'in').at(-1)).toEqual(['item_type', ['hourly_salary']])
     expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
@@ -702,10 +706,7 @@ describe('setRunEmployeeSalary', () => {
       'salary_run_employees',
       'salary_line_items',
     ])
-    expect(mock.findCall('salary_run_employees', 'update')?.[0]).toEqual({
-      hours_worked: 160.33,
-      calculation_breakdown: null,
-    })
+    expect(mock.findCall('salary_run_employees', 'update')?.[0]).toEqual({ hours_worked: 160.33 })
     expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
       amount: 33749.47,
       quantity: 160.33,

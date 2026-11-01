@@ -7177,6 +7177,10 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönekörningen måste beräknas innan bokföring.',
     message_en: 'Salary run must be calculated before booking.',
+    remediation: {
+      description:
+        'Calculate the run: gnubok_calculate_salary_run or POST /salary-runs/{id}/calculate. Only a draft calculates, so a run in review goes back first: gnubok_revert_salary_run or POST /salary-runs/{id}/revert.',
+    },
   },
   SALARY_RUN_CREATE_FAILED: {
     httpStatus: 500,

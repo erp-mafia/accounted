@@ -48,6 +48,7 @@ import {
   type UpdateEmployeeRecurringLineSchema,
 } from '@/lib/api/schemas'
 import { ACCOUNT_NUMBER_MESSAGE, ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
 import { roundOre } from '@/lib/money'
 import {
@@ -341,6 +342,9 @@ export async function createEmployeeRecurringLine(
     return { ok: true, data: { ...row, id: null, created_at: null, updated_at: null } }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('employee_recurring_lines')
     .insert({
@@ -451,6 +455,9 @@ export async function updateEmployeeRecurringLine(
     return { ok: true, data: { ...existing, ...updates } as EmployeeRecurringLineRow }
   }
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('employee_recurring_lines')
     // Literal keys so the phantom-column scanner can verify every column;
@@ -526,6 +533,9 @@ export async function deleteEmployeeRecurringLine(
       ? { ok: true, data: { id: args.lineId, deleted: false, deactivated: true } }
       : { ok: true, data: { id: args.lineId, deleted: true } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: args.employeeId })
+  if (invalidated) return invalidated
 
   // Delete-first, no pre-check: the FK from salary_line_items is NO ACTION,
   // so the database itself refuses (23503) whenever any derived row

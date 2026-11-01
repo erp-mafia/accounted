@@ -32,6 +32,12 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as createLine } from '../../employees/[employeeId]/lines/route'
 import { PATCH as patchLine, DELETE as deleteLine } from '../[lineId]/route'
@@ -507,6 +513,20 @@ describe('v1 payslip lines: text rows and 0 kr rows', () => {
         expect(json.error.code).toBe('VALIDATION_ERROR')
         expect(json.error.details.field).toBe('amount')
         expect(json.error.details.message).toMatch(/inte är 0 kr/)
+        expect(mock.tables()).not.toContain('salary_line_items')
+      }
+    })
+
+    it('returns 400 VALIDATION_ERROR for a wrong sign', async () => {
+      for (const body of [
+        { item_type: 'gross_deduction_other', description: 'Avdrag', amount: 1000 },
+        { item_type: 'mileage_taxfree', description: 'Mil', amount: -300 },
+        { item_type: 'benefit_other', description: 'Förmån', amount: -100 },
+      ]) {
+        const { res, body: json, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, body)
+        expect(res.status).toBe(400)
+        expect(json.error.code).toBe('VALIDATION_ERROR')
+        expect(json.error.details.field).toBe('amount')
         expect(mock.tables()).not.toContain('salary_line_items')
       }
     })

@@ -209,6 +209,26 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(body.data.days[0].salary_absence_day_id).toBeTruthy()
   })
 
+  it('states one scheduled day of the employee when hours_per_day is left out', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { id: EMPLOYEE_ID, hours_per_week: 40, workdays_per_week: 4 }, error: null },
+      }).supabase,
+    )
+
+    const res = await putAbsence(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence?dry_run=true`,
+        { method: 'PUT', body: JSON.stringify({ from: '2026-03-02', to: '2026-03-02', absence_type: 'sick' }) },
+      ),
+      absenceParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({ count: 1, days: [{ hours: 10 }] })
+  })
+
   it('rejects from > to with 400', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

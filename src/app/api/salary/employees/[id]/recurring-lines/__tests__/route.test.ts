@@ -30,6 +30,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { POST } from '../route'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
 function post(body: unknown) {

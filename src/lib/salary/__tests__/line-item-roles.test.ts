@@ -34,6 +34,12 @@ import { clearTaxTableCache } from '../tax-tables'
 import { createPayrollFakeDb, type Row } from './payroll-fake-db'
 import { PAYROLL_CONFIG_2026, draftRun, employee, line, rosterRow, skatteverketFetch } from './payroll-fixtures'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 vi.mock('../personnummer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../personnummer')>()
   return { ...actual, decryptPersonnummer: () => '199001011234' }

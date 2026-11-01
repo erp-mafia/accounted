@@ -41,6 +41,13 @@ vi.mock('@/lib/salary/expense-claim-lines', () => ({
 }))
 
 import { registerExpenseClaim, createPayoutBatch, deleteExpenseClaim } from '../expense-claims-service'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 // The queued mock is structurally sufficient for the service; the cast keeps
@@ -689,6 +696,7 @@ describe('deleteExpenseClaim', () => {
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(sb, COMPANY, { salaryRunId: 'run-1' })
     expect(findCall('salary_line_items', 'delete')).toBeTruthy()
     expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
     expect(findCall('expense_claims', 'delete')).toBeTruthy()

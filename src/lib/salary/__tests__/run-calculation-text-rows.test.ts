@@ -15,7 +15,8 @@ import { createLogger } from '@/lib/logger'
 import { clearTaxTableCache } from '../tax-tables'
 import { createPayrollFakeDb, type Row } from './payroll-fake-db'
 import { draftRun, employee, line, PAYROLL_CONFIG_2026, rosterRow, skatteverketFetch } from './payroll-fixtures'
-import { RECURRING_TEXT_SORT_ORDER, TEXT_ROW_FLAGS } from '../text-rows'
+import { payslipLineFlags } from '../line-item-roles'
+import { RECURRING_TEXT_SORT_ORDER } from '../text-rows'
 
 vi.mock('../calculation-engine', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../calculation-engine')>()
@@ -48,7 +49,7 @@ const MANUAL_TEXT = line(CO, SRE, 'li-text-manual', {
   item_type: 'text',
   description: 'Lön enligt kollektivavtal, se bilaga',
   amount: 0,
-  ...TEXT_ROW_FLAGS,
+  ...payslipLineFlags('text'),
   sort_order: 5,
 })
 
@@ -191,7 +192,7 @@ describe('runSalaryCalculation: text rows never reach the pay', () => {
       quantity: null,
       amount: 0,
       account_number: null,
-      ...TEXT_ROW_FLAGS,
+      ...payslipLineFlags('text'),
       source_recurring_line_id: 'rec-text',
       // The only recurring text line: counted among text lines only, so the
       // money lines before it never push it past the semesterersättning (50).

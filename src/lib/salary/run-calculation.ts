@@ -32,7 +32,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { calculateSalary, monthlyBaseSalary, type CalculationStep } from './calculation-engine'
+import { calculateSalary, monthlyBaseSalary, type CalculationLineItem, type CalculationStep } from './calculation-engine'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
 import { VACATION_LIABILITY_METHOD_PARAM, vacationLiabilityMethodFrom } from './vacation-liability-method'
 import {
@@ -61,14 +61,13 @@ import { REGIONAL_SUPPORT_PARAM } from './regional-support'
 import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
 import type { MoneyLineItemType } from './account-mapping'
-import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines, premiumPayBasis } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { effectiveRow } from './effective-figures'
 import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from './base-salary-line'
-import { isBaseSalaryDisplayLine } from './line-item-roles'
+import { isBaseSalaryDisplayLine, payslipLineFlags, type PayslipLineFlags } from './line-item-roles'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, scheduledHoursPerDay } from './work-schedule'
 import { paidDaysPerDayOff } from './vacation-net-days'
@@ -133,6 +132,28 @@ interface RecurringRow {
   /** On a net_deduction_benefit_payment line: the benefit it pays for. */
   benefit_type?: string | null
   valid_to: string | null
+}
+
+/** A payslip row as the engine takes it. */
+function engineLine(
+  row: PayslipLineFlags & {
+    item_type: string
+    amount: number
+    one_off_tax_percent?: number | null
+    benefit_type?: string | null
+  },
+): CalculationLineItem {
+  return {
+    itemType: row.item_type as SalaryLineItemType,
+    amount: row.amount,
+    isTaxable: row.is_taxable,
+    isAvgiftBasis: row.is_avgift_basis,
+    isVacationBasis: row.is_vacation_basis,
+    isGrossDeduction: row.is_gross_deduction,
+    isNetDeduction: row.is_net_deduction,
+    oneOffTaxPercent: row.one_off_tax_percent ?? null,
+    benefitType: row.benefit_type ?? null,
+  }
 }
 
 function groupByEmployee<T extends { employee_id: string }>(rows: T[]): Map<string, T[]> {
@@ -615,6 +636,7 @@ export async function runSalaryCalculation(
   const vaxaStodRefundEmployees: string[] = []
   const variableVacationPayEmployees: string[] = []
   const vacationDaysPayEmployees: string[] = []
+  const netRepayments: string[] = []
   // Vacation days the law and the data cannot price (vacation-days-pay.ts):
   // collected for the whole roster, then refused together before anything
   // is written.
@@ -626,6 +648,7 @@ export async function runSalaryCalculation(
   const hourlyLineRefreshIds: string[] = []
   const monthlyLineAmounts: Array<{ salaryRunEmployeeId: string; amount: number }> = []
   const derivedLineRows: Array<Record<string, unknown>> = []
+  const lineFlagFixes: Array<{ id: string; itemType: SalaryLineItemType }> = []
   const rosterWrites: Array<{ id: string; columns: Record<string, unknown> }> = []
 
   // 8. Per-employee calculation: in memory, no reads and no writes.
@@ -744,11 +767,7 @@ export async function runSalaryCalculation(
           quantity: pricedHours,
           unit_price: emp.hourly_rate,
           amount: baseAmount,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_vacation_basis: true,
-          is_gross_deduction: false,
-          is_net_deduction: false,
+          ...payslipLineFlags('hourly_salary'),
           account_number: (currentLine?.account_number as string | null | undefined) ?? null,
           sort_order: 0,
         })
@@ -804,11 +823,7 @@ export async function runSalaryCalculation(
           description: b.description,
           quantity: 1,
           amount: Math.round(b.monthly_value * 100) / 100,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_vacation_basis: false,
-          is_gross_deduction: false,
-          is_net_deduction: false,
+          ...payslipLineFlags(itemType),
           account_number: null,
           sort_order: 200 + idx,
           source_benefit_id: b.id,
@@ -817,9 +832,7 @@ export async function runSalaryCalculation(
 
     // 8d3. Derive recurring line items from employee_recurring_lines: same
     //      lifecycle as the benefit rows (deleted by back-link, re-derived for
-    //      rows whose validity window covers the payment date). Flags come
-    //      from the item type so a stored row can never contradict the
-    //      payslip math. A recurring text row is copied as words only (no
+    //      rows whose validity window covers the payment date). A recurring text row is copied as words only (no
     //      quantity, amount 0, no account) and sorts directly under the base
     //      salary row; it is stored on the run, so the payslip keeps the text
     //      it was issued with even if the recurring line changes later.
@@ -828,8 +841,7 @@ export async function runSalaryCalculation(
     )
     let textIdx = 0
     const derivedRecurringRows = activeRecurring.map((r, idx) => {
-      const itemType = r.item_type as RecurringLineItemType
-      const flags = recurringLineFlags(itemType)
+      const itemType = r.item_type as SalaryLineItemType
       const text = itemType === 'text'
       return {
         salary_run_employee_id: sre.id,
@@ -838,11 +850,7 @@ export async function runSalaryCalculation(
         description: r.description,
         quantity: text ? null : 1,
         amount: text ? 0 : roundOre(r.amount),
-        is_taxable: flags.is_taxable,
-        is_avgift_basis: flags.is_avgift_basis,
-        is_vacation_basis: flags.is_vacation_basis,
-        is_gross_deduction: flags.is_gross_deduction,
-        is_net_deduction: flags.is_net_deduction,
+        ...payslipLineFlags(itemType),
         // A text row has no account; any other row carries its own
         // override, else the default resolved at booking (account-mapping.ts
         // lineItemAccount).
@@ -860,15 +868,8 @@ export async function runSalaryCalculation(
     const absenceRows = absenceResult.lineItems.map((li, idx) => ({
       salary_run_employee_id: sre.id,
       company_id: companyId,
-      item_type: li.item_type,
-      description: li.description,
-      quantity: li.quantity,
+      ...li,
       amount: Math.round(li.amount * 100) / 100,
-      is_taxable: li.is_taxable,
-      is_avgift_basis: li.is_avgift_basis,
-      is_vacation_basis: li.is_vacation_basis,
-      is_gross_deduction: li.is_gross_deduction,
-      is_net_deduction: false,
       account_number: null,
       sort_order: 100 + idx,
     }))
@@ -883,18 +884,13 @@ export async function runSalaryCalculation(
     //      its minutes and the rule as used (source_premium_rule_id,
     //      premium_basis), so the line can be explained after the rule
     //      changes and a correction run recomputes from the dated rules.
-    let derivedPremiumRows: Array<{
+    let derivedPremiumRows: Array<PayslipLineFlags & {
       salary_run_employee_id: string
       company_id: string
       item_type: ShiftPremiumItemType
       description: string
       quantity: number
       amount: number
-      is_taxable: boolean
-      is_avgift_basis: boolean
-      is_vacation_basis: boolean
-      is_gross_deduction: boolean
-      is_net_deduction: boolean
       account_number: string | null
       sort_order: number
       source_premium_rule_id: string
@@ -929,11 +925,7 @@ export async function runSalaryCalculation(
         description: line.description,
         quantity: line.hours,
         amount: line.amount,
-        is_taxable: true,
-        is_avgift_basis: true,
-        is_vacation_basis: true,
-        is_gross_deduction: false,
-        is_net_deduction: false,
+        ...payslipLineFlags(line.itemType),
         account_number: null,
         sort_order: 300 + idx,
         source_premium_rule_id: line.sourceRuleId,
@@ -942,7 +934,7 @@ export async function runSalaryCalculation(
     }
 
     // 8e. Assemble the in-memory line item set fed to calculateSalary.
-    const manualLineItems = (sre.line_items || [])
+    const manualRows = ((sre.line_items || []) as Array<Record<string, unknown>>)
       // Everything the calculation derives is re-derived above; the rest are
       // manual lines (only the engine's own semesterersättning row counts as
       // derived: a manually entered one is a wage the operator decided on).
@@ -951,62 +943,32 @@ export async function runSalaryCalculation(
       // Timlön row that shows Step 1: of the live pay type, or of the
       // snapshot's while 9a has yet to swap it (it deletes that row). A
       // base-salary row of another type is pay on top (crm#1331).
-      .filter((li: Record<string, unknown>) => !isCalculatedLine(li) && !isTextRow(li))
-      .filter((li: Record<string, unknown>) => !isBaseSalaryDisplayLine(li.item_type, [emp.salary_type, sre.salary_type]))
-      .map((li: Record<string, unknown>) => ({
-        itemType: li.item_type as SalaryLineItemType,
+      .filter((li) => !isCalculatedLine(li) && !isTextRow(li))
+      .filter((li) => !isBaseSalaryDisplayLine(li.item_type, [emp.salary_type, sre.salary_type]))
+    // The type's flags, not the stored ones: a row written before the line
+    // commands derived them keeps its type's meaning, and is stored right
+    // again (step 9b) for the booking and the reports that read the row.
+    const manualLineItems = manualRows.map((li) => {
+      const flags = payslipLineFlags(li.item_type as SalaryLineItemType)
+      if ((Object.keys(flags) as Array<keyof PayslipLineFlags>).some((flag) => li[flag] !== flags[flag])) {
+        lineFlagFixes.push({ id: li.id as string, itemType: li.item_type as SalaryLineItemType })
+      }
+      return engineLine({
+        ...flags,
+        item_type: li.item_type as string,
         amount: li.amount as number,
-        isTaxable: li.is_taxable as boolean,
-        isAvgiftBasis: li.is_avgift_basis as boolean,
-        isVacationBasis: li.is_vacation_basis as boolean,
-        isGrossDeduction: li.is_gross_deduction as boolean,
-        isNetDeduction: li.is_net_deduction as boolean,
-        oneOffTaxPercent: (li.one_off_tax_percent as number | null | undefined) ?? null,
-        benefitType: (li.benefit_type as string | null | undefined) ?? null,
-      }))
-    const derivedLineItems = absenceResult.lineItems.map((li) => ({
-      itemType: li.item_type as SalaryLineItemType,
-      amount: li.amount,
-      isTaxable: li.is_taxable,
-      isAvgiftBasis: li.is_avgift_basis,
-      isVacationBasis: li.is_vacation_basis,
-      isGrossDeduction: li.is_gross_deduction,
-      isNetDeduction: false,
-    }))
-    const derivedBenefitLineItems = derivedBenefitRows.map((row) => ({
-      itemType: row.item_type as SalaryLineItemType,
-      amount: row.amount,
-      isTaxable: true,
-      isAvgiftBasis: true,
-      isVacationBasis: false,
-      isGrossDeduction: false,
-      isNetDeduction: false,
-    }))
-    const derivedPremiumLineItems = derivedPremiumRows.map((row) => ({
-      itemType: row.item_type as SalaryLineItemType,
-      amount: row.amount,
-      isTaxable: true,
-      isAvgiftBasis: true,
-      isVacationBasis: true,
-      isGrossDeduction: false,
-      isNetDeduction: false,
-    }))
-    const derivedRecurringLineItems = derivedRecurringRows.filter((row) => !isTextRow(row)).map((row) => ({
-      itemType: row.item_type as SalaryLineItemType,
-      amount: row.amount,
-      isTaxable: row.is_taxable,
-      isAvgiftBasis: row.is_avgift_basis,
-      isVacationBasis: row.is_vacation_basis,
-      isGrossDeduction: row.is_gross_deduction,
-      isNetDeduction: row.is_net_deduction,
-      benefitType: 'benefit_type' in row ? row.benefit_type : null,
-    }))
+        one_off_tax_percent: li.one_off_tax_percent as number | null | undefined,
+        benefit_type: li.benefit_type as string | null | undefined,
+      })
+    })
     const lineItems = [
       ...manualLineItems,
-      ...derivedLineItems,
-      ...derivedBenefitLineItems,
-      ...derivedPremiumLineItems,
-      ...derivedRecurringLineItems,
+      ...[
+        ...absenceResult.lineItems,
+        ...derivedBenefitRows,
+        ...derivedPremiumRows,
+        ...derivedRecurringRows.filter((row) => !isTextRow(row)),
+      ].map(engineLine),
     ]
 
     // 8e0. Pay for the vacation days taken (issue #85, Semesterlagen 16 a,
@@ -1054,6 +1016,12 @@ export async function runSalaryCalculation(
       }
       vacationPaySteps = vacationPay.steps
       for (const row of vacationPay.rows) {
+        // Whether the row replaces salary is the one thing its type cannot say.
+        const flags = {
+          ...payslipLineFlags('vacation'),
+          is_vacation_basis: row.is_vacation_basis,
+          is_gross_deduction: row.is_gross_deduction,
+        }
         vacationPayRows.push({
           salary_run_employee_id: sre.id,
           company_id: companyId,
@@ -1064,23 +1032,11 @@ export async function runSalaryCalculation(
           // vacation ledger and vacation_days_taken count.
           quantity: null,
           amount: row.amount,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_vacation_basis: row.is_vacation_basis,
-          is_gross_deduction: row.is_gross_deduction,
-          is_net_deduction: false,
+          ...flags,
           account_number: null,
           sort_order: row.sort_order,
         })
-        lineItems.push({
-          itemType: 'vacation',
-          amount: row.amount,
-          isTaxable: true,
-          isAvgiftBasis: true,
-          isVacationBasis: row.is_vacation_basis,
-          isGrossDeduction: row.is_gross_deduction,
-          isNetDeduction: false,
-        })
+        lineItems.push(engineLine({ ...flags, item_type: 'vacation', amount: row.amount }))
       }
       if (vacationPay.rows.length > 0) vacationDaysPayEmployees.push(employeeName)
     }
@@ -1121,23 +1077,11 @@ export async function runSalaryCalculation(
           description,
           quantity: 1,
           amount,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_vacation_basis: false,
-          is_gross_deduction: false,
-          is_net_deduction: false,
+          ...payslipLineFlags('semesterersattning'),
           account_number: null,
           sort_order: 51,
         })
-        lineItems.push({
-          itemType: 'semesterersattning',
-          amount,
-          isTaxable: true,
-          isAvgiftBasis: true,
-          isVacationBasis: false,
-          isGrossDeduction: false,
-          isNetDeduction: false,
-        })
+        lineItems.push(engineLine({ ...payslipLineFlags('semesterersattning'), item_type: 'semesterersattning', amount }))
         variableVacationPayStep = {
           label: `${description} (Semesterlagen 16 a §)`,
           formula: finalSettlement
@@ -1226,6 +1170,7 @@ export async function runSalaryCalculation(
       taxRates,
     )
     if (result.vaxaStodRefund) vaxaStodRefundEmployees.push(employeeName)
+    if (lineItems.some((li) => li.isNetDeduction && li.amount > 0)) netRepayments.push(employeeName)
     // The breakdown names where the variable vacation pay came from, next to
     // the additions it is part of.
     if (variableVacationPayStep) {
@@ -1328,17 +1273,13 @@ export async function runSalaryCalculation(
         description: 'Semesterersättning',
         quantity: 1,
         amount: Math.round(result.vacationCompensation * 100) / 100,
-        is_taxable: true,
-        is_avgift_basis: true,
-        is_vacation_basis: false,
-        is_gross_deduction: false,
-        is_net_deduction: false,
+        ...payslipLineFlags('semesterersattning'),
         account_number: null,
         sort_order: 50,
       })
     }
 
-    // 8i. The derived 'oresavrundning' line item. All flags false: the
+    // 8i. The derived 'oresavrundning' line item: the
     //     rounding is not pay, not tax base, not avgift basis; it exists so
     //     the payslip shows the whole-krona step and the booking gets its 3740
     //     debit (credit when net_rounding = nearest rounded down). The old row
@@ -1353,11 +1294,7 @@ export async function runSalaryCalculation(
         description: 'Öresavrundning',
         quantity: 1,
         amount: Math.round(result.netRounding * 100) / 100,
-        is_taxable: false,
-        is_avgift_basis: false,
-        is_vacation_basis: false,
-        is_gross_deduction: false,
-        is_net_deduction: false,
+        ...payslipLineFlags('oresavrundning'),
         account_number: null,
         sort_order: 900,
       })
@@ -1433,6 +1370,16 @@ export async function runSalaryCalculation(
       .eq('salary_run_employee_id', salaryRunEmployeeId)
       .eq('company_id', companyId)
       .eq('item_type', 'monthly_salary')
+  }
+  //     Stored flags that were not the type's. Not display: the booking reads
+  //     them, so a row that stays wrong fails the calculation.
+  for (const { id: lineId, itemType } of lineFlagFixes) {
+    const { error: flagError } = await supabase
+      .from('salary_line_items')
+      .update({ ...payslipLineFlags(itemType) })
+      .eq('id', lineId)
+      .eq('company_id', companyId)
+    if (flagError) return { ok: false, code: 'DATABASE_ERROR', details: flagError }
   }
 
   // 9c. Delete every row the calculation derives, for the whole roster: the
@@ -1592,6 +1539,13 @@ export async function runSalaryCalculation(
     warnings.push(
       `Semesterlön för rörliga lönedelar (Semesterlagen 16 a §) har lagts till för ${variableVacationPayEmployees.join(', ')}. ` +
         `Beloppet bygger på lönekörningarna i Accounted; ta bort en manuellt inlagd rad för samma ersättning så att den inte betalas två gånger.`,
+    )
+  }
+
+  if (netRepayments.length > 0) {
+    warnings.push(
+      `Ett nettolöneavdrag med positivt belopp betalas ut till den anställde som en återbetalning: ${netRepayments.join(', ')}. ` +
+        'Ska beloppet dras från lönen, ange det som negativt.',
     )
   }
 

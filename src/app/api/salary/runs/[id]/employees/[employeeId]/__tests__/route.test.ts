@@ -25,6 +25,12 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 function authed() {
@@ -290,7 +296,7 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours
 
     expect(status).toBe(200)
     expect(body.data).toMatchObject({ hours_worked: 26, salary_type: 'hourly' })
-    expect(findCalls('salary_run_employees', 'update')[0]![0]).toEqual({ hours_worked: 26, calculation_breakdown: null })
+    expect(findCalls('salary_run_employees', 'update')[0]![0]).toEqual({ hours_worked: 26 })
     expect(findCalls('salary_line_items', 'update')[0]![0]).toEqual({ amount: 4875, quantity: 26, unit_price: 187.5 })
   })
 

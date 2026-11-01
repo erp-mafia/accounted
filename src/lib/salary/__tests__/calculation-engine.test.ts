@@ -4,7 +4,7 @@ import {
   calculateAvgifterRate,
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
-import { recurringLineFlags } from '../recurring-lines'
+import { payslipLineFlags } from '../line-item-roles'
 import { deriveAbsenceLineItems, type AbsenceDay, type DeriveInput } from '../derive-absence-line-items'
 import { dailyDivisor } from '../work-schedule'
 import { roundOre } from '@/lib/money'
@@ -1729,10 +1729,10 @@ describe('öresavrundning (roundNetToWholeKrona)', () => {
 
 describe('recurring line flags through the engine', () => {
   // Pins the payroll math for derived recurring rows: the flags produced by
-  // recurringLineFlags must actually move gross, the tax base and the AGA
+  // payslipLineFlags must actually move gross, the tax base and the AGA
   // base when run through calculateSalary (regression guard for #2044).
   it('a recurring gross deduction reduces gross, tax base and AGA base, not the semester base', () => {
-    const flags = recurringLineFlags('gross_deduction_other')
+    const flags = payslipLineFlags('gross_deduction_other')
     const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
     const withDeduction = calculateSalary(
       makeBasicInput({
@@ -1762,7 +1762,7 @@ describe('recurring line flags through the engine', () => {
   })
 
   it('a recurring net deduction reduces only the paid-out net', () => {
-    const flags = recurringLineFlags('net_deduction_union')
+    const flags = payslipLineFlags('net_deduction_union')
     const base = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
     const withDeduction = calculateSalary(
       makeBasicInput({
@@ -1857,14 +1857,16 @@ describe('kostnadsersättning: tax-free reimbursements', () => {
     expect(r.netRounding).toBe(0.6)
   })
 
-  it('ignores a negative reimbursement line', () => {
+  // The line commands refuse a negative one (payslip-line-sign.test.ts); the
+  // voucher posts the row with its sign, so the pay must read it the same way.
+  it('reads a negative reimbursement line with its sign, as the voucher does', () => {
     const r = calculateSalary(
       makeBasicInput({ lineItems: [baseLineItem(40000), reimbursement('expense_reimbursement', -100)] }),
       config2026,
       emptyTaxRates,
     )
-    expect(r.taxFreeReimbursements).toBe(0)
-    expect(r.netSalary).toBe(28000)
+    expect(r.taxFreeReimbursements).toBe(-100)
+    expect(r.netSalary).toBe(27900)
   })
 
   it('invariant: netSalary + tax + netDeductions - reimbursements = grossSalary', () => {

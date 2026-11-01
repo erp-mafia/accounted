@@ -1207,6 +1207,17 @@ function creditNoteRefundRefusal(failure: Extract<RefundCreditNoteResult, { ok: 
   return codedRefusal(code, `gnubok_mark_invoice_as_paid: ${message}`)
 }
 
+/**
+ * The way out of a run in review that needs a calculation: only a draft
+ * calculates, and an input written during review leaves the run stale.
+ */
+const REVIEW_RUN_EXIT = 'Send it back to draft with gnubok_revert_salary_run, approve that, then run gnubok_calculate_salary_run.'
+const reviewRunExit = (salaryRunId: string) => ({
+  description: REVIEW_RUN_EXIT,
+  tool: 'gnubok_revert_salary_run',
+  args: { salary_run_id: salaryRunId },
+})
+
 /** SALARY_RUN_NOT_FOUND naming the id the agent sent. */
 function salaryRunNotFound(salaryRunId: string): Error {
   return codedRefusal('SALARY_RUN_NOT_FOUND', `Salary run not found: no run with id ${salaryRunId} in this company.`)
@@ -19572,7 +19583,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_calculate_salary_run',
     keywords: ['lön', 'lönekörning', 'beräkna lön'],
     title: 'Calculate Salary Run',
-    description: 'Calculate a draft salary run: tax, avgifter, vacation accrual, totals. Run must be in draft status.',
+    description: 'Calculate a draft salary run: tax, avgifter, vacation accrual, totals. Run must be in draft status; a run in review goes back with gnubok_revert_salary_run first.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -19600,6 +19611,9 @@ export const tools: McpTool[] = [
         requestId: randomUUID(),
       })
       if (!result.ok) {
+        if ((result.details as { currentStatus?: string } | undefined)?.currentStatus === 'review') {
+          throw codedRefusal(result.code, `Salary run ${id} is in review, and only a draft calculates. ${REVIEW_RUN_EXIT}`, reviewRunExit(id))
+        }
         // Carry the helper's code so the dispatch reports it by name (a
         // missing tax table or year's rates) instead of UNKNOWN_ERROR. A
         // refusal that names the employees and the fix (unpriceable vacation
@@ -19693,15 +19707,17 @@ export const tools: McpTool[] = [
           verdict.uncalculated.length > 0
             ? `${verdict.uncalculated.length} employee(s) lack a calculation (${verdict.uncalculated.join(', ')})`
             : 'the run has never been calculated'
-        throw codedRefusal(
-          'SALARY_RUN_NOT_CALCULATED',
-          `Salary run ${id} cannot be booked yet: ${what}. Run gnubok_calculate_salary_run first.`,
-          {
-            description: 'Calculate the run, then stage gnubok_book_salary_run again.',
-            tool: 'gnubok_calculate_salary_run',
-            args: { salary_run_id: id },
-          },
-        )
+        throw run.status === 'review'
+          ? codedRefusal('SALARY_RUN_NOT_CALCULATED', `Salary run ${id} cannot be booked yet: ${what}. ${REVIEW_RUN_EXIT}`, reviewRunExit(id))
+          : codedRefusal(
+              'SALARY_RUN_NOT_CALCULATED',
+              `Salary run ${id} cannot be booked yet: ${what}. Run gnubok_calculate_salary_run first.`,
+              {
+                description: 'Calculate the run, then stage gnubok_book_salary_run again.',
+                tool: 'gnubok_calculate_salary_run',
+                args: { salary_run_id: id },
+              },
+            )
       }
       const approvalWarnings =
         run.status === 'draft' || run.status === 'review' ? [...verdict.bankDetails, ...verdict.warnings] : []
@@ -20793,7 +20809,7 @@ export const tools: McpTool[] = [
           enum: ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave'],
           description: 'Absence type',
         },
-        hours_per_day: { type: 'number', description: 'Hours per day (default 8; use e.g. 4 for half days)' },
+        hours_per_day: { type: 'number', description: 'Hours per day. Omitted: one scheduled day of the employee (use e.g. half that for half days)' },
         notes: { type: 'string', description: 'Optional note' },
         include_weekends: { type: 'boolean', description: 'Also register Saturday/Sunday (default false)' },
       },
@@ -20845,7 +20861,7 @@ export const tools: McpTool[] = [
         userId,
         type: 'register_absence',
         title: `Registrera frånvaro: ${employeeName}, ${absence_type} ${from}${to !== from ? ` till ${to}` : ''}`,
-        params: { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? 8, notes: notes ?? null, include_weekends: include_weekends ?? false },
+        params: { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? null, notes: notes ?? null, include_weekends: include_weekends ?? false },
         preview: {
           employee_id,
           employee_name: employeeName,
@@ -20853,7 +20869,7 @@ export const tools: McpTool[] = [
           from,
           to,
           day_count: preflight.data.count,
-          hours_per_day: hours_per_day ?? 8,
+          hours_per_day: preflight.data.hours_per_day,
           dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
         },
         actor,

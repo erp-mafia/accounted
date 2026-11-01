@@ -19,6 +19,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { invalidateRunCalculation } from './invalidate-calculation'
 
 export type UpdateRunResult<T> =
   | { ok: true; data: T }
@@ -194,6 +195,16 @@ export async function updateDraftSalaryRun(
     }
   }
 
+  // A supplied payment_date invalidates any existing calculation: skatteavdrag
+  // follows the payment date, so a recalculation must run against the new
+  // date before approval and booking accept the roster. Gated on SUPPLIED,
+  // not on changed: clearing on an equal date merely forces a redundant
+  // recalculation, which is the safe direction.
+  if (changes.payment_date !== undefined) {
+    const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunId: args.salaryRunId })
+    if (invalidated) return invalidated
+  }
+
   // Optimistic lock on status='draft': a concurrent :calculate flipping the
   // run to review between the read above and this write must fail the write,
   // not let a frozen field slip through (same guard as the v1 PATCH).
@@ -214,28 +225,6 @@ export async function updateDraftSalaryRun(
       ok: false,
       code: 'SALARY_RUN_PATCH_NOT_DRAFT',
       details: { reason: 'race' },
-    }
-  }
-
-  // A supplied payment_date invalidates any existing calculation:
-  // skatteavdrag follows the payment date, so clearing calculation_breakdown
-  // makes both book preflights refuse the roster until a recalculation has
-  // run against the new date (same invariant as setRunEmployeeSalary in
-  // lib/salary/run-employees.ts). Unlike the display-line refresh there,
-  // this clear IS the compliance guard, so a failure surfaces as an error.
-  // Gated on SUPPLIED, not on changed: after a partial failure (header
-  // committed, clear failed) a retry re-reads the run and sees the new date
-  // as current, so a changed-only gate would skip the clear forever and
-  // leave a stale calculation bookable. Clearing on an equal date merely
-  // forces a redundant recalculation, which is the safe direction.
-  if (changes.payment_date !== undefined) {
-    const { error: clearError } = await supabase
-      .from('salary_run_employees')
-      .update({ calculation_breakdown: null })
-      .eq('salary_run_id', args.salaryRunId)
-      .eq('company_id', args.companyId)
-    if (clearError) {
-      return { ok: false, code: 'INTERNAL_ERROR', details: { message: clearError.message } }
     }
   }
 

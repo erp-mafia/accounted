@@ -4,6 +4,7 @@
  * ledger: payroll and the books must tell one story.
  */
 import { describe, expect, it } from 'vitest'
+import { generateAvgifterBasis } from '@/lib/salary/avgifter-basis'
 import { loadSimCompany } from './company'
 import type { PayrollMonth } from './answer-key'
 
@@ -60,6 +61,17 @@ describe.each(months)('arbetsgivardeklaration $label', ({ month }) => {
     expect(field(xml, '497')).toEqual([month.totalTax])
     expect(ascending(field(xml, '011'))).toEqual(ascending(month.employees.map((row) => row.gross)))
     expect(ascending(field(xml, '001'))).toEqual(ascending(month.employees.map((row) => row.tax)))
+  })
+})
+
+describe.each([...new Set(months.map(({ month }) => month.year))])('avgifter report of %i', (year) => {
+  it('states what each month\'s declaration filed', async () => {
+    const { rows, totals } = await generateAvgifterBasis(supabase, state.companyId, year)
+    const declared = months.map(({ month }) => month).filter((month) => month.year === year)
+    const byMonth = new Map<number, number>()
+    for (const row of rows) byMonth.set(row.periodMonth, (byMonth.get(row.periodMonth) ?? 0) + row.amount)
+    expect(Object.fromEntries(byMonth)).toEqual(Object.fromEntries(declared.map((month) => [month.month, month.filedAvgifter])))
+    expect(totals.totalAmount).toBe(declared.reduce((total, month) => total + month.filedAvgifter, 0))
   })
 })
 

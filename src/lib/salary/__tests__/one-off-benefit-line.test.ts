@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { calculateSalary } from '../calculation-engine'
 import { loadPayrollConfig, serializePayrollConfig, type PayrollConfig } from '../payroll-config'
 import { resolveTaxableBenefits } from '../benefit-payments'
+import { payslipLineFlags } from '../line-item-roles'
 import {
   buildManualPayslipLine,
   mealBenefitSchablonFromRunParams,
@@ -10,6 +11,7 @@ import {
 import { PAYROLL_CONFIG_2026 } from './payroll-fixtures'
 import { roundOre } from '@/lib/money'
 import type { TaxTableRate } from '../tax-tables'
+import type { SalaryLineItemType } from '@/types'
 
 // A one-off förmån entered on the payslip ("Lägg till rad", crm#1349) is the
 // same benefit row the employee's standing benefit derives (run-calculation.ts
@@ -48,19 +50,18 @@ const SALARY = 40000
 type EngineLine = Parameters<typeof calculateSalary>[0]['lineItems'][number]
 
 /** A stored payslip row as the engine reads it, whichever door wrote it. */
-type StoredRow = Pick<ManualLineBody, 'amount' | 'is_taxable' | 'is_avgift_basis' | 'is_vacation_basis' | 'is_gross_deduction' | 'is_net_deduction'> & {
-  item_type: string
-}
+type StoredRow = Pick<ManualLineBody, 'amount'> & { item_type: string }
 
 function engineLine(row: StoredRow): EngineLine {
+  const flags = payslipLineFlags(row.item_type as SalaryLineItemType)
   return {
     itemType: row.item_type as never,
     amount: row.amount,
-    isTaxable: row.is_taxable,
-    isAvgiftBasis: row.is_avgift_basis,
-    isVacationBasis: row.is_vacation_basis,
-    isGrossDeduction: row.is_gross_deduction,
-    isNetDeduction: row.is_net_deduction,
+    isTaxable: flags.is_taxable,
+    isAvgiftBasis: flags.is_avgift_basis,
+    isVacationBasis: flags.is_vacation_basis,
+    isGrossDeduction: flags.is_gross_deduction,
+    isNetDeduction: flags.is_net_deduction,
   }
 }
 
@@ -69,11 +70,6 @@ function derivedBenefitRow(itemType: string, monthlyValue: number): StoredRow {
   return {
     item_type: itemType,
     amount: roundOre(monthlyValue),
-    is_taxable: true,
-    is_avgift_basis: true,
-    is_vacation_basis: false,
-    is_gross_deduction: false,
-    is_net_deduction: false,
   }
 }
 

@@ -11385,7 +11385,7 @@
     "calculation_computed_label": "Employer contributions, sum per employee",
     "calculation_declared_label": "Declared contributions (whole kronor)",
     "calculation_declared_formula": "contribution basis {underlag} × rate, öre dropped",
-    "calculation_stale": "The calculation is out of date: the payment date, a salary or the employees changed after it was made. Recalculate before the run is approved.",
+    "calculation_stale": "The calculation is out of date: something it rests on changed after it was made, such as payslip lines, absence, the payment date, a salary or the employees. Recalculate before the run is approved.",
     "journal_preview_title": "Vouchers to book",
     "journal_booked_title": "Booked vouchers",
     "journal_preview_nollkorning": "Zero run — no vouchers are posted for this run. Verify that other payroll runs for the period cover the employer declaration to Skatteverket.",

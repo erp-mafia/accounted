@@ -22,6 +22,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { invalidateRunCalculation } from './invalidate-calculation'
+import { payslipLineFlags } from './line-item-roles'
 import {
   assertRunDraft,
   resolveRunEmployee,
@@ -124,15 +126,14 @@ export async function addOpenExpenseClaimsToPayslip(
     quantity: null,
     unit_price: null,
     amount: claim.amount_sek,
-    is_taxable: false,
-    is_avgift_basis: false,
-    is_vacation_basis: false,
-    is_gross_deduction: false,
-    is_net_deduction: false,
+    ...payslipLineFlags('expense_reimbursement'),
     account_number: claim.liability_account,
     sort_order: EXPENSE_REIMBURSEMENT_SORT_ORDER + index,
     source_expense_claim_id: claim.id,
   }))
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunEmployeeId: sre.data.id })
+  if (invalidated) return invalidated
 
   const { data: created, error } = await supabase
     .from('salary_line_items')

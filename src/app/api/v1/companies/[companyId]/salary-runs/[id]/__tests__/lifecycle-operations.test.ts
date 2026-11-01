@@ -68,6 +68,12 @@ vi.mock('@/lib/events', async (importOriginal) => ({
   eventBus: { emit: mocks.emit, on: vi.fn(), off: vi.fn(), clear: vi.fn() },
 }))
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as sendPayslipsRoute } from '../send-payslips/route'
 import { POST as revertRoute } from '../revert/route'

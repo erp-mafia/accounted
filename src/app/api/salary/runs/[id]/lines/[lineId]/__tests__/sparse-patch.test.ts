@@ -3,12 +3,10 @@
  *
  * UpdateSalaryLineItemSchema is CreateSalaryLineItemSchema.partial(), and
  * .partial() does NOT strip .default(). Parsed bare, `{ amount: 5500 }` comes
- * back carrying is_taxable/is_avgift_basis/is_vacation_basis=true,
- * is_gross_deduction/is_net_deduction=false and sort_order=0, and
- * updatePayslipLine spreads the patch straight into .update(). Correcting the
- * amount on a net deduction line would have silently converted it into a
- * taxable, avgift-bearing, vacation-bearing earning: wrong skatteavdrag, wrong
- * arbetsgivaravgifter, wrong semesterlöneskuld.
+ * back carrying sort_order=0, and updatePayslipLine spreads the patch straight
+ * into .update(). The flags used to ride along the same way, which converted
+ * a net deduction into a taxable earning; they are the type's now and no
+ * patch carries them.
  *
  * The writer is mocked here on purpose: the assertion is about the exact patch
  * object handed to it, which is the thing that reaches the UPDATE.
@@ -86,9 +84,14 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId] sparse patch', () => {
     }
   })
 
-  it('still writes a default-carrying flag when the caller sets it explicitly', async () => {
-    await patch({ is_net_deduction: true })
-    expect(sentPatch()).toEqual({ is_net_deduction: true })
+  it('still writes a defaulted field when the caller sets it explicitly', async () => {
+    await patch({ amount: 5500, sort_order: 3 })
+    expect(sentPatch()).toEqual({ amount: 5500, sort_order: 3 })
+  })
+
+  it('drops flags from a patch: they follow from the type', async () => {
+    await patch({ amount: 5500, is_net_deduction: true })
+    expect(sentPatch()).toEqual({ amount: 5500 })
   })
 
   it('rejects null on a non-nullable field rather than quietly clearing it', async () => {

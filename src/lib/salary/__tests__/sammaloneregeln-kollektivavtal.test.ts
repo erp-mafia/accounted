@@ -32,6 +32,12 @@ import {
   recordSammaloneregelnKollektivavtal,
 } from '@/lib/salary/sammaloneregeln-kollektivavtal-record'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const USER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'

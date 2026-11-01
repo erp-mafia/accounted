@@ -1,0 +1,1 @@
+[2026-11-01] The avgifter-basis report states the AGI's declared figures per AGI period and sats, whole kronor, and exempt rows have no row: its header promises reconciliation, and a second computation sent an accountant looking for differences that were not there.
