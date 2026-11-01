@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { supersededTwins, type TwinCandidate } from '@/lib/cash-accounts/twins'
 import { UNBOOKED_BANK_LINES } from '@/lib/composition/unbooked-bank-lines'
 import { RECONCILIATION_SIGNOFFS } from '@/lib/composition/reconciliation-signoffs'
 import { previousMonthEndIso, todayIsoStockholm } from '@/lib/dates/iso'
@@ -302,28 +303,18 @@ async function bankReconciliation(
   const [accountsRes, signoffs] = await Promise.all([
     supabase
       .from('cash_accounts')
-      .select('id, iban, currency, updated_at')
+      .select('id, iban, currency, ledger_account, is_primary, created_at')
       .eq('company_id', companyId)
       .eq('enabled', true),
     RECONCILIATION_SIGNOFFS.latest(supabase, companyId),
   ])
   if (accountsRes.error) throw new Error(`cash account read failed: ${accountsRes.error.message}`)
-  const accounts = (accountsRes.data ?? []) as Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
+  const accounts = (accountsRes.data ?? []) as Array<TwinCandidate & { iban: string | null; currency: string | null }>
   const adopted = signoffs.size > 0
   if (accounts.length === 0) return { reconciledThrough: null, hasBankAccounts: false, adopted }
 
-  const live: string[] = []
-  const byIban = new Map<string, (typeof accounts)[number]>()
-  for (const a of accounts) {
-    if (!a.iban) {
-      live.push(a.id)
-      continue
-    }
-    const key = `${a.iban}|${a.currency ?? 'SEK'}`
-    const prev = byIban.get(key)
-    if (!prev || (a.updated_at ?? '') > (prev.updated_at ?? '')) byIban.set(key, a)
-  }
-  for (const a of byIban.values()) live.push(a.id)
+  const twins = await supersededTwins(supabase, companyId, accounts)
+  const live = accounts.filter((a) => !twins.has(a.id)).map((a) => a.id)
 
   let earliest: string | null = null
   for (const id of live) {

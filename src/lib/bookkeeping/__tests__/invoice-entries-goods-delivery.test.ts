@@ -209,7 +209,7 @@ describe('the verifikat of an invoice with a goods delivery abroad', () => {
       'user-1',
       makeInvoice({ delivery_country: 'NO' }),
       '2026-10-15',
-      'aktiebolag',
+      'aktiebolag', undefined, '1930',
     )
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(revenueAccounts(input)).toEqual(['3105'])

@@ -19,7 +19,7 @@ const OPEN_PERIOD = {
   is_closed: false,
   locked_at: null,
 }
-const BANK_ACCOUNT = { id: 'ca-1', iban: 'SE1', currency: 'SEK', updated_at: '2026-01-01' }
+const BANK_ACCOUNT = { id: 'ca-1', iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' }
 
 interface Tables {
   period?: Record<string, unknown> | null
@@ -27,7 +27,14 @@ interface Tables {
   settings?: Record<string, unknown> | null
   drafts?: number
   connections?: Array<{ status: string; last_synced_at: string | null }>
-  cashAccounts?: Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
+  cashAccounts?: Array<{
+    id: string
+    iban: string | null
+    currency: string | null
+    ledger_account: string
+    is_primary: boolean
+    created_at: string
+  }>
 }
 
 /**
@@ -61,7 +68,7 @@ function makeSupabase(t: Tables) {
   const from = (table: string) => {
     const local: Array<{ method: string; args: unknown[] }> = []
     const chain: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'gte', 'lte', 'not', 'order', 'limit', 'is', 'in']) {
+    for (const m of ['select', 'eq', 'gte', 'lte', 'not', 'order', 'limit', 'is', 'in', 'range']) {
       chain[m] = (...args: unknown[]) => {
         calls.push({ table, method: m, args })
         local.push({ method: m, args })
@@ -315,14 +322,15 @@ describe('buildReportDataStatus', () => {
 
     it('reports the earliest sign-off across live accounts, a reconnect duplicate counting once', async () => {
       const accounts = [
-        { id: 'a', iban: 'SE1', currency: 'SEK', updated_at: '2026-01-01' },
-        { id: 'b', iban: null, currency: 'SEK', updated_at: null },
-        // Reconnect duplicate of 'a': the newer row is the live one.
-        { id: 'a2', iban: 'SE1', currency: 'SEK', updated_at: '2026-05-01' },
+        { id: 'a', iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: false, created_at: '2026-01-01' },
+        { id: 'b', iban: null, currency: 'SEK', ledger_account: '1931', is_primary: false, created_at: '2026-02-01' },
+        // Reconnect duplicate of 'a': no ledger history, so the older row keeps
+        // the account and this one, never signed off, does not count.
+        { id: 'a2', iban: 'SE1', currency: 'SEK', ledger_account: '1932', is_primary: false, created_at: '2026-05-01' },
       ]
       latestSignoffs.mockResolvedValue(
         new Map([
-          ['bank:a2', { through_date: '2026-08-31' }],
+          ['bank:a', { through_date: '2026-08-31' }],
           ['bank:b', { through_date: '2026-07-31' }],
         ]),
       )

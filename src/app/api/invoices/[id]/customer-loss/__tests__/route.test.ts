@@ -132,10 +132,17 @@ describe('booking', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('CUSTOMER_LOSS_EVIDENCE_REQUIRED')
   })
 
-  it('books a recovery on the bank by default', async () => {
+  it('leaves a recovery that names no account to the service, which books it on the primary', async () => {
     recovered.mockResolvedValue(OK)
     const res = await call(POST, 'POST', INVOICE_ID, { kind: 'recovered', reason: 'Utdelning', amount: 125 })
     expect(res.status).toBe(200)
-    expect(recovered).toHaveBeenCalledWith({}, 'company-1', USER_ID, expect.objectContaining({ amount: 125, paymentAccount: '1930' }))
+    expect(recovered).toHaveBeenCalledWith({}, 'company-1', USER_ID, expect.objectContaining({ amount: 125, paymentAccount: undefined }))
+  })
+
+  it('books a recovery on the account it names', async () => {
+    recovered.mockResolvedValue(OK)
+    const res = await call(POST, 'POST', INVOICE_ID, { kind: 'recovered', reason: 'Utdelning', amount: 125, payment_account: '1931' })
+    expect(res.status).toBe(200)
+    expect(recovered).toHaveBeenCalledWith({}, 'company-1', USER_ID, expect.objectContaining({ amount: 125, paymentAccount: '1931' }))
   })
 })

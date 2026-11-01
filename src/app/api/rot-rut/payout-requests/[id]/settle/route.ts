@@ -10,7 +10,7 @@ import { settleRotRutPayoutRequest } from '@/lib/invoices/rot-rut-settle'
  *
  * Books Skatteverkets utbetalning for a begäran:
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * The journal entry IS the accounting record here, so engine failure blocks

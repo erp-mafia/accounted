@@ -17,19 +17,13 @@
  * is handed over as before, whatever it reads.
  */
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
-import { normalizeIban, type BankFeedAccount } from './sync'
+import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
+import type { BankFeedAccount } from './sync'
 
 export interface HandoverCandidate {
   id: string
   aggregator?: string | null
   accounts_data?: BankFeedAccount[] | null
-}
-
-/** One physical account: the IBAN and the currency (SEK when the bank names none), as supersede_enable_banking_connection matches them. */
-function accountKey(account: Pick<BankFeedAccount, 'iban' | 'currency'>): string | null {
-  const iban = normalizeIban(account.iban)
-  if (!iban) return null
-  return `${iban}:${(account.currency || 'SEK').trim().toUpperCase()}`
 }
 
 export function enableBankingRowsTakenOver(input: {
@@ -40,14 +34,14 @@ export function enableBankingRowsTakenOver(input: {
   /** The company's other live connections (any service). */
   live: readonly HandoverCandidate[]
 }): string[] {
-  const covered = new Set(input.reads.map(accountKey).filter((key): key is string => key !== null))
+  const covered = new Set(input.reads.map(physicalAccountKey).filter((key): key is string => key !== null))
   return input.live
     .filter((row) => aggregatorOf(row) === 'enable_banking')
     .filter((row) => {
       if (input.replaced && row.id === input.replaced) return true
       const reads = (Array.isArray(row.accounts_data) ? row.accounts_data : []).filter((account) => account?.enabled === true)
       return reads.length > 0 && reads.every((account) => {
-        const key = accountKey(account)
+        const key = physicalAccountKey(account)
         return key !== null && covered.has(key)
       })
     })

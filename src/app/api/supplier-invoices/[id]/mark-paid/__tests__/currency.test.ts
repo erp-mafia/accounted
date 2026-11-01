@@ -72,6 +72,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   findFiscalPeriod: vi.fn().mockResolvedValue('fp-1'),
 }))
+// With no account named the plan resolves the primary bank account.
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({
+  resolvePrimaryBankAccount: vi.fn(async () => '1930'),
+}))
 vi.mock('@/lib/invoices/duplicate-payment-candidates', () => ({
   findDuplicatePaymentCandidatesForSupplierInvoice: vi.fn().mockResolvedValue([]),
 }))

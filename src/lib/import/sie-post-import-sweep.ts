@@ -120,11 +120,9 @@ export async function sweepBankRowsAfterSIEImport(
       // Most imports land in a company with no unlinked bank rows at all
       // (SIE first, bank later). One HEAD count keeps those off the matcher.
       const { count, error } = await supabase
-        .from('transactions')
+        .from('open_bank_rows')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', job.company_id)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
         .gte('date', year.start)
         .lte('date', year.end)
       if (error) throw new Error(error.message)

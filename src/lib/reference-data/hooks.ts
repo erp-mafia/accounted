@@ -25,6 +25,8 @@
 import { useMemo } from 'react'
 import useSWR, { type SWRConfiguration } from 'swr'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { paymentBankRow } from '@/lib/cash-accounts/primary'
 import type {
   Article,
   EmployeeMasked,
@@ -117,6 +119,16 @@ export function useCashAccounts(
     [items, enabledOnly],
   )
   return { cashAccounts, ...state }
+}
+
+/**
+ * The bank account a dialog starts from when it books a payment with no bank
+ * row of its own and nothing else names one: what the server books on
+ * (resolvePrimaryBankAccount), the bank role until the accounts have loaded.
+ */
+export function usePaymentBankLedger(): string {
+  const { cashAccounts } = useCashAccounts()
+  return paymentBankRow(cashAccounts)?.ledger_account ?? resolveAccountRole(PINNED_JURISDICTION, 'bank')
 }
 
 export function useAccounts(activeOnly = true): ReferenceListState & { accounts: BASAccount[] } {

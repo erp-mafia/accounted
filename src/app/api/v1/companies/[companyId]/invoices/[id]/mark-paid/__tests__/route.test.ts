@@ -810,6 +810,29 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     })
   })
 
+  it('dry-run names the primary bank account the commit would debit', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: SENT_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: { data: { id: 'ca-1', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid?dry_run=true`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview.payment_account).toBe('1931')
+    expect(mockPayment).not.toHaveBeenCalled()
+  })
+
   it('dry-run previews the post-payment state without booking', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

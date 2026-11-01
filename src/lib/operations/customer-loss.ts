@@ -62,7 +62,7 @@ export const invoicesRecordCustomerLoss = defineOperation({
     entry_date: z.iso.date().optional().describe('The voucher date; today when omitted.'),
     evidence_document_id: z.uuid().nullable().optional().describe('For confirmed: the archived document that shows the customer cannot pay.'),
     amount: z.number().positive().max(1_000_000_000).optional().describe('For recovered: the amount received, VAT included.'),
-    payment_account: accountNumberSchema.optional().describe('For recovered: the account the money reached; 1930 when omitted.'),
+    payment_account: accountNumberSchema.optional().describe("For recovered: the account the money reached; the company's primary bank account when omitted."),
   }),
   output: z.object({
     write_off_id: z.string(),
@@ -130,7 +130,7 @@ export const invoicesRecordCustomerLoss = defineOperation({
         outcome = await recordRecoveredLoss(ctx.supabase, ctx.companyId, ctx.userId, {
           ...common,
           amount: input.amount,
-          paymentAccount: input.payment_account ?? '1930',
+          paymentAccount: input.payment_account,
         })
       }
     } catch (error) {

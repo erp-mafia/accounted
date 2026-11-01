@@ -30,7 +30,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { Currency } from '@/types'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { reenableIfUnused } from '@/lib/cash-accounts/service'
-import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
+import { normalizeIban, physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import { bankFeedIbanOf } from '@/lib/transactions/external-id'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -184,9 +184,9 @@ async function refuseMoveOntoAnotherBankAccount(
     .eq('company_id', ctx.companyId)
     .not('iban', 'is', null)
   if (error) return failed(error)
-  const currency = (transaction.currency ?? 'SEK').toUpperCase()
+  const originKey = physicalAccountKey({ iban: originIban, currency: transaction.currency })
   const origin = ((data ?? []) as Array<{ ledger_account: string; iban: string | null; currency: string }>)
-    .find((row) => normalizeIban(row.iban) === originIban && row.currency.toUpperCase() === currency)
+    .find((row) => physicalAccountKey(row) === originKey)
   if (!origin) return null
 
   return {

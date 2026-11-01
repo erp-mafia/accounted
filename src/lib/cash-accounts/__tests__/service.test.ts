@@ -14,13 +14,13 @@ import {
   findFreeLedgerAccount,
   allocatePsd2LedgerAccount,
   resolvePsd2LedgerAccount,
-  pickKeeper,
   sameCashAccount,
   normalizeIban,
   getRevokedConnectionIds,
   upsertFromPsd2,
   ensureManualCashAccount,
 } from '../service'
+import { pickKeeper } from '../twins'
 import { defaultLedgerForCurrency } from '../ledger-slots'
 import { allocateLedgers, ledgerClaims } from '@/lib/onboarding-books/ledger'
 

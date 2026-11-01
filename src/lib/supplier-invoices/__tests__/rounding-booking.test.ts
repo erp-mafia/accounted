@@ -55,7 +55,7 @@ it.each([false, true])('saves the previewed payable and keeps VAT unchanged (rev
     vat_treatment: reverseCharge ? 'reverse_charge' : 'standard_25',
   })
   await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, items, 'swedish_business')
-  await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-09-21', 'swedish_business')
+  await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-09-21', 'swedish_business', undefined, '1930')
   for (const [i, anchor] of ['2440', '1930'].entries()) {
     const lines = vi.mocked(createJournalEntry).mock.calls[i][3].lines
     expect(lines.find(l => l.account_number === anchor)?.credit_amount).toBe(reverseCharge ? 100 : 20056)

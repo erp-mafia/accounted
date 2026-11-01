@@ -19,7 +19,7 @@
 import { addDaysIso, daysBetweenIso } from '@/lib/dates/iso'
 import { toHandle } from '@/lib/handles'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { applyUnbookedFilter, countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { cannotCheck, sourceFailed } from '../shared'
 import type { CheckBreakdown, CheckContext, CheckDefinition, CheckItem, CheckRun, CheckSide, CheckSource } from '../types'
 
@@ -112,13 +112,11 @@ async function explain(ctx: CheckContext, run: CheckRun<UnbookedSource>): Promis
     currency: string | null
   }>(
     ({ from, to }) =>
-      applyUnbookedFilter(
-        ctx.supabase
-          .from('transactions')
-          .select('id, date, description, amount, currency')
-          .eq('company_id', ctx.companyId)
-          .lte('date', source.cutoff),
-      )
+      ctx.supabase
+        .from('open_bank_rows')
+        .select('id, date, description, amount, currency')
+        .eq('company_id', ctx.companyId)
+        .lte('date', source.cutoff)
         .order('date', { ascending: true })
         .order('id', { ascending: true })
         .range(from, to),

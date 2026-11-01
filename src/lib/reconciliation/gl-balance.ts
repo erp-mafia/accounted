@@ -89,28 +89,16 @@ export interface OpeningBalanceFloor {
   entryIds: string[]
 }
 
-interface OpeningBalanceLineRow {
-  debit_amount: number | string | null
-  credit_amount: number | string | null
-  journal_entries?: { id: string; entry_date: string; status: string; source_type: string | null }
-}
-
 /**
- * The latest ingående balans (IB) on one account dated on or before cutoffDate.
+ * The latest ingående balans (IB) on one account dated on or before cutoffDate
+ * (public.account_ib_floor, where the rule lives: the bank status reads it in
+ * SQL).
  *
  * An IB restates everything booked before it: year-end rollover, SIE import
  * and set_opening_balances each post one opening_balance verifikat on the
  * fiscal year's first day, and the prior years' detail stays in the ledger.
  * A balance that sums across the IB counts those years twice, so balance
- * readers floor at it (the bank engine does the same, issue #751).
- *
- * Only a POSTED opening_balance entry dated on the first day of a fiscal year
- * counts. A stornerad IB is nulled by its storno, and prod holds ordinary
- * payments that an import labelled opening_balance in mid-year: flooring at
- * one of those would drop months of real movement.
- *
- * A date whose IB entries (two or more) cancel to zero on the account is not
- * a floor: the latest date that is one wins, and none means null.
+ * readers floor at it (issue #751).
  *
  * Returns null when the account has no IB. Throws on a read failure: the
  * floor decides what the balance is, so a caller must not guess it.
@@ -121,54 +109,10 @@ export async function findOpeningBalanceFloor(
   accountNumber: string,
   cutoffDate: string,
 ): Promise<OpeningBalanceFloor | null> {
-  const lines = await fetchEntryLines<OpeningBalanceLineRow>({
-    supabase,
-    entryColumns: 'id, entry_date, status, source_type',
-    lineColumns: 'debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .eq('status', 'posted')
-        .eq('source_type', 'opening_balance')
-        .lte('entry_date', cutoffDate),
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', accountNumber),
-  })
-  const candidates = lines.flatMap((l) => {
-    const entry = l.journal_entries
-    return entry && entry.status === 'posted' && entry.source_type === 'opening_balance' ? [{ entry, line: l }] : []
-  })
-  if (candidates.length === 0) return null
-
   const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('period_start')
-    .eq('company_id', companyId)
-    .in('period_start', Array.from(new Set(candidates.map((c) => c.entry.entry_date))))
-  if (error) throw new Error(`Kunde inte läsa räkenskapsår: ${error.message}`)
-  const yearStarts = new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
-
-  const byDate = new Map<string, { amount: number; entryIds: Set<string> }>()
-  for (const { entry, line } of candidates) {
-    if (!yearStarts.has(entry.entry_date)) continue
-    const group = byDate.get(entry.entry_date) ?? { amount: 0, entryIds: new Set<string>() }
-    group.amount += Number(line.debit_amount || 0) - Number(line.credit_amount || 0)
-    group.entryIds.add(entry.id)
-    byDate.set(entry.entry_date, group)
-  }
-
-  // Latest date first. Two or more IB entries on one date that cancel to the
-  // öre on this account are no IB of it: a duplicated SIE IB and the entry
-  // that undoes it, both labelled opening_balance. Flooring there dropped
-  // every earlier year from the balance although nothing restates them, so
-  // the reconciliation disagreed with the huvudbok by exactly the pre-IB
-  // history. Such a date is skipped; with no date left the balance runs over
-  // all history, as the huvudbok does.
-  const dates = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
-  for (const date of dates) {
-    const group = byDate.get(date)!
-    const amount = roundOre(group.amount)
-    if (group.entryIds.size >= 2 && amount === 0) continue
-    return { date, amount, entryIds: Array.from(group.entryIds) }
-  }
-  return null
+    .rpc('account_ib_floor', { p_company_id: companyId, p_account_number: accountNumber, p_through: cutoffDate })
+    .maybeSingle()
+  if (error) throw new Error(`Kunde inte läsa ingående balans: ${error.message}`)
+  const floor = data as { floor_date: string; amount: number | string; entry_ids: string[] } | null
+  return floor ? { date: floor.floor_date, amount: Number(floor.amount), entryIds: floor.entry_ids } : null
 }

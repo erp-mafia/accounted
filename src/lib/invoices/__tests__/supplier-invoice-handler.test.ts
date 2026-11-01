@@ -56,12 +56,10 @@ function makeRetroMock(opts: {
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === 'supplier_invoices') return chain({ data: opts.invoice, error: null })
+      if (table === 'open_bank_rows') return chain({ data: opts.candidates, error: null })
       if (table === 'transactions') {
         return {
-          select: (_cols: string, selOpts?: { count?: string }) =>
-            selOpts?.count
-              ? chain({ count: opts.linkedCount, data: null, error: null })
-              : chain({ data: opts.candidates, error: null }),
+          select: () => chain({ count: opts.linkedCount, data: null, error: null }),
           update: (payload: Record<string, unknown>) => {
             updates.push(payload)
             return chain(opts.update ?? { data: [{ id: 'tx-retro' }], error: null })

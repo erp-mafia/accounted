@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -118,13 +118,14 @@ export default function PaymentBookingDialog({
   // existing-voucher picker must look for a 1510 clearing for the same
   // reason. Same rule as resolveInvoicePaymentSourceType.
   const proposalMethod: 'accrual' | 'cash' = invoice.journal_entry_id ? 'accrual' : accountingMethod
-  // The bank account the invoice asked to be paid to (1930 when none was
-  // chosen): the proposed debit lands there, same as the route's default.
+  // The bank account the invoice asked to be paid to, else the company's
+  // primary: the proposed debit lands there, same as the route's default.
   const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const paymentLedger = usePaymentBankLedger()
   const chosenPaymentAccount = useMemo(() => {
     const id = (invoice as { payment_cash_account_id?: string | null }).payment_cash_account_id
-    return id ? cashAccounts.find((a) => a.id === id)?.ledger_account ?? undefined : undefined
-  }, [cashAccounts, invoice])
+    return (id ? cashAccounts.find((a) => a.id === id)?.ledger_account : undefined) ?? paymentLedger
+  }, [cashAccounts, invoice, paymentLedger])
   // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =

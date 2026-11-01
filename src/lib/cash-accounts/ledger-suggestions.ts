@@ -15,7 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
-import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
+import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
 import {
   suggestLedgerChanges,
@@ -80,9 +80,9 @@ function storedAccounts(connection: BankConnectionRow | undefined): StoredAccoun
 function storedAccountFor(row: CashAccountRow, stored: readonly StoredAccountEntry[]): StoredAccountEntry | null {
   const byUid = row.external_uid ? stored.find((entry) => entry.uid === row.external_uid) : undefined
   if (byUid) return byUid
-  const iban = normalizeIban(row.iban)
-  if (!iban) return null
-  const byIban = stored.filter((entry) => normalizeIban(entry.iban) === iban && (entry.currency ?? row.currency) === row.currency)
+  const physical = physicalAccountKey(row)
+  if (!physical) return null
+  const byIban = stored.filter((entry) => physicalAccountKey({ iban: entry.iban, currency: entry.currency ?? row.currency }) === physical)
   return byIban.length === 1 ? byIban[0] : null
 }
 

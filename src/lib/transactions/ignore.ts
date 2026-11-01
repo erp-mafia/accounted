@@ -14,9 +14,9 @@
  *   - the MCP executor for the staged ignore_transaction operation
  *     (lib/pending-operations/commit.ts)
  *
- * "Already booked" is decided by isTransactionBooked(): a bulk-booked or
- * multi-allocated row keeps transactions.journal_entry_id NULL and is anchored
- * through transaction_voucher_links / invoice_payments /
+ * "Already booked" is the is_booked column (public.bank_row_anchors): a
+ * bulk-booked or multi-allocated row keeps transactions.journal_entry_id NULL
+ * and is anchored through transaction_voucher_links / invoice_payments /
  * supplier_invoice_payments instead. A bare journal_entry_id check would let
  * those rows be ignored while a verifikat still carries them.
  *
@@ -27,7 +27,6 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
-import { isTransactionBooked } from '@/lib/transactions/is-booked'
 import { findStaleBankAnchors, type StaleAnchorRow } from '@/lib/transactions/stale-bank-anchor'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { passed } from '@/lib/suggestion-log/checks'
@@ -51,6 +50,7 @@ export type SetTransactionIgnoredOutcome =
     }
 
 interface TransactionIgnoreRow extends StaleAnchorRow {
+  is_booked?: boolean | null
   is_ignored: boolean | null
   reconciliation_method?: string | null
 }
@@ -79,7 +79,7 @@ export async function setTransactionIgnored(
   const { data: tx, error: fetchError } = await supabase
     .from('transactions')
     .select(
-      'id, journal_entry_id, is_ignored, reconciliation_method, cash_account_id, currency, amount, bank_connection_id, import_source, invoice_id, supplier_invoice_id',
+      'id, journal_entry_id, is_booked, is_ignored, reconciliation_method, cash_account_id, currency, amount, bank_connection_id, import_source, invoice_id, supplier_invoice_id',
     )
     .eq('id', transactionId)
     .eq('company_id', companyId)
@@ -91,35 +91,15 @@ export async function setTransactionIgnored(
   // no bank line (PH 214), and only with a person to record the unlink for.
   let release: { entryId: string; userId: string } | null = null
   if (ignored) {
-    let booked = tx.journal_entry_id != null
-    if (booked) {
-      if (options.userId && tx.journal_entry_id && (await findStaleBankAnchors(supabase, companyId, [tx])).has(tx.id)) {
+    // An ignored row holds no pointer, so a stale one goes with the flag, the
+    // same release as the stale anchor below.
+    let booked = Boolean(tx.is_booked || tx.journal_entry_id)
+    if (booked && options.userId && tx.journal_entry_id) {
+      const free = !tx.is_booked || (await findStaleBankAnchors(supabase, companyId, [tx])).has(tx.id)
+      if (free) {
         release = { entryId: tx.journal_entry_id, userId: options.userId }
         booked = false
       }
-    } else {
-      // The two junction shapes that keep journal_entry_id NULL on the row.
-      const [voucherLinks, invoicePayments, supplierPayments] = await Promise.all([
-        supabase
-          .from('transaction_voucher_links')
-          .select('transaction_id')
-          .eq('transaction_id', tx.id)
-          .limit(1),
-        supabase.from('invoice_payments').select('transaction_id').eq('transaction_id', tx.id).limit(1),
-        supabase
-          .from('supplier_invoice_payments')
-          .select('transaction_id')
-          .eq('transaction_id', tx.id)
-          .limit(1),
-      ])
-      if (voucherLinks.error) throw dbError(voucherLinks.error, null)
-      if (invoicePayments.error) throw dbError(invoicePayments.error, null)
-      if (supplierPayments.error) throw dbError(supplierPayments.error, null)
-      booked = isTransactionBooked(
-        tx,
-        [...(invoicePayments.data ?? []), ...(supplierPayments.data ?? [])],
-        voucherLinks.data ?? [],
-      )
     }
     if (booked) return { ok: false, code: 'TX_IGNORE_ALREADY_BOOKED', status: 409 }
   }
@@ -166,7 +146,7 @@ export async function setTransactionIgnored(
         previous_state: {
           journal_entry_id: release.entryId,
           reconciliation_method: tx.reconciliation_method ?? null,
-          reason: 'verifikat_books_no_bank_line',
+          reason: tx.is_booked ? 'verifikat_books_no_bank_line' : 'verifikat_no_longer_posted',
         },
         new_state: { is_ignored: true },
       })

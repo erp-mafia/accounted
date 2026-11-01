@@ -250,13 +250,10 @@ export interface PaymentClearingLines {
  *   the SEK branches and never consults invoice.exchange_rate.
  *
  * # paymentAccount
- *   The bank-leg account (the debit line below). Defaults to '1930': callers
- *   that haven't resolved the transaction's actual cash account keep booking
- *   there unchanged. Callers matching a real bank transaction should resolve
- *   it via resolveSettlementAccount (cash_account_id -> cash_accounts.ledger_
- *   account) and pass it here so a receipt into a non-primary bank/cash
- *   account (e.g. a secondary SEK account, or a EUR account on 1940) doesn't
- *   silently get misbooked to the primary account.
+ *   The bank-leg account (the debit line below): the cash account the
+ *   transaction belongs to, from resolveSettlementAccount (cash_account_id ->
+ *   cash_accounts.ledger_account), so a receipt into a non-primary bank or
+ *   cash account (a secondary SEK account, a EUR account on 1940) books there.
  *
  * # overpaymentAccount
  *   Pure SEK only. When the bank moved a krona or more above the remaining
@@ -276,16 +273,12 @@ export function buildInvoicePaymentClearingLines(
   tx: PaymentClearingTx,
   invoice: PaymentClearingInvoice,
   description: string,
-  paidInInvoiceCurrency?: number,
+  paidInInvoiceCurrency: number | undefined,
   /**
-   * BAS account for the bank leg (the 1930 debit below). Defaults to '1930'
-   * to preserve existing behaviour for every caller that doesn't pass one.
-   * Callers that know which cash account the underlying bank transaction
-   * actually belongs to (via cash_account_id -> cash_accounts.ledger_account,
-   * see lib/bookkeeping/settlement-account.ts) should resolve it and pass it
-   * here instead of always booking to the primary bank account.
+   * BAS account for the bank leg (the debit below): the cash account the bank
+   * transaction belongs to (lib/bookkeeping/settlement-account.ts).
    */
-  paymentAccount = '1930',
+  paymentAccount: string,
   overpaymentAccount?: string,
   feeAccount?: string,
 ): PaymentClearingLines {

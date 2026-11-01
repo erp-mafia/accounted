@@ -18,7 +18,7 @@ import {
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
-import { applyBookedFilter, applyUnbookedFilter } from '@/lib/transactions/unbooked'
+import { applyBookedFilter } from '@/lib/transactions/unbooked'
 
 const TransactionSummary = z.object({
   id: z.string().uuid(),
@@ -148,19 +148,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // cursor (date is YYYY-MM-DD only, decoder rejects it). For users
     // who care about transaction-date ordering specifically, the date
     // is still in every row and ?date_from / ?date_to filters work.
+    // The open rows are public.open_bank_rows, the same definition as the MCP
+    // list, the period-lock guard and the VAT close check; the booked ones are
+    // the is_booked computed column. Both filter server-side, so the cursor
+    // never skips a row.
     let query = ctx.supabase
-      .from('transactions')
+      .from(f.status === 'unbooked' ? 'open_bank_rows' : 'transactions')
       .select(TRANSACTION_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .order('created_at', { ascending: false })
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    // The same definitions as the MCP list, the period-lock guard and the VAT
-    // close check (lib/transactions/unbooked.ts), read server-side through
-    // the is_booked computed column so the cursor never skips a row.
     if (f.status === 'booked') query = applyBookedFilter(query)
-    else if (f.status === 'unbooked') query = applyUnbookedFilter(query)
     if (f.currency) query = query.eq('currency', f.currency)
     if (f.cash_account_id) query = query.eq('cash_account_id', f.cash_account_id)
     if (f.date_from) query = query.gte('date', f.date_from)

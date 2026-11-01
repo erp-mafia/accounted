@@ -100,7 +100,7 @@ describe('kontantmetoden installments in the ledger', () => {
         invoice,
         'aktiebolag',
         { priorPaid: paid, amount: installment.amount },
-        'Delbetalare AB',
+        'Delbetalare AB', '1930',
       )
       if (!result.ok) throw new Error(result.reason)
       const entryId = await insertPostedJournalEntry({

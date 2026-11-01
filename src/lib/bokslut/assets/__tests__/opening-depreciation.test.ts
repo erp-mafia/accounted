@@ -194,6 +194,7 @@ describe('buildAssetDisposalPlan with an opening balance', () => {
   it('clears the opening amount from 12x9 together with Accounted depreciation', () => {
     const asset = makeAsset(MIGRATED)
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset,
       input: {
         disposal_type: 'scrap',

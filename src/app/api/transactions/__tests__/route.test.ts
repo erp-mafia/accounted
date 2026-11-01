@@ -125,19 +125,16 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest('/api/transactions?unmatched=true')
     await GET(request, createMockRouteParams({}))
 
-    expect(fromSpy).toHaveBeenCalledWith('transactions')
+    expect(fromSpy).toHaveBeenCalledTimes(1)
+    expect(fromSpy).toHaveBeenCalledWith('open_bank_rows')
     const chain = fromSpy.mock.results[0].value as { __calls: { method: string; args: unknown[] }[] }
-    const isCall = chain.__calls.find((c) => c.method === 'is')
-    expect(isCall).toEqual({ method: 'is', args: ['journal_entry_id', null] })
+    expect(chain.__calls.filter((c) => c.method === 'is')).toEqual([])
+    expect(chain.__calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
   })
 
-  it('hides rows anchored only through transaction_voucher_links from unmatched=true (bulk-book, 1:N split, #1553)', async () => {
-    const txs = [
-      makeTransaction({ id: 'tx-open', journal_entry_id: null }),
-      makeTransaction({ id: 'tx-split', journal_entry_id: null }),
-    ]
-    enqueue({ data: txs, error: null }) // transactions list
-    enqueue({ data: [{ transaction_id: 'tx-split' }], error: null }) // transaction_voucher_links
+  it('answers unmatched=true with what open_bank_rows answers, with no embed and no anchor read (bulk-book, 1:N split, #1553)', async () => {
+    const txs = [makeTransaction({ id: 'tx-open', journal_entry_id: null })]
+    enqueue({ data: txs, error: null })
 
     const request = createMockRequest('/api/transactions?unmatched=true')
     const response = await GET(request, createMockRouteParams({}))
@@ -146,9 +143,22 @@ describe('GET /api/transactions', () => {
     expect(status).toBe(200)
     expect(body.data.map((t) => t.id)).toEqual(['tx-open'])
     expect(body.has_more).toBe(false)
+    expect(String(findCall('open_bank_rows', 'select')?.[0])).not.toContain('transaction_voucher_links')
+    expect(findCall('transaction_voucher_links', 'select')).toBeUndefined()
   })
 
-  it('embeds transaction_voucher_links in every mode so a split row (journal_entry_id NULL, #1553) can be told from an unbooked one (crm#48)', async () => {
+  it('reads ignored rows off the table with the embed: unmatched=true&only_ignored=true is no open list', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions?unmatched=true&only_ignored=true')
+    await GET(request, createMockRouteParams({}))
+
+    expect(String(findCall('transactions', 'select')?.[0])).toContain('transaction_voucher_links(journal_entry_id, role)')
+    expect(findCalls('transactions', 'eq')).toContainEqual(['is_ignored', true])
+    expect(findCall('open_bank_rows', 'select')).toBeUndefined()
+  })
+
+  it('embeds transaction_voucher_links in every mode but the open list, so a split row (journal_entry_id NULL, #1553) can be told from an unbooked one (crm#48)', async () => {
     const split = makeTransaction({ id: 'tx-split', journal_entry_id: null }) as unknown as Record<string, unknown>
     split.transaction_voucher_links = [
       { journal_entry_id: 'je-200', role: 'bank_line' },
@@ -172,8 +182,8 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest('/api/transactions?unmatched=true&q=Acme')
     await GET(request, createMockRouteParams({}))
 
-    expect(findCall('transactions', 'or')).toEqual(['description.ilike.%Acme%,merchant_name.ilike.%Acme%'])
-    expect(String(findCall('transactions', 'select')?.[0])).toContain('merchant_name')
+    expect(findCall('open_bank_rows', 'or')).toEqual(['description.ilike.%Acme%,merchant_name.ilike.%Acme%'])
+    expect(String(findCall('open_bank_rows', 'select')?.[0])).toContain('merchant_name')
   })
 
   it('ignores a q shorter than two characters', async () => {
@@ -182,7 +192,7 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest('/api/transactions?unmatched=true&q=A')
     await GET(request, createMockRouteParams({}))
 
-    expect(findCall('transactions', 'or')).toBeUndefined()
+    expect(findCall('open_bank_rows', 'or')).toBeUndefined()
   })
 
   it('strips the filter-DSL characters from q, so a term cannot add a clause', async () => {
@@ -191,7 +201,7 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest(`/api/transactions?unmatched=true&q=${encodeURIComponent('Acme,company_id.neq.x(%)')}`)
     await GET(request, createMockRouteParams({}))
 
-    expect(findCall('transactions', 'or')).toEqual([
+    expect(findCall('open_bank_rows', 'or')).toEqual([
       'description.ilike.%Acme company_id.neq.x%,merchant_name.ilike.%Acme company_id.neq.x%',
     ])
   })
@@ -217,9 +227,11 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest('/api/transactions?reconciled=true')
     await GET(request, createMockRouteParams({}))
 
+    expect(fromSpy).toHaveBeenCalledWith('transactions')
     const chain = fromSpy.mock.results[0].value as { __calls: { method: string; args: unknown[] }[] }
-    const notCall = chain.__calls.find((c) => c.method === 'not')
-    expect(notCall).toEqual({ method: 'not', args: ['journal_entry_id', 'is', null] })
+    expect(chain.__calls).toContainEqual({ method: 'eq', args: ['is_booked', true] })
+    // A row booked through a link or a payment has no pointer: the filter is never on it.
+    expect(chain.__calls.find((c) => c.method === 'not')).toBeUndefined()
     // unmatched and reconciled are mutually exclusive: when reconciled is set, no .is() filter
     const isCall = chain.__calls.find((c) => c.method === 'is')
     expect(isCall).toBeUndefined()

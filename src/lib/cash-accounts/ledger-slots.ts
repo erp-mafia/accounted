@@ -34,6 +34,46 @@ export function normalizeIban(iban: string | null | undefined): string | null {
   return normalized || null
 }
 
+/** A row or a bank's account without a currency is in SEK, the column default. */
+export function currencyKey(currency: string | null | undefined): string {
+  return (currency?.trim() || 'SEK').toUpperCase()
+}
+
+/**
+ * Identity of the physical bank account a row represents: normalized IBAN
+ * plus currency, or null for rows without an IBAN (manual, CSV, kassa). The
+ * one spelling of "same IBAN, same currency" for cash_accounts rows and for
+ * the accounts a bank reports; public.normalize_iban is the SQL side.
+ */
+export function physicalAccountKey(row: { iban?: string | null; currency?: string | null }): string | null {
+  const iban = normalizeIban(row.iban)
+  return iban ? `${iban}|${currencyKey(row.currency)}` : null
+}
+
+/**
+ * Whether two cash_accounts row ids may be the same bank account, for the
+ * content-dedup account guard in lib/transactions/ingest.ts and the booking
+ * guard in lib/transactions/booking-duplicate-detection.ts.
+ *
+ * A null id on either side stays compatible (legacy rows without a binding).
+ * Two different ids are the same account only when BOTH rows carry a physical
+ * key and the keys are equal: a broken reconnect leaves two rows for one
+ * (IBAN, currency), and a merge legitimately keeps the retired one as a manual
+ * row while booked transactions remain on it. A row WITHOUT a key (manual, CSV,
+ * kassa) never matches another id: a missing IBAN is not evidence of identity.
+ *
+ * @param physicalKeyById row id -> physicalAccountKey, rows without a key omitted
+ */
+export function sameCashAccount(
+  a: string | null,
+  b: string | null,
+  physicalKeyById: ReadonlyMap<string, string>,
+): boolean {
+  if (a === null || b === null || a === b) return true
+  const keyA = physicalKeyById.get(a)
+  return keyA !== undefined && keyA === physicalKeyById.get(b)
+}
+
 /** A cash_accounts row that already holds a 19xx slot. */
 export interface SlotHolder {
   ledger_account: string

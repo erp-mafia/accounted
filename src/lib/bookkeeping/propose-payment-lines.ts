@@ -74,7 +74,8 @@ export interface ProposePaymentLinesInput {
   }
   accountingMethod: 'accrual' | 'cash'
   entityType: EntityType
-  paymentAccount?: string
+  /** The account the money landed on: the caller names it. */
+  paymentAccount: string
   exchangeRateDifference?: number
   /**
    * company_settings.ore_rounding. Combined with the per-invoice override via
@@ -117,7 +118,7 @@ export function resolveInvoicePaymentSourceType(opts: {
  */
 export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[] {
   const { invoice, accountingMethod, entityType, exchangeRateDifference } = input
-  const paymentAccount = input.paymentAccount || '1930'
+  const { paymentAccount } = input
   const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
   // #1717: an invoice with a prior partial payment gets a proposal that

@@ -380,7 +380,12 @@ function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
     }
   }
   const supabase = {
-    from: (table: string) => new Query(table, (db as unknown as Record<string, Row[]>)[table] ?? []),
+    // public.open_bank_rows over this double's rows: its answer, not its rule
+    // (tests/pg/bank-row-open-read.pg.test.ts proves the rule).
+    from: (table: string) =>
+      table === 'open_bank_rows'
+        ? new Query(table, db.transactions.filter((r) => !r.is_ignored && r.is_business !== false && !r.journal_entry_id))
+        : new Query(table, (db as unknown as Record<string, Row[]>)[table] ?? []),
     rpc: (name: string, args: Row) => {
       // The scalar-answer RPCs resolve to their object, as supabase-js does.
       if (name === 'get_bank_reconciliation_facts' || name === 'get_bank_reconciliation_items') {

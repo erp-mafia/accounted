@@ -1,33 +1,21 @@
 /**
- * Centralised predicate for "is this bank transaction anchored to a
- * verifikat?": single source of truth that readers across the inbox,
- * history list, and MCP filters use to decide whether a tx is unbooked
- * (needs categorisation) vs already attached to a journal entry.
+ * Reading a bank row's anchors. Whether a live verifikat books the row is the
+ * database's answer, one view for every door: public.bank_row_anchors, read
+ * through public.open_bank_rows, the is_booked column and
+ * public.is_transaction_booked. The anchors are
  *
- * Three storage locations to consider, all of which can independently
- * make a tx "booked":
+ *  1. transactions.journal_entry_id: the 1:1 case (categorisation, a match),
+ *     at a posted verifikat, or at one a posted correction replaced.
  *
- *  1. transactions.journal_entry_id: the 1:1 case (single tx → single
- *     verifikat via categorisation, match-invoice, or match-supplier-invoice).
+ *  2. transaction_voucher_links, role 'bank_line': the N-tx-to-1-JE case
+ *     (bulk-book) and the 1:N split, pointer NULL.
  *
- *  2. invoice_payments / supplier_invoice_payments: the multi-allocation
- *     case (PR #603's match_batch_allocate). One tx with multiple payment
- *     rows pointing at the same combined verifikat; the row in transactions
- *     itself has journal_entry_id = NULL because no single invoice ID
- *     captures the full picture.
+ *  3. invoice_payments / supplier_invoice_payments: the multi-allocation case.
+ *     match_batch_allocate writes the pointer too since 20260824120000, so
+ *     only older rows are anchored here alone.
  *
- *  3. transaction_voucher_links: the N-tx-to-1-JE case (the bulk-book
- *     flow). Same combined verifikat, multiple bank lines, each tx's row
- *     in transactions has journal_entry_id = NULL for N>1.
- *
- * If a reader only checks `tx.journal_entry_id`, every multi-tx and
- * multi-allocation case falsely shows as "unbooked" and would re-surface
- * in the inbox or hide the "Open verifikat" affordance. Use this helper
- * to avoid that.
- *
- * The Postgres mirror is `public.is_transaction_booked(uuid)`
- * (migration 20260529120000_transaction_voucher_links.sql): same
- * predicate, three storage locations, in SQL.
+ * What follows reads the same anchors when a door needs to know which
+ * verifikat it is: the gates, and the labels a list shows.
  */
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -35,33 +23,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 interface TxLike {
   id: string
   journal_entry_id: string | null
-}
-
-interface PaymentLike {
-  transaction_id: string | null
-}
-
-interface VoucherLinkLike {
-  transaction_id: string
-}
-
-/**
- * @param tx - the bank transaction row (must include `journal_entry_id`)
- * @param payments - rows from invoice_payments AND supplier_invoice_payments
- *                   filtered to ones whose transaction_id might equal tx.id.
- *                   May be empty if the reader didn't fetch them.
- * @param voucherLinks - rows from transaction_voucher_links filtered to ones
- *                       whose transaction_id might equal tx.id. May be empty.
- */
-export function isTransactionBooked(
-  tx: TxLike,
-  payments: PaymentLike[] = [],
-  voucherLinks: VoucherLinkLike[] = [],
-): boolean {
-  if (tx.journal_entry_id != null) return true
-  if (payments.some((p) => p.transaction_id === tx.id)) return true
-  if (voucherLinks.some((v) => v.transaction_id === tx.id)) return true
-  return false
 }
 
 /**
@@ -98,9 +59,8 @@ export function getPrimaryJournalEntryId(
  * or 'clearing' are supplementary anchors. Since #2061 the engine drops them
  * together with the pointer when the main verifikat is reversed, so a row
  * with only a supplementary anchor is a leftover from before that change;
- * such a row must still not be stranded with no way to re-book it. The list
- * readers (fetchJunctionLinkedTxIds, is_transaction_booked()) keep counting
- * every role, and agree with the worklist because no released row keeps one.
+ * such a row must still not be stranded with no way to re-book it, and
+ * public.bank_row_anchors reads it as open too.
  */
 export function hasBankLineJunctionRow(
   rows: Array<{ role?: string | null }> | null | undefined,
@@ -132,7 +92,8 @@ export type TransactionBookableVerdict =
  *
  * A pointer or link to a verifikat that is no longer posted (reversed by a
  * storno, the uncategorize path) does not count: the row reads as unbooked in
- * the UI and must be bookable again (issue #988). Bulk-book with N=1 writes the
+ * the UI and must be bookable again (issue #988), unless a posted correction of
+ * that verifikat stands, which books the money. Bulk-book with N=1 writes the
  * pointer AND a link to the same verifikat; that is one booking, reported once.
  * Supplementary roles ('other', 'clearing') never count, see
  * hasBankLineJunctionRow.
@@ -224,9 +185,30 @@ async function readPostedAnchors(
       .map((entry) => [entry.id, entry]),
   )
   const pointer = (tx.journal_entry_id && posted.get(tx.journal_entry_id)) || null
-  const linked = [...new Set(linkIds)]
+  const linked: PostedAnchor[] = [...new Set(linkIds)]
     .filter((id) => id !== tx.journal_entry_id)
     .flatMap((id) => posted.get(id) ?? [])
+
+  // An anchor at a verifikat no longer posted. While a correction of it books on
+  // a bank account the row's money is on the ledger through that correction, as
+  // public.bank_row_anchors reads it, so it counts as a link: the anchor is not
+  // the row's own booking any more, and a storno of the correction is what opens
+  // the row.
+  for (const id of ids.filter((entryId) => !posted.has(entryId))) {
+    const { data: correctionId, error: correctionError } = await supabase.rpc('standing_correction', {
+      p_entry_id: id,
+    })
+    if (correctionError) return 'read_error'
+    if (!correctionId) continue
+    const { data: correction, error: readError } = await supabase
+      .from('journal_entries')
+      .select('id, source_type, source_id, voucher_series, voucher_number')
+      .eq('company_id', companyId)
+      .eq('id', correctionId as string)
+      .maybeSingle()
+    if (readError) return 'read_error'
+    if (correction) linked.unshift(correction as PostedAnchor)
+  }
   return { pointer, linked }
 }
 
@@ -393,6 +375,14 @@ export function isBookedFromRow(
   transactionId: string,
 ): boolean {
   return entry.source_type === 'bank_transaction' && entry.source_id === transactionId
+}
+
+/**
+ * A list row as the page shows it: a pointer that books nothing is no pointer,
+ * so the row offers Bokför. `is_booked` comes with a list read that names it.
+ */
+export function withLivePointer<T extends { journal_entry_id: string | null; is_booked?: boolean | null }>(row: T): T {
+  return row.is_booked === false && row.journal_entry_id ? { ...row, journal_entry_id: null } : row
 }
 
 function anchorVoucherLabel(entry: PostedAnchor): string | null {

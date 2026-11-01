@@ -24,20 +24,17 @@ const TX_ROW = {
   date: '2025-11-15',
   is_ignored: false,
 }
-const CORE_ROW = { id: TX_ID, journal_entry_id: null, is_ignored: false }
+const CORE_ROW = { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: false }
 
 const noopSupabase = { from: vi.fn() } as never
 
-/** Tool fetch + shared-core fetch + the three junction lookups. */
+/** Tool fetch + shared-core fetch. */
 function enqueueUnbooked(
   enqueue: (r: { data?: unknown; error?: unknown }) => void,
   overrides: { tool?: Record<string, unknown>; core?: Record<string, unknown> } = {},
 ) {
   enqueue({ data: { ...TX_ROW, ...overrides.tool } })
   enqueue({ data: { ...CORE_ROW, ...overrides.core } })
-  enqueue({ data: [] }) // transaction_voucher_links
-  enqueue({ data: [] }) // invoice_payments
-  enqueue({ data: [] }) // supplier_invoice_payments
 }
 
 beforeEach(() => {
@@ -89,20 +86,33 @@ describe('gnubok_ignore_transaction: validation gates', () => {
   it('refuses a directly booked row with TX_IGNORE_ALREADY_BOOKED, as a code and not only in the text', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: TX_ROW })
-    enqueue({ data: { ...CORE_ROW, journal_entry_id: 'je-1' } })
+    enqueue({ data: { ...CORE_ROW, journal_entry_id: 'je-1', is_booked: true } })
     await expect(
       tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
     ).rejects.toMatchObject({ code: 'TX_IGNORE_ALREADY_BOOKED', message: expect.stringMatching(/TX_IGNORE_ALREADY_BOOKED/) })
     expect(findCalls('pending_operations', 'insert')).toEqual([])
   })
 
-  it('refuses a bulk-booked row anchored only through transaction_voucher_links', async () => {
+  it('stages a row whose pointer names a verifikat no longer posted: the commit releases the pointer with the flag', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueUnbooked(enqueue, { core: { journal_entry_id: 'je-reversed' } })
+    enqueue({ data: null }) // company_settings
+    enqueue({ data: null }) // fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await tool.execute(
+      { transaction_id: TX_ID },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(1)
+  })
+
+  it('refuses a row booked with no pointer (a voucher link, a payment allocation)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: TX_ROW })
-    enqueue({ data: CORE_ROW })
-    enqueue({ data: [{ transaction_id: TX_ID }] }) // voucher links
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: { ...CORE_ROW, is_booked: true } })
     await expect(
       tool.execute({ transaction_id: TX_ID }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/TX_IGNORE_ALREADY_BOOKED/)
@@ -168,7 +178,7 @@ describe('gnubok_ignore_transaction: staging', () => {
   it('restore: true stages ignored: false without the booked check and points back at categorize', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { ...TX_ROW, is_ignored: true } }) // tool fetch
-    enqueue({ data: { ...CORE_ROW, is_ignored: true } }) // core fetch (no junction lookups on restore)
+    enqueue({ data: { ...CORE_ROW, is_ignored: true } }) // core fetch
     enqueue({ data: null }) // company_settings
     enqueue({ data: null }) // fiscal_periods
     enqueue({ data: { id: 'op-2' }, error: null }) // insert

@@ -9,11 +9,10 @@
  * agent could stage a lock over thousands of untriaged transactions and
  * present an approval card claiming zero unbooked (BFL 5 kap 2 §).
  *
- * The corrected guard counts:
- *   - untriaged: is_business IS NULL AND is_ignored = false
- *   - businessUnbooked: is_business = true, is_ignored = false,
- *     journal_entry_id IS NULL, minus rows anchored via
- *     transaction_voucher_links / invoice_payments / supplier_invoice_payments
+ * The corrected guard counts the rows of open_bank_rows (not ignored, not
+ * private, anchored to no live verifikat, tests/pg/bank-row-open-read.pg.test.ts):
+ *   - untriaged: is_business IS NULL
+ *   - businessUnbooked: is_business = true
  * and fails CLOSED when the check itself cannot run.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -57,7 +56,7 @@ describe('gnubok_lock_period staging guard', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD }) // fiscal_periods
     enqueue({ data: null, count: 3 }) // untriaged head-count
-    enqueue({ data: [] }) // business candidates page (none)
+    enqueue({ data: null, count: 0 }) // business head-count
 
     await expect(
       lockPeriod.execute(
@@ -73,7 +72,7 @@ describe('gnubok_lock_period staging guard', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD })
     enqueue({ data: null, count: 1 })
-    enqueue({ data: [] })
+    enqueue({ data: null, count: 0 })
 
     const err = await lockPeriod
       .execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
@@ -91,10 +90,7 @@ describe('gnubok_lock_period staging guard', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD })
     enqueue({ data: null, count: 0 }) // untriaged: none
-    enqueue({ data: [{ id: 'tx-9' }] }) // business candidates
-    enqueue({ data: [] }) // transaction_voucher_links
-    enqueue({ data: [] }) // invoice_payments
-    enqueue({ data: [] }) // supplier_invoice_payments
+    enqueue({ data: null, count: 1 }) // business head-count
 
     await expect(
       lockPeriod.execute(
@@ -103,41 +99,21 @@ describe('gnubok_lock_period staging guard', () => {
     ).rejects.toThrow(/1 markerade som affärshändelse men utan verifikat/)
   })
 
-  it('stages when the business candidates are anchored via transaction_voucher_links (bulk-booked rows no longer block)', async () => {
+  it('stages the clean period: open_bank_rows holds nothing for it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD })
     enqueue({ data: null, count: 0 }) // untriaged: none
-    // Two bulk-booked rows: journal_entry_id NULL but anchored via links. The
-    // OLD predicate counted these and refused; the shared predicate subtracts
-    // them.
-    enqueue({ data: [{ id: 'tx-1' }, { id: 'tx-2' }] })
-    enqueue({ data: [{ transaction_id: 'tx-1' }, { transaction_id: 'tx-2' }] }) // transaction_voucher_links
-    enqueue({ data: [] }) // invoice_payments
-    enqueue({ data: [] }) // supplier_invoice_payments
-    enqueue({ data: { id: 'op-lock-1' } }) // pending_operations insert
+    enqueue({ data: null, count: 0 }) // business: none
+    enqueue({ data: { id: 'op-lock-2' } }) // pending_operations insert
 
     const result = (await lockPeriod.execute(
       { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
     )) as { staged: boolean; operation_id?: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
-    expect(result.operation_id).toBe('op-lock-1')
+    expect(result.operation_id).toBe('op-lock-2')
     expect(result.preview.unbooked_business_transactions).toBe(0)
     expect(result.preview.untriaged_transactions).toBe(0)
-  })
-
-  it('stages the clean period (no untriaged, no candidates)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: PERIOD })
-    enqueue({ data: null, count: 0 })
-    enqueue({ data: [] }) // no business candidates: no anchor lookups run
-    enqueue({ data: { id: 'op-lock-2' } }) // pending_operations insert
-
-    const result = (await lockPeriod.execute(
-      { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    )) as { staged: boolean }
-
-    expect(result.staged).toBe(true)
   })
 
   it('fails CLOSED when the guard query errors: never stages, and the message steers to retry, not remediation', async () => {

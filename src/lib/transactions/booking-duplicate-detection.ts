@@ -47,6 +47,8 @@ import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
 import { BANK_LEG_ROOM_TOLERANCE, holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import { isAccountNumber } from '@/lib/invariants/account-number'
+import { sameCashAccount } from '@/lib/cash-accounts/ledger-slots'
+import { readPhysicalKeys } from '@/lib/cash-accounts/twins'
 import { chunk } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 
@@ -313,9 +315,10 @@ const SIBLING_DUPLICATE_DATE_WINDOW_DAYS = 3
  * candidates and the candidate's verifikat resolves via
  * getPrimaryJournalEntryId.
  *
- * Account guard mirrors the import dedup bridge: when BOTH sides know their
- * cash_account_id they must match; a null on either side is treated as
- * compatible (single-account companies and un-backfilled rows behave as before).
+ * Account guard is the import dedup's (sameCashAccount): when BOTH sides know
+ * their cash_account_id they must be one bank account, the same row or twin
+ * rows of one IBAN and currency; a null on either side is treated as compatible
+ * (single-account companies and un-backfilled rows behave as before).
  *
  * Identity guard mirrors the ingest identity guard: a sibling the same feed's
  * ids prove to be another entry is another movement and is skipped
@@ -374,7 +377,7 @@ export async function detectBookedDuplicateTransaction(
   // deterministic even at the limit.
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id, is_booked, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
     .eq('company_id', companyId)
     .gte('date', siblingLowDate)
     .lte('date', siblingHighDate)
@@ -394,6 +397,7 @@ export async function detectBookedDuplicateTransaction(
     description: string | null
     cash_account_id: string | null
     journal_entry_id: string | null
+    is_booked?: boolean | null
     external_id: string | null
     import_source: string | null
     bank_connection_id: string | null
@@ -401,8 +405,10 @@ export async function detectBookedDuplicateTransaction(
     bank_file_import_id: string | null
   }
   const targetAccount = target.cash_account_id ?? null
-  const matches = (data as unknown as Row[]).filter((r) => {
+  const sameMovement = (data as unknown as Row[]).filter((r) => {
     if (excludeTransactionIds.has(r.id)) return false
+    // Not booked by a live verifikat: open work, not a booked twin.
+    if (r.is_booked === false) return false
     // Identity guard: two rows the same feed's ids prove to be two entries are
     // two movements (two Stripe fees of the same öre, two customers paying the
     // same price, two Swish payments of one ticket price), never a copy of
@@ -413,15 +419,16 @@ export async function detectBookedDuplicateTransaction(
     // column default), so SEK-only companies see no behaviour change.
     if ((r.currency || 'SEK').toUpperCase() !== targetCurrency) return false
     if (toOre(r.amount) !== targetOre) return false
-    // Account guard: both-known must match; a null on either side is compatible.
-    if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
-      return false
-    }
     // Window re-check in JS (the query already ranged on date): keeps the
     // window authoritative in one place and drops rows with unparseable dates.
     const rowMs = new Date(r.date).getTime()
     return Number.isFinite(rowMs) && Math.abs(rowMs - targetDateMs) <= siblingWindowMs
   })
+  if (sameMovement.length === 0) return null
+  // Account guard, on one bank account: a reconnect's twin row is not another
+  // account. Last, because it is the one test that may need a read.
+  const physicalKeyById = await readPhysicalKeys(supabase, companyId, [targetAccount, ...sameMovement.map((r) => r.cash_account_id)])
+  const matches = sameMovement.filter((r) => sameCashAccount(targetAccount, r.cash_account_id, physicalKeyById))
   if (matches.length === 0) return null
 
   // Resolve booked-ness with the full is_transaction_booked semantics: the
@@ -836,6 +843,11 @@ export async function detectLedgerDuplicateVoucher(
     for (const r of (rows ?? []) as LinkedTxRow[]) sourceRows.set(r.id, r)
   }
 
+  const physicalKeyById = await readPhysicalKeys(supabase, companyId, [
+    targetAccount,
+    ...((txLinks ?? []) as LinkedTxRow[]).map((r) => r.cash_account_id),
+    ...[...bulkLinkedRows.values(), ...sourceRows.values()].map((r) => r.cash_account_id),
+  ])
   const linkedTxMatchesTarget = (r: LinkedTxRow): boolean => {
     if (r.id === target.id) return false
     // Same identity guard as the sibling scan: a voucher linked to ANOTHER
@@ -845,9 +857,7 @@ export async function detectLedgerDuplicateVoucher(
     if (idsProveDistinctBookings(target, r)) return false
     if ((r.currency || 'SEK').toUpperCase() !== targetCurrency) return false
     if (toOre(r.amount) !== targetOre) return false
-    if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
-      return false
-    }
+    if (!sameCashAccount(targetAccount, r.cash_account_id, physicalKeyById)) return false
     const linkedMs = new Date(r.date).getTime()
     return Number.isFinite(linkedMs) && Math.abs(linkedMs - dateMs) <= windowMs
   }

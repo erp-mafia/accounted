@@ -13,10 +13,10 @@ const UUID = z.string().uuid()
 const NAME = z.string().trim().min(1).max(200)
 const PARTY_KIND = z.enum(['person', 'company'])
 const ORG = z.string().trim().max(20)
-const BANK = z.string().regex(/^19\d\d$/).describe('Bank account (BAS 19xx). Default 1930.')
+const BANK = z.string().regex(/^19\d\d$/).describe("Bank account (BAS 19xx). Default: the company's primary bank account.")
 
 /** The account a tillskott is booked against: a bank account (19xx), or 1685 while only promised. */
-export const ContributionCounterAccount = z.string().regex(/^(19\d\d|1685)$/).describe('Bank account 19xx (default 1930), or 1685 while only promised.')
+export const ContributionCounterAccount = z.string().regex(/^(19\d\d|1685)$/).describe("Bank account 19xx (default: the company's primary bank account), or 1685 while only promised.")
 
 export const DividendBookBody = z
   .object({

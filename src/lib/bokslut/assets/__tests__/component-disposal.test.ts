@@ -63,6 +63,7 @@ function asset(components: AssetComponent[]): Asset {
 describe('buildAssetDisposalPlan for a component asset', () => {
   it('clears each component\'s opening, posted split and the charge to the disposal date', () => {
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset: asset([
         component({}),
         component({ id: 'stomme', name: 'Stomme', cost: '800000.00', useful_life_months: 1200, sort_order: 1 }),
@@ -93,6 +94,7 @@ describe('buildAssetDisposalPlan for a component asset', () => {
 
   it('does not clear a component replaced earlier', () => {
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset: asset([
         component({ derecognised_at: '2025-06-30', derecognition_journal_entry_id: 'je-r' }),
         component({ id: 'nytt', name: 'Nytt tak', opening_accumulated_depreciation: '0.00', opening_depreciation_date: null, acquisition_date: '2025-06-30', replaces_component_id: 'tak' }),

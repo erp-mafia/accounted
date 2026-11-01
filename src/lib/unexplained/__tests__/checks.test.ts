@@ -6,7 +6,7 @@
  * report's figure. A check without an ok and an unexplained case here fails
  * the coverage test at the bottom.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createFakeLedger, type FakeEntry } from '@/lib/measures/__tests__/fake-ledger'
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
@@ -37,10 +37,22 @@ import {
   type CheckFixtureOptions,
 } from './fixtures'
 
+// The floor is public.account_ib_floor, whose rule the in-memory company does
+// not port (tests/pg/bank-reconciliation-floor-and-window.pg.test.ts proves
+// it). No fixture here has an ingående balans on the skattekonto: no floor.
+vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()),
+  findOpeningBalanceFloor: async () => null,
+}))
+
 const seen = new Map<CheckId, Set<CheckStatus>>()
 
 function ledger(options: CheckFixtureOptions = {}) {
-  return createFakeLedger(checkFixture(options))
+  const data = checkFixture(options)
+  // public.open_bank_rows over the fixture's rows: its answer, not its rule
+  // (tests/pg/bank-row-open-read.pg.test.ts proves the rule).
+  const open = (options.transactions ?? []).filter((t) => !t.is_ignored && t.is_business !== false && !t.is_booked)
+  return createFakeLedger({ ...data, extraTables: { ...data.extraTables, open_bank_rows: open } })
 }
 
 async function check(l: ReturnType<typeof ledger>, id: CheckId) {
@@ -208,6 +220,16 @@ describe('bank_balance_vs_bank equals the bank balance minus the balance sheet r
     const data = await check(l, 'bank_balance_vs_bank')
     return data.results.find((r) => r.subject.kind === 'bank_account' && r.subject.cash_account_id === CA_1930)!
   }
+
+  it('one bank account on two rows is one balance, on the row with the bookkeeping history', async () => {
+    const data = checkFixture({})
+    const twin = { ...data.cashAccounts![0], id: 'ca000000-0000-4000-8000-000000000009', ledger_account: '1941', created_at: '2026-06-01T00:00:00.000Z' }
+    const l = createFakeLedger({ ...data, cashAccounts: [...data.cashAccounts!, twin] })
+    const result = await check(l, 'bank_balance_vs_bank')
+    const subjects = result.results.flatMap((r) => (r.subject.kind === 'bank_account' ? [r.subject.cash_account_id] : []))
+    expect(subjects).toContain(CA_1930)
+    expect(subjects).not.toContain(twin.id)
+  })
 
   it('ok when the books hold what the bank reported', async () => {
     const l = ledger()

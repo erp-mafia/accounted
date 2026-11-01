@@ -893,7 +893,7 @@ describe('a kreditfaktura of a registered supplier invoice', () => {
     const { supabase, findCall } = books({ lines: TAGGED_LINES })
     await registerBookedSupplierInvoice(supabase as never, COMPANY_ID, USER_ID, input())
     const header = findCall('supplier_invoices', 'insert')?.[0] as SupplierInvoice
-    const { lines } = buildSupplierInvoicePaymentLines(header, { paymentAmount: 10000 })
+    const { lines } = buildSupplierInvoicePaymentLines(header, { paymentAccount: '1930', paymentAmount: 10000 })
     expect(lines.find((line) => line.account_number === '2440')).toMatchObject({ debit_amount: 10000, dimensions: { '6': 'P1' } })
   })
 })

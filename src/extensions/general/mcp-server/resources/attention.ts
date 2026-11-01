@@ -13,7 +13,7 @@ import {
   summarizeOverdueInvoices,
   type OverdueInvoiceRow,
 } from '@/lib/worklist/categories'
-import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
 import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
@@ -93,14 +93,11 @@ export const attentionResource: McpResource = {
         return null
       }),
       supabase
-        .from('transactions')
+        .from('open_bank_rows')
         .select('id, date, amount, currency, description, merchant_name')
         .eq('company_id', companyId)
-        .eq('is_ignored', false)
-        .is('journal_entry_id', null)
-        .or('is_business.is.null,is_business.eq.true')
         .order('date', { ascending: true })
-        .limit(SAMPLE_LIMIT * 4),
+        .limit(SAMPLE_LIMIT),
       // The Att göra group's rows (lib/worklist listOverdueInvoiceRows): the
       // Förfallna view's invoices, oldest first, every one of them counted.
       // A failed read skips the category rather than claiming zero.
@@ -178,25 +175,7 @@ export const attentionResource: McpResource = {
 
     // ── Unbooked business transactions ──────────────────────────────
     const unbookedCount = unbooked?.total ?? 0
-    const sampleCandidates = unbookedSamples.data ?? []
-    const anchoredSamples =
-      unbookedCount > 0 && sampleCandidates.length > 0
-        ? await fetchAnchoredTransactionIds(
-            supabase,
-            companyId,
-            sampleCandidates.map((row) => row.id as string),
-          ).catch((err: unknown) => {
-            // Counts are unaffected; at worst a sample row is already booked.
-            log.warn('attention unbooked sample anchor lookup failed', {
-              companyId,
-              reason: failureReason(err),
-            })
-            return new Set<string>()
-          })
-        : new Set<string>()
-    const samples = sampleCandidates
-      .filter((row) => !anchoredSamples.has(row.id as string))
-      .slice(0, SAMPLE_LIMIT)
+    const samples = unbookedSamples.data ?? []
     if (unbookedCount > 0) {
       const oldest = samples[0]
       const oldestAgeDays = oldest?.date ? daysBetween(oldest.date, today) : 0

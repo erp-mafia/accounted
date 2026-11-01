@@ -102,7 +102,7 @@ describe('buildInvoiceCashLines, foreign invoice with a known SEK bank amount', 
       items: [item({ unit_price: 100, line_total: 100, vat_rate: 25, vat_amount: 25 })],
     })
     const { lines } = buildInvoiceCashLines(standard, 'aktiebolag', undefined, '1930', 1410)
-    const without = buildInvoiceCashLines(standard, 'aktiebolag').lines
+    const without = buildInvoiceCashLines(standard, 'aktiebolag', undefined, '1930').lines
     expect(lines.filter((l) => !['1930', '7960'].includes(l.account_number))).toEqual(
       without.filter((l) => l.account_number !== '1930'),
     )
@@ -113,7 +113,7 @@ describe('buildInvoiceCashLines, foreign invoice with a known SEK bank amount', 
 
   it('a bank amount equal to the invoice-rate share books no kursdiff', () => {
     const { lines } = buildInvoiceCashLines(eurInvoice(), 'aktiebolag', undefined, '1930', 4505.8)
-    expect(lines).toEqual(buildInvoiceCashLines(eurInvoice(), 'aktiebolag').lines)
+    expect(lines).toEqual(buildInvoiceCashLines(eurInvoice(), 'aktiebolag', undefined, '1930').lines)
     expect(lines.some((l) => ['3960', '7960'].includes(l.account_number))).toBe(false)
   })
 

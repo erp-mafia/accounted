@@ -17,6 +17,7 @@ import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-cand
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { supersededTwins, type TwinCandidate } from '@/lib/cash-accounts/twins'
 import { toError } from '@/lib/errors/to-error'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -1376,24 +1377,14 @@ export async function countReconciliationDue(
 
   const { data: cashRows, error: cashError } = await supabase
     .from('cash_accounts')
-    .select('id, iban, currency, updated_at')
+    .select('id, iban, currency, ledger_account, is_primary, created_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
   if (cashError) return logAndZero('reconciliation_due', companyId, cashError)
-  const cash = (cashRows ?? []) as Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
-  // Reconnect duplicates (same IBAN + currency) count once: the newest row.
-  const byIban = new Map<string, typeof cash[number]>()
-  const keys: string[] = []
-  for (const a of cash) {
-    if (!a.iban) {
-      keys.push(`bank:${a.id}`)
-      continue
-    }
-    const k = `${a.iban}|${a.currency ?? 'SEK'}`
-    const prev = byIban.get(k)
-    if (!prev || (a.updated_at ?? '') > (prev.updated_at ?? '')) byIban.set(k, a)
-  }
-  for (const a of byIban.values()) keys.push(`bank:${a.id}`)
+  const cash = (cashRows ?? []) as Array<TwinCandidate & { iban: string | null; currency: string | null }>
+  // Reconnect duplicates count once: the row the rail keeps.
+  const twins = await supersededTwins(supabase, companyId, cash)
+  const keys = cash.filter((a) => !twins.has(a.id)).map((a) => `bank:${a.id}`)
 
   const { count: skvCount, error: skvError } = await supabase
     .from('skattekonto_transactions')

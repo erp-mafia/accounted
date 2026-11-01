@@ -210,7 +210,7 @@ describe('foreign-currency invoices with a negative row derive the debit from th
   })
 
   it('createInvoiceCashEntry: 1930 = 12 400, entry balances', async () => {
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', eurInvoice(), '2024-07-01', 'aktiebolag')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', eurInvoice(), '2024-07-01', 'aktiebolag', undefined, '1930')
     expectNetBalanced(mockedCreateEntry.mock.calls[0][3].lines, '1930')
   })
 })
@@ -603,7 +603,7 @@ describe('createInvoiceCashEntry: per-line VAT', () => {
       ],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
 
     expect(mockedCreateEntry).toHaveBeenCalledOnce()
     const input = mockedCreateEntry.mock.calls[0][3]
@@ -646,7 +646,7 @@ describe('createInvoiceCashEntry: per-line VAT', () => {
       ],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     expect(input.lines.find((line) => line.account_number === '1930')?.debit_amount).toBe(10000)
@@ -812,7 +812,7 @@ describe('foreign currency without an exchange rate is refused, not relabelled',
         'user-1',
         eurInvoiceWithoutRate(),
         '2024-06-20'
-      )
+      , 'enskild_firma', undefined, '1930')
     ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
@@ -993,7 +993,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
 
   it('createInvoiceCashEntry (no items, no rate) refuses too', async () => {
     await expect(
-      createInvoiceCashEntry(null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-01')
+      createInvoiceCashEntry(null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-01', 'enskild_firma', undefined, '1930')
     ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
@@ -1017,7 +1017,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
     await expect(
       createInvoicePaymentJournalEntry(
         null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-15'
-      )
+      , undefined, undefined, undefined, '1930')
     ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' })
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
@@ -1026,7 +1026,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
     await expect(
       createInvoicePaymentJournalEntry(
         null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-15',
-        undefined, undefined, 400,
+        undefined, undefined, 400, '1930',
       )
     ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
     expect(mockedCreateEntry).not.toHaveBeenCalled()
@@ -1037,7 +1037,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
 
     await createInvoicePaymentJournalEntry(
       null as never, 'company-1', 'user-1', invoice, '2024-07-15',
-      undefined, undefined, 400,
+      undefined, undefined, 400, '1930',
     )
 
     const input = mockedCreateEntry.mock.calls[0][3]
@@ -1048,7 +1048,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
 
   it('buildInvoicePaymentLines clears what 1510 carries, not total_sek, so no öre is stranded', () => {
     const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11.123, total: 176.7, total_sek: 1965.43, remaining_amount: 176.7 })
-    const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 1965.44 }, undefined)
+    const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 1965.44 }, undefined, '1930')
     expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
       ['1930', 1965.44, 0],
       ['1510', 0, 1965.44],
@@ -1114,7 +1114,7 @@ describe('header fallback and payment path: strict FX conversion', () => {
   it('createInvoicePaymentJournalEntry keeps identical numbers when total_sek is present without a rate', async () => {
     const invoice = eurHeaderOnlyInvoice({ total_sek: 11500 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(11500)
@@ -1171,7 +1171,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
   it('createInvoicePaymentJournalEntry includes customer name', async () => {
     const invoice = makeInvoice({ total: 1250 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, 'Foretag AB')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, 'Foretag AB', undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Inbetalning kundfaktura 1001, Foretag AB')
@@ -1180,7 +1180,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
   it('createInvoicePaymentJournalEntry falls back without customer name', async () => {
     const invoice = makeInvoice({ total: 1250 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Inbetalning kundfaktura 1001')
@@ -1206,7 +1206,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
       items: [makeItem()],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', 'Foretag AB')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', 'Foretag AB', '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Kontantbetalning kundfaktura 1001, Foretag AB')
@@ -1217,7 +1217,7 @@ describe('BFL-compliant descriptions with counterparty names', () => {
       items: [makeItem()],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.description).toBe('Kontantbetalning kundfaktura 1001')
@@ -1232,7 +1232,7 @@ describe('createInvoicePaymentJournalEntry: exchange rate difference', () => {
   it('SEK payment creates simple 2-line entry', async () => {
     const invoice = makeInvoice({ total: 1250 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines).toHaveLength(2)
@@ -1253,7 +1253,7 @@ describe('createInvoicePaymentJournalEntry: exchange rate difference', () => {
     })
 
     // Gain of 200 SEK (received more than booked)
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', 200)
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', 200, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines).toHaveLength(3)
@@ -1285,7 +1285,7 @@ describe('createInvoicePaymentJournalEntry: exchange rate difference', () => {
     })
 
     // Loss of 300 SEK (received less than booked)
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', -300)
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', -300, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines).toHaveLength(3)
@@ -1317,7 +1317,7 @@ describe('paymentAccount parameter (settlement-account resolution)', () => {
   it('createInvoicePaymentJournalEntry defaults the bank leg to 1930 when paymentAccount is omitted', async () => {
     const invoice = makeInvoice({ total: 1250 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(1250)
@@ -1361,7 +1361,7 @@ describe('paymentAccount parameter (settlement-account resolution)', () => {
   it('createInvoiceCashEntry defaults the bank leg to 1930 when paymentAccount is omitted', async () => {
     const invoice = makeInvoice({ total: 1198 })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(1198)
@@ -1886,7 +1886,7 @@ describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () =>
   it('SEK payment: both 1930 and 1510 carry the invoice default', async () => {
     const invoice = makeInvoice({ total: 1250, default_dimensions: { '1': 'KS01', '6': 'P001' } })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     expect(input.lines).toHaveLength(2)
@@ -1904,7 +1904,7 @@ describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () =>
       default_dimensions: { '6': 'P001' },
     })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', 200)
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', 200, undefined, undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     expect(input.lines).toHaveLength(3)
@@ -1923,7 +1923,7 @@ describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () =>
       default_dimensions: { '6': 'P001' },
     })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', -300)
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', -300, undefined, undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     const loss7960 = input.lines.find((l) => l.account_number === '7960')
@@ -1933,7 +1933,7 @@ describe('dimensions propagation (PR7): createInvoicePaymentJournalEntry', () =>
   it('no default bag → payment lines carry no dimensions', async () => {
     const invoice = makeInvoice({ total: 1250 })
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     for (const line of input.lines) {
@@ -1959,7 +1959,7 @@ describe('dimensions propagation (PR7): createInvoiceCashEntry', () => {
       ],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
 
     const debit1930 = input.lines.find((l) => l.account_number === '1930')
@@ -2038,7 +2038,7 @@ describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
       ],
     })
 
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01', 'enskild_firma', undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
 
@@ -2115,7 +2115,7 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
       remaining_amount: 8750,
     } as Partial<Invoice>)
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     const bank = input.lines.find((l) => l.account_number === '1930')!
@@ -2132,7 +2132,7 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
       remaining_amount: 750,
     } as Partial<Invoice>)
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1930')!.debit_amount).toBe(750)
@@ -2147,7 +2147,7 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
       remaining_amount: 0,
     } as Partial<Invoice>)
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(8750)
@@ -2157,7 +2157,7 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
     const invoice = makeInvoice({ total: 1250, paid_amount: 250 } as Partial<Invoice>)
     ;(invoice as unknown as { remaining_amount?: number }).remaining_amount = undefined
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(1000)
@@ -2166,7 +2166,7 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
   it('fully outstanding invoice still books the full total (unchanged path)', async () => {
     const invoice = makeInvoice({ total: 1250, paid_amount: 0, remaining_amount: 1250 } as Partial<Invoice>)
 
-    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15', undefined, undefined, undefined, '1930')
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(1250)

@@ -219,6 +219,20 @@ describe('planSupplierSettlement: the plan', () => {
     })
   })
 
+  it('with no account named the plan credits the primary bank account, not the last-used one', async () => {
+    const db = client()
+    db.enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '1931' } })
+    db.enqueue({ data: { id: 'ca-1', ledger_account: '1941', enabled: true, currency: 'SEK' } })
+    const outcome = await planSupplierSettlement(db.ctx, invoice(), { paymentDate: '2026-05-12' })
+    expect(outcome.ok && outcome.plan.paymentAccount).toBe('1941')
+  })
+
+  it('a named account is credited as named, with no read of the cash accounts', async () => {
+    const { db, plan: p } = await planned(invoice(), { paymentDate: '2026-05-12', paymentAccount: '2893' })
+    expect(p.paymentAccount).toBe('2893')
+    expect(db.supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+  })
+
   it('a part payment leaves the rest open and no paid_at', async () => {
     const { plan: p } = await planned(invoice(), { amount: 400, paymentDate: '2026-05-12' })
     expect(p).toMatchObject({ newPaidAmount: 1840, newRemaining: 600, newStatus: 'partially_paid', paidAt: null })

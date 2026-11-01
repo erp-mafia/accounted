@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { isAccountNumber, isIsoDateShaped } from '@/lib/invariants'
 import { parseAmountInput } from '@/lib/money'
+import { usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { formatLossAmount } from '@/lib/customer-loss/text'
 import { postCustomerLoss } from './use-customer-loss'
 
@@ -32,7 +33,9 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
   const t = useTranslations('customer_loss')
   const { toast } = useToast()
   const [amount, setAmount] = useState('')
-  const [account, setAccount] = useState('1930')
+  const paymentLedger = usePaymentBankLedger()
+  const [accountChoice, setAccountChoice] = useState<string | null>(null)
+  const account = accountChoice ?? paymentLedger
   const [reason, setReason] = useState('')
   const [entryDate, setEntryDate] = useState(today)
   const [sending, setSending] = useState(false)
@@ -43,7 +46,7 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
     setOpenedFor(open)
     if (open) {
       setAmount('')
-      setAccount('1930')
+      setAccountChoice(null)
       setReason('')
       setEntryDate(today)
     }
@@ -93,7 +96,7 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="recovery-account">{t('recovery_account')}</Label>
-            <Input id="recovery-account" inputMode="numeric" maxLength={4} value={account} onChange={(e) => setAccount(e.target.value)} />
+            <Input id="recovery-account" inputMode="numeric" maxLength={4} value={account} onChange={(e) => setAccountChoice(e.target.value)} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="recovery-reason">{t('reason')}</Label>

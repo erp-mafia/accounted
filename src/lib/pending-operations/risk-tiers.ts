@@ -271,7 +271,7 @@ const RISK_TIERS = {
   // Ignoring a bank transaction flips transactions.is_ignored and nothing
   // else: no verifikat, no ledger impact, reversible with the same op
   // (ignored: false). The DB CHECK transactions_is_ignored_no_journal_entry
-  // and the executor's isTransactionBooked() refusal keep it off booked rows,
+  // and the executor's refusal of a booked row keep it off booked rows,
   // so the op cannot hide a booking even if tampered with (issue #1661).
   ignore_transaction: 'low',
   // Kundorder (sales orders) never book: an order is the non-ledger document

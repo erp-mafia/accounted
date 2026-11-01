@@ -208,14 +208,13 @@ export function clearingBankRows(supabase: SupabaseClient, companyId: string): C
     async open(from, to) {
       const rows = await fetchAllRows<RowLike>(({ from: start, to: end }) =>
         supabase
-          .from('transactions')
+          .from('unbooked_bank_rows')
           .select(
             'id, date, amount, currency, description, original_description, merchant_name, transaction_method, counterparty_iban, journal_entry_id, is_ignored, is_business, invoice_id, supplier_invoice_id, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id, potential_journal_entry_id',
           )
           .eq('company_id', companyId)
           .gt('amount', 0)
           .eq('is_ignored', false)
-          .eq('is_booked', false)
           .gte('date', from)
           .lte('date', to)
           .order('id', { ascending: true })

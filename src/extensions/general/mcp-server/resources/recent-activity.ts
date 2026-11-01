@@ -1,5 +1,4 @@
 import type { McpResource } from './types'
-import { fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 
 export const recentActivityResource: McpResource = {
   uri: 'Accounted://recent-activity',
@@ -43,27 +42,25 @@ export const recentActivityResource: McpResource = {
     }
 
     // Unbooked as lib/transactions/unbooked.ts defines it, the count every
-    // other MCP surface reports: not ignored, not triaged as private, and no
-    // verifikat. A NULL pointer is not enough on its own: rows bulk-booked
-    // into a samlingsverifikat, split over several verifikat (1:N) or settled
-    // through an invoice allocation are anchored elsewhere.
+    // other MCP surface reports.
     const recentTx = transactions.data ?? []
-    const pointerUnbooked = recentTx.filter((t) => !t.journal_entry_id && !t.is_ignored && t.is_business !== false)
-    const anchored =
-      pointerUnbooked.length > 0
-        ? await fetchAnchoredTransactionIds(
-            supabase,
-            companyId,
-            pointerUnbooked.map((t) => t.id as string),
-          )
-        : new Set<string>()
+    const open = recentTx.length > 0
+      ? await supabase
+          .from('open_bank_rows')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .in('id', recentTx.map((t) => t.id as string))
+      : { count: 0, error: null }
+    if (open.error) {
+      throw new Error(`Failed to count recent unbooked transactions: ${open.error.message}`)
+    }
 
     return {
       limit,
       journal_entries: journalEntries.data ?? [],
       invoices: invoices.data ?? [],
       transactions: recentTx,
-      uncategorized_transaction_count: pointerUnbooked.filter((t) => !anchored.has(t.id as string)).length,
+      uncategorized_transaction_count: open.count ?? 0,
     }
   },
 }

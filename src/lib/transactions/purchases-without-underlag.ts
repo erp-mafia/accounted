@@ -20,14 +20,12 @@
  * those rows would sit under "saknar underlag" forever, already booked, with
  * nothing the user could do to clear them.
  *
- * So the column filter stays as the cheap first pass the database can index,
- * and `isTransactionBooked` settles it afterwards with the two link tables it
- * needs. That predicate is canonical; nothing here re-implements it.
+ * So the list reads public.open_bank_rows, which holds every anchor; nothing
+ * here re-implements it.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { isTransactionBooked } from '@/lib/transactions/is-booked'
 
 /**
  * Deliberately below the receipt hunt's own floor (MIN_AMOUNT_SEK = 100 in
@@ -78,37 +76,16 @@ export async function fetchPurchasesWithoutUnderlag(
 
   const sinceDate = addMonthsIso(todayIsoStockholm(), -lookback)
 
-  const rows = await fetchAllRows<PurchaseWithoutUnderlag>((range) =>
+  return fetchAllRows<PurchaseWithoutUnderlag>((range) =>
     supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select(COLUMNS)
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
       .is('document_id', null)
-      .eq('is_ignored', false)
-      // is_business IS DISTINCT FROM false: NULL is untriaged and true is
-      // "business, not yet booked". Only an explicit false means the user
-      // called it private, and a private purchase needs no underlag.
-      .not('is_business', 'is', false)
       // Outflows only. With no floor this is simply every negative row.
       .lt('amount', minAmount > 0 ? -minAmount : 0)
       .gte('date', sinceDate)
       .order('date', { ascending: false })
       .range(range.from, range.to),
   )
-
-  if (rows.length === 0) return []
-
-  // The column filter above cannot see these two. Fetched once for the whole
-  // page rather than per row.
-  const ids = rows.map((r) => r.id)
-  const [{ data: voucherLinks }, { data: invoicePayments }, { data: supplierPayments }] =
-    await Promise.all([
-      supabase.from('transaction_voucher_links').select('transaction_id').in('transaction_id', ids),
-      supabase.from('invoice_payments').select('transaction_id').in('transaction_id', ids),
-      supabase.from('supplier_invoice_payments').select('transaction_id').in('transaction_id', ids),
-    ])
-
-  const payments = [...(invoicePayments ?? []), ...(supplierPayments ?? [])]
-  return rows.filter((tx) => !isTransactionBooked(tx, payments, voucherLinks ?? []))
 }

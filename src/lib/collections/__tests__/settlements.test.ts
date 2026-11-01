@@ -135,6 +135,12 @@ function seedWorld(options: { autoBookSettlements?: boolean; vatRegistered?: boo
   ])
 }
 
+/** Bank rows nothing books: the table holds them and open_bank_rows answers them. */
+function seedOpenRows(rows: Record<string, unknown>[]) {
+  mem.seed('transactions', rows)
+  mem.seed('open_bank_rows', rows)
+}
+
 function connection() {
   return normalizeConnectionRow(mem.rows('collection_connections')[0]!)
 }
@@ -652,7 +658,7 @@ describe('the payout bank row', () => {
 
   it('links the bank row of the payout to the payout voucher and clears its invoice hint', async () => {
     seedWorld()
-    mem.seed('transactions', [payoutRow(), payoutRow({ id: 'tx-other', amount: 900 }), payoutRow({ id: 'tx-late', date: '2026-10-08' })])
+    seedOpenRows([payoutRow(), payoutRow({ id: 'tx-other', amount: 900 }), payoutRow({ id: 'tx-late', date: '2026-10-08' })])
     const id = await storedSettlement()
     expect(await bookSettlement(deps(), COMPANY, id, { userId: USER })).toMatchObject({ ok: true, journalEntryId: 'je-d1' })
     expect(linkBankRow).toHaveBeenCalledTimes(1)
@@ -673,13 +679,13 @@ describe('the payout bank row', () => {
       { journal_entry_id: 'je-d1', account_number: '1689', debit_amount: 0, credit_amount: 1000 },
     ])
     // The same payout text and amount on another bank account: never this voucher's row.
-    mem.seed('transactions', [payoutRow({ id: 'tx-1940', cash_account_id: 'ca-1940' })])
+    seedOpenRows([payoutRow({ id: 'tx-1940', cash_account_id: 'ca-1940' })])
     const id = await storedSettlement()
     expect(await bookSettlement(deps(), COMPANY, id, { userId: USER })).toMatchObject({ ok: true, journalEntryId: 'je-d1' })
     expect(linkBankRow).not.toHaveBeenCalled()
 
     // The row on the payout account's bank account is linked on the next run; the other is left alone.
-    mem.seed('transactions', [payoutRow({ id: 'tx-1930', cash_account_id: 'ca-1930' })])
+    seedOpenRows([payoutRow({ id: 'tx-1930', cash_account_id: 'ca-1930' })])
     expect(await runSettlementSync(deps(), { importAll: false })).toMatchObject({ bankLinked: 1 })
     expect(linkBankRow).toHaveBeenCalledWith(mem.client, USER, COMPANY, { transactionId: 'tx-1930', journalEntryId: 'je-d1' })
     expect(settlementRow(id)).toMatchObject({ bank_transaction_id: 'tx-1930' })
@@ -687,21 +693,23 @@ describe('the payout bank row', () => {
 
   it('leaves two candidate rows to a person, and the booking stands when the link is refused', async () => {
     seedWorld()
-    mem.seed('transactions', [payoutRow(), payoutRow({ id: 'tx-twin' })])
+    seedOpenRows([payoutRow(), payoutRow({ id: 'tx-twin' })])
     const id = await storedSettlement()
     expect(await bookSettlement(deps(), COMPANY, id, { userId: USER })).toMatchObject({ ok: true })
     expect(linkBankRow).not.toHaveBeenCalled()
     expect(settlementRow(id).bank_transaction_id ?? null).toBeNull()
 
     mem.rows('transactions').splice(1, 1)
+    mem.rows('open_bank_rows').splice(1, 1)
     linkBankRow.mockResolvedValueOnce({ ok: false, code: 'LINK_TX_TX_ALREADY_LINKED' })
     expect(await runSettlementSync(deps(), { importAll: false })).toMatchObject({ bankLinked: 0 })
+    expect(linkBankRow).toHaveBeenCalledTimes(1)
     expect(settlementRow(id).bank_transaction_id ?? null).toBeNull()
   })
 
   it('finds the bank row of a payout without a reference by the provider name, and never by the amount alone', async () => {
     seedWorld()
-    mem.seed('transactions', [
+    seedOpenRows([
       payoutRow({ id: 'tx-customer', description: 'Insättning Tolvan Tolvansson' }),
       payoutRow({ id: 'tx-provider', date: '2026-10-03', description: 'BG ACME INKASSO AB' }),
     ])
@@ -726,7 +734,7 @@ describe('the payout bank row', () => {
     const id = await storedSettlement()
     await bookSettlement(deps(), COMPANY, id, { userId: USER })
     expect(linkBankRow).not.toHaveBeenCalled()
-    mem.seed('transactions', [payoutRow()])
+    seedOpenRows([payoutRow()])
     expect(await runSettlementSync(deps(), { importAll: false })).toMatchObject({ bankLinked: 1 })
     expect(settlementRow(id)).toMatchObject({ bank_transaction_id: 'tx-payout' })
     expect(await runSettlementSync(deps(), { importAll: false })).toMatchObject({ bankLinked: 0 })
@@ -740,7 +748,7 @@ describe('runSettlementSync: the run budget', () => {
     const id = await storedSettlement()
     await bookSettlement(deps(), COMPANY, id, { userId: USER })
     settlementRow(id).provider_acknowledged_at = null
-    mem.seed('transactions', [
+    seedOpenRows([
       { id: 'tx-payout', company_id: COMPANY, date: '2026-10-02', amount: 843.75, description: 'PAYOUT 7731', original_description: null, journal_entry_id: null },
     ])
     adapter.markSettlementBooked.mockClear()

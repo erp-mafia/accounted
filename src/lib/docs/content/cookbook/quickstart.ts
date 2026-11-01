@@ -143,7 +143,7 @@ If any post-email step degraded, \`data.warnings\` is present (e.g. \`JOURNAL_EN
 
 ## 5. Mark it paid
 
-When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit 1930 bank, credit 1510 AR) and links it to the invoice. There is no \`payment_amount\` field: the default books the full remaining amount (\`remaining_amount\`). For a partial payment, pass a custom \`lines\` array (at least two balanced rows).
+When the customer pays, mark the invoice paid. The engine generates the payment voucher (debit the company's primary bank account, credit 1510 AR) and links it to the invoice. There is no \`payment_amount\` field: the default books the full remaining amount (\`remaining_amount\`). For a partial payment, pass a custom \`lines\` array (at least two balanced rows).
 
 \`\`\`bash
 # One key per logical payment; reuse it across retries of this mark-paid.

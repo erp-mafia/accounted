@@ -28,16 +28,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { liveRows, recoveryLines, recoveryShares, totalVat } from './amounts'
 import type { CustomerLossOutcome } from './errors'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
+import { createLogger } from '@/lib/logger'
 import { bookDecision } from './record'
 import { loadCustomerLossState } from './state'
 import { decisionDescription, invoiceLabel } from './text'
+
+const log = createLogger('customer-loss/recovered')
 
 export interface RecordRecoveredLossParams {
   invoiceId: string
   amount: number
   entryDate: string
-  /** The account the money reached: the bank (1930) by default. */
-  paymentAccount: string
+  /** The account the money reached; the company's primary bank account when nothing names one. */
+  paymentAccount?: string
   reason: string
   decidedBy: string
   /** The agency collected the money and reported it (collections settlement): the case may stay open. */
@@ -71,13 +75,14 @@ export async function recordRecoveredLoss(
   }
   const vat = totalVat(shares)
   const label = invoiceLabel(state.invoice)
+  const paymentAccount = params.paymentAccount ?? (await resolvePrimaryBankAccount(supabase, companyId, log))
 
   return bookDecision(supabase, companyId, userId, {
     state,
     kind: 'recovered',
     entryDate: params.entryDate,
     description: decisionDescription('Återvunnen kundförlust', label, params.reason),
-    lines: recoveryLines({ amount, shares, paymentAccount: params.paymentAccount, tag: label }),
+    lines: recoveryLines({ amount, shares, paymentAccount, tag: label }),
     amount,
     net: roundOre(amount - vat),
     vat,

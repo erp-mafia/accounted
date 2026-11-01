@@ -58,6 +58,7 @@ import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-
 import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, LIVE_CONNECTION_STATUSES, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
 import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { resolvePsd2LedgerAccount } from '@/lib/cash-accounts/service'
+import { normalizeIban, physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { endOfDayIsoStockholm } from '@/lib/dates/iso'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { eventBus } from '@/lib/events/bus'
@@ -75,7 +76,7 @@ import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, typ
 import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
 import { viaCanonicalOrigin } from '@/lib/connect/return-bounce'
 import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
-import { normalizeIban, type BankFeedAccount } from './sync'
+import type { BankFeedAccount } from './sync'
 
 /** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
 export type ConsentMethod = 'same_device' | 'qr' | 'redirect'
@@ -1105,9 +1106,9 @@ async function saveSelection(
       reuse = resolved.reuseCashAccountId
     }
     used.add(ledger)
-    const iban = normalizeIban(account.iban)
-    if (!reuse && iban) {
-      reuse = rows.find((r) => normalizeIban(r.iban) === iban && r.currency === account.currency && r.ledger_account === ledger)?.id ?? null
+    const physical = physicalAccountKey(account)
+    if (!reuse && physical) {
+      reuse = rows.find((r) => physicalAccountKey(r) === physical && r.ledger_account === ledger)?.id ?? null
     }
     selectionByUid.set(account.uid, { uid: account.uid, enabled: true, currency: account.currency, ledger_account: ledger, reuse_cash_account_id: reuse })
   }

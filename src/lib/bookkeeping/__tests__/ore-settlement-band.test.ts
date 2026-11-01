@@ -70,6 +70,8 @@ describe('inside the band the invoice settles and 3740 carries the gap', () => {
       { amount: bank, amount_sek: null, currency: 'SEK', exchange_rate: null },
       { currency: 'SEK', exchange_rate: null, remaining_amount: owed, total: owed, paid_amount: 0 },
       'x',
+      undefined,
+      '1930',
     )
     expect(oreRoundingSek).not.toBe(0)
   })

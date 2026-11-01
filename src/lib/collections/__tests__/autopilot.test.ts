@@ -122,7 +122,7 @@ describe('gatherDailyBatch', () => {
     [
       'with an unbooked bank row that may be its payment',
       (w: CaseWorld) =>
-        w.db.seed('transactions', [
+        w.db.seed('open_bank_rows', [
           {
             id: 'tx-1',
             company_id: COMPANY_ID,
@@ -186,7 +186,7 @@ describe('gatherDailyBatch', () => {
   it('keeps a waiting decision out while a bank row may be the payment', async () => {
     const world = await ladderWorld()
     await caseAfter(world, 6)
-    world.db.seed('transactions', [
+    world.db.seed('open_bank_rows', [
       {
         id: 'tx-2',
         company_id: COMPANY_ID,

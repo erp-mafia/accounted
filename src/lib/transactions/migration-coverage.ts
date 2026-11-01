@@ -141,12 +141,10 @@ export async function fetchOpenPreMigrationRows(
 ): Promise<PreMigrationRowGroup[]> {
   const rows = await fetchAllRows<OpenRow>(({ from, to }) =>
     supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, date, amount, currency, amount_sek, exchange_rate, cash_account_id')
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
       .is('is_business', null)
-      .eq('is_ignored', false)
       .lte('date', coverageEnd)
       .order('date', { ascending: true })
       .order('id', { ascending: true })

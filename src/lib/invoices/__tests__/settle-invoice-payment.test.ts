@@ -66,6 +66,7 @@ function payableInvoice(overrides: Partial<Invoice> = {}) {
 }
 
 const BASE_PARAMS = {
+  settlementAccountNumber: '1930',
   paymentAmountInInvoiceCurrency: 1250,
   paymentDate: '2026-07-12',
   accountingMethod: 'accrual',
@@ -115,6 +116,7 @@ describe('settleInvoicePayment', () => {
       const { supabase } = createQueuedMockSupabase()
       const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
         invoice: makeInvoice({ status: 'sent', total: 1000, remaining_amount: 1000, ...overrides }) as Invoice,
+        settlementAccountNumber: '1930',
         paymentAmountInInvoiceCurrency: 1000,
         paymentDate,
         accountingMethod: 'accrual',
@@ -130,6 +132,7 @@ describe('settleInvoicePayment', () => {
       mockHasActiveCreditNote.mockResolvedValueOnce(true)
       const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
         invoice: makeInvoice({ status: 'sent', total: 1000, remaining_amount: 1000 }) as Invoice,
+        settlementAccountNumber: '1930',
         paymentAmountInInvoiceCurrency: 1000,
         paymentDate: '2026-03-30',
         accountingMethod: 'accrual',

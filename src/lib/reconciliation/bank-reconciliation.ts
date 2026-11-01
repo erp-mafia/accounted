@@ -4,6 +4,7 @@ import { roundOre } from '@/lib/money'
 import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { descriptionMentionsReference, normalizeOcrReference } from '@/lib/invariants/reference-number'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dbError } from '@/lib/errors/db-error'
 import {
@@ -13,7 +14,6 @@ import {
   writeBankLink,
   type BankLinkRefusalCode,
 } from '@/lib/transactions/bank-link'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import {
@@ -627,24 +627,22 @@ export async function runReconciliation(
   // Fetch unmatched transactions, scoped to the selected cash account.
   // Paginated: a busy company can exceed PostgREST's silent 1000-row cap, which
   // would make the matcher skip transactions without any signal. Ordered on id
-  // (unique) so pages never duplicate or skip rows. The junction rows ride
-  // along: a row booked through a bank_line link (a samlingsverifikat, a split)
-  // has no pointer, and a pointer written here would anchor it to a second
-  // verifikat, unattended on the nightly sweep.
-  const transactions = (
-    await fetchAllRows<Transaction & { transaction_voucher_links?: Array<{ role?: string | null }> | null }>(({ from, to }) => {
-      let query = supabase
-        .from('transactions')
-        .select('*, transaction_voucher_links(role)')
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
-      query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
-      if (dateFrom) query = query.gte('date', dateFrom)
-      if (dateTo) query = query.lte('date', dateTo)
-      return query.order('id').range(from, to)
-    })
-  ).filter((row) => !hasBankLineJunctionRow(row.transaction_voucher_links))
+  // (unique) so pages never duplicate or skip rows. Open work only: a pointer
+  // written on a row booked through a link would anchor it to a second
+  // verifikat, unattended on the nightly sweep. The pointer filter stays for the
+  // write below, whose compare-and-set takes a free row: a stale pointer waits
+  // for a person.
+  const transactions = await fetchAllRows<Transaction>(({ from, to }) => {
+    let query = supabase
+      .from('open_bank_rows')
+      .select('*')
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+    if (dateFrom) query = query.gte('date', dateFrom)
+    if (dateTo) query = query.lte('date', dateTo)
+    return query.order('id').range(from, to)
+  })
 
   // Same diagnostic as the read path, and it matters MORE here: an unscoped run
   // matches transactions from every same-currency account against unlinked GL
@@ -1520,8 +1518,8 @@ export interface LinkTransactionToVouchersResult {
  * transaction_voucher_links row per verifikat carries the signed slice
  * (role 'bank_line'), exactly how bulk_book_transactions anchors a
  * samlingsverifikat. Every reader that asks "is this row booked?" through
- * isTransactionBooked / is_transaction_booked() therefore already sees it;
- * the pointer column is never the answer for a split row.
+ * public.bank_row_anchors therefore already sees it; the pointer column is
+ * never the answer for a split row.
  *
  * Invariants (all refused, nothing written):
  *   - the transaction exists in the company, is not ignored and is not booked
@@ -1589,7 +1587,7 @@ export async function linkTransactionToVouchers(
   ) {
     return refused('TRANSACTION_ALREADY_LINKED', 'Transaktionen är redan kopplad till en verifikation.')
   }
-  // Third anchor of isTransactionBooked: a payment row (match-invoice,
+  // Third anchor of a bank row: a payment row (match-invoice,
   // match-batch) settles the row through invoice_payments /
   // supplier_invoice_payments with the pointer left NULL.
   const [{ data: invoicePayments }, { data: supplierPayments }] = await Promise.all([
@@ -2105,11 +2103,10 @@ export async function autoReconcileTransactionForLinkedVoucher(
   const fromDate = shiftIsoDate(entry.entry_date, -windowDays)
   const toDate = shiftIsoDate(entry.entry_date, windowDays)
   let candQuery = supabase
-    .from('transactions')
-    .select('id, amount, transaction_voucher_links(role)')
+    .from('open_bank_rows')
+    .select('id, amount')
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
-    .eq('is_ignored', false)
     .gte('date', fromDate)
     .lte('date', toDate)
   candQuery = scopeTransactionsToAccount(
@@ -2123,7 +2120,6 @@ export async function autoReconcileTransactionForLinkedVoucher(
   const matches = (
     (candidates ?? []) as Array<{ id: string; amount: number; transaction_voucher_links?: Array<{ role?: string | null }> | null }>
   ).filter((tx) => {
-    if (hasBankLineJunctionRow(tx.transaction_voucher_links)) return false
     const amt = Number(tx.amount)
     if (Math.abs(Math.abs(amt) - Math.abs(movement)) > VOUCHER_LINK_AMOUNT_TOLERANCE) return false
     return Math.sign(amt) === Math.sign(movement)
@@ -2255,32 +2251,6 @@ export function openAmountByEntry(lines: UnlinkedGLLine[], currency: string): Ma
   return out
 }
 
-/**
- * Ids of the given transactions that are anchored to a verifikat through
- * transaction_voucher_links (journal_entry_id NULL on the row itself). Chunked
- * on the id list so a busy window never pushes the .in() past URL limits;
- * a failed read returns the empty set rather than throwing.
- */
-export async function fetchJunctionLinkedTxIds(
-  supabase: SupabaseClient,
-  companyId: string,
-  transactionIds: string[],
-): Promise<Set<string>> {
-  const out = new Set<string>()
-  const CHUNK = 150
-  for (let i = 0; i < transactionIds.length; i += CHUNK) {
-    const chunk = transactionIds.slice(i, i + CHUNK)
-    const { data, error } = await supabase
-      .from('transaction_voucher_links')
-      .select('transaction_id')
-      .eq('company_id', companyId)
-      .in('transaction_id', chunk)
-    if (error) return out
-    for (const row of (data ?? []) as Array<{ transaction_id: string }>) out.add(row.transaction_id)
-  }
-  return out
-}
-
 /** A match candidate that carries how many transactions already point at it. */
 export interface GLLineForMatching extends UnlinkedGLLine {
   /** Transactions settling this entry ON THE REQUESTED ACCOUNT (plus legacy
@@ -2353,16 +2323,24 @@ function isDirectionCompatible(txAmount: number, line: UnlinkedGLLine): boolean 
 }
 
 /**
- * OCR/reference-number match. Requires a non-trivial reference token (≥4 chars)
- * on the transaction that appears in the GL line/entry description. Description
- * substring matching is intentionally NOT done here: that collided on recurring
- * monthly charges across years (same description, same amount, different year).
+ * OCR/reference-number match: the transaction's reference named as a whole
+ * number in the GL line or entry description (descriptionMentionsReference).
+ * A bare number, digits and separators alone, needs four digits and matches as
+ * written or on its digits, however the bank grouped them. A reference with
+ * letters must stand as written, F-101 or INV-42, never by the digits inside
+ * it: the number in "Hyra feb 2026" is a year, and on its digits February's row
+ * would take March's verifikat. Words alone name no document. A match of the
+ * transaction's description is intentionally NOT done here: that collided on
+ * recurring monthly charges across years (same description, same amount,
+ * different year).
  */
 function hasOcrReferenceMatch(txReference: string, line: UnlinkedGLLine): boolean {
-  if (!txReference || txReference.length < 4) return false
-  const lineDesc = (line.line_description || '').toLowerCase()
-  const entryDesc = (line.entry_description || '').toLowerCase()
-  return lineDesc.includes(txReference) || entryDesc.includes(txReference)
+  const digits = normalizeOcrReference(txReference)
+  const bareNumber = /^[\d\s./-]+$/.test(txReference)
+  if (bareNumber ? digits.length < 4 : digits.length === 0 || txReference.trim().length < 4) return false
+  return [line.line_description, line.entry_description].some(
+    (text) => descriptionMentionsReference(text, txReference) || (bareNumber && descriptionMentionsReference(text, digits)),
+  )
 }
 
 /** Check if two dates are within ±dayRange of each other */

@@ -162,16 +162,20 @@ describe('bank_row_posted_anchor', () => {
     return rows[0].anchor
   }
 
-  it('names the pointer first, then a posted bank_line link, and nothing for a free row', async () => {
+  it('names the pointer, a posted bank_line link, and nothing for a free row', async () => {
     const s = await company()
     const onPointer = await bankEntry(s)
     const onLink = await bankEntry(s)
-    const tx = await row(s)
+    const free = await row(s)
+    expect(await anchor(s, free, null)).toBeNull()
 
-    expect(await anchor(s, tx, null)).toBeNull()
-    await link(s, tx, onLink)
-    expect(await anchor(s, tx, null)).toBe(onLink)
-    expect(await anchor(s, tx, onPointer)).toBe(onPointer)
+    const linked = await row(s)
+    await link(s, linked, onLink)
+    expect(await anchor(s, linked, null)).toBe(onLink)
+
+    const pointed = await row(s)
+    await getPool().query(`UPDATE public.transactions SET journal_entry_id = $2 WHERE id = $1`, [pointed, onPointer])
+    expect(await anchor(s, pointed, onPointer)).toBe(onPointer)
   })
 
   it('does not read a verifikat no longer posted, or a supplementary link, as a booking', async () => {

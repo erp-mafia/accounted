@@ -93,7 +93,7 @@ import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { BankDetailsSetupForm } from '@/components/invoices/BankDetailsSetupForm'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
-import { useAccounts, useArticles, useCompanySettings, useCustomers, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts, useArticles, useCompanySettings, useCustomers, useFiscalPeriods, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -177,7 +177,6 @@ import {
   type DraftVoucherInput,
 } from '@/lib/invoices/editor/voucher-preview'
 import { isPaidAtIssueAccount, paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
-import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import {
   continueInvoiceSeries,
@@ -757,6 +756,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Active balance-sheet and revenue accounts for the optional per-line
   // posting override, plus which rows currently show that picker.
   const { accounts: activeAccounts } = useAccounts()
+  const paymentLedger = usePaymentBankLedger()
   const postingAccounts = useMemo(
     () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
     [activeAccounts],
@@ -3439,14 +3439,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const confirmDocType = confirmData?.document_type ?? watchDocumentType
   // Kontantfaktura (crm#1281): issued paid at once to a 19xx account active
   // in the chart (kassa, bank, Swish). The default is the account the invoice
-  // asks to be paid to, else the bank role. The receipt is mailed when email can go.
+  // asks to be paid to, else the primary bank account. The receipt is mailed when email can go.
   const isPaidConfirm = confirmIntent?.kind === 'issue_paid'
   const paidAccountOptions = activeAccounts.filter((account) => isPaidAtIssueAccount(account.account_number))
   const payeeLedgerAccount = (
     watchPayeeAccount ? payeeState?.accounts.find((account) => account.id === watchPayeeAccount) : defaultPayee
   )?.ledger_account
   const defaultPaidAccount =
-    [payeeLedgerAccount, resolveAccountRole(PINNED_JURISDICTION, 'bank')].find(
+    [payeeLedgerAccount, paymentLedger].find(
       (candidate) => candidate && paidAccountOptions.some((option) => option.account_number === candidate),
     ) ??
     paidAccountOptions[0]?.account_number ??

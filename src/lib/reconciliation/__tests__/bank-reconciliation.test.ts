@@ -570,7 +570,7 @@ describe('runReconciliation', () => {
 
     // RPC: get_unlinked_1930_lines returns empty
     enqueue({ data: [] })
-    // from('transactions').select: unmatched
+    // from('open_bank_rows').select: unmatched
     enqueue({ data: [] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1')
@@ -584,7 +584,7 @@ describe('runReconciliation', () => {
 
     // RPC: get_unlinked_gl_lines fails
     enqueue({ error: { message: 'canceling statement due to statement timeout', code: '57014' } })
-    // from('transactions').select: one unmatched row that would otherwise read as "nothing to match"
+    // from('open_bank_rows').select: one unmatched row that would otherwise read as "nothing to match"
     enqueue({ data: [makeTransaction({ id: 'tx-1', amount: 100, date: '2024-06-15', currency: 'SEK' })] })
 
     await expect(runReconciliation(supabase as never, 'company-1', 'user-1')).rejects.toThrow('statement timeout')
@@ -603,7 +603,7 @@ describe('runReconciliation', () => {
 
     // RPC returns GL lines
     enqueue({ data: [glLine] })
-    // from('transactions') returns unmatched transactions
+    // from('open_bank_rows') returns unmatched transactions
     enqueue({ data: [tx] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
@@ -613,25 +613,23 @@ describe('runReconciliation', () => {
     expect(result.applied).toBe(0)
   })
 
-  it('never writes a pointer on a row booked through a voucher link: it would anchor the row to two verifikat', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
+  // A pointer written on a row booked through a link would anchor it to a
+  // second verifikat. The view keeps such a row out; the database decides,
+  // tests/pg/bank-row-open-read.pg.test.ts proves it.
+  it('matches what open_bank_rows answers, free of a pointer and with no embed', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     const free = makeTransaction({ id: 'tx-free', amount: 700, date: '2024-06-15', currency: 'SEK' })
-    const booked = {
-      ...makeTransaction({ id: 'tx-booked', amount: 700, date: '2024-06-15', currency: 'SEK' }),
-      transaction_voucher_links: [{ role: 'bank_line' }],
-    }
-    const supplementary = {
-      ...makeTransaction({ id: 'tx-residual', amount: 700, date: '2024-06-15', currency: 'SEK' }),
-      transaction_voucher_links: [{ role: 'other' }],
-    }
 
     enqueue({ data: [makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 700, entry_date: '2024-06-15' })] })
-    enqueue({ data: [booked, free, supplementary] })
+    enqueue({ data: [free] })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
 
-    expect(result.candidates).toBe(2)
-    expect(result.matches.map((m) => m.transaction.id)).not.toContain('tx-booked')
+    expect(result.candidates).toBe(1)
+    expect(result.matches.map((m) => m.transaction.id)).toEqual(['tx-free'])
+    expect(findCalls('open_bank_rows', 'select')).toEqual([['*']])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([['journal_entry_id', null]])
+    expect(findCalls('transactions', 'select')).toEqual([])
   })
 
   it('never auto-links a partially allocated verifikat, even on its full line amount', async () => {
@@ -669,7 +667,7 @@ describe('runReconciliation', () => {
 
     // RPC returns GL lines
     enqueue({ data: [glLine] })
-    // from('transactions') returns unmatched transactions
+    // from('open_bank_rows') returns unmatched transactions
     enqueue({ data: [tx] })
     // Update transaction with link: .select('id') returns the updated row
     enqueue({ data: [{ id: 'tx-1' }] })

@@ -476,13 +476,12 @@ async function findAggregateCandidates(
   const dateHigh = new Date(dateMs + AGGREGATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
 
   const { data: rowsData } = await supabase
-    .from('transactions')
+    .from('open_bank_rows')
     .select('id, date, amount, description, merchant_name, reference')
     .eq('company_id', companyId)
     .eq('is_business', true)
     .is('invoice_id', null)
     .is('supplier_invoice_id', null)
-    .is('journal_entry_id', null)
     .or('currency.is.null,currency.eq.SEK')
     .gt('amount', payment)
     .gte('date', dateLow)

@@ -43,7 +43,6 @@ vi.mock('@supabase/supabase-js', async () => {
 
 // Journal-entry helpers are stubbed: the route flow is what we test here.
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
-  DEFAULT_SUPPLIER_PAYMENT_ACCOUNT: '1930',
   createSupplierInvoicePaymentEntry: vi.fn().mockResolvedValue({ id: 'je-si-payment' }),
   createSupplierInvoiceCashEntry: vi.fn().mockResolvedValue({ id: 'je-si-cash' }),
 }))
@@ -496,18 +495,35 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       expect(mockPaymentEntry).not.toHaveBeenCalled()
     })
 
-    it('omitting payment_account leaves the generator default (1930) in charge', async () => {
-      mockServiceClient.mockReturnValue(accrualClient().supabase)
+    it('omitting payment_account books on the primary bank account', async () => {
+      const { supabase, setTable } = accrualClient()
+      setTable('cash_accounts', { data: { id: 'ca-1', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null })
+      mockServiceClient.mockReturnValue(supabase)
 
       const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
 
       expect(res.status).toBe(200)
-      // undefined, not '1930': the fallback lives in one place, the generator.
       // This door deliberately does NOT read company_settings
       // .last_supplier_payment_account: that is the dashboard dialog's
-      // pre-fill, and letting it steer the API would change the booking of
-      // existing integrations that never send the field.
-      expect(mockPaymentEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBeUndefined()
+      // pre-fill, a person's last choice and no statement about this payment.
+      expect(mockPaymentEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBe('1931')
+    })
+
+    it('dry-run names the primary bank account when no account is named', async () => {
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: { data: APPROVED_SI, error: null },
+          company_settings: { data: { accounting_method: 'accrual' }, error: null },
+          cash_accounts: { data: { id: 'ca-1', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null },
+        }).supabase,
+      )
+
+      const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }, { dryRun: true }), detailParams())
+
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.preview.payment_account).toBe('1931')
+      expect(mockPaymentEntry).not.toHaveBeenCalled()
     })
 
     it('dry-run reports the account the commit would credit', async () => {

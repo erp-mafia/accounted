@@ -156,29 +156,26 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: [], error: null },
+      open_bank_rows: { data: [], error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
     const res = await listTransactions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=${status}`),
       { params: Promise.resolve({ companyId: COMPANY_ID }) },
     )
-    const filters = calls
-      .filter((c) => c.table === 'transactions' && ['eq', 'not', 'is'].includes(c.method))
+    const read = (table: string) => calls.filter((c) => c.table === table)
+    const filters = read('transactions')
+      .filter((c) => ['eq', 'not', 'is'].includes(c.method))
       .map((c) => [c.method, ...c.args])
-    return { res, filters }
+    return { res, filters, read }
   }
 
   it('status=unbooked lists the work queue: no ignored, no private, no row anchored to a verifikat', async () => {
-    const { res, filters } = await listWithStatus('unbooked')
+    const { res, read } = await listWithStatus('unbooked')
     expect(res.status).toBe(200)
-    expect(filters).toEqual(
-      expect.arrayContaining([
-        ['eq', 'is_ignored', false],
-        ['not', 'is_business', 'is', false],
-        ['eq', 'is_booked', false],
-      ]),
-    )
-    expect(filters).not.toContainEqual(['is', 'journal_entry_id', null])
+    // public.open_bank_rows holds the whole rule: a read of the table is a copy of it.
+    expect(read('open_bank_rows').map((c) => c.method)).toContain('select')
+    expect(read('transactions')).toEqual([])
   })
 
   it('status=booked lists every row anchored to a verifikat, not only the journal_entry_id pointer', async () => {

@@ -124,11 +124,15 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     customer: { name: 'Test AB' },
   }
 
+  // No invoice here chose a payee account: the payment lands on the primary.
+  const PRIMARY = { data: { id: 'ca-1931', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null }
+
   // A kreditfaktura: the approval records the refund of its credit, never a payment.
   it('records the refund of a credit note on approval', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: CREDIT_NOTE, error: null }) // invoice fetch
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
     mockRefundCreditNote.mockResolvedValue({
       ok: true,
@@ -148,7 +152,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     expect(result.data).toMatchObject({ refund: true, refunded_amount: 525, journal_entry_id: 'je-refund' })
     expect(mockRefundCreditNote.mock.calls[0][3]).toMatchObject({
       refundDate: '2026-03-30',
-      settlementAccountNumber: '1930',
+      settlementAccountNumber: '1931',
       force: false,
     })
     expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
@@ -159,6 +163,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: CREDIT_NOTE, error: null }) // invoice fetch
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
     mockRefundCreditNote.mockResolvedValue({
       ok: false,
@@ -193,6 +198,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert (#2019)
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
@@ -381,6 +387,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
@@ -413,6 +420,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null }) // settings
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
@@ -432,7 +440,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
         paymentDate: '2026-03-30',
         accountingMethod: 'cash',
         paymentSource: 'manual',
-        settlementAccountNumber: '1930',
+        settlementAccountNumber: '1931',
       }),
     )
     expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
@@ -456,6 +464,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
       error: null,
     }) // invoice fetch
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue(PRIMARY) // cash_accounts primary
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [], error: null }) // invoice CAS update: lost
     enqueue({ data: null, error: null }) // invoice_payments delete

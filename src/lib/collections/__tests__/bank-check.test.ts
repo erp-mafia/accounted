@@ -154,15 +154,19 @@ describe('runBankCheck', () => {
 
   it('reads inbound, unexplained rows from the invoice date, unclassified rows included', async () => {
     const db = seed('2026-10-06T02:00:00Z')
-    db.seed('transactions', [
+    db.seed('open_bank_rows', [
       tx({ id: 'hit', reference: OCR }),
       tx({ id: 'unclassified', description: 'KUNDBOLAGET NORR', is_business: null, amount: 400 }),
-      tx({ id: 'private', reference: OCR, is_business: false }),
       tx({ id: 'before', reference: OCR, date: '2026-07-31' }),
-      tx({ id: 'ignored', reference: OCR, is_ignored: true }),
       tx({ id: 'linked', reference: OCR, invoice_id: 'inv-9' }),
-      tx({ id: 'booked', reference: OCR, journal_entry_id: 'je-1' }),
       tx({ id: 'allocated', reference: OCR }),
+    ])
+    // Rows the view leaves out, which tests/pg/bank-row-open-read.pg.test.ts
+    // proves shape by shape: only the view's answer can be a candidate.
+    db.seed('transactions', [
+      tx({ id: 'private', reference: OCR, is_business: false }),
+      tx({ id: 'ignored', reference: OCR, is_ignored: true }),
+      tx({ id: 'booked', reference: OCR, journal_entry_id: 'je-1' }),
     ])
     db.seed('invoice_payments', [{ id: 'p-1', company_id: COMPANY_ID, invoice_id: 'inv-9', transaction_id: 'allocated' }])
     const result = await runBankCheck(db.client, input)
@@ -177,7 +181,7 @@ describe('runBankCheck', () => {
     const backlog = Array.from({ length: 1200 }, (_, i) =>
       tx({ id: `backlog-${String(i).padStart(4, '0')}`, date: '2026-10-01', description: 'Swish', amount: 99 }),
     )
-    db.seed('transactions', [...backlog, tx({ id: 'early-payment', date: '2026-08-31', reference: OCR })])
+    db.seed('open_bank_rows', [...backlog, tx({ id: 'early-payment', date: '2026-08-31', reference: OCR })])
     const result = await runBankCheck(db.client, input)
     expect(result.outcome).toBe('candidates')
     expect(result.candidates.map((c) => c.transactionId)).toEqual(['early-payment'])
@@ -185,7 +189,7 @@ describe('runBankCheck', () => {
 
   it('stores a snapshot with the attestation and the dismissals', async () => {
     const db = seed('2026-10-05T01:00:00Z')
-    db.seed('transactions', [tx({ id: 'hit', reference: OCR })])
+    db.seed('open_bank_rows', [tx({ id: 'hit', reference: OCR })])
     const result = await runBankCheck(db.client, { ...input, dismissedTransactionIds: ['hit'] })
     expect(result.outcome).toBe('stale')
     const snapshot = bankCheckSnapshot(result, {

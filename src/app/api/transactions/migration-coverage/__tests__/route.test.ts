@@ -86,7 +86,7 @@ function seedMigratedCompany(rows: ReturnType<typeof openRow>[], ledger = LEDGER
       }),
   })
   setTable('cash_accounts', { data: [{ id: 'ca-1', ledger_account: '1930' }] })
-  setTable('transactions', { data: rows })
+  setTable('open_bank_rows', { data: rows })
 }
 
 describe('GET /api/transactions/migration-coverage', () => {
@@ -114,7 +114,7 @@ describe('GET /api/transactions/migration-coverage', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual({ coverage_end: null, explained_ids: [] })
-    expect(tables()).not.toContain('transactions')
+    expect(tables()).not.toContain('open_bank_rows')
   })
 
   it('crm#1239: marks only the row the ledger explains, never a row the old system did not book', async () => {

@@ -25,6 +25,6 @@ describe('fetchPurchasesWithoutUnderlag: window from the Swedish day', () => {
     const out = await fetchPurchasesWithoutUnderlag(supabase as unknown as SupabaseClient, 'company-1', { lookbackMonths: 3 })
 
     expect(out).toEqual([])
-    expect(findCall('transactions', 'gte')).toEqual(['date', from])
+    expect(findCall('open_bank_rows', 'gte')).toEqual(['date', from])
   })
 })

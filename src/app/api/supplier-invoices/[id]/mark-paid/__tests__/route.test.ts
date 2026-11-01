@@ -57,6 +57,11 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
     mockCreateSupplierInvoiceCashEntry(...args),
 }))
 
+// With no account named the plan resolves the primary bank account.
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({
+  resolvePrimaryBankAccount: vi.fn(async () => '1931'),
+}))
+
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   anchorSupplierInvoiceDocument: vi.fn().mockResolvedValue(null),
 }))

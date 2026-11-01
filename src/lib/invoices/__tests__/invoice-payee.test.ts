@@ -154,21 +154,55 @@ describe('snapshotInvoicePayee', () => {
 })
 
 describe('resolveInvoiceSettlementAccount', () => {
-  it('defaults to 1930 without a chosen account and never queries', async () => {
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1930')
-    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+  // The first primary read: the is_primary row. A usable one ends it; without
+  // one the second read lists the enabled SEK bank accounts.
+  const primaryOn1931 = { data: { id: 'ca-primary', ledger_account: '1931', enabled: true, currency: 'SEK' } }
+
+  it('books on the primary bank account without a chosen account', async () => {
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1931')
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['is_primary', true],
+    ])
   })
 
-  it('debits the chosen account\'s ledger account, and falls back to 1930 when the row is gone, disabled, or not a bank account', async () => {
-    enqueue({ data: { ledger_account: '1931', enabled: true } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
-    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['company_id', 'company-1'])
+  it('books on the only enabled SEK bank account when no primary is usable', async () => {
     enqueue({ data: null })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
-    enqueue({ data: { ledger_account: '1931', enabled: false } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    enqueue({ data: [{ id: 'ca-only', ledger_account: '1940' }] })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1940')
+  })
+
+  it('debits the chosen account\'s ledger account', async () => {
+    enqueue({ data: { ledger_account: '1940', enabled: true } })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1940')
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['id', CA_1],
+    ])
+  })
+
+  it('falls back to the primary when the chosen row is gone, disabled, or not a bank account', async () => {
+    enqueue({ data: null })
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
+    enqueue({ data: { ledger_account: '1940', enabled: false } })
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
     // Stripe clearing (1686) is cleared by the payout, never by a bank transfer.
     enqueue({ data: { ledger_account: '1686', enabled: true } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
+  })
+
+  it('a failed read throws: a retry is cheap, a verifikat on the wrong account is a storno', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).rejects.toMatchObject({
+      name: 'BookkeepingDatabaseError',
+    })
+    enqueue({ error: { message: 'boom' } })
+    await expect(resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).rejects.toMatchObject({
+      name: 'BookkeepingDatabaseError',
+    })
   })
 })

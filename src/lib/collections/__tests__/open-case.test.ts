@@ -146,7 +146,7 @@ describe('openCollectionCase', () => {
 
   it('refuses while an unbooked bank row may be the payment, until a person dismisses it', async () => {
     const world = await createCaseWorld()
-    world.db.seed('transactions', [
+    world.db.seed('open_bank_rows', [
       {
         id: 'tx-1',
         company_id: COMPANY_ID,

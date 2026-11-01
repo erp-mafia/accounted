@@ -35,6 +35,8 @@ export interface DuplicateCheckInput {
 const BANK_ROW_WINDOW_DAYS = 7
 /** Posted verifikat on one date read for the same-voucher comparison. */
 const SAME_DAY_LIMIT = 500
+/** Rows of one amount on one account inside the window, booked or not. */
+const BANK_ROW_LIMIT = 20
 
 function normalizedText(text: string): string {
   return text.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -109,37 +111,46 @@ async function findBookedBankRow(
 
     const { data: rows, error } = await supabase
       .from('transactions')
-      .select('id, date, amount, description, journal_entry_id')
+      .select('id, date, amount, description')
       .eq('company_id', companyId)
       .in('cash_account_id', cashIds)
       .eq('amount', signed)
       .or('currency.is.null,currency.eq.SEK')
       .gte('date', addDaysIso(input.entry_date, -BANK_ROW_WINDOW_DAYS))
       .lte('date', addDaysIso(input.entry_date, BANK_ROW_WINDOW_DAYS))
-      .not('journal_entry_id', 'is', null)
-      .limit(5)
+      .limit(BANK_ROW_LIMIT)
     if (error) throw new Error(`bank rows: ${error.message}`)
-    const candidates = (rows ?? []) as Array<{ id: string; date: string; amount: number; description: string | null; journal_entry_id: string }>
+    const candidates = (rows ?? []) as Array<{ id: string; date: string; amount: number; description: string | null }>
     if (candidates.length === 0) continue
 
-    const { data: entries, error: entryError } = await supabase
+    // The live verifikat that book these rows, however they are anchored.
+    const { data: anchors, error: anchorError } = await supabase
+      .from('bank_row_anchors')
+      .select('transaction_id, journal_entry_id')
+      .eq('company_id', companyId)
+      .in('transaction_id', candidates.map((c) => c.id))
+    if (anchorError) throw new Error(`bank row anchors: ${anchorError.message}`)
+    const anchorOf = new Map(((anchors ?? []) as Array<{ transaction_id: string; journal_entry_id: string }>).map((a) => [a.transaction_id, a.journal_entry_id]))
+    const hit = candidates.find((c) => anchorOf.has(c.id))
+    if (!hit) continue
+    const journalEntryId = anchorOf.get(hit.id)!
+
+    const { data: entry, error: entryError } = await supabase
       .from('journal_entries')
       .select('id, voucher_series, voucher_number')
       .eq('company_id', companyId)
-      .eq('status', 'posted')
-      .in('id', candidates.map((c) => c.journal_entry_id))
+      .eq('id', journalEntryId)
+      .maybeSingle()
     if (entryError) throw new Error(`bank row vouchers: ${entryError.message}`)
-    const posted = new Map(((entries ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [e.id, e]))
-    const hit = candidates.find((c) => posted.has(c.journal_entry_id))
-    if (!hit) continue
+    if (!entry) continue
 
-    const voucher = formatVoucher(posted.get(hit.journal_entry_id)!)
+    const voucher = formatVoucher(entry as { voucher_series: string | null; voucher_number: number | null })
     const amount = `${formatAmount(Math.abs(signed))} kr`
     return {
       code: 'BANK_MOVEMENT_ALREADY_BOOKED',
       message_sv: `Bankraden ${hit.date} på ${amount} på konto ${line.account_number} är redan bokförd som ${voucher}. Samma pengar bokförs bara en gång: hör underlaget till den raden, koppla det till ${voucher} i stället.`,
       message_en: `The bank row of ${hit.date} for ${amount} on account ${line.account_number} is already booked as ${voucher}. The same money is booked once: if the underlag belongs to that row, attach it to ${voucher} instead.`,
-      details: { transaction_id: hit.id, transaction_date: hit.date, amount: signed, account: line.account_number, journal_entry_id: hit.journal_entry_id, voucher },
+      details: { transaction_id: hit.id, transaction_date: hit.date, amount: signed, account: line.account_number, journal_entry_id: journalEntryId, voucher },
     }
   }
   return null

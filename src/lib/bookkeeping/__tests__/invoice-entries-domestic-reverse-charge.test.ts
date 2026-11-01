@@ -153,7 +153,7 @@ describe('the verifikat of a domestic reverse charge invoice', () => {
   })
 
   it('kontantmetoden recognises the sale on 3231 at payment', async () => {
-    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', makeInvoice(), '2026-10-20', 'enskild_firma')
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', makeInvoice(), '2026-10-20', 'enskild_firma', undefined, '1930')
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(revenueAccounts(input)).toEqual(['3231'])
     expect(input.lines.some((l) => l.account_number.startsWith('26'))).toBe(false)

@@ -54,12 +54,9 @@ function unbookedSupabase(transactionOverrides: Record<string, unknown> = {}) {
   return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     transactions: [
-      { data: { id: TX_ID, journal_entry_id: null, is_ignored: false, ...transactionOverrides }, error: null },
+      { data: { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: false, ...transactionOverrides }, error: null },
       { data: null, error: null }, // update
     ],
-    transaction_voucher_links: { data: [], error: null },
-    invoice_payments: { data: [], error: null },
-    supplier_invoice_payments: { data: [], error: null },
     idempotency_keys: { data: null, error: null },
   })
 }
@@ -134,7 +131,7 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
   })
 
   it('returns 409 TX_IGNORE_ALREADY_BOOKED for a directly booked row', async () => {
-    const { supabase, payloads } = unbookedSupabase({ journal_entry_id: 'je-1' })
+    const { supabase, payloads } = unbookedSupabase({ journal_entry_id: 'je-1', is_booked: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
@@ -145,14 +142,8 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
     expect(payloads('transactions', 'update')).toEqual([])
   })
 
-  it('returns 409 for a bulk-booked row anchored only through transaction_voucher_links', async () => {
-    const { supabase, payloads } = createTableMockSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { id: TX_ID, journal_entry_id: null, is_ignored: false }, error: null },
-      transaction_voucher_links: { data: [{ transaction_id: TX_ID }], error: null },
-      invoice_payments: { data: [], error: null },
-      supplier_invoice_payments: { data: [], error: null },
-    })
+  it('returns 409 for a row booked with no pointer (a voucher link, a payment allocation)', async () => {
+    const { supabase, payloads } = unbookedSupabase({ is_booked: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest('POST'), routeParams())
@@ -160,22 +151,6 @@ describe('POST /api/v1/.../transactions/{id}/ignore', () => {
     expect(res.status).toBe(409)
     expect(body.error.code).toBe('TX_IGNORE_ALREADY_BOOKED')
     expect(payloads('transactions', 'update')).toEqual([])
-  })
-
-  it('returns 409 for a multi-allocated row anchored only through invoice_payments', async () => {
-    const { supabase } = createTableMockSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { id: TX_ID, journal_entry_id: null, is_ignored: false }, error: null },
-      transaction_voucher_links: { data: [], error: null },
-      invoice_payments: { data: [{ transaction_id: TX_ID }], error: null },
-      supplier_invoice_payments: { data: [], error: null },
-    })
-    mockServiceClient.mockReturnValue(supabase)
-
-    const res = await POST(makeRequest('POST'), routeParams())
-    const body = await res.json()
-    expect(res.status).toBe(409)
-    expect(body.error.code).toBe('TX_IGNORE_ALREADY_BOOKED')
   })
 
   it('is idempotent: an already-ignored row returns already_ignored=true without writing', async () => {

@@ -2648,8 +2648,9 @@ async function commitMarkInvoicePaid(
   // rather than the full total (which would double-count a prior partial).
   const inv = invoice as { remaining_amount?: number | null; paid_amount?: number | null }
   const paymentAmount = inv.remaining_amount ?? (invoice.total - (inv.paid_amount ?? 0))
-  // Debit the bank account the invoice asked to be paid to (1930 when none
-  // was chosen): an agent marking a 1931-invoice paid must not land it on 1930.
+  // Debit the bank account the invoice asked to be paid to (the primary bank
+  // account when none was chosen): an agent marking a 1931-invoice paid must
+  // not land it on 1930.
   const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice)
   const settled = await settleInvoicePayment(supabase, companyId, userId, {
     invoice: invoice as Invoice,

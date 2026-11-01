@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { makePrimary, primaryIneligibleReason } from '../primary'
+import { makePrimary, paymentBankRow, primaryIneligibleReason } from '../primary'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 const client = supabase as unknown as SupabaseClient
@@ -15,6 +15,38 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   is_primary: true,
   bank_connection_id: null,
   ...overrides,
+})
+
+describe('paymentBankRow', () => {
+  const bank = (ledger_account: string, overrides: Record<string, unknown> = {}) => ({
+    ledger_account,
+    currency: 'SEK',
+    enabled: true,
+    is_primary: false,
+    kind: 'bank' as const,
+    ...overrides,
+  })
+
+  it('answers the primary, even beside a 1930', () => {
+    const primary = bank('1931', { is_primary: true })
+    expect(paymentBankRow([bank('1930'), primary])).toBe(primary)
+  })
+
+  it('a primary that cannot carry a payment answers the only enabled SEK bank account', () => {
+    const only = bank('1940')
+    expect(paymentBankRow([bank('1930', { is_primary: true, enabled: false }), only])).toBe(only)
+    expect(paymentBankRow([bank('1932', { is_primary: true, currency: 'EUR' }), only])).toBe(only)
+  })
+
+  it('a card or a foreign account is no candidate', () => {
+    const only = bank('1940')
+    expect(paymentBankRow([only, bank('2891', { kind: 'card' }), bank('1932', { currency: 'EUR' })])).toBe(only)
+  })
+
+  it('no answer among several accounts, or none', () => {
+    expect(paymentBankRow([bank('1940'), bank('1941')])).toBeNull()
+    expect(paymentBankRow([])).toBeNull()
+  })
 })
 
 // The UI-side mirror. That it agrees with make_cash_account_primary is

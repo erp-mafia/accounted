@@ -78,6 +78,7 @@ function unbookedInvoice(overrides: Partial<Invoice> = {}) {
 }
 
 const BASE_PARAMS = {
+  settlementAccountNumber: '1930',
   paymentAmountInInvoiceCurrency: 1250,
   paymentDate: '2026-10-12',
   accountingMethod: 'accrual',

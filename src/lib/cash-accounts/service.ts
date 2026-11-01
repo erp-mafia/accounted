@@ -1,11 +1,9 @@
-import { chunk as chunkIds } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
+import { ledgersWithPostedLines, pickKeeper, type TwinCandidate } from '@/lib/cash-accounts/twins'
 import {
   bankLedgerName,
   defaultLedgerForCurrency,
@@ -13,6 +11,9 @@ import {
   seededRowBelongsToAnother,
   type ConsentAccountRef,
   normalizeIban,
+  currencyKey,
+  physicalAccountKey,
+  sameCashAccount,
   overflowLedgerSlots,
 } from '@/lib/cash-accounts/ledger-slots'
 
@@ -59,8 +60,8 @@ export interface UpsertFromPsd2Input {
   expected_session_id?: string
 }
 
-// Lives with the slot rule, which compares IBANs and must stay client-safe.
-export { normalizeIban }
+// They live with the slot rule, which compares IBANs and must stay client-safe.
+export { normalizeIban, physicalAccountKey, sameCashAccount }
 
 export async function listForCompany(
   supabase: SupabaseClient,
@@ -150,10 +151,6 @@ interface CashAccountTopology {
   isReleased: (row: CashAccount) => boolean
 }
 
-function currencyKey(currency: string | null | undefined): string {
-  return String(currency ?? '').toUpperCase()
-}
-
 /**
  * Load the topology, or null when the row lookup fails. A failed connection
  * lookup degrades to "no connection is known to be active": nothing is
@@ -213,38 +210,6 @@ async function loadCashAccountTopology(
   }
 
   return { rows, statuses, orphaned, isLive, isReleased }
-}
-
-/**
- * Identity of the physical bank account a row represents: normalized IBAN
- * plus currency, or null for rows without an IBAN (manual, CSV, kassa).
- */
-export function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
-  const iban = normalizeIban(row.iban)
-  return iban ? `${iban}|${currencyKey(row.currency)}` : null
-}
-
-/**
- * Whether two cash_accounts row ids may be the same bank account, for the
- * content-dedup account guard in lib/transactions/ingest.ts.
- *
- * A null id on either side stays compatible (legacy rows without a binding).
- * Two different ids are the same account only when BOTH rows carry a physical
- * key and the keys are equal: a broken reconnect leaves two rows for one
- * (IBAN, currency), and a merge legitimately keeps the retired one as a manual
- * row while booked transactions remain on it. A row WITHOUT a key (manual, CSV,
- * kassa) never matches another id: a missing IBAN is not evidence of identity.
- *
- * @param physicalKeyById row id -> physicalAccountKey, rows without a key omitted
- */
-export function sameCashAccount(
-  a: string | null,
-  b: string | null,
-  physicalKeyById: ReadonlyMap<string, string>,
-): boolean {
-  if (a === null || b === null || a === b) return true
-  const keyA = physicalKeyById.get(a)
-  return keyA !== undefined && keyA === physicalKeyById.get(b)
 }
 
 /**
@@ -930,58 +895,6 @@ export interface Psd2LedgerResolution {
 }
 
 /**
- * The subset of `ledgers` that carry bookkeeping history: at least one line on
- * a posted or reversed verifikat. Driven from the journal_entries side (see
- * lib/bookkeeping/entry-lines.ts); only called when a company actually has
- * twin rows, so the entry scan is paid on the rare path.
- */
-export async function ledgersWithPostedLines(
-  supabase: SupabaseClient,
-  companyId: string,
-  ledgers: string[],
-): Promise<Set<string>> {
-  if (ledgers.length === 0) return new Set()
-  const lines = await fetchEntryLines<{ account_number: string }>({
-    supabase,
-    lineColumns: 'account_number',
-    filterEntries: (q) => q.eq('company_id', companyId).in('status', ['posted', 'reversed']),
-    filterLines: (q) => q.in('account_number', ledgers),
-    attachEntriesAs: null,
-  })
-  return new Set(lines.map((l) => l.account_number))
-}
-
-/** What {@link pickKeeper} needs to rank the rows of one physical account. */
-export type TwinCandidate = Pick<CashAccount, 'id' | 'ledger_account' | 'is_primary' | 'created_at'>
-
-/**
- * Which of several rows for ONE physical account (same IBAN + currency) is the
- * account going forward. The signal is bookkeeping HISTORY, not liveness (two
- * liveness signals were contradicted by prod, see DECISIONS.md 2026-08-28):
- * the row whose ledger already carries posted lines keeps the bank account on
- * one ledger; then the primary row; then the oldest.
- *
- * Returns null when MORE than one ledger carries posted lines: the account is
- * already split across two ledgers, no automatic choice is safe, and any
- * correction there is a storno the user has to decide on.
- */
-export function pickKeeper<T extends TwinCandidate>(
-  rows: readonly T[],
-  postedLedgers: ReadonlySet<string>,
-): T | null {
-  const withHistory = rows.filter((r) => postedLedgers.has(r.ledger_account))
-  if (withHistory.length > 1) return null
-  if (withHistory.length === 1) return withHistory[0]
-  const primary = rows.find((r) => r.is_primary)
-  if (primary) return primary
-  return (
-    [...rows].sort(
-      (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
-    )[0] ?? null
-  )
-}
-
-/**
  * Decide which BAS account a PSD2 account should book to, IBAN first.
  *
  * The IBAN identifies the physical bank account; the provider's account `uid`
@@ -1088,9 +1001,6 @@ export async function resolvePsd2LedgerAccount(
   if (!allocated) return null
   return { ledgerAccount: allocated, reuseCashAccountId: null, source: 'allocated' }
 }
-
-/** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
-const REBIND_ID_CHUNK_SIZE = 100
 
 /**
  * Promote and mirror a PSD2 account through one database transaction. Routing,
@@ -1367,61 +1277,23 @@ export async function setEnabled(
 }
 
 /**
- * Whether a cash account still has work pending: an unbooked, non-ignored
- * transaction. Disabling an account with open work would hide it from
- * Konton and the booking flows while its rows still need a decision.
- *
- * A NULL journal_entry_id alone overcounts: a row split over several
- * verifikat (transaction_voucher_links, #1553) carries the same NULL but is
- * not open work, so junction-anchored rows are subtracted.
- *
- * lib/transactions/is-booked.ts names a third anchor, invoice_payments and
- * supplier_invoice_payments. It is not subtracted here on purpose:
- * match_batch_allocate sets journal_entry_id itself (20260824120000), so only
- * rows from before that can be payment-anchored alone, and counting one as
- * open errs toward refusing the disable, never toward hiding open work.
- *
- * No row cap: an arbitrary `.limit()` here could return a page that happens
- * to be all junction-anchored while a genuinely open row sits past it,
- * letting the guard wave through an account that still has unbokförda
- * affärshändelser (BFL 5 kap). fetchAllRows pages past PostgREST's 1000-row
- * cap instead (regression test: 60 candidates, only the 60th genuinely open).
+ * Whether a cash account still has work pending (open_bank_rows). Disabling an
+ * account with open work would hide it from Konton and the booking flows while
+ * its rows still need a decision. A head count, so no page cap can wave through
+ * an account that still has unbokförda affärshändelser (BFL 5 kap).
  */
 export async function hasOpenTransactions(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
 ): Promise<boolean> {
-  const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
-    supabase
-      .from('transactions')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('cash_account_id', cashAccountId)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  const candidateIds = candidates.map((row) => row.id)
-  if (candidateIds.length === 0) return false
-  // lib/reconciliation/bank-reconciliation.ts already imports this module, so
-  // its fetchJunctionLinkedTxIds() can't be imported back here without a
-  // cycle; the same two-column lookup, inlined, chunked at the same size the
-  // rebind helpers above use to stay under PostgREST's URL length limit.
-  const junctionLinked = new Set<string>()
-  for (const idChunk of chunkIds(candidateIds, REBIND_ID_CHUNK_SIZE)) {
-    const { data: linkRows, error: linkError } = await supabase
-      .from('transaction_voucher_links')
-      .select('transaction_id')
-      .eq('company_id', companyId)
-      .in('transaction_id', idChunk)
-    if (linkError) throw new Error(`cash_accounts hasOpenTransactions junction lookup failed: ${linkError.message}`)
-    for (const row of (linkRows ?? []) as { transaction_id: string }[]) {
-      junctionLinked.add(row.transaction_id)
-    }
-  }
-  return candidateIds.some((id) => !junctionLinked.has(id))
+  const { count, error } = await supabase
+    .from('open_bank_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('cash_account_id', cashAccountId)
+  if (error) throw new Error(`cash_accounts hasOpenTransactions failed: ${error.message}`)
+  return (count ?? 0) > 0
 }
 
 /**

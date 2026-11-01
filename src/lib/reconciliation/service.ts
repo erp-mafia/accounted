@@ -16,6 +16,7 @@ import {
 } from './schemas'
 import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
+import { supersededTwins } from '@/lib/cash-accounts/twins'
 import { getManualReconciliationStatus, listManualAccounts, type BalanceSheetSnapshot } from './manual-reconciliation'
 
 const log = createLogger('reconciliation/service')
@@ -58,14 +59,14 @@ interface CashAccountRow {
   currency: string | null
   iban: string | null
   enabled: boolean | null
-  is_primary: boolean | null
+  is_primary: boolean
   source: string | null
   bank_connection_id: string | null
   balance: number | null
   available_balance: number | null
   balance_updated_at: string | null
   balance_reference: unknown
-  updated_at: string | null
+  created_at: string
 }
 
 function defaultWindow(today: string): { from: string; to: string } {
@@ -303,7 +304,7 @@ export async function listReconciliationAccounts(
 
   const cashAccountsRead = supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, updated_at')
+    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, created_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .order('is_primary', { ascending: false })
@@ -319,22 +320,10 @@ export async function listReconciliationAccounts(
   if (error) throw new Error(`Kunde inte hämta kassakonton: ${error.message}`)
   const cashAccounts = (data ?? []) as CashAccountRow[]
 
-  // Reconnect duplicates: same IBAN and currency twice. Keep the most recently
-  // updated row as the live one and mark the other as superseded so a rail
-  // can fold it away; never drop it silently, it may still hold unlinked rows.
-  const supersededBy = new Map<string, string>()
-  const byIban = new Map<string, CashAccountRow[]>()
-  for (const a of cashAccounts) {
-    if (!a.iban) continue
-    const k = `${a.iban}|${a.currency ?? 'SEK'}`
-    byIban.set(k, [...(byIban.get(k) ?? []), a])
-  }
-  for (const group of byIban.values()) {
-    if (group.length < 2) continue
-    const sorted = [...group].sort((x, y) => (y.updated_at ?? '').localeCompare(x.updated_at ?? ''))
-    const keep = sorted[0]
-    for (const other of sorted.slice(1)) supersededBy.set(other.id, bankAccountKey(keep.id))
-  }
+  // Reconnect duplicates: a rail folds the superseded row away, never drops it
+  // silently, it may still hold unlinked rows.
+  const twins = await supersededTwins(supabase, companyId, cashAccounts)
+  const supersededBy = new Map([...twins].map(([id, keeper]) => [id, bankAccountKey(keeper)]))
 
   const signoffs = await signoffsRead
 
@@ -493,7 +482,7 @@ export async function getAccountStatus(
   if (parsed.kind === 'bank') {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, updated_at')
+      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, created_at')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle()

@@ -17,15 +17,14 @@ describe('searchUnmatchedOutgoingTransactions', () => {
 
     await searchUnmatchedOutgoingTransactions(supabase as never, 'company-1', '  ')
 
-    expect(findCall('transactions', 'eq')).toEqual(['company_id', 'company-1'])
-    expect(findCall('transactions', 'lt')).toEqual(['amount', 0])
-    expect(findCalls('transactions', 'is')).toEqual([
-      ['journal_entry_id', null],
+    expect(findCall('open_bank_rows', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(findCall('open_bank_rows', 'lt')).toEqual(['amount', 0])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([
       ['supplier_invoice_id', null],
       ['invoice_id', null],
     ])
-    expect(findCall('transactions', 'ilike')).toBeUndefined()
-    expect(findCall('transactions', 'limit')).toEqual([OUTGOING_PICKER_LIMIT])
+    expect(findCall('open_bank_rows', 'ilike')).toBeUndefined()
+    expect(findCall('open_bank_rows', 'limit')).toEqual([OUTGOING_PICKER_LIMIT])
   })
 
   it('sends a term to the database as an escaped description search', async () => {
@@ -34,7 +33,7 @@ describe('searchUnmatchedOutgoingTransactions', () => {
 
     await searchUnmatchedOutgoingTransactions(supabase as never, 'company-1', ' 50%_rabatt ')
 
-    expect(findCall('transactions', 'ilike')).toEqual(['description', '%50\\%\\_rabatt%'])
+    expect(findCall('open_bank_rows', 'ilike')).toEqual(['description', '%50\\%\\_rabatt%'])
   })
 
   it('says when the answer came back full', async () => {

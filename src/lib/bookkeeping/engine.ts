@@ -2494,8 +2494,8 @@ export async function releaseBankRowsOfReversedEntry(
   // column and anchors the small residual verifikat through a junction row of
   // role 'other'. With the pointer gone that row would be the only thing left,
   // and it explains a few kronor of fee, not the bank amount: every reader
-  // that counts junction rows (fetchJunctionLinkedTxIds, the bulk_book RPC,
-  // is_transaction_booked()) would go on calling the row booked while the
+  // that counts junction rows (the bulk_book RPC, the link doors) would go on
+  // calling the row booked while the
   // worklist shows it as att bokföra (#2061). The release_reversed_entry_
   // transactions RPC therefore resets the pointer AND drops the released
   // rows' links to other verifikat in one statement (one snapshot, the

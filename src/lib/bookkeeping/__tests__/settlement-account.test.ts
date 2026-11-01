@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createMockSupabase, createQueuedMockSupabase } from '@/tests/helpers'
+import { createMockSupabase, createQueuedMockSupabase, createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import { resolvePrimaryBankAccount, resolvePrimaryBankAccountRow, resolveSettlementAccount } from '../settlement-account'
 import { BookkeepingDatabaseError } from '../errors'
+import { paymentBankRow } from '@/lib/cash-accounts/primary'
 import { errorResponse, getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
@@ -338,5 +339,69 @@ describe('resolvePrimaryBankAccountRow', () => {
     b.enqueue({ data: null, error: null })
     b.enqueue({ data: [], error: null })
     expect(await resolvePrimaryBankAccount(b.supabase as never, 'company-1', noopLog)).toBe('1930')
+  })
+})
+
+// A dialog names the account from the list it holds (paymentBankRow), the
+// booking reads it (resolvePrimaryBankAccountRow): one row set must give one
+// answer, or the preview shows one bank account and the verifikat books another.
+describe('paymentBankRow mirrors resolvePrimaryBankAccountRow', () => {
+  interface Row {
+    id: string
+    company_id: string
+    ledger_account: string
+    enabled: boolean
+    currency: string
+    is_primary: boolean
+    kind: 'bank' | 'card'
+  }
+
+  const row = (ledger_account: string, overrides: Partial<Row> = {}): Row => ({
+    id: `ca-${ledger_account}`,
+    company_id: 'company-1',
+    ledger_account,
+    enabled: true,
+    currency: 'SEK',
+    is_primary: false,
+    kind: 'bank',
+    ...overrides,
+  })
+
+  /** cash_accounts as Postgres answers a chain: its eq filters, its columns, its limit, and one row or none from maybeSingle. */
+  const postgres = (rows: Row[]): TableMockResolver => (chain) => {
+    const argsOf = (method: string) => chain.find((call) => call.method === method)?.args
+    const columns = String(argsOf('select')?.[0]).split(', ') as Array<keyof Row>
+    const answer = rows
+      .filter((candidate) => chain.every((call) => call.method !== 'eq' || candidate[call.args[0] as keyof Row] === call.args[1]))
+      .slice(0, (argsOf('limit')?.[0] as number | undefined) ?? rows.length)
+      .map((candidate) => Object.fromEntries(columns.map((column) => [column, candidate[column]])))
+    return { data: argsOf('maybeSingle') ? (answer[0] ?? null) : answer }
+  }
+
+  const rowSets: Array<[string, Row[], string | null]> = [
+    ['a usable primary', [row('1930'), row('1931', { is_primary: true })], '1931'],
+    ['a primary on another currency', [row('1932', { is_primary: true, currency: 'EUR' }), row('1931')], '1931'],
+    ['a disabled primary', [row('1930', { is_primary: true, enabled: false }), row('1931')], '1931'],
+    // Enabled, SEK and of kind bank: the listing counts it beside the bank account.
+    ['a primary off 19xx', [row('1686', { is_primary: true }), row('1931')], null],
+    [
+      'no primary and one enabled SEK row',
+      [row('1931'), row('1932', { currency: 'EUR' }), row('1940', { enabled: false }), row('2890', { kind: 'card' })],
+      '1931',
+    ],
+    ['no primary and two enabled SEK rows', [row('1931'), row('1940')], null],
+    ['no rows at all', [], null],
+  ]
+
+  it.each(rowSets)('%s', async (_name, rows, expected) => {
+    const { supabase } = createTableMockSupabase({ cash_accounts: postgres(rows) })
+
+    const server = await resolvePrimaryBankAccountRow(supabase as never, 'company-1', noopLog)
+    const client = paymentBankRow(rows)
+
+    // No row answers: the booking keeps the 1930 fallback, the dialog names none.
+    expect(server).toEqual(expected ? { id: `ca-${expected}`, ledger_account: expected } : { id: null, ledger_account: '1930' })
+    expect(client?.ledger_account ?? null).toBe(expected)
+    expect(client?.id ?? null).toBe(server.id)
   })
 })

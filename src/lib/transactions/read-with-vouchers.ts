@@ -85,7 +85,7 @@ export interface TransactionWithVouchers {
   receipt_id: string | null
   created_at: string | null
   updated_at: string | null
-  /** True when a posted verifikat books the transaction: its pointer, a bank_line link or a payment. */
+  /** True when a live verifikat books the transaction (public.bank_row_anchors). */
   booked: boolean
   verifikat: TransactionVerifikat[]
   documents: TransactionDocument[]
@@ -107,7 +107,7 @@ export async function readTransactionWithVouchers(
   // apart again (crm#1347: this read never had external_id).
   const { data, error } = await supabase
     .from('transactions')
-    .select(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored`)
+    .select(`${TRANSACTION_DETAIL_COLUMNS}, is_ignored, is_booked`)
     .eq('company_id', companyId)
     .eq('id', transactionId)
     .maybeSingle()
@@ -117,6 +117,7 @@ export async function readTransactionWithVouchers(
     id: string
     category: string | null
     is_ignored: boolean | null
+    is_booked: boolean | null
     journal_entry_id: string | null
     document_id: string | null
   }
@@ -235,7 +236,7 @@ export async function readTransactionWithVouchers(
 
   // Every selected column passes through; only the id is renamed and the
   // numerics and the default category normalised.
-  const { id, amount, amount_sek, instructed_amount, balance_after, category, is_ignored, ...fields } = tx
+  const { id, amount, amount_sek, instructed_amount, balance_after, category, is_ignored, is_booked, ...fields } = tx
   return {
     transaction_id: id,
     ...(fields as Omit<TransactionWithVouchers, 'transaction_id' | 'amount' | 'amount_sek' | 'instructed_amount' | 'balance_after' | 'category' | 'is_ignored' | 'booked' | 'verifikat' | 'documents'>),
@@ -245,8 +246,7 @@ export async function readTransactionWithVouchers(
     balance_after: num(balance_after),
     category: category === 'uncategorized' ? null : category,
     is_ignored: is_ignored === true,
-    // A residual or clearing link supplements a booking, it is not one (hasBankLineJunctionRow).
-    booked: verifikat.some((v) => v.status === 'posted' && v.anchored_by.some((a) => a !== 'clearing' && a !== 'other')),
+    booked: is_booked === true,
     verifikat,
     documents: [...documents.values()],
   }

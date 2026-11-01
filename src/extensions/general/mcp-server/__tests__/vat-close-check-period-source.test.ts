@@ -97,7 +97,9 @@ const BROKEN_FY_SETTINGS = {
 describe('gnubok_vat_close_check: ignored transactions', () => {
   it('excludes transactions ignored on purpose from the uncategorized blocker', async () => {
     // Ignored rows have journal_entry_id NULL by CHECK constraint, so the
-    // "no journal entry" predicate alone counted them as work to do.
+    // "no journal entry" predicate alone counted them as work to do. The
+    // count reads open_bank_rows, which leaves them out
+    // (tests/pg/bank-row-open-read.pg.test.ts).
     const { supabase, findCalls } = mockSupabase({})
 
     const result = await computeVatCloseCheck(
@@ -107,17 +109,13 @@ describe('gnubok_vat_close_check: ignored transactions', () => {
     )
 
     // Both legs of the shared predicate (lib/transactions/unbooked.ts): the
-    // untriaged head count and the triaged-but-unanchored candidates.
-    expect(findCalls('transactions', 'is')).toEqual([
-      ['is_business', null],
-      ['journal_entry_id', null],
+    // untriaged head count and the business head count.
+    expect(findCalls('open_bank_rows', 'select')).toEqual([
+      ['id', { count: 'exact', head: true }],
+      ['id', { count: 'exact', head: true }],
     ])
-    const eqCalls = findCalls('transactions', 'eq')
-    expect(eqCalls.filter((c) => c[0] === 'is_ignored')).toEqual([
-      ['is_ignored', false],
-      ['is_ignored', false],
-    ])
-    expect(eqCalls).toContainEqual(['is_business', true])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([['is_business', null]])
+    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['is_business', true])
     expect(result.blockers).not.toContainEqual(expect.objectContaining({
       kind: 'uncategorized_transactions',
     }))

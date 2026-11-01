@@ -37,9 +37,8 @@ const log = createLogger('period-service')
  * NULL`. That column only covers the 1:1 case; bulk-booked (N tx -> 1 JE, via
  * transaction_voucher_links) and multi-allocated (invoice_payments /
  * supplier_invoice_payments) transactions stay NULL while being anchored to a
- * real verifikat. See lib/transactions/is-booked.ts and its Postgres mirror
- * public.is_transaction_booked(uuid); this helper reproduces all three
- * locations so the guard does not block on already-booked rows.
+ * real verifikat. public.open_bank_rows holds all three, so the guard does not
+ * block on already-booked rows.
  */
 export interface UnbookedInPeriod {
   /** Never triaged: is_business IS NULL AND is_ignored = false. */

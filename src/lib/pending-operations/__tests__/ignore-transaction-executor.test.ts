@@ -41,12 +41,6 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   } as PendingOperation
 }
 
-function enqueueNoAnchors(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
-  enqueue({ data: [] }) // transaction_voucher_links
-  enqueue({ data: [] }) // invoice_payments
-  enqueue({ data: [] }) // supplier_invoice_payments
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
@@ -56,8 +50,7 @@ describe('commitPendingOperation: ignore_transaction', () => {
   it('happy path: flips is_ignored on an unbooked row and returns committed', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
-    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_ignored: false } }) // core fetch
-    enqueueNoAnchors(enqueue)
+    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: false } }) // core fetch
     enqueue({ data: null }) // update
     enqueue({ data: null }) // finalize
 
@@ -71,8 +64,7 @@ describe('commitPendingOperation: ignore_transaction', () => {
   it('is idempotent: an already-ignored row commits with changed=false and no write', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
-    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_ignored: true } }) // core fetch
-    enqueueNoAnchors(enqueue)
+    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: true } }) // core fetch
     enqueue({ data: null }) // finalize
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({}))
@@ -85,7 +77,7 @@ describe('commitPendingOperation: ignore_transaction', () => {
   it('refuses a row that got booked between staging and approval (TX_IGNORE_ALREADY_BOOKED)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
-    enqueue({ data: { id: TX_ID, journal_entry_id: 'je-1', is_ignored: false } }) // core fetch: booked now
+    enqueue({ data: { id: TX_ID, journal_entry_id: 'je-1', is_booked: true, is_ignored: false } }) // core fetch: booked now
     enqueue({ data: null }) // dispatcher reject/finalize update
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({}))
@@ -96,13 +88,10 @@ describe('commitPendingOperation: ignore_transaction', () => {
     expect(findCalls('transactions', 'update')).toEqual([])
   })
 
-  it('refuses a junction-anchored row (journal_entry_id NULL, voucher link present)', async () => {
+  it('refuses a junction-anchored row (journal_entry_id NULL, is_booked true)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
-    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_ignored: false } })
-    enqueue({ data: [{ transaction_id: TX_ID }] }) // transaction_voucher_links
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_booked: true, is_ignored: false } })
     enqueue({ data: null }) // finalize
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({}))
@@ -115,7 +104,7 @@ describe('commitPendingOperation: ignore_transaction', () => {
   it('restore (ignored: false) clears the flag', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
-    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_ignored: true } }) // core fetch
+    enqueue({ data: { id: TX_ID, journal_entry_id: null, is_booked: false, is_ignored: true } }) // core fetch
     enqueue({ data: null }) // update
     enqueue({ data: null }) // finalize
 

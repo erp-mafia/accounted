@@ -710,8 +710,9 @@ describe('getSkattekontoReconciliationStatus', () => {
     // both opening_balance on one fiscal-year start, net to 0 on 1630. The
     // floor stopped at them and dropped every earlier year, so "Bokfört på
     // 1630" fell short of the huvudbok by exactly that history and the gap
-    // showed up as an opening difference. The real floor (not the mock) now
-    // skips the pair and the balance runs over all history.
+    // showed up as an opening difference. public.account_ib_floor skips the
+    // pair (tests/pg/bank-reconciliation-floor-and-window.pg.test.ts), so the
+    // real read answers no floor and the balance runs over all history.
     it('a cancelling IB pair is no floor: the ledger balance is the full-history huvudbok sum', async () => {
       const actualGl = await vi.importActual<typeof import('../gl-balance')>('../gl-balance')
       findOpeningBalanceFloorMock.mockImplementation(actualGl.findOpeningBalanceFloor)
@@ -729,7 +730,7 @@ describe('getSkattekontoReconciliationStatus', () => {
       ]
       enqueue({ data: { value: { saldo: { saldoSkatteverket: 7000 }, fetchedAt: FETCHED_AT } } })
       enqueue({ data: rows })
-      enqueue({ data: [{ period_start: '2021-01-01' }] }) // the floor's fiscal-year read
+      enqueue({ data: null }) // account_ib_floor: no floor
       enqueue({ data: [A2, A3] })
       const lines = [
         ledgerLine(H1, 6000), ledgerLine(H2, -1500),

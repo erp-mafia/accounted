@@ -102,7 +102,7 @@ describe('cannot_check, never ok', () => {
     const r = (await results(permanent, 'receivables_vs_ledger')).results[0]
     expect(r.refusal).toMatchObject({ code: 'SOURCE_FAILED', retryable: false })
 
-    const transient = ctxFor({}, { tables: { transactions: { message: 'canceling statement due to statement timeout', code: '57014' } } })
+    const transient = ctxFor({}, { tables: { open_bank_rows: { message: 'canceling statement due to statement timeout', code: '57014' } } })
     const t = (await results(transient, 'unbooked_bank_lines_overdue')).results[0]
     expect(t.refusal).toMatchObject({ code: 'SOURCE_FAILED', retryable: true })
   })

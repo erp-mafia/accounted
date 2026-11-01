@@ -6,9 +6,8 @@ const tool = tools.find((t) => t.name === 'gnubok_list_uncategorized_transaction
 
 type Enqueue = (r: { data?: unknown; error?: unknown; count?: number | null }) => void
 
-// Query order per call: (1) the page with an exact count, filtered on the
-// work-queue predicate (lib/transactions/unbooked.ts applyUnbookedFilter:
-// not ignored, not private, is_booked false through the computed column),
+// Query order per call: (1) the page with an exact count, from the work queue
+// (public.open_bank_rows: not ignored, not private, anchored to no verifikat),
 // (2) cash_accounts when a page row carries a cash_account_id, (3) the
 // Bankgirot parts of the page. (2) and (3) are skipped on an empty page.
 function enqueuePage(enqueue: Enqueue, rows: unknown[], count = rows.length) {
@@ -99,7 +98,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
       transactions: Array<{ transaction_id: string; external_id: string | null }>
     }
 
-    const select = String(findCalls('transactions', 'select')[0][0]).split(',').map((c) => c.trim())
+    const select = String(findCalls('open_bank_rows', 'select')[0][0]).split(',').map((c) => c.trim())
     expect(select).toContain('external_id')
     expect(result.transactions.map((t) => [t.transaction_id, t.external_id])).toEqual([
       ['t-1', 'stripe_acct_1_txn_1'],
@@ -114,7 +113,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
     const CA = '550e8400-e29b-41d4-a716-446655441940'
     await tool.execute({ limit: 20, cash_account_id: CA }, 'company-1', 'user-1', supabase as never)
 
-    const eqCalls = findCalls('transactions', 'eq').filter((args) => args[0] === 'cash_account_id')
+    const eqCalls = findCalls('open_bank_rows', 'eq').filter((args) => args[0] === 'cash_account_id')
     expect(eqCalls).toEqual([['cash_account_id', CA]])
     // No ledger lookup when no page row carries a cash_account_id.
     expect(findCalls('cash_accounts', 'in')).toHaveLength(0)
@@ -150,7 +149,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
 
     const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as { transactions: Array<Record<string, unknown>> }
 
-    expect(String(findCalls('transactions', 'select')[0][0])).toContain('counterparty_iban')
+    expect(String(findCalls('open_bank_rows', 'select')[0][0])).toContain('counterparty_iban')
     expect(result.transactions[0]).toMatchObject({ transaction_id: 't-foreign', counterparty_account: null, counterparty_iban: 'NO9386011117947' })
   })
 
@@ -158,19 +157,18 @@ describe('gnubok_list_uncategorized_transactions', () => {
     // journal_entry_id IS NULL is only the first anchor: a row split over
     // several verifikat (#1553), bulk-booked into a samlingsverifikat or
     // settled through an invoice allocation keeps it NULL. An ignored row has
-    // journal_entry_id NULL by CHECK (feedback seq 330091). The shared filter
-    // reads all four anchors through the is_booked computed column.
+    // journal_entry_id NULL by CHECK (feedback seq 330091). The view holds the
+    // rule, so a filter on the table beside it is a copy.
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueuePage(enqueue, [{ id: 't-1', date: '2026-03-09', description: 'A', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }])
 
     await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)
 
-    const eq = findCalls('transactions', 'eq')
-    expect(eq).toContainEqual(['is_ignored', false])
-    expect(eq).toContainEqual(['is_booked', false])
-    expect(findCalls('transactions', 'not')).toEqual([['is_business', 'is', false]])
-    expect(findCalls('transactions', 'is')).toEqual([])
-    expect(findCalls('transactions', 'select')[0][1]).toEqual({ count: 'exact' })
+    expect(findCalls('open_bank_rows', 'select')[0][1]).toEqual({ count: 'exact' })
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCalls('open_bank_rows', 'not')).toEqual([])
+    expect(findCalls('open_bank_rows', 'is')).toEqual([])
+    expect(findCalls('transactions', 'select')).toEqual([])
   })
 
   it('pages with range and takes total_count from the same query (split row, crm#48)', async () => {
@@ -188,7 +186,7 @@ describe('gnubok_list_uncategorized_transactions', () => {
       next_offset?: number
     }
 
-    expect(findCalls('transactions', 'range')).toEqual([[0, 0]])
+    expect(findCalls('open_bank_rows', 'range')).toEqual([[0, 0]])
     expect(result.transactions.map((t) => t.transaction_id)).toEqual(['t-open'])
     expect(result.total_count).toBe(2)
     expect(result.has_more).toBe(true)

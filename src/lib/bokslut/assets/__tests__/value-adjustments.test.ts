@@ -377,6 +377,7 @@ describe('disposal of a written-down asset', () => {
   it('clears the write-down from 12x8 and takes it out of the book value', () => {
     const asset = building({ value_adjustments: [adjustment({})] })
     const plan = buildAssetDisposalPlan({
+      proceedsAccount: '1930',
       asset,
       input: {
         disposal_type: 'scrap',
@@ -402,6 +403,7 @@ describe('disposal of a written-down asset', () => {
     const asset = building({ value_adjustments: [adjustment({})] })
     expect(() =>
       buildAssetDisposalPlan({
+        proceedsAccount: '1930',
         asset,
         input: { disposal_type: 'scrap', disposed_at: '2026-06-30', disposed_proceeds: 0, fiscal_period_id: 'fp-2026' },
         fiscalPeriod: P2026,

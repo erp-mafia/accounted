@@ -9,7 +9,8 @@ import {
   resolveSkattekontoAccount,
   type SkattekontoLedgerAccount,
 } from '@/lib/skatteverket/skattekonto-account'
-import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
+import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
+import { createLogger } from '@/lib/logger'
 import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import {
   getSkattekontoReconciliationStatus,
@@ -86,12 +87,11 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 
 /**
  * Sentinel emitted by system rules for inbetalning / utbetalning: resolves to the
- * company's primary SEK cash account at runtime so the resolver doesn't assume 1930.
- * Falls back to '1930' until cash_accounts exists (Item 4 in the bank-architecture
- * priority list).
+ * company's primary bank account at runtime (resolvePrimaryBankAccount).
  */
 const PRIMARY_SEK_SENTINEL = '__PRIMARY_SEK__'
-const PRIMARY_SEK_FALLBACK = '1930'
+
+const log = createLogger('skatteverket/skattekonto-booking')
 
 export type { EntityType } from '@/types'
 
@@ -157,19 +157,6 @@ export interface CounterAccountMatch {
    * and the booking marks the begäran paid.
    */
   rotRutPayout?: RotRutPayoutLeg
-}
-
-/**
- * Resolve the primary SEK cash account for a company via `cash_accounts`.
- * Falls back to '1930' when no primary row exists yet (fresh company before the
- * initial PSD2 connection, or a manual-only company that hasn't set a primary).
- */
-async function resolvePrimarySekAccount(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<string> {
-  const primary = await getPrimaryCashAccount(supabase, companyId, 'SEK')
-  return primary?.ledger_account ?? PRIMARY_SEK_FALLBACK
 }
 
 /** Reads the 1650 balance up to an event date (null on a failed read). */
@@ -551,7 +538,7 @@ export async function guessCounterAccount(
       rules,
       entityType,
       employerRegistered,
-      resolvePrimarySek: () => resolvePrimarySekAccount(supabase, companyId),
+      resolvePrimarySek: () => resolvePrimaryBankAccount(supabase, companyId, log),
       readAvgifterLiability: readAvgifterLiabilityAccount(supabase, companyId),
       readRotRutSetOff: readRotRutSetOff(supabase, companyId),
     },
@@ -599,7 +586,7 @@ export async function loadRuleContext(
       entityType: 'aktiebolag',
       account: SKATTEKONTO_ACCOUNT_DEFAULT,
       employerRegistered: false,
-      resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
+      resolvePrimarySek: async () => resolveAccountRole(PINNED_JURISDICTION, 'bank'),
       readAvgifterLiability: async () => null,
       readRotRutSetOff: async () => null,
     }
@@ -629,7 +616,7 @@ export async function loadRuleContext(
         settingsResult.data?.pays_salaries) === true,
     resolvePrimarySek: async () => {
       if (primary === null) {
-        primary = await resolvePrimarySekAccount(supabase, companyId)
+        primary = await resolvePrimaryBankAccount(supabase, companyId, log)
       }
       return primary
     },

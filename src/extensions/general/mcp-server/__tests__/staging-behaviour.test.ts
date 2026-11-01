@@ -209,6 +209,8 @@ const ALLOWED_MUTATION_TABLES = new Set(['pending_operations', 'idempotency_keys
  * refuses to let modify data. A VOLATILE function cannot be listed here.
  */
 const READ_ONLY_RPCS = new Set([
+  'account_ib_floor',
+  'standing_correction',
   // The trial balance (generateTrialBalance, both STABLE): the dividend
   // previews (gnubok_create_dividend, gnubok_book_dividend) read fritt eget
   // kapital on the last balance sheet for the ABL 17:3 check, and the
@@ -1108,8 +1110,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Klarmarkera: an ended, imported year with every bank row booked.
   gnubok_close_fiscal_period_external: {
     rows: { fiscal_periods: { ...ENDED_FISCAL_YEAR, closing_entry_id: null, locked_at: null } },
-    counts: { transactions: 0 },
-    empty: ['transactions'],
+    counts: { open_bank_rows: 0 },
+    empty: ['open_bank_rows'],
   },
   // Salary-run lifecycle: each needs the run in the status its verb starts from.
   gnubok_send_payslips: {

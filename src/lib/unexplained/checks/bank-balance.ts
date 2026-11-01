@@ -20,13 +20,13 @@
  * the books have not. What they do not cover is the residual.
  */
 import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
+import { supersededTwins } from '@/lib/cash-accounts/twins'
 import { toHandle } from '@/lib/handles'
 import { tiesOut } from '@/lib/measures/explain'
 import { fiscalPeriodContaining } from '@/lib/measures/params'
 import { roundOre } from '@/lib/money'
 import { bankBalanceDay, bookedBalancesAt } from '@/lib/reconciliation/bank-balance-check'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { cannotCheck, companyFacts, kronor, noFiscalPeriod, sourceFailed, statusFor, sumOre } from '../shared'
 import type { CheckBreakdown, CheckContext, CheckDefinition, CheckItem, CheckNextAction, CheckRun, CheckSide, CheckSource, CheckSubject } from '../types'
 
@@ -58,7 +58,8 @@ interface CashAccountRow {
   balance: number | string | null
   balance_updated_at: string | null
   balance_reference: unknown
-  updated_at: string | null
+  is_primary: boolean
+  created_at: string
 }
 
 interface BankSource {
@@ -91,26 +92,6 @@ function sidesOf(reported: number | null, booked: number | null, account: string
   ]
 }
 
-/**
- * Reconnect duplicates (same IBAN and currency twice) keep only the most
- * recently updated row, as the reconciliation list does: the other is a
- * stale copy of the same bank account, not a second balance.
- */
-function withoutReconnectDuplicates(rows: CashAccountRow[]): CashAccountRow[] {
-  const latest = new Map<string, CashAccountRow>()
-  const out: CashAccountRow[] = []
-  for (const row of rows) {
-    if (!row.iban) {
-      out.push(row)
-      continue
-    }
-    const key = `${row.iban}|${row.currency}`
-    const seen = latest.get(key)
-    if (!seen || (row.updated_at ?? '') > (seen.updated_at ?? '')) latest.set(key, row)
-  }
-  return [...out, ...latest.values()].sort((a, b) => a.ledger_account.localeCompare(b.ledger_account) || a.id.localeCompare(b.id))
-}
-
 async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
   const company: CheckSubject = { kind: 'company' }
   let rows: CashAccountRow[]
@@ -119,12 +100,15 @@ async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
     ledgerCurrency = (await companyFacts(ctx)).ledgerCurrency
     const { data, error } = await ctx.supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, balance, balance_updated_at, balance_reference, updated_at')
+      .select('id, name, ledger_account, currency, iban, is_primary, created_at, balance, balance_updated_at, balance_reference')
       .eq('company_id', ctx.companyId)
       .eq('enabled', true)
       .order('ledger_account', { ascending: true })
     if (error) throw Object.assign(new Error(error.message), { code: error.code })
-    rows = withoutReconnectDuplicates(((data ?? []) as CashAccountRow[]).filter((r) => isBankCashAccount(r)))
+    // A reconnect duplicate is a copy of the same bank account, not a second balance.
+    const banks = ((data ?? []) as CashAccountRow[]).filter((r) => isBankCashAccount(r))
+    const twins = await supersededTwins(ctx.supabase, ctx.companyId, banks)
+    rows = banks.filter((r) => !twins.has(r.id))
   } catch (err) {
     return [cannotCheck(company, ctx.today, sourceFailed('bank_balance_vs_bank', 'Kontoregistret', err))]
   }
@@ -212,14 +196,12 @@ async function explain(ctx: CheckContext, run: CheckRun<BankSource>): Promise<Ch
   if (!source || run.difference === null) return { parts: [], items: [], residual: null, reconciles: false }
   const rows = await fetchAllRows<{ id: string; date: string; description: string | null; amount: number | string; currency: string | null }>(
     ({ from, to }) =>
-      applyUnbookedFilter(
-        ctx.supabase
-          .from('transactions')
-          .select('id, date, description, amount, currency')
-          .eq('company_id', ctx.companyId)
-          .eq('cash_account_id', source.cashAccountId)
-          .lte('date', run.as_of),
-      )
+      ctx.supabase
+        .from('open_bank_rows')
+        .select('id, date, description, amount, currency')
+        .eq('company_id', ctx.companyId)
+        .eq('cash_account_id', source.cashAccountId)
+        .lte('date', run.as_of)
         .order('date', { ascending: true })
         .order('id', { ascending: true })
         .range(from, to),
