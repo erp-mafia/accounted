@@ -49,6 +49,7 @@ import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { parseEntityType } from '@/lib/company/entity-type'
 
@@ -977,8 +978,8 @@ export async function generateAgiDeclaration(
   // warn-level and carry no alert flag, so they do not reach the observability
   // sink (lib/observability); they are a breadcrumb, not a page.
   {
-    const now = new Date()
-    const currentYM = now.getUTCFullYear() * 100 + (now.getUTCMonth() + 1)
+    const { year: currentYear, month: currentMonth } = stockholmYearMonth()
+    const currentYM = currentYear * 100 + currentMonth
     const periodYM = agiPeriod.periodYear * 100 + agiPeriod.periodMonth
     if (periodYM > currentYM) {
       opLog.warn('AGI generated for future period', {

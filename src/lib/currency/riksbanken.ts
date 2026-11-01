@@ -326,6 +326,11 @@ async function readLatestCachedRate(
   }
 }
 
+/** The day a rate is read for, the rate cache's key: the date asked for, else the Swedish today. */
+export function exchangeRateDate(date?: Date): string {
+  return date ? date.toISOString().split('T')[0] : todayIsoStockholm()
+}
+
 /**
  * The exchange rate for a currency on a given date, from Riksbanken's public
  * API. A date without an observation (weekend, holiday, not published yet)
@@ -366,8 +371,7 @@ export async function fetchExchangeRate(
     }
   }
 
-  const targetDate = date || new Date()
-  const formattedDate = targetDate.toISOString().split('T')[0]
+  const formattedDate = exchangeRateDate(date)
 
   const seriesId = riksbankenSeriesId(currency)
   if (!seriesId) {

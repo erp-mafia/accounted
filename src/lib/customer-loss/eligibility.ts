@@ -2,6 +2,7 @@
  * Whether an invoice's open claim can take a kundförlust decision, and where
  * the menu shows (build spec 3.10).
  */
+import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { roundOre } from '@/lib/money'
 import type { CustomerLossErrorCode } from './errors'
 import type { CustomerLossInvoice, CustomerLossState, LatestCase } from './state'
@@ -30,10 +31,9 @@ export function customerLossMenuVisible(
   if ((invoice.currency ?? 'SEK') !== 'SEK') return false
   if (!(OPEN_CLAIM_STATUSES as readonly string[]).includes(invoice.status)) return false
   if (roundOre(invoice.remaining_amount) <= 0) return false
-  const overdue = invoice.status === 'overdue' || (!!invoice.due_date && invoice.due_date < today)
   const closedAsLoss =
     !!latestCase && !latestCase.is_open && (LOSS_CLOSE_REASONS as readonly string[]).includes(latestCase.close_reason ?? '')
-  return overdue || closedAsLoss
+  return isInvoiceOverdue(invoice, today) || closedAsLoss
 }
 
 /**

@@ -38,7 +38,6 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import {
   alignRunDateToDay,
   firstRunDateOnOrAfter,
-  getStockholmDateHour,
   parseIsoDate,
   projectRunDates,
   runDateMatchesDayOfMonth,
@@ -54,6 +53,7 @@ import { useArticles, useCompanySettings, useCustomers } from '@/lib/reference-d
 import { sortArticles } from '@/lib/articles/sort'
 import { articleLineName, documentLanguageOf } from '@/lib/articles/line-name'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -67,15 +67,6 @@ function compactDims(dims: Record<string, string>): string {
 }
 
 /**
- * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
- * against. The browser's own zone must not leak in, or a user west of Sweden
- * late in the evening would pass client validation and get a 400.
- */
-function stockholmTodayIso(): string {
-  return getStockholmDateHour(new Date()).date
-}
-
-/**
  * The create dialog's first run date for a day of the month: the shared rule
  * (firstRunDateOnOrAfter, what the server picks when start_date is omitted)
  * from Stockholm's today, or from the start of a later month the user picked
@@ -83,7 +74,7 @@ function stockholmTodayIso(): string {
  * when the day changes. Never in the past.
  */
 function createRunDate(dayOfMonth: number, pickedMonth: string | null): string {
-  const today = stockholmTodayIso()
+  const today = todayIsoStockholm()
   const monthStart = pickedMonth ? `${pickedMonth}-01` : ''
   return firstRunDateOnOrAfter(monthStart > today ? monthStart : today, dayOfMonth)
 }
@@ -262,7 +253,7 @@ function NewRecurringScheduleForm({
           })
           return
         }
-        const today = stockholmTodayIso()
+        const today = todayIsoStockholm()
         if (schedule) {
           // The stored date, moved onto the grid for the (possibly edited)
           // day, is the "unchanged" reference: a day-only edit keeps the

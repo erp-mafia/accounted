@@ -24,6 +24,7 @@ import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 import { compareCustomerNumbers } from '@/lib/customers/sort'
 import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
+import { invoiceTermsFor } from '@/lib/invoices/due-date'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -94,10 +95,7 @@ function CustomersPageInner() {
   // Default payment terms from the session-cached settings row; the dialog
   // falls back to 30 until (or unless) the company set one.
   const { settings: companySettings } = useCompanySettings()
-  const companyDefaultTerms =
-    typeof companySettings?.invoice_default_days === 'number' && companySettings.invoice_default_days > 0
-      ? companySettings.invoice_default_days
-      : null
+  const companyDefaultTerms = companySettings ? invoiceTermsFor(undefined, companySettings.invoice_default_days) : null
   const { toast } = useToast()
   const t = useTranslations('customers')
   const errorLocale = useLocale() as ErrorLocale

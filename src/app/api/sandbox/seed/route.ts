@@ -47,6 +47,7 @@ import {
   buildSandboxSalaryVouchers,
   SANDBOX_SALARY_ACCOUNT_NUMBERS,
 } from './salary-vouchers'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -252,7 +253,7 @@ export async function POST(request: Request) {
     }
 
     // 4. Create fiscal period (current year)
-    const currentYear = new Date().getFullYear()
+    const currentYear = stockholmYearMonth().year
     const { data: fiscalPeriod, error: fpError } = await supabase
       .from('fiscal_periods')
       .insert({

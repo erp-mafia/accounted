@@ -10,6 +10,7 @@ import { getOpeningBalances } from './opening-balances'
 import { excludeYearEndChain, fetchYearEndEntryIds, generateTrialBalance } from './trial-balance'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reports:sie-export')
 
@@ -470,10 +471,7 @@ async function resultClosingMovements(
  * Format a Date object for SIE: YYYYMMDD
  */
 function formatSIEDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
+  return todayIsoStockholm(date).replace(/-/g, '')
 }
 
 /**

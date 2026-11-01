@@ -31,8 +31,9 @@ import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
-import { formatQty, todayIso } from '@/components/sales-orders/labels'
+import { formatQty } from '@/components/sales-orders/labels'
 import { CURRENCIES, type Article, type SalesOrder, type SalesOrderItem, type SalesOrderItemInput } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // The invoice editor's currency set (CurrencySchema in lib/api/schemas.ts).
 
@@ -161,7 +162,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   )
 
   const [customerId, setCustomerId] = useState<string>(initial?.customer_id ?? '')
-  const [orderDate, setOrderDate] = useState<string>(initial?.order_date ?? todayIso())
+  const [orderDate, setOrderDate] = useState<string>(initial?.order_date ?? todayIsoStockholm())
   const [requestedDeliveryDate, setRequestedDeliveryDate] = useState<string>(
     initial?.requested_delivery_date ?? '',
   )

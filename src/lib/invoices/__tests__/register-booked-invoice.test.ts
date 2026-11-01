@@ -387,6 +387,8 @@ describe('planBookedInvoiceRegistration', () => {
     // The ladder follows only invoices sent from here: never one with no delivery history (policy.ts).
     expect(warned.map((w) => w.code)).toEqual(['REGISTER_OVERDUE_NOT_REMINDED'])
     expect(warned[0].message_sv).toContain('får inga påminnelser av sig själv')
+    // Due today is on time: nothing to say yet.
+    expect(await codes({ customer }, { due_date: overdue.today })).toEqual([])
     expect(warned[0].message_sv).not.toContain('Stäng av')
     // Partly paid is owed too.
     expect((await codes({ customer }, { remaining_amount: 100, balance_as_of: '2026-03-31' })).map((w) => w.code)).toEqual(['REGISTER_OVERDUE_NOT_REMINDED'])

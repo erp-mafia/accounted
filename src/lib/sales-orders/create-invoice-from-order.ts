@@ -5,10 +5,11 @@ import type { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { loadSalesOrder } from './load'
 import { qtyGreater, roundQty } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
+import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 
 export type CreateInvoiceFromOrderInput = z.infer<typeof CreateInvoiceFromSalesOrderSchema>
 
@@ -154,12 +155,7 @@ export async function createInvoiceFromSalesOrder(
   }
 
   const invoiceDate = input.invoice_date ?? todayIsoStockholm()
-  let dueDate = input.due_date
-  if (!dueDate) {
-    const due = new Date(invoiceDate)
-    due.setDate(due.getDate() + (customer.default_payment_terms ?? 30))
-    dueDate = due.toISOString().slice(0, 10)
-  }
+  const dueDate = input.due_date || invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms))
   const deliveryDate = deliveryDateFor(picked)
 
   const pickedById = new Map(picked.map((p) => [p.item.id, p]))

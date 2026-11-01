@@ -1,3 +1,4 @@
+import { todayIsoStockholm } from '@/lib/dates/iso'
 /**
  * Moments the way a Swedish reader says them, in Stockholm time:
  * "17 oktober 2026 kl. 14:05". Isomorphic: the mail, the signer's page and
@@ -12,7 +13,7 @@ export function formatSigningMoment(iso: string): string {
 
 /** The Stockholm calendar day of an instant: "2026-10-24". */
 export function stockholmDay(iso: string): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso))
+  return todayIsoStockholm(new Date(iso))
 }
 
 /** A signature's moment, short, in Stockholm time: "29 okt 2026, 09:21". */

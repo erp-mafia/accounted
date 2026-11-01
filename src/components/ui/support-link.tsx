@@ -56,6 +56,7 @@ import {
   whenConversationsReady,
 } from '@/lib/support/conversations'
 import { dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 interface SupportLinkProps {
   /** 'hidden' renders no trigger: the dialog is controlled through `open`. */
@@ -405,7 +406,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   // subject, and the last message alone does not tell two tickets apart.
   const fmtDay = (iso: string) => {
     const d = new Date(iso)
-    const sameYear = d.getFullYear() === new Date().getFullYear()
+    const sameYear = stockholmYearMonth(d).year === stockholmYearMonth().year
     return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) }).format(d)
   }
 

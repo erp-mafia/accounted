@@ -171,11 +171,13 @@
  *      Page with fetchAllRows (its maxRows keeps a deliberate cap) or read an
  *      aggregate. Implementation and rationale in limit-above-page.mjs.
  *      Allowlisted file-set, may only shrink.
- *   17. utc-today: "today" computed as the UTC calendar date
- *      (`new Date().toISOString().slice(0, 10)` and its twins, also read off
- *      a `now` variable or a horizon derived from one), which is yesterday
- *      in Sweden between midnight and 01:00/02:00. Use todayIsoStockholm()
- *      from lib/dates/iso, with addDaysIso / addMonthsIso for horizons.
+ *   17. utc-today: "today", this month or this year not read from the one
+ *      definition (`new Date().toISOString().slice(0, 10)` and its twins, the
+ *      Date getters, `date || new Date()`, wrappers, also read off a `now`
+ *      variable or a horizon derived from one), which is yesterday in Sweden
+ *      between midnight and 01:00/02:00. Use todayIsoStockholm() or
+ *      stockholmYearMonth() from lib/dates/iso, with addDaysIso / addMonthsIso
+ *      for horizons.
  *      Implementation and rationale
  *      in utc-today.mjs. Allowlisted file-set, may only shrink.
  *   18. unsigned-provider-names: the name of a provider whose contract is not
@@ -1840,12 +1842,13 @@ const utcTodayFilesNow = new Set(current.utcToday.map((f) => f.file))
 const migratedUtcToday = [...UTC_TODAY_ALLOWED].filter((f) => !utcTodayFilesNow.has(f))
 if (newUtcToday.length) {
   failed = true
-  console.error(`\n✗ utc-today: ${newUtcToday.length} site(s) compute "today" as the UTC date:`)
+  console.error(`\n✗ utc-today: ${newUtcToday.length} site(s) read "today" by hand:`)
   newUtcToday.forEach((f) => console.error(`    ${f.file}:${f.line}`))
   console.error(
-    '  → use todayIsoStockholm(now) from @/lib/dates/iso, and addDaysIso / addMonthsIso on\n' +
-      '    that ISO date for a horizon. The UTC date is yesterday in Sweden between midnight\n' +
-      '    and 01:00/02:00, so a default date, a cutoff or an as-of date computed from it\n' +
+    '  → use todayIsoStockholm(now) or stockholmYearMonth(now) from @/lib/dates/iso, and\n' +
+      '    addDaysIso / addMonthsIso on that ISO date for a horizon. The UTC date, and a\n' +
+      "    Date's getters on a server in UTC, are yesterday in Sweden between midnight and\n" +
+      '    01:00/02:00, so a default date, a cutoff or an as-of date computed from them\n' +
       '    books, filters or labels against the wrong day.',
   )
 }

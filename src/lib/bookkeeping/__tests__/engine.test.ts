@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   validateBalance,
-  getSwedishLocalDate,
   createDraftEntry,
   createJournalEntry,
   replaceOpeningBalanceEntry,
@@ -556,19 +555,6 @@ describe('reverseEntry: a kept 0 in amount_in_currency reverses to 0 (#3517)', (
     expect(byAccount['1932']).toMatchObject({ debit_amount: 0, credit_amount: 812.4, currency: 'USD', amount_in_currency: 0 })
     expect(Object.is(byAccount['1932'].amount_in_currency, 0)).toBe(true)
     expect(byAccount['3960']).toMatchObject({ debit_amount: 812.4, credit_amount: 0, amount_in_currency: null })
-  })
-})
-
-describe('getSwedishLocalDate', () => {
-  it('returns a date string in YYYY-MM-DD format', () => {
-    const date = getSwedishLocalDate()
-    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-  })
-
-  it('returns a valid date', () => {
-    const date = getSwedishLocalDate()
-    const parsed = new Date(date)
-    expect(parsed.toString()).not.toBe('Invalid Date')
   })
 })
 

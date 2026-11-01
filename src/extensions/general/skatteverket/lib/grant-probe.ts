@@ -13,12 +13,12 @@ import { currentSkvEnvironment } from './resolve-auth'
 import {
   grantCountsFor,
   grantPredatesOptIn,
-  isoDate,
   listOmbudGrants,
   OmbudApiError,
   summarizeGrants,
 } from './ombud-client'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('skatteverket-grant-probe')
 
@@ -105,8 +105,7 @@ async function probeLasombud(orgNumber: string, actor: SkvAuditActor): Promise<P
 
 /** Current YYYYMM-style moms period for the draft probe. */
 function currentMomsPeriod(): string {
-  const now = new Date()
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+  return todayIsoStockholm().slice(0, 7).replace('-', '')
 }
 
 async function probeMomsOmbud(orgNumber: string, actor: SkvAuditActor): Promise<ProbeClassification> {
@@ -149,7 +148,7 @@ export async function probeViaOmbudsregister(
   orgNumber: string,
   optInDay: string,
   actor: SkvAuditActor,
-  today: string = isoDate(new Date())
+  today: string = todayIsoStockholm()
 ): Promise<{ result: RegistryProbe; roles: string[] } | { result: null; reason: string }> {
   try {
     const posts = await listOmbudGrants({ huvudman: orgNumber }, actor)
@@ -235,7 +234,7 @@ export async function probeCompanyGrants(
   // row" would make today the opt-in day and deny a grant signed earlier.
   const stored = await getConnectionOrThrow(companyId, currentSkvEnvironment())
   const optInDay =
-    stored && stored.org_number === orgNumber ? isoDate(new Date(stored.created_at)) : isoDate(new Date())
+    todayIsoStockholm(stored && stored.org_number === orgNumber ? new Date(stored.created_at) : undefined)
   const actor: SkvAuditActor = { companyId, userId: createdBy ?? null }
   const registry = await probeViaOmbudsregister(orgNumber, optInDay, actor)
 
@@ -308,7 +307,7 @@ export async function recordGrantRefusal(
   if (!connection) return 'unverified'
   const registry = await probeViaOmbudsregister(
     connection.org_number,
-    isoDate(new Date(connection.created_at)),
+    todayIsoStockholm(new Date(connection.created_at)),
     { companyId, userId: null }
   )
   const key = behorighet === 'lasombud' ? 'lasombud' : 'momsOmbud'

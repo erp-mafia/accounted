@@ -31,15 +31,6 @@ export const INVOICING_LABEL_KEY: Record<SalesOrderProgress, string> = {
   full: 'invoicing_full',
 }
 
-/** Today as an ISO calendar date in the browser's local timezone. */
-export function todayIso(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 /** Renders a quantity without trailing zeros (2 -> "2", 2.5 -> "2,5" via toLocaleString). */
 export function formatQty(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '0'

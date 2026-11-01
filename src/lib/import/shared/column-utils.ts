@@ -191,14 +191,17 @@ export function cellOrNull(value: unknown): string | null {
   return str === '' ? null : str
 }
 
-/** Parse an integer payment term ("30 dagar" → 30) with a default fallback. */
-export function parsePaymentTerms(value: unknown, fallback: number): number {
+/**
+ * Parse an integer payment term ("30 dagar" → 30), null when the cell gives
+ * none: what stands on a matched card, or a new card's default, then decides.
+ */
+export function parsePaymentTerms(value: unknown): number | null {
   const str = cellOrNull(value)
-  if (!str) return fallback
+  if (!str) return null
   const match = str.match(/-?\d+/)
-  if (!match) return fallback
+  if (!match) return null
   const n = parseInt(match[0], 10)
-  if (isNaN(n) || n < 0 || n > 365) return fallback
+  if (isNaN(n) || n < 0 || n > 365) return null
   return n
 }
 

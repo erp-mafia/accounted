@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
-import { outstandingAsOf, paymentsAsOfFromFacts, todayIsoDate } from './reskontra-payments'
+import { outstandingAsOf, paymentsAsOfFromFacts } from './reskontra-payments'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
@@ -15,6 +15,7 @@ import {
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
+import { daysPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -120,11 +121,12 @@ export async function generateARLedger(
   asOfDate?: string,
   options?: { strict?: boolean }
 ): Promise<ARLedgerReport> {
-  const refDate = asOfDate ? new Date(asOfDate) : new Date()
+  const today = todayIsoStockholm()
+  const asOf = asOfDate || today
   // Backdated reconstruction only kicks in for genuinely historical dates:
   // for today/future the stored open-invoice state IS the as-of state, and
   // the live view must stay byte-identical to what it always showed.
-  const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
+  const isHistorical = asOf < today
 
   // The ledger population, in one read (ar-ledger-invoices.ts). Live view:
   // open invoices, plus paid ones still awaiting Skatteverket's share of a
@@ -214,8 +216,7 @@ export async function generateARLedger(
     }
 
     const entry = byCustomer.get(customerId)!
-    const dueDate = new Date(inv.due_date)
-    const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+    const daysOverdue = daysPastDue(inv.due_date, asOf)
     const total = Number(inv.total) || 0
     const outstanding = paired.outstanding.get(inv.id) ?? 0
     const paidAmount = roundOre(total - outstanding)
@@ -258,7 +259,7 @@ export async function generateARLedger(
       paid_amount: paidAmount,
       outstanding,
       outstanding_sek: outstandingSek,
-      days_overdue: Math.max(0, daysOverdue),
+      days_overdue: daysOverdue,
       currency: inv.currency || 'SEK',
     })
 

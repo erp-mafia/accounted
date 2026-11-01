@@ -4,7 +4,7 @@
  * back as UTC. In Swedish time that lost a day across the March DST change
  * (2026-03-10 + 30 days gave 2026-04-08). The webshop "already booked" and
  * bank "match voucher" search windows had the same shape. All three now use
- * the shared pure calendar-date helper addDaysIso. Components are not
+ * the shared pure calendar-date helpers on addDaysIso. Components are not
  * rendered in this suite (vitest runs in `node`), so the wiring is pinned on
  * the source.
  */
@@ -28,11 +28,11 @@ describe('due date and search windows across DST', () => {
     expect(addDaysIso('2026-04-15', -45)).toBe('2026-03-01')
   })
 
-  it('every door shifts dates with addDaysIso, never a local setDate', () => {
+  it('every door shifts dates on addDaysIso, never a local setDate', () => {
     for (const rel of SOURCES) {
       const src = read(rel)
       expect(src, rel).toContain("from '@/lib/dates/iso'")
-      expect(src, rel).toMatch(/addDaysIso\(/)
+      expect(src, rel).toMatch(/\b(?:addDaysIso|invoiceDueDate)\(/)
       expect(src, rel).not.toMatch(/\.setDate\(/)
     }
   })

@@ -1,6 +1,7 @@
-import { addDays, differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
+import { differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
 import { gronTeknikWorkType } from '@/lib/bookkeeping/rot-rut-rules'
+import { invoiceDueDate } from '@/lib/dates/iso'
 
 /**
  * Pure derivations behind the invoice editor's snabbflöde shell:
@@ -199,7 +200,7 @@ export function planDueDateSync(input: DueDateSyncInput): DueDateSyncResult {
     }
   }
   return {
-    dueDate: format(addDays(anchor, terms), 'yyyy-MM-dd'),
+    dueDate: invoiceDueDate(format(anchor, 'yyyy-MM-dd'), terms),
     terms,
     previousInvoiceDate: invoiceDate,
   }
@@ -236,7 +237,7 @@ export function planCustomerTermsFill(input: CustomerTermsFillInput): CustomerTe
   const { invoiceDate, terms, today } = input
   const anchor = parseISO(invoiceDate)
   const base = invoiceDate && isValid(anchor) ? anchor : parseISO(today)
-  return { dueDate: format(addDays(base, terms), 'yyyy-MM-dd'), terms }
+  return { dueDate: invoiceDueDate(format(base, 'yyyy-MM-dd'), terms), terms }
 }
 
 export interface ArticleSuggestion {

@@ -15,6 +15,7 @@
 
 import { roundOre } from '@/lib/money'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Swedish month labels, mirrors MONTH_LABELS in lib/reports/monthly-breakdown.ts
  *  (not imported: that module pulls server-side report code, and this helper is
@@ -77,9 +78,9 @@ export function resolvePeriodPreset(
     ? (raw as KpiPeriodPreset)
     : 'ytd'
 
-  const y = today.getFullYear()
-  const m = today.getMonth()
-  const toDate = isoDate(y, m, today.getDate())
+  const { year: y, month } = stockholmYearMonth(today)
+  const m = month - 1
+  const toDate = todayIsoStockholm(today)
 
   let fromDate: string
   switch (preset) {

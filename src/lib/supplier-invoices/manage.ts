@@ -40,7 +40,7 @@ import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import {
@@ -239,7 +239,7 @@ export function restoredAfterUncredit(
     status = 'paid'
   } else if (paidSum > 0) {
     status = 'partially_paid'
-  } else if (original.due_date && new Date(original.due_date) < now) {
+  } else if (original.due_date && isPastDue(original.due_date, todayIsoStockholm(now))) {
     status = 'overdue'
   } else if (original.registration_journal_entry_id) {
     // A posted verifikat exists: safe to restore to 'approved'.

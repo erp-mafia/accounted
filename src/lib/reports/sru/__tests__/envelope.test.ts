@@ -26,7 +26,7 @@ describe('sruText', () => {
 })
 
 describe('buildInfoSru', () => {
-  const now = new Date(2026, 2, 1, 9, 5, 7)
+  const now = new Date('2026-03-01T08:05:07Z') // 09:05:07 in Sweden
 
   it('writes the posts in the prescribed order, CRLF-terminated', () => {
     const info = buildInfoSru(

@@ -4,14 +4,14 @@ import {
   generateNewYearDeadlines,
 } from '@/lib/tax/deadline-generator'
 import { withServiceCronContext } from '@/lib/api/with-cron-context'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * GET /api/tax-deadlines/cron: daily recovery plus annual horizon extension.
  */
 export const GET = withServiceCronContext('cron.tax_deadlines', async (_request, ctx) => {
   const supabase = ctx.supabase
-  const now = new Date()
-  const isAnnualRun = now.getUTCMonth() === 0 && now.getUTCDate() === 2
+  const isAnnualRun = todayIsoStockholm().slice(5) === '01-02'
 
   // Each step logs its own failure before rethrowing so a partial failure
   // names the failed step in the audit trail instead of surfacing as an

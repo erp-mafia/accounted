@@ -26,6 +26,7 @@ import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { SHARE_EVENT_KINDS, TRANSFER_REASONS, type ShareEventKind } from '@/lib/bolaget/types'
 import type { ShareEventView, ShareRegisterView } from '@/lib/bolaget/view'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface Person {
   party_id: string
@@ -142,10 +143,6 @@ export function eventBody(form: FormState): Record<string, unknown> {
   return body
 }
 
-function today(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-}
-
 /**
  * Ägare och aktiebok: the aktiebok (ABL 5 kap.) as of a date, its history,
  * the share classes with their förbehåll, the holders' identities and the
@@ -203,7 +200,7 @@ export function ShareRegister() {
 
   function openEvent(preset: Partial<FormState> = {}) {
     setPreview(null)
-    setEventForm({ ...EMPTY_EVENT, event_date: today(), ...preset })
+    setEventForm({ ...EMPTY_EVENT, event_date: todayIsoStockholm(), ...preset })
   }
 
   async function submitEvent(dryRun: boolean) {

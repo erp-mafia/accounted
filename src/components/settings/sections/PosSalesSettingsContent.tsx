@@ -24,6 +24,7 @@ import { isAccountNumber } from '@/lib/invariants'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { formatDate } from '@/lib/utils'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 interface VenueJson {
   provider: { ref: string; displayName: string; accessRequestSv: string | null }
@@ -50,9 +51,7 @@ const TENDER_ROWS: ReadonlyArray<{ kind: PosTenderKind; nullable: boolean }> = [
 ]
 
 function yesterday(): string {
-  const d = new Date()
-  d.setDate(d.getDate() - 1)
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(d)
+  return addDaysIso(todayIsoStockholm(), -1)
 }
 
 /**

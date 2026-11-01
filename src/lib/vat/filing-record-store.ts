@@ -17,7 +17,7 @@ import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/
 import { createLinkedReportPeriod } from '@/lib/tax/deadline-generator'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatDateISO } from '@/lib/calendar/utils'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 import {
   VAT_FILING_DEADLINE_TYPES,
   parseVatFilingReference,
@@ -599,7 +599,7 @@ export async function unmarkVatPeriodFiled(
       completed_at: null,
       // The nightly status engine only advances pending statuses, so the
       // row is put straight where that engine would have it.
-      status: existing.due_date && existing.due_date < today ? 'overdue' : 'upcoming',
+      status: existing.due_date && isPastDue(existing.due_date, today) ? 'overdue' : 'upcoming',
       status_changed_at: new Date().toISOString(),
       notes: withVatFilingReference(existing.notes, null),
     })

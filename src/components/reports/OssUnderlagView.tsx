@@ -24,6 +24,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { OssUnderlag } from '@/lib/webshop-orders/oss-underlag'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Underlag for the quarterly OSS declaration: the quarter's webshop sales to
@@ -36,8 +37,9 @@ const QUARTERS = [1, 2, 3, 4]
 
 /** The last finished quarter: the one a declaration is due for. */
 function lastClosedQuarter(now: Date): { year: number; quarter: number } {
-  const current = Math.floor(now.getMonth() / 3) + 1
-  return current === 1 ? { year: now.getFullYear() - 1, quarter: 4 } : { year: now.getFullYear(), quarter: current - 1 }
+  const { year, month } = stockholmYearMonth(now)
+  const current = Math.ceil(month / 3)
+  return current === 1 ? { year: year - 1, quarter: 4 } : { year, quarter: current - 1 }
 }
 
 /** Euro as declared: always two decimals, 9,00 and never 9 (the VAT is never rounded). */
@@ -88,7 +90,7 @@ export function OssUnderlagView() {
     [locale],
   )
 
-  const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).filter((y) => y >= 2021)
+  const yearOptions = Array.from({ length: 5 }, (_, i) => stockholmYearMonth().year - i).filter((y) => y >= 2021)
   const upToDate = result !== null && result.key === query
   const report = upToDate ? result.data ?? null : null
   const error = upToDate ? result.error ?? null : null

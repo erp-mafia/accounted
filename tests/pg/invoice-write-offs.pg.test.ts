@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getClient, getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedCompany, withSwedishToday } from './fixtures'
 
 /**
  * Migration 20261021120700_invoice_write_offs:
@@ -457,6 +457,31 @@ describe('invoice write-offs (migration 20261021120700)', () => {
     await expect(
       recordAsService(s, { id: decisionId, invoiceId, kind: 'confirmed', journalEntryId: voucherId, evidenceId }),
     ).rejects.toThrow(/CUSTOMER_LOSS_CURRENCY_UNSUPPORTED/)
+  })
+
+  it.each([
+    ['the due date itself', '2026-02-14', 'sent'],
+    ['the day after it', '2026-02-15', 'overdue'],
+  ])('an annulled write-off with nothing paid, on %s, goes back to %s', async (_when, today, status) => {
+    const s = await seedCompany()
+    const invoiceId = await insertInvoice(s, { dueDate: '2026-02-14' })
+    const evidenceId = await insertDocument(s)
+    const decisionId = randomUUID()
+    const voucherId = await insertConfirmedVoucher(s, decisionId)
+    await recordAsService(s, { id: decisionId, invoiceId, kind: 'confirmed', journalEntryId: voucherId, evidenceId })
+    const stornoId = await insertStorno(s, voucherId)
+
+    await withSwedishToday(today, async () => {
+      const annulled = await recordAsService(s, {
+        id: randomUUID(),
+        invoiceId,
+        kind: 'annulled',
+        entryDate: '2026-06-10',
+        journalEntryId: stornoId,
+        reversesId: decisionId,
+      })
+      expect(annulled.invoice_status).toBe(status)
+    })
   })
 
   it('gives the invoice its open status back when the konstaterad voucher is stornoed, latest decision first', async () => {

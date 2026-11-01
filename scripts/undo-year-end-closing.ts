@@ -75,7 +75,6 @@ function arg(name: string): string | undefined {
 config({ path: arg('env-file') ?? '.env.local' })
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { getSwedishLocalDate } from '../src/lib/bookkeeping/engine'
 import { reopenStornoBusinessEvent } from '../src/lib/core/bookkeeping/fiscal-year-reopen'
 import { todayIsoStockholm } from '../src/lib/dates/iso'
 import { linkBasisColumns } from '../src/lib/links/stamp'
@@ -212,7 +211,7 @@ async function main() {
   for (const res of [submissionsRes, signatureRes, versionsRes, narrativeRes]) {
     if (res.error) fail(`failed to read årsredovisning state: ${res.error.message}`)
   }
-  const today = getSwedishLocalDate()
+  const today = todayIsoStockholm()
   const gate = evaluateYearEndUndoGate({
     submissions: submissionsRes.data ?? [],
     signatureRequests: signatureRes.data ?? [],

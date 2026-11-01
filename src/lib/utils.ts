@@ -2,6 +2,7 @@ import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { format as formatDateFns, parseISO, isValid } from "date-fns"
 import { roundOre } from "@/lib/money"
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -202,25 +203,11 @@ export function formatDateLong(date: Date | string, locale: string = 'sv'): stri
  * read a day behind.
  */
 export function swedishToday(now: Date = new Date()): string {
-  const date = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
   const weekday = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Stockholm',
     weekday: 'long',
   }).format(now)
-  return `${date} (${weekday})`
-}
-
-/** UTC YYYYMMDD stamp (e.g. for archive download filenames). */
-export function utcDateStamp(date: Date): string {
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}${month}${day}`
+  return `${todayIsoStockholm(now)} (${weekday})`
 }
 
 /** Resolve after `ms` milliseconds (setTimeout as a promise). */

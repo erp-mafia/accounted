@@ -151,6 +151,19 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(mockListOmbudGrants).toHaveBeenCalledWith({}, 'ombud_register', { emptyOn404: true })
   })
 
+  it("reads the register on the Swedish day: a grant from today counts on New Year's night", async () => {
+    mockListConnections.mockResolvedValue([connection('c-1', '165560000000', 'unknown', 'unknown', 'pending')])
+    mockListOmbudGrants.mockResolvedValue([{ ...JLO('165560000000'), giltigFrom: '2027-01-01' }])
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      await GET(request())
+      expect(recordedFor('c-1')[0]).toMatchObject({ lasombud: expect.objectContaining({ status: 'granted' }) })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('records grants only on rows that already exist (tenant opt-in); a listed huvudman without a row is ignored', async () => {
     mockListConnections.mockResolvedValue([
       connection('c-pending', '165560000000', 'unknown', 'unknown', 'pending'),

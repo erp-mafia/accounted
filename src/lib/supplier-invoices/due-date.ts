@@ -1,4 +1,4 @@
-import { addDaysIso } from '@/lib/dates/iso'
+import { invoiceDueDate } from '@/lib/dates/iso'
 
 /** The suppliers.default_payment_terms column default, and the Swedish norm. */
 export const DEFAULT_SUPPLIER_PAYMENT_TERMS_DAYS = 30
@@ -26,5 +26,5 @@ export function resolveSupplierInvoiceDueDate(
   supplierTerms: unknown,
 ): string {
   if (givenDueDate) return givenDueDate
-  return addDaysIso(invoiceDate, supplierPaymentTermsDays(supplierTerms))
+  return invoiceDueDate(invoiceDate, supplierPaymentTermsDays(supplierTerms))
 }

@@ -21,6 +21,7 @@ import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 interface OpeningBalancesData {
   cutover_date: string
@@ -43,7 +44,7 @@ interface OpeningBalancesData {
   locked_by_run_id: string | null
 }
 
-const currentYear = new Date().getFullYear()
+const currentYear = stockholmYearMonth().year
 /** Sparade dagar origin years: Semesterlagen allows saving max 5 years. */
 const SAVED_YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 - i))
 

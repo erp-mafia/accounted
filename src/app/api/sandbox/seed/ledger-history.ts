@@ -42,6 +42,7 @@ import { swedishMonthName } from '@/lib/dates/swedish-months'
 import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { lastDayOfMonth } from './date-utils'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Every BAS account this builder can emit. Exported so the seed's
@@ -205,9 +206,9 @@ export function buildSandboxLedgerHistory({
   today,
   accountMap,
 }: SandboxLedgerHistoryInput): SandboxLedgerHistory {
-  const year = today.getFullYear()
+  const { year, month } = stockholmYearMonth(today)
   /** 1-based; the history covers January through the month before this one. */
-  const lastMonth = today.getMonth()
+  const lastMonth = month - 1
 
   const entries: SandboxLedgerEntryRow[] = []
   const linesByEntryIndex: SandboxLedgerLineRow[][] = []

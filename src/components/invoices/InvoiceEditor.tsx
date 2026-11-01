@@ -11,7 +11,7 @@ import { SortableRow } from '@/components/ui/sortable-row'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { addDays, format } from 'date-fns'
+import { format } from 'date-fns'
 import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/ui/tag-input'
@@ -240,6 +240,7 @@ import {
   type InvoicePayeeDefault,
   type InvoiceQrMode,
 } from '@/types'
+import { addDaysIso, todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -970,10 +971,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // editing: the draft's own dates are already loaded into the form.
   useEffect(() => {
     if (isEditMode) return
-    setValue('invoice_date', format(new Date(), 'yyyy-MM-dd'))
-    setValue('received_date', format(new Date(), 'yyyy-MM-dd'))
-    setValue('due_date', format(addDays(new Date(), DEFAULT_PAYMENT_TERM_DAYS), 'yyyy-MM-dd'))
-    setValue('valid_until', format(addDays(new Date(), 30), 'yyyy-MM-dd'))
+    const today = todayIsoStockholm()
+    setValue('invoice_date', today)
+    setValue('received_date', today)
+    setValue('due_date', invoiceDueDate(today, DEFAULT_PAYMENT_TERM_DAYS))
+    setValue('valid_until', addDaysIso(today, 30))
   }, [])
 
   const { fields, append, remove, move } = useFieldArray({
@@ -1687,7 +1689,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             const fill = planCustomerTermsFill({
               invoiceDate: getValues('invoice_date') || '',
               terms: customer.default_payment_terms,
-              today: format(new Date(), 'yyyy-MM-dd'),
+              today: todayIsoStockholm(),
             })
             setValue('due_date', fill.dueDate)
             dueDateSyncRef.current = { ...dueDateSyncRef.current, terms: fill.terms }
@@ -3101,7 +3103,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       : null
 
   // ===== Form sections (lib/invoices/editor/details, rows, payment-summary) =
-  const todayIso = format(new Date(), 'yyyy-MM-dd')
+  const todayIso = todayIsoStockholm()
   // The document's language follows the customer card (there is no
   // per-invoice language): English drops the OCR row and relabels the PDF.
   const documentLanguage: DocumentLanguage = documentLanguageOf(selectedCustomer)
@@ -3652,7 +3654,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     copyOf: isCopyMode && copyInitial ? copyInitial.source_invoice_number : null,
     savedAt:
       isEditMode && updatedAt && !Number.isNaN(updatedAt.getTime())
-        ? format(updatedAt, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+        ? todayIsoStockholm(updatedAt) === todayIsoStockholm()
           ? format(updatedAt, 'HH:mm')
           : format(updatedAt, 'yyyy-MM-dd HH:mm')
         : null,

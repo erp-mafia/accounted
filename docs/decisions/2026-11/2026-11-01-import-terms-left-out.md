@@ -1,0 +1,1 @@
+[2026-11-01] A customer or supplier import that gives no payment terms decides nothing: the parser keeps null, a matched card stays as it is, a new customer gets the company default. Before, a parsed 30 overwrote a matched card's terms and a file's 0 days never merged.

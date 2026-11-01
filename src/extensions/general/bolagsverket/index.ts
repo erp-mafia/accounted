@@ -21,6 +21,7 @@ import {
   submitRevisionsberattelse,
 } from './lib/submission-service'
 import type { BolagsverketEnvironment, HandelseMeddelande } from './types'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Bolagsverket integration: digital inlämning av årsredovisning.
@@ -188,7 +189,7 @@ const PersonnummerSchema = z
   // no later than this year.
   .refine(
     (value) =>
-      validatePersonnummer(value).valid && Number(value.slice(0, 4)) <= new Date().getFullYear(),
+      validatePersonnummer(value).valid && Number(value.slice(0, 4)) <= stockholmYearMonth().year,
     'Ogiltigt personnummer',
   )
   .refine((value) => {

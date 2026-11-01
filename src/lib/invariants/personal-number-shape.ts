@@ -1,3 +1,5 @@
+import { todayIsoStockholm } from '@/lib/dates/iso'
+
 /**
  * Shape detection for Swedish personal identity numbers submitted where an
  * organisationsnummer belongs.
@@ -64,8 +66,8 @@ export function expandPersonnummerTo12(value: string, now: Date = new Date()): s
 
   // Compare dates as yyyymmdd integers: immune to Date rollover on the
   // not-yet-validated month/day values.
-  const today = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate()
-  let year = Math.floor(now.getFullYear() / 100) * 100 + yy
+  const today = Number(todayIsoStockholm(now).replace(/-/g, ''))
+  let year = Math.floor(today / 1_000_000) * 100 + yy
   if (year * 10000 + month * 100 + birthDay > today) year -= 100
   if (trimmed.includes('+')) year -= 100
   return `${year}${digits.slice(2)}`

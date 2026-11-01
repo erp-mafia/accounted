@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { seedCompany, withSwedishToday } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
@@ -47,7 +47,7 @@ const MIGRATION_SQL = readFileSync(
 const CURRENT_FUNCTION_SQL = readFileSync(
   join(
     process.cwd(),
-    'supabase/migrations/20260924204244_supplier_invoice_overdue_skip_reset_archives.sql',
+    'supabase/migrations/20261101120100_stockholm_today.sql',
   ),
   'utf8',
 )
@@ -281,6 +281,23 @@ describe('update_overdue_supplier_invoices() with a migration-reset archive', ()
 
     expect(await statusOf(liveId)).toBe('overdue')
     expect(await statusOf(archivedId)).toBe('approved')
+  })
+})
+
+describe('the flip reads the Swedish day (migration 20261101120100)', () => {
+  it('leaves the due date itself, flips the day after it and un-flips a due date moved to today', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const row = { userId, companyId, supplierId, total: 100, remaining: 100, approvedAt: '2031-01-01T00:00:00Z' }
+    const dueToday = await insertSupplierInvoice({ ...row, status: 'approved', dueDate: '2031-06-15' })
+    const dueYesterday = await insertSupplierInvoice({ ...row, status: 'approved', dueDate: '2031-06-14' })
+    const movedToToday = await insertSupplierInvoice({ ...row, status: 'overdue', dueDate: '2031-06-15' })
+
+    await withSwedishToday('2031-06-15', () => getPool().query('SELECT public.update_overdue_supplier_invoices()'))
+
+    expect(await statusOf(dueToday)).toBe('approved')
+    expect(await statusOf(dueYesterday)).toBe('overdue')
+    expect(await statusOf(movedToToday)).toBe('approved')
   })
 })
 

@@ -8,6 +8,7 @@
  */
 
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Last day of the month (1-indexed result, 0-indexed month). */
 export function lastDayOfMonth(year: number, monthIndex0: number): number {
@@ -118,21 +119,9 @@ export function projectRunDates(
  * dialog runs in whatever zone the browser is in, but users pick dates and a
  * send hour in Swedish local time, so every surface asks "what day and hour
  * is it in Sweden right now" through this one function. Uses Intl (DST-aware,
- * no extra dependency); en-CA + hourCycle 'h23' guarantees zero-padded
- * ISO-shaped parts and a 0-23 hour.
+ * no extra dependency); hourCycle 'h23' guarantees a 0-23 hour.
  */
 export function getStockholmDateHour(instant: Date): { date: string; hour: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(instant)
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  return {
-    date: `${get('year')}-${get('month')}-${get('day')}`,
-    hour: Number(get('hour')),
-  }
+  const hour = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', hour: '2-digit', hourCycle: 'h23' }).format(instant)
+  return { date: todayIsoStockholm(instant), hour: Number(hour) }
 }

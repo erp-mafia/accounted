@@ -12,7 +12,9 @@ import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { loadInvoiceTerms } from '@/lib/invoices/due-date'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
 const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
 
@@ -175,6 +177,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         // user-confirmed on the customer card before it lands anywhere legal
         // (Swedish compliance review, PR #1525). The dialog shows it as a
         // review hint.
+        const defaultPaymentTerms = await resolveDefaultPaymentTerms(supabase, companyId, undefined)
         const { data: created, error: createError } = await supabase
           .from('customers')
           .insert({
@@ -189,6 +192,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               ?? (order.customer_country ? order.customer_country.toUpperCase() : 'SE'),
             contact_person: billingCompany ? billingName : null,
             email: billingEmail,
+            default_payment_terms: defaultPaymentTerms,
           })
           .select('*')
           .single<Customer>()
@@ -261,8 +265,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // The due date counts the terms from the invoice date itself: a UTC
     // clock lands one day short between midnight and 01:00/02:00 in Sweden.
     const invoiceDate = todayIsoStockholm()
-    const paymentTermsDays = customer.default_payment_terms ?? 30
-    const dueDate = addDaysIso(invoiceDate, paymentTermsDays)
+    const dueDate = invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms))
 
     const input: InvoiceWriteInput = {
       customer_id: customer.id,

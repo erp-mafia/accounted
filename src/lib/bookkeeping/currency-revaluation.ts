@@ -11,7 +11,6 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 import {
   fetchPaymentsAsOf,
   outstandingAsOf,
-  todayIsoDate,
   type PaymentsAsOf,
 } from '@/lib/reports/reskontra-payments'
 import {
@@ -28,6 +27,7 @@ import type {
   CreateJournalEntryLineInput,
 } from '@/types'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const FX_CLOSING_RATE_UNAVAILABLE = 'FX_CLOSING_RATE_UNAVAILABLE' as const
 
@@ -196,7 +196,7 @@ export async function getOpenForeignCurrencyReceivables(
   companyId: string,
   asOfDate?: string
 ): Promise<Invoice[]> {
-  const historical = asOfDate != null && asOfDate < todayIsoDate()
+  const historical = asOfDate != null && asOfDate < todayIsoStockholm()
   try {
     // Paginated with a stable id order so a company with >1000 open FX invoices
     // is fully revalued rather than silently truncated at 1000 rows.
@@ -240,7 +240,7 @@ export async function getOpenForeignCurrencyPayables(
   companyId: string,
   asOfDate?: string
 ): Promise<SupplierInvoice[]> {
-  const historical = asOfDate != null && asOfDate < todayIsoDate()
+  const historical = asOfDate != null && asOfDate < todayIsoStockholm()
   try {
     // Paginated with a stable id order so a company with >1000 open FX payables
     // is fully revalued rather than silently truncated at 1000 rows.
@@ -314,7 +314,7 @@ export async function previewCurrencyRevaluation(
   // today, not the balance sheet being valued: reconstruct each row's
   // outstanding from the payment history, the same walk-back the reskontra
   // reports and countOpenFxItemsAtBalansdagen use.
-  const isHistorical = closingDate < todayIsoDate()
+  const isHistorical = closingDate < todayIsoStockholm()
   const [receivablePayments, payablePayments]: [PaymentsAsOf | null, PaymentsAsOf | null] =
     await Promise.all([
       isHistorical && receivables.length > 0

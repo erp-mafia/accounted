@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
 import { effectiveQuoteStatus, quoteHasLiveFollowUp } from '@/lib/invoices/quote-status'
 
 /**
@@ -62,8 +62,8 @@ export function isSalaryRunLate(
   periodMonth: number,
   now: Date,
 ): boolean {
-  const monthsBehind =
-    (now.getFullYear() - periodYear) * 12 + (now.getMonth() + 1 - periodMonth)
+  const { year, month } = stockholmYearMonth(now)
+  const monthsBehind = (year - periodYear) * 12 + (month - periodMonth)
   return monthsBehind >= SALARY_LATE_MONTHS
 }
 

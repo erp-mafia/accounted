@@ -271,7 +271,7 @@ export async function parseCustomersFile(
       city,
       country,
       vat_number: vatNumber,
-      default_payment_terms: parsePaymentTerms(paymentTermsRaw, 30),
+      default_payment_terms: parsePaymentTerms(paymentTermsRaw),
       notes,
       is_valid: validationErrors.length === 0,
       validation_errors: validationErrors,

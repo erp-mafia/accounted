@@ -17,9 +17,10 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
-import { formatQty, todayIso } from '@/components/sales-orders/labels'
+import { formatQty } from '@/components/sales-orders/labels'
 import type { SalesOrder, SalesOrderItem } from '@/types'
 import { parseDecimalInput } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface RegisterDeliveryDialogProps {
   open: boolean
@@ -49,7 +50,7 @@ export default function RegisterDeliveryDialog({
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [deliveryDate, setDeliveryDate] = useState<string>(todayIso())
+  const [deliveryDate, setDeliveryDate] = useState<string>(todayIsoStockholm())
   const [quantities, setQuantities] = useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -57,7 +58,7 @@ export default function RegisterDeliveryDialog({
   // changed since the last registration.
   useEffect(() => {
     if (!open) return
-    setDeliveryDate(todayIso())
+    setDeliveryDate(todayIsoStockholm())
     const seed: Record<string, string> = {}
     for (const item of productLines(order)) seed[item.id] = String(item.delivered_qty ?? 0)
     setQuantities(seed)

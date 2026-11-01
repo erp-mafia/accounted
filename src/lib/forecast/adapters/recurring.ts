@@ -11,7 +11,6 @@
  * VAT-registered. Text rows carry no amount. SEK schedules only (v1).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { addDaysIso } from '@/lib/dates/iso'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
@@ -20,6 +19,7 @@ import { getArticleVatRateAdoptionSet, getVatRules } from '@/lib/invoices/vat-ru
 import { roundOre } from '@/lib/money'
 import type { CustomerType } from '@/types'
 import type { CashFlow, ForecastCaveat, ForecastWindow } from '../types'
+import { isPastDue, invoiceDueDate } from '@/lib/dates/iso'
 
 export interface RecurringScheduleRow {
   id: string
@@ -68,9 +68,9 @@ export function recurringFlows(
     const runs = projectRunDates(s.next_run_date, s.day_of_month, Math.max(1, s.interval_months), 24)
     for (const run of runs) {
       const sent = run < window.today ? window.today : run
-      const due = addDaysIso(sent, s.payment_terms_days)
+      const due = invoiceDueDate(sent, s.payment_terms_days)
       if (due > window.end) break
-      if (due < window.today) continue
+      if (isPastDue(due, window.today)) continue
       flows.push({
         date: due,
         direction: 'in',

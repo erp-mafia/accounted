@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { invoiceTermsFor } from '@/lib/invoices/due-date'
 
 /**
  * Resolve the payment terms for a new customer.
@@ -25,6 +26,5 @@ export async function resolveDefaultPaymentTerms(
     .eq('company_id', companyId)
     .maybeSingle()
 
-  const days = (data as { invoice_default_days?: number | null } | null)?.invoice_default_days
-  return typeof days === 'number' && Number.isInteger(days) && days > 0 ? days : 30
+  return invoiceTermsFor(provided, (data as { invoice_default_days?: number | null } | null)?.invoice_default_days)
 }

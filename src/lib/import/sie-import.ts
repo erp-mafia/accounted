@@ -40,6 +40,7 @@ import {
   type ObjectBalancePlan,
 } from './sie-object-balances'
 import { carriesObjectBalances, fetchAccumulatingDimensions } from '@/lib/bookkeeping/dimension-carry'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Re-export from the parser (moved there to avoid an import cycle:
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
@@ -765,7 +766,7 @@ export function buildSIEOpeningBalanceEntry(
     }
   }
 
-  const entryDate = parsed.stats.fiscalYearStart ?? formatDate(new Date())
+  const entryDate = parsed.stats.fiscalYearStart ?? todayIsoStockholm()
 
   return {
     fiscal_period_id: fiscalPeriodId,
@@ -1270,7 +1271,7 @@ export function buildSIEMigrationAdjustmentEntry(
   }
 
   // Date the adjustment at fiscal year end
-  const entryDate = parsed.stats.fiscalYearEnd ?? formatDate(new Date())
+  const entryDate = parsed.stats.fiscalYearEnd ?? todayIsoStockholm()
 
   // Fix 4: Build structured description with skipped voucher details
   const skippedIds = skippedDetails.map(d => d.voucherId)

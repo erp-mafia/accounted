@@ -140,6 +140,19 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
     expect(mockStream).not.toHaveBeenCalled()
   })
 
+  it("stamps the file with the Swedish day, also on New Year's night", async () => {
+    enqueueAuthorizedArchive()
+    mockStream.mockReturnValue(chunks('PK'))
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      const response = await GET(createMockRequest('/api/company/company-1/migration-reset/archive'), params)
+      expect(response.headers.get('Content-Disposition')).toContain('migration_reset_archive_20270101.zip')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('downloads the retained source without changing the active company', async () => {
     enqueueAuthorizedArchive()
     mockStream.mockReturnValue(chunks('PK', '-zip'))

@@ -1,5 +1,5 @@
 /**
- * Proof that the utc-today guard finds the inline UTC "today" shapes and
+ * Proof that the utc-today guard finds the hand-written "today" shapes and
  * nothing else, and that the repository holds none outside the allowlist.
  * Fixtures live in an OS temp directory the test creates and deletes.
  */
@@ -120,6 +120,131 @@ describe('utc-today guard', () => {
         `export const at = now.toISOString()`,
         `const notAClock = new Date(invoiceDate)`,
         `export const n = notAClock.toISOString().slice(0, 10)`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root)).toEqual([])
+  })
+
+  // The forms the guard did not see until November 2026: every one of them was
+  // alive in the code, and each answers last year on New Year's night.
+  it('flags the calendar getters read off the clock', () => {
+    const root = fixture({
+      'lib/getters.ts': [
+        `const year = new Date().getFullYear()`,
+        `const month = new Date().getUTCMonth()`,
+        `export function late(now: Date, opts: { now: Date }) {`,
+        `  return now.getMonth() + opts.now.getFullYear()`,
+        `}`,
+        `export function start(today: Date) {`,
+        `  return today.getUTCDate()`,
+        `}`,
+        `const clock = new Date()`,
+        `const day = clock.getDate()`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root).map((f) => f.line)).toEqual([1, 2, 4, 7, 10])
+  })
+
+  it('flags the fallback forms', () => {
+    const root = fixture({
+      'lib/fallback.ts': [
+        `export function key(date?: Date) {`,
+        `  const target = date || new Date()`,
+        `  return target.toISOString().split('T')[0]`,
+        `}`,
+        `export const a = (date?: Date) => (date ?? new Date()).toISOString().split('T')[0]`,
+        `export const b = (date?: Date) => (date || new Date()).getFullYear()`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root).map((f) => f.line)).toEqual([3, 5, 6])
+  })
+
+  it('flags an exported wrapper where it lands, and a wrapper built from getters', () => {
+    const root = fixture({
+      'lib/stamp.ts': [
+        `export function isoDate(d: Date): string {`,
+        `  return d.toISOString().slice(0, 10)`,
+        `}`,
+        `export function localDate(date: Date): string {`,
+        `  const y = date.getFullYear()`,
+        `  const m = String(date.getMonth() + 1).padStart(2, '0')`,
+        `  const d = String(date.getDate()).padStart(2, '0')`,
+        `  return \`\${y}-\${m}-\${d}\``,
+        `}`,
+      ].join('\n'),
+      'lib/one.ts': [
+        `import { isoDate, localDate as day } from './stamp'`,
+        `export const a = isoDate(new Date())`,
+        `export const b = day(new Date())`,
+        `export const c = isoDate(row.created)`,
+      ].join('\n'),
+      'app/api/two/route.ts': [
+        `import { isoDate } from '@/lib/stamp'`,
+        `export const a = (now: Date) => isoDate(now)`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root)).toEqual([
+      { file: 'app/api/two/route.ts', line: 2 },
+      { file: 'lib/one.ts', line: 2 },
+      { file: 'lib/one.ts', line: 3 },
+    ])
+  })
+
+  it('leaves a same-named function from another module alone', () => {
+    const root = fixture({
+      'lib/stamp.ts': `export function isoDate(d: Date): string {\n  return d.toISOString().slice(0, 10)\n}\n`,
+      'lib/other.ts': `export function isoDate(y: number): string {\n  return String(y)\n}\n`,
+      'lib/one.ts': `import { isoDate } from './other'\nexport const a = isoDate(new Date())\n`,
+    })
+    expect(findUtcTodaySites(root)).toEqual([])
+  })
+
+  it('flags a date printed in the process zone and a second body of the helper', () => {
+    const root = fixture({
+      'components/Z.tsx': [
+        `import { format } from 'date-fns'`,
+        `export const a = new Date().toLocaleDateString('sv-SE')`,
+        `export const b = format(new Date(), 'yyyy-MM-dd')`,
+        `export const c = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())`,
+        `export const d = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm' })`,
+      ].join('\n'),
+      'lib/whole.ts': [
+        `const STOCKHOLM = new Intl.DateTimeFormat('sv-SE', {`,
+        `  timeZone: 'Europe/Stockholm',`,
+        `  year: 'numeric',`,
+        `  month: '2-digit',`,
+        `  day: '2-digit',`,
+        `})`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root)).toEqual([
+      { file: 'components/Z.tsx', line: 2 },
+      { file: 'components/Z.tsx', line: 3 },
+      { file: 'components/Z.tsx', line: 4 },
+      { file: 'components/Z.tsx', line: 5 },
+      { file: 'lib/whole.ts', line: 1 },
+    ])
+  })
+
+  it('leaves arithmetic on an instant, stored dates and worded dates alone', () => {
+    const root = fixture({
+      'lib/ok-getters.ts': [
+        `export function cutoff() {`,
+        `  const d = new Date()`,
+        `  d.setDate(d.getDate() - 7)`,
+        `  return d.toISOString()`,
+        `}`,
+        `export const y = (row: { at: string }) => new Date(row.at).getFullYear()`,
+        `export const when = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', day: 'numeric', month: 'long' })`,
+        `export const hour = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', hour: '2-digit' }).format(new Date())`,
+        `export const weekday = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', weekday: 'long' }).format(new Date())`,
+        `export const stored = (date?: Date) => (date ? date.toISOString().split('T')[0] : null)`,
+        `export const stamp = (date?: string) => date || new Date().toISOString()`,
+        `export const utcDay = new Intl.DateTimeFormat('sv-SE', { timeZone: 'UTC' }).format(stored)`,
+        `export function readBack(todayIso: string) {`,
+        `  const parsed = new Date(todayIso + 'T00:00:00Z')`,
+        `  return parsed.getUTCFullYear()`,
+        `}`,
       ].join('\n'),
     })
     expect(findUtcTodaySites(root)).toEqual([])

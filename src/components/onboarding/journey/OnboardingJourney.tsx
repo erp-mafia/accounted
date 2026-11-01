@@ -55,6 +55,7 @@ import {
 import { isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /** The two chips every picker shows (AB first, as before). */
 const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
@@ -1109,7 +1110,7 @@ export default function OnboardingJourney({
               />
             ) : (
               <JourneyDatePicker
-                years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+                years={[stockholmYearMonth().year - 1, stockholmYearMonth().year]}
                 onPick={(d) => dispatch({ type: 'FY_START_PICKED', date: d })}
               />
             )}
@@ -1338,7 +1339,7 @@ function FyMonthStep({
   const [sel, setSel] = useState(0)
   const [hover, setHover] = useState(0)
   const m = hover || sel
-  const year0 = new Date().getFullYear()
+  const year0 = stockholmYearMonth().year
   const span: [number, number] | null = m ? (m === 12 ? [0, 11] : [m, m + 11]) : null
   const label = m
     ? m === 12
@@ -1396,7 +1397,7 @@ function FyStartWithSuggestion({
   if (manual) {
     return (
       <JourneyDatePicker
-        years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+        years={[stockholmYearMonth().year - 1, stockholmYearMonth().year]}
         onPick={onPick}
       />
     )

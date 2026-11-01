@@ -12,13 +12,13 @@ import {
 import {
   grantCountsFor,
   grantPredatesOptIn,
-  isoDate,
   listOmbudGrants,
   summarizeGrants,
   type HuvudmanGrantSummary,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
 import type { SkvBehorighet } from '@/extensions/general/skatteverket/lib/connection-store'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const maxDuration = 60
 
@@ -87,7 +87,7 @@ export const GET = withCronContext('cron.skatteverket_ombud_sync', async (_reque
 
   const startedAt = Date.now()
   const environment = currentSkvEnvironment()
-  const today = isoDate(new Date())
+  const today = todayIsoStockholm()
 
   let grants: Map<string, HuvudmanGrantSummary>
   try {
@@ -253,7 +253,7 @@ export function planDecisions(
       decisions.push({ kind: 'unrecognized', row })
       continue
     }
-    const optInDay = isoDate(new Date(row.created_at))
+    const optInDay = todayIsoStockholm(new Date(row.created_at))
     const lasombud: GrantStatus = grantCountsFor(summary, 'lasombud', optInDay) ? 'granted' : 'denied'
     const momsOmbud: GrantStatus = grantCountsFor(summary, 'moms_ombud', optInDay) ? 'granted' : 'denied'
     const predatesOptIn = (['lasombud', 'moms_ombud'] as const).filter((key) =>

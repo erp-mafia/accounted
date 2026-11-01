@@ -20,7 +20,7 @@ vi.mock('@/lib/processing-history/append', () => ({
 
 import { sendText } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { finalizeBurst } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
-import { stockholmDayKey } from '@/extensions/general/whatsapp-inbox/lib/conversation'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 const sendTextMock = vi.mocked(sendText)
@@ -258,7 +258,7 @@ describe('finalizeBurst', () => {
     enqueue({ data: [{ id: 'conv-1' }] })
     enqueue({
       data: makeConversation({
-        context: { budget: { day_key: stockholmDayKey(), count: 6 } },
+        context: { budget: { day_key: todayIsoStockholm(), count: 6 } },
       }),
     })
     enqueue({ data: [makeDoneRow(1)] })

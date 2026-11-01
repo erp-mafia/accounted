@@ -18,11 +18,7 @@ import {
 import type { ShiftPremiumRule } from '@/types'
 import { ShiftPremiumRuleDialog, type PremiumRuleEmployeeOption } from './ShiftPremiumRuleDialog'
 import { ShiftPremiumRulesList } from './ShiftPremiumRulesList'
-
-/** Today in the viewer's time zone, as YYYY-MM-DD. */
-function localToday(): string {
-  return new Date().toLocaleDateString('sv-SE')
-}
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** The rules, switched-off ones included; null when the read failed. */
 async function loadRules(): Promise<ShiftPremiumRule[] | null> {
@@ -45,7 +41,7 @@ export function ShiftPremiumRulesPanel() {
   const canWrite = role !== null && role !== 'viewer'
   const { dialogProps, confirm } = useDestructiveConfirm()
 
-  const [today] = useState(localToday)
+  const [today] = useState(todayIsoStockholm)
   const [rules, setRules] = useState<ShiftPremiumRule[]>([])
   const { employees: roster } = useEmployees()
   const employees = useMemo<PremiumRuleEmployeeOption[]>(

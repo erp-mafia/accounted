@@ -4,7 +4,6 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import {
   findChangedVerifikatFields,
   findLockedVerifikatFields,
@@ -14,6 +13,7 @@ import {
 import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { selfBilledLockedFields } from '@/lib/supplier-invoices/self-billing/edit-guard'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -124,7 +124,7 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
       is_credit_note: existing.is_credit_note,
       approved_at: existing.approved_at,
     },
-    getSwedishLocalDate(),
+    todayIsoStockholm(),
   )
 
   const rewritesStatus = restingStatus !== existing.status

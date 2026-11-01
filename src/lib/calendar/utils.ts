@@ -1,5 +1,6 @@
 import { Invoice, Deadline } from '@/types'
 import { isInvoiceOverdue as isCustomerInvoiceOverdue } from '@/lib/invoices/overdue'
+import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 // Parse ISO date string to Date object at start of day
 export function parseDate(dateString: string): Date {
@@ -35,9 +36,7 @@ export function isInvoiceOverdue(invoice: Invoice): boolean {
 // Check if deadline is overdue
 export function isDeadlineOverdue(deadline: Deadline): boolean {
   if (deadline.is_completed) return false
-  const today = startOfDay(new Date())
-  const dueDate = parseDate(deadline.due_date)
-  return isBefore(dueDate, today)
+  return isPastDue(deadline.due_date, todayIsoStockholm())
 }
 
 // Swedish deadline type labels

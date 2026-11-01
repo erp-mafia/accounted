@@ -596,6 +596,16 @@ describe('unmarkVatPeriodFiled', () => {
     expect(captured.some((c) => c.update)).toBe(false)
   })
 
+  it('a deadline due today goes back to upcoming, not overdue', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: { ...pendingRow, is_completed: true, completed_at: '2026-08-10T12:00:00.000Z', status: 'submitted', notes: null } },
+      { data: { id: 'd-q2' } },
+    ])
+    await unmarkVatPeriodFiled(supabase, COMPANY, input, { today: pendingRow.due_date })
+    expect(captured[2].update).toMatchObject({ status: 'upcoming' })
+  })
+
   it('puts a manual mark back to pending and drops the reference line', async () => {
     const { supabase, captured } = createStoreSupabase([
       CALENDAR_AB,

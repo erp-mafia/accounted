@@ -42,6 +42,7 @@ import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { serializePayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
 import type { TaxTableRate } from '@/lib/salary/tax-tables'
 import type { SalaryLineItemType } from '@/types'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Skatteverket tax table + column both demo employees are registered on.
@@ -148,8 +149,7 @@ export interface SandboxSalaryPeriods {
  * January booked, February draft.
  */
 export function resolveSandboxSalaryPeriods(today: Date): SandboxSalaryPeriods {
-  const year = today.getFullYear()
-  const month = today.getMonth() + 1
+  const { year, month } = stockholmYearMonth(today)
 
   const [bookedMonth, draftMonth] = month === 1 ? [1, 2] : [month - 1, month]
 
@@ -418,7 +418,7 @@ export interface SandboxSalaryRunsInput {
  */
 export function buildSandboxSalaryRuns({ userId, companyId, today, payroll }: SandboxSalaryRunsInput) {
   const periods = resolveSandboxSalaryPeriods(today)
-  const todayDate = toDateString(today.getFullYear(), today.getMonth() + 1, today.getDate())
+  const todayDate = todayIsoStockholm(today)
 
   // Never stamp a completion timestamp in the future: in the January case the
   // booked run's payday (25 January) can still be ahead of `today`.

@@ -1,5 +1,5 @@
 import type { InvoiceStatus } from '@/types'
-import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { daysBetweenIso, isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * "Overdue" for a customer invoice is derived, never stored (crm#1084): a
@@ -48,7 +48,7 @@ export function isInvoiceOverdue(invoice: OverdueInvoiceInput, today: string = t
   if ((invoice.document_type || 'invoice') !== 'invoice') return false
   if (invoice.credited_invoice_id) return false
   if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount <= 0) return false
-  return !!invoice.due_date && invoice.due_date < today
+  return !!invoice.due_date && isPastDue(invoice.due_date, today)
 }
 
 /** Whole days past the due date, at least 1 (the day after the due date is day 1). */

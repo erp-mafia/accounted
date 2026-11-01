@@ -35,7 +35,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { createServiceClient } from '@/lib/supabase/server'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { buildCanonicalAnnualReport } from './model'
 import { cancelSigningForSupersededVersions, slotCoveredByBankIdSigning } from './bankid-signing'
 import { getAnnualReportCapabilities } from './capabilities'
@@ -61,6 +60,7 @@ import type {
   VersionCreateInput,
 } from './workflow-schemas'
 import { isAuditorRole } from './workflow-schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -472,9 +472,9 @@ async function pateckningGate(
 }
 
 function isSignatureDateAllowed(signedAt: string, finalizedAt: string): boolean {
-  const signedDate = getSwedishLocalDate(new Date(signedAt))
-  const finalizedDate = getSwedishLocalDate(new Date(finalizedAt))
-  const today = getSwedishLocalDate()
+  const signedDate = todayIsoStockholm(new Date(signedAt))
+  const finalizedDate = todayIsoStockholm(new Date(finalizedAt))
+  const today = todayIsoStockholm()
   return signedDate >= finalizedDate && signedDate <= today
 }
 

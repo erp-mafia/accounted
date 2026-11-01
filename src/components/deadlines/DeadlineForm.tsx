@@ -24,6 +24,7 @@ import { formatDateISO, DEADLINE_TYPE_LABELS, PRIORITY_LABELS } from '@/lib/cale
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { LockClosedIcon } from '@/components/icons'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Only the fields the form actually manages. Both API routes whitelist to
@@ -75,7 +76,7 @@ export function DeadlineForm({
       if (initialData) {
         setFormData({
           title: initialData.title || '',
-          due_date: initialData.due_date || formatDateISO(new Date()),
+          due_date: initialData.due_date || todayIsoStockholm(),
           due_time: initialData.due_time || '',
           deadline_type: initialData.deadline_type || 'other',
           priority: initialData.priority || 'normal',
@@ -95,7 +96,7 @@ export function DeadlineForm({
       } else {
         setFormData({
           title: '',
-          due_date: formatDateISO(new Date()),
+          due_date: todayIsoStockholm(),
           due_time: '',
           deadline_type: 'other',
           priority: 'normal',

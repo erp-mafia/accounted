@@ -372,3 +372,25 @@ export async function insertBalancedLines(
     [journalEntryId, amount],
   )
 }
+
+/**
+ * Runs `fn` with public.stockholm_today() standing on `day`, so a test stands
+ * on a due date, the day after it or a New Year's night whenever it runs. The
+ * stand-in is committed, so every pooled client sees the same day, and the real
+ * definition goes back afterwards; the pg-real files run one at a time.
+ */
+export async function withSwedishToday<T>(day: string, fn: () => Promise<T>): Promise<T> {
+  const pool = getPool()
+  const { rows } = await pool.query<{ def: string }>(
+    `SELECT pg_get_functiondef('public.stockholm_today()'::regprocedure) AS def`,
+  )
+  await pool.query(
+    `CREATE OR REPLACE FUNCTION public.stockholm_today() RETURNS date LANGUAGE sql STABLE
+     AS $function$ SELECT '${day}'::date $function$`,
+  )
+  try {
+    return await fn()
+  } finally {
+    await pool.query(rows[0]!.def)
+  }
+}

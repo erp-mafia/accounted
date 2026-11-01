@@ -26,6 +26,7 @@ import { cn, formatDate } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { ATTENDEE_CAPACITIES, DECISION_KINDS, DECISION_OUTCOMES, MEETING_KINDS, type DecisionKind } from '@/lib/bolaget/meetings/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Payload = Record<string, unknown>
 
@@ -160,10 +161,6 @@ const PAYLOAD_FIELDS: Partial<Record<DecisionKind, Array<{ key: string; type: Fi
 const BOARD_ROLES = ['styrelseledamot', 'styrelseordforande', 'styrelsesuppleant'] as const
 const AUDITOR_ROLES = ['revisor', 'huvudansvarig_revisor', 'revisorssuppleant'] as const
 const NEW = '__new'
-
-function today(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-}
 
 /** The payload with the scalar fields as the API wants them: numbers, dates, nulls. */
 function cleanPayload(kind: DecisionKind, draft: Payload): Payload {
@@ -484,7 +481,7 @@ export function MeetingsRegister() {
           help={t('help')}
           action={
             canWrite ? (
-              <Button size="sm" onClick={() => setCreateForm({ kind: 'arsstamma', organ: 'bolagsstamma', meeting_date: today(), meeting_time: '', place: '', fiscal_period_id: periods[0]?.id ?? '' })}>
+              <Button size="sm" onClick={() => setCreateForm({ kind: 'arsstamma', organ: 'bolagsstamma', meeting_date: todayIsoStockholm(), meeting_time: '', place: '', fiscal_period_id: periods[0]?.id ?? '' })}>
                 {t('new_meeting')}
               </Button>
             ) : null
@@ -628,12 +625,12 @@ export function MeetingsRegister() {
               </Button>
             )}
             {m && canWrite && m.status === 'draft' && (
-              <Button size="sm" onClick={() => setConfirmHold(true)} disabled={m.meeting_date > today()}>
+              <Button size="sm" onClick={() => setConfirmHold(true)} disabled={m.meeting_date > todayIsoStockholm()}>
                 {t('hold')}
               </Button>
             )}
             {m && canWrite && m.status === 'held' && !m.signing_pending && (
-              <Button size="sm" onClick={() => setSignForm({ mode: bankIdAvailable ? 'bankid' : 'manual', signedOn: today(), names: m.signers.map((s) => s.name).join(', '), file: null })}>
+              <Button size="sm" onClick={() => setSignForm({ mode: bankIdAvailable ? 'bankid' : 'manual', signedOn: todayIsoStockholm(), names: m.signers.map((s) => s.name).join(', '), file: null })}>
                 {t('sign')}
               </Button>
             )}

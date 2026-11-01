@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { fetchExchangeRate, readCachedRate } from '@/lib/currency/riksbanken'
+import { exchangeRateDate, fetchExchangeRate, readCachedRate } from '@/lib/currency/riksbanken'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { FOREIGN_CURRENCIES, type Currency } from '@/types'
@@ -35,7 +35,7 @@ export const GET = withRouteContext('currency.rate', async (request, ctx) => {
   }
 
   // Same cache key fetchExchangeRate computes internally.
-  const formattedDate = (date ?? new Date()).toISOString().split('T')[0]
+  const formattedDate = exchangeRateDate(date)
 
   // exchange_rates is tenant-free public reference data (no company_id,
   // SELECT policy USING(true)), so a service-role read is safe here, and it

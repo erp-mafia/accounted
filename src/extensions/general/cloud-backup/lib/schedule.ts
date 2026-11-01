@@ -1,4 +1,5 @@
 import type { CloudSchedule } from '../types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 
@@ -6,11 +7,6 @@ function isValidHour(hour: unknown): hour is number {
   return (
     typeof hour === 'number' && Number.isInteger(hour) && hour >= 0 && hour <= 23
   )
-}
-
-function stockholmDateString(now: Date): string {
-  // sv-SE with a timeZone yields YYYY-MM-DD.
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: STOCKHOLM_TZ }).format(now)
 }
 
 function stockholmHourOf(date: Date): number {
@@ -30,7 +26,7 @@ function stockholmHourOf(date: Date): number {
  * without a timezone library.
  */
 export function stockholmSlotForDay(now: Date, hour: number): Date {
-  const dateStr = stockholmDateString(now)
+  const dateStr = todayIsoStockholm(now)
   const hh = String(hour).padStart(2, '0')
   for (const offset of ['+02:00', '+01:00']) {
     const candidate = new Date(`${dateStr}T${hh}:00:00${offset}`)

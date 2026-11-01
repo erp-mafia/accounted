@@ -86,9 +86,9 @@ describe('nextRunPeriod', () => {
     expect(nextRunPeriod(runs, MID_SEPTEMBER)).toEqual({ period_year: 2026, period_month: 4 })
   })
 
-  it('uses the local month of `now` at a year boundary', () => {
-    expect(nextRunPeriod([], new Date(2026, 11, 31, 23, 30))).toEqual({ period_year: 2026, period_month: 12 })
-    expect(nextRunPeriod([], new Date(2027, 0, 1, 0, 30))).toEqual({ period_year: 2027, period_month: 1 })
+  it('reads the Swedish month of `now` at a year boundary, whatever zone the process is in', () => {
+    expect(nextRunPeriod([], new Date('2026-12-31T22:30:00Z'))).toEqual({ period_year: 2026, period_month: 12 })
+    expect(nextRunPeriod([], new Date('2026-12-31T23:30:00Z'))).toEqual({ period_year: 2027, period_month: 1 })
   })
 })
 

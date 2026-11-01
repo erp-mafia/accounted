@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { outstandingAsOf, paymentsAsOfFromFacts, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import { outstandingAsOf, paymentsAsOfFromFacts, type PaymentsAsOf } from './reskontra-payments'
 import { fetchSupplierLedgerInvoices, type SupplierLedgerInvoice } from './supplier-ledger-invoices'
+import { daysPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * One open supplier invoice behind a ledger entry. Only present when the
@@ -70,10 +71,11 @@ export async function generateSupplierLedger(
   asOfDate?: string,
   options?: { strict?: boolean; includeInvoices?: boolean }
 ): Promise<SupplierLedgerReport> {
-  const refDate = asOfDate ? new Date(asOfDate) : new Date()
+  const today = todayIsoStockholm()
+  const asOf = asOfDate || today
   // Backdated reconstruction only for genuinely historical dates: for
   // today/future the stored open-invoice state IS the as-of state.
-  const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
+  const isHistorical = asOf < today
 
   // Fetch the ledger population, in one read (supplier-ledger-invoices.ts).
   // Live view: open invoices only. Historical view: also invoices paid since
@@ -148,8 +150,7 @@ export async function generateSupplierLedger(
     }
 
     const entry = bySupplier.get(supplierId)!
-    const dueDate = new Date(inv.due_date)
-    const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+    const daysOverdue = daysPastDue(inv.due_date, asOf)
     // Outstanding is in invoice currency. The 2440 GL line was posted in SEK
     // at the invoice-date rate, so we convert here for the reconciliation.
     const amount = resolveSekAmount(outstandingRaw, null, inv.currency, inv.exchange_rate)
@@ -163,7 +164,7 @@ export async function generateSupplierLedger(
       currency: inv.currency || 'SEK',
       outstanding: outstandingRaw,
       outstanding_sek: amount,
-      days_overdue: Math.max(0, daysOverdue),
+      days_overdue: daysOverdue,
     })
 
     if (daysOverdue <= 0) {

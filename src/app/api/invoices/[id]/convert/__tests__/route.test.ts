@@ -408,6 +408,51 @@ describe('POST /api/invoices/[id]/convert', () => {
     // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
     // (UTC+2) and in winter (UTC+1). The invoice is dated that day and the
     // terms count from it.
+    describe('a customer without terms', () => {
+      const queueQuote = () => {
+        enqueue({ data: { ...baseQuote, customer: { ...baseQuote.customer, default_payment_terms: null } }, error: null }) // fetch quote
+        enqueue({ data: null, error: null }) // no existing conversion
+        enqueue({ data: null, count: 0, error: null }) // no live sales order
+      }
+
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('takes the company default', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date('2026-07-01T10:00:00Z'))
+        queueQuote()
+        enqueue({ data: { invoice_default_days: 10 }, error: null }) // company_settings
+        enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // insert invoice
+        enqueue({ data: null, error: null }) // insert items
+        enqueue({ data: [{ id: 'q-1' }], error: null }) // quote -> accepted
+        enqueue({ data: 'F-042', error: null }) // generate_invoice_number
+        enqueue({ data: { id: 'inv-1', invoice_number: 'F-042', document_type: 'invoice', items: [] }, error: null }) // refetch
+
+        const response = await POST(
+          createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+          createMockRouteParams({ id: 'q-1' })
+        )
+
+        expect(response.status).toBe(200)
+        expect((findCall('invoices', 'insert')?.[0] as Record<string, unknown>).due_date).toBe('2026-07-11')
+      })
+
+      it('refuses on a failed settings read instead of dating the receivable on 30 days', async () => {
+        queueQuote()
+        enqueue({ data: null, error: { message: 'timeout' } }) // company_settings
+
+        const response = await POST(
+          createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+          createMockRouteParams({ id: 'q-1' })
+        )
+
+        expect(response.status).toBe(500)
+        expect(findCall('invoices', 'insert')).toBeUndefined()
+      })
+    })
+
     describe('dates on the Swedish day', () => {
       afterEach(() => {
         vi.useRealTimers()

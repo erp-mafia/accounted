@@ -59,7 +59,7 @@
 
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 import { dbError } from '@/lib/errors/db-error'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { createLogger } from '@/lib/logger'
@@ -730,7 +730,7 @@ export async function planBookedInvoiceRegistration(
   const today = options.today ?? todayIsoStockholm()
   if (
     (status === 'sent' || status === 'partially_paid') &&
-    input.due_date < today &&
+    isPastDue(input.due_date, today) &&
     customer.email &&
     remindersActiveFor(settings?.send_invoice_reminders)
   ) {

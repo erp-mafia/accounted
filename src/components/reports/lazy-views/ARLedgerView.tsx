@@ -14,9 +14,9 @@ import {
 } from '@/components/reports/report-view-shared'
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount, formatDate } from '@/lib/utils'
-import { formatDateISO } from '@/lib/calendar/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // --- AR Ledger (Kundreskontra) ---
 
@@ -169,7 +169,7 @@ function ARCustomerInvoiceRows({
 
 export default function ARLedgerView({ periodId }: { periodId: string }) {
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [asOfDate, setAsOfDate] = useState(() => todayIsoStockholm())
   const { data, loading, error } = useReportData<ARLedgerData>(
     periodId ? `/api/reports/ar-ledger?period_id=${periodId}&as_of_date=${asOfDate}` : null,
     'Kunde inte hämta kundreskontra',
