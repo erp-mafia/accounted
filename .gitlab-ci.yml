@@ -126,6 +126,13 @@ checks:
   # merge request changed (and still reports every stored error). It does not
   # write it back: when every merge request wrote it, each job started from
   # whatever unrelated branch saved last, and tsc took 4 to 13 minutes.
+  # One typecheck at a time across every pipeline, main's checks-cache
+  # included: a cold tsc takes about 11 GB of the runner's 16, so two at once
+  # SIGKILL each other, and every retry added another. On 2026-11-01 from 14:30
+  # to 17:40 UTC, 4 of 47 typecheck jobs passed and 41 were SIGKILLed. A job
+  # now waits ("waiting for resource") instead of dying, and a new commit still
+  # cancels the wait.
+  resource_group: typecheck
   variables:
     CHECKS_CACHE_DIR: .ci-cache
   script:
@@ -173,6 +180,8 @@ checks-cache:
   needs: []
   allow_failure: true
   interruptible: false
+  # checks' group: one typecheck at a time (see there).
+  resource_group: typecheck
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
