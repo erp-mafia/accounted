@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ARCIM_DOCUMENT_IMPORT_ENDPOINT,
   ARCIM_DOCUMENT_IMPORT_STALLED,
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
+  ARCIM_MIGRATION_STATUS_ENDPOINT,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   PROVIDER_DOCUMENT_SCOPES_REQUIRED,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
@@ -11,15 +13,21 @@ import {
   documentImportProgress,
   documentImportRunNote,
   documentOAuthProblemFromReason,
+  fetchResumableDocumentImport,
   parseArcimDocumentResumeMarker,
   mergeArcimDocumentImportResults,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
+  resumableDocumentImportRun,
   runArcimDocumentImportToCompletion,
   serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
 } from '../arcim-document-import-flow'
+import {
+  foldDocumentImportSlice,
+  type DocumentImportRunStatus,
+} from '@/extensions/general/arcim-migration/lib/document-import-run'
 
 function result(
   overrides: Partial<ArcimDocumentImportResult> = {},
@@ -817,5 +825,141 @@ describe('the latest run under its connection (crm#1410)', () => {
   it('says nothing before any run was recorded', () => {
     expect(documentImportRunNote(null)).toBeNull()
     expect(documentImportRunNote(undefined)).toBeNull()
+  })
+})
+
+describe('a run the server kept, after a reload (crm#1581)', () => {
+  // A Fortnox sweep that stopped at 2 740 of 17 219 files, its tab long gone.
+  const kept: DocumentImportRunStatus = {
+    provider: 'fortnox',
+    startedAt: '2026-10-31T11:02:00Z',
+    updatedAt: '2026-10-31T19:40:00Z',
+    complete: false,
+    total: 17219,
+    scanned: 2740,
+    linked: 2731,
+    skipped: 0,
+    unmatched: 9,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: 'file-02740',
+    stalled: true,
+  }
+  // Connected and migrated that morning, before the sweep started.
+  const status = {
+    consents: [{ id: 'consent-1', provider: 'fortnox', createdAt: '2026-10-31T09:15:00Z' }],
+    latestCompletedSieImport: { imported_at: '2026-10-31T10:40:00Z', created_at: '2026-10-31T10:31:00Z' },
+    latestDocumentImport: kept,
+  }
+
+  /** The two routes the page calls: the status it reads, then one slice per call. */
+  function server(slices: ArcimDocumentImportResult[], body: unknown = status) {
+    return vi.fn(async (url: string | URL | Request, _init?: RequestInit) =>
+      url === ARCIM_MIGRATION_STATUS_ENDPOINT
+        ? jsonResponse(body)
+        : jsonResponse({ success: true, result: slices.shift() }),
+    )
+  }
+
+  const importBodies = (fetcher: ReturnType<typeof server>) =>
+    fetcher.mock.calls
+      .filter(([url]) => url === ARCIM_DOCUMENT_IMPORT_ENDPOINT)
+      .map(([, init]) => JSON.parse(init?.body as string))
+
+  it('continues after the last file the stopped run handled instead of downloading the first 2 740 again', async () => {
+    const fetcher = server([
+      result({ dryRun: false, scanned: 7000, linked: 7000, unmatched: 0, total: 17219, partial: true, nextCursor: 'file-09740' }),
+      result({ dryRun: false, scanned: 7479, linked: 7470, unmatched: 9, total: 17219 }),
+    ])
+
+    const resumeFrom = await fetchResumableDocumentImport('consent-1', fetcher)
+    const final = await runArcimDocumentImportToCompletion('consent-1', { fetcher, resumeFrom })
+
+    expect(importBodies(fetcher)).toEqual([
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-02740' },
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-09740' },
+    ])
+    expect(final).toMatchObject({ scanned: 17219, linked: 17201, unmatched: 18, total: 17219, partial: false })
+  })
+
+  it('counts on from where the kept run stopped while the first slice runs', () => {
+    const offered = arcimDocumentImportReducer(
+      { phase: 'discovering', provider: 'fortnox', found: 0, result: null, problem: null },
+      { type: 'discovery-succeeded', result: result({ dryRun: true, scanned: 17219, total: 17219 }) },
+    )
+    const importing = arcimDocumentImportReducer(offered, { type: 'import-started' })
+    const resumeAt = resumableDocumentImportRun(kept, 'fortnox')
+    expect(resumeAt).not.toBeNull()
+    const resumed = arcimDocumentImportReducer(importing, { type: 'import-progress', result: resumeAt as ArcimDocumentImportResult })
+
+    expect(documentImportProgress(resumed)).toEqual({ done: 2740, total: 17219 })
+  })
+
+  it('sends the cursor the server stopped at, so the kept summary takes the slice as the same run', () => {
+    const resumeAt = resumableDocumentImportRun(kept, 'fortnox')
+    const slice = {
+      ...result({ dryRun: false, scanned: 7000, linked: 7000, unmatched: 0, total: 17219, partial: true, nextCursor: 'file-09740' }),
+      unmatchedSamples: [],
+      unreachableSources: [],
+    }
+
+    const folded = foldDocumentImportSlice(kept, slice, resumeAt?.nextCursor ?? null, '2026-11-01T09:00:00Z')
+
+    expect(folded).toMatchObject({
+      startedAt: kept.startedAt,
+      scanned: 9740,
+      linked: 9731,
+      complete: false,
+      nextCursor: 'file-09740',
+    })
+  })
+
+  it('continues a run the provider refused once the connection answers again (B11)', () => {
+    expect(resumableDocumentImportRun({ ...kept, needsReconnect: true }, 'fortnox')).toMatchObject({
+      scanned: 2740,
+      nextCursor: 'file-02740',
+      partial: true,
+      dryRun: false,
+    })
+  })
+
+  it('starts from the top when there is nothing of this provider to continue', () => {
+    expect(resumableDocumentImportRun({ ...kept, complete: true, nextCursor: null }, 'fortnox')).toBeNull()
+    expect(resumableDocumentImportRun(kept, 'bokio')).toBeNull()
+    // Refused on its first slice: no file was handled, so no cursor.
+    expect(resumableDocumentImportRun({ ...kept, scanned: 0, nextCursor: null, needsReconnect: true }, 'fortnox')).toBeNull()
+    expect(resumableDocumentImportRun(null, 'fortnox')).toBeNull()
+    expect(resumableDocumentImportRun(undefined, 'fortnox')).toBeNull()
+  })
+
+  it('starts from the top when the files below the cursor may have changed since the run started', async () => {
+    // Another Fortnox database connected after the run: its ids are not the run's.
+    const reconnectedElsewhere = server([], {
+      ...status,
+      consents: [{ id: 'consent-2', provider: 'fortnox', createdAt: '2026-11-01T08:00:00Z' }],
+    })
+    // A ledger import after the run started: files it left unmatched may match now.
+    const ledgerSince = server([], {
+      ...status,
+      latestCompletedSieImport: { imported_at: '2026-11-01T07:30:00Z', created_at: '2026-11-01T07:29:00Z' },
+    })
+
+    await expect(fetchResumableDocumentImport('consent-2', reconnectedElsewhere)).resolves.toBeNull()
+    await expect(fetchResumableDocumentImport('consent-1', ledgerSince)).resolves.toBeNull()
+    // A connection the status does not list (gone, or another company's).
+    await expect(fetchResumableDocumentImport('consent-9', server([]))).resolves.toBeNull()
+  })
+
+  it('starts from the top when the server cannot say where the run stands', async () => {
+    const down = vi.fn().mockResolvedValue(jsonResponse({ error: 'boom' }, 500))
+    const offline = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    const older = server([], { consents: status.consents })
+
+    await expect(fetchResumableDocumentImport('consent-1', down)).resolves.toBeNull()
+    await expect(fetchResumableDocumentImport('consent-1', offline)).resolves.toBeNull()
+    await expect(fetchResumableDocumentImport('consent-1', older)).resolves.toBeNull()
   })
 })

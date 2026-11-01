@@ -392,6 +392,87 @@ export function resumableDocumentImport(
   return result && !result.dryRun && result.partial && result.nextCursor ? result : null
 }
 
+/**
+ * The run the server kept (crm#1410) as the totals a new attempt continues,
+ * when it is this provider's and stopped part-way with a cursor to continue
+ * after. A reload, a closed laptop or a tab that gave up used to send the
+ * next "Hämta underlag" back to the first file, downloading every file the
+ * stopped run had already linked again (crm#1581). A run the provider
+ * refused keeps its cursor too: it is only fetched again once the connection
+ * answers, which is what the reconnect copy promises.
+ *
+ * The sweep skips every file up to the cursor, so a run is continued only
+ * while what it read is still what there is: not when it started before
+ * `notBefore` (this connection was made, so it may read another database; or
+ * a ledger import landed, so files it left unmatched may match now). Null
+ * then, and for a finished run, another provider's, or one that never got a
+ * slice back: those start from the top.
+ */
+export function resumableDocumentImportRun(
+  run: DocumentImportRunStatus | null | undefined,
+  provider: string | null,
+  notBefore: readonly (string | null | undefined)[] = [],
+): ArcimDocumentImportResult | null {
+  if (!run || run.complete || run.provider !== provider) return null
+  if (typeof run.nextCursor !== 'string' || run.nextCursor.length === 0) return null
+  const startedAt = Date.parse(run.startedAt)
+  if (notBefore.some((at) => typeof at === 'string' && Date.parse(at) > startedAt)) return null
+  return {
+    provider: run.provider,
+    scanned: run.scanned,
+    linked: run.linked,
+    skipped: run.skipped,
+    unmatched: run.unmatched,
+    failed: run.failed,
+    locked: run.locked,
+    lockedPeriods: run.lockedPeriods,
+    dryRun: false,
+    unmatchedSamples: run.unmatchedSamples,
+    total: run.total,
+    partial: true,
+    nextCursor: run.nextCursor,
+    unreachableSources: run.unreachableSources,
+  }
+}
+
+/** The parts of the migration status route the resume reads. */
+interface ArcimMigrationStatusForResume {
+  consents?: { id: string; provider: string; createdAt?: string }[]
+  latestCompletedSieImport?: { imported_at: string | null; created_at: string } | null
+  latestDocumentImport?: DocumentImportRunStatus | null
+}
+
+export const ARCIM_MIGRATION_STATUS_ENDPOINT = '/api/extensions/ext/arcim-migration/status'
+
+/**
+ * Where the kept run for this connection stands now, read from the server
+ * when the import starts rather than from the page's earlier copy: a run
+ * this tab finished since then must not be continued from where it stood
+ * before. Null when there is nothing to continue or the server cannot say:
+ * the import then starts from the top, which is always safe.
+ */
+export async function fetchResumableDocumentImport(
+  consentId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ArcimDocumentImportResult | null> {
+  try {
+    const response = await fetcher(ARCIM_MIGRATION_STATUS_ENDPOINT)
+    if (!response.ok) return null
+    const status = (await response.json()) as ArcimMigrationStatusForResume | null
+    const consent = status?.consents?.find((entry) => entry.id === consentId)
+    if (!consent) return null
+    const ledger = status?.latestCompletedSieImport
+    return resumableDocumentImportRun(status?.latestDocumentImport, consent.provider, [
+      consent.createdAt,
+      ledger ? (ledger.imported_at ?? ledger.created_at) : null,
+    ])
+  } catch {
+    // Safe to ignore: without the kept run the import starts from the top,
+    // as it did before, and the files already linked are skipped by hash.
+    return null
+  }
+}
+
 export class ArcimDocumentImportRequestError extends Error {
   constructor(
     readonly problem: ArcimDocumentImportProblem,
