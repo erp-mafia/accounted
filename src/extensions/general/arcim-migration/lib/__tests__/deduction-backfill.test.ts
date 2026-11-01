@@ -333,6 +333,9 @@ describe('runDeductionBackfill: apply', () => {
     ['a Visma 401', new VismaApiError('Unauthorized', 401), 'reconnect'],
     ['a Visma 403', new VismaApiError('Forbidden', 403), 'reconnect'],
     ['an expired provider token', new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'visma', 'expired'), 'reconnect'],
+    // Reconnecting can never clear these: the classifier says the subscription.
+    ['an inactive API module', new VismaApiError('Forbidden', 403, 'ForbiddenRequestException - No access to module: api_standard'), 'subscription'],
+    ['the same refusal already classified', new ProviderCallError('PROVIDER_API_MODULE_INACTIVE', 'visma', 'module'), 'subscription'],
   ])('stops on %s from the detail fetch and reports progress', async (_label, error, reason) => {
     seed()
     const deps = makeDeps()

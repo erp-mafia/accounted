@@ -15,7 +15,7 @@ import {
   multiplyIfBothPresent,
 } from '../amounts';
 import { parseSourceVoucherRef } from '../source-voucher';
-import { creditNoteTypeCode } from '../dto';
+import { documentPayment, documentState } from '../document-state';
 import { roundOre } from '@/lib/money';
 import { vismaDeductionKind, vismaHouseholdDeduction, vismaHouseholdWork } from './housework';
 
@@ -53,6 +53,8 @@ const CUSTOMER_PS_OVERDUE = 2;
 // NOT verifiably left the account, so they must stay open payables.
 const SUPPLIER_PS_SETTLED = new Set([6, 9]);
 const SUPPLIER_PS_OVERDUE = new Set([4, 7]);
+/** The values that say money moved on the invoice, in full or in part. */
+const SUPPLIER_PS_PAYMENT = new Set([4, 5, ...SUPPLIER_PS_SETTLED]);
 
 /**
  * RemainingAmount is nullable in the eAccounting schema, and in practice the
@@ -94,11 +96,6 @@ function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   const remaining = readRemaining(raw);
   const total = raw['TotalAmount'] as number ?? 0;
   const ps = raw['PaymentStatus'] as number | undefined;
-  if (raw['IsCancelled'] === true) return 'cancelled';
-  // A credit invoice has a negative TotalAmount, so the `total > 0` paid check
-  // below can never match it: without this it fell all the way through to
-  // 'draft' and surfaced on the dashboard as an overdue unsent invoice.
-  if (raw['IsCreditInvoice'] === true) return 'credited';
   if (ps === CUSTOMER_PS_PAID) return 'paid';
   if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
   if (ps == null && remaining === 0 && total !== 0) return 'paid';
@@ -114,16 +111,8 @@ function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
  * (IsCancelled/IsBooked/IsSent): its lifecycle lives in `Status`
  * (0 = Draft, 1 = Normal, 2 = Deleted) plus the PaymentStatus enum.
  */
-function deriveSupplierInvoiceStatus(
-  raw: Record<string, unknown>,
-  paid: boolean,
-  isCreditNote: boolean,
-): InvoiceStatusCode {
-  const status = raw['Status'] as number | undefined;
-  if (status === 2) return 'cancelled';
-  if (isCreditNote) return 'credited';
+function deriveSupplierInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
   if (paid) return 'paid';
-  if (status === 0) return 'draft';
   const ps = raw['PaymentStatus'] as number | undefined;
   if (ps != null && SUPPLIER_PS_OVERDUE.has(ps)) return 'overdue';
   return 'booked';
@@ -209,9 +198,17 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const paid = ps != null
     ? ps === CUSTOMER_PS_PAID
     : remaining === 0 && total !== 0;
+  // /customerinvoices lists issued invoices only: drafts live under
+  // /customerinvoicedrafts (see deriveInvoiceStatus).
+  const doc = documentState({
+    issued: true,
+    cancelled: raw['IsCancelled'] === true,
+    creditFlag: raw['IsCreditInvoice'] === true,
+    total,
+  });
   // A kreditfaktura carries no deduction here: crediting a ROT, RUT or grön
   // teknik invoice is outside what the migrated deduction step handles.
-  const isCredit = raw['IsCreditInvoice'] === true;
+  const isCredit = doc.invoiceTypeCode !== undefined;
   const greenTechnology = !isCredit && vismaDeductionKind(raw) === 'gron_teknik';
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
@@ -264,8 +261,8 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
-    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
+    status: doc.status ?? deriveInvoiceStatus(raw),
+    invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['InvoiceCustomerName'] ?? '') as string,
@@ -294,14 +291,28 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
   // LIST payload omits RemainingAmount, and reading that absence as 0 imported
   // every supplier invoice as fully paid. Fall back to RemainingAmount only
   // when the enum itself is missing.
-  const paid = ps != null
+  const statedPaid = ps != null
     ? SUPPLIER_PS_SETTLED.has(ps)
     : remaining === 0 && total !== 0;
+  // 381 for a supplier kreditfaktura: `IsCreditInvoice` is eAccounting's own
+  // flag; the negative total is the same backstop every supplier mapper has,
+  // for a payload that omits the flag. SupplierInvoiceApi names no credited
+  // invoice, so the credit note lands unpaired.
+  const doc = documentState({
+    issued: raw['Status'] !== 0,
+    paymentStated: ps != null && SUPPLIER_PS_PAYMENT.has(ps),
+    cancelled: raw['Status'] === 2,
+    creditFlag: raw['IsCreditInvoice'] === true,
+    total,
+  });
   // A partially paid invoice without a RemainingAmount cannot be represented
   // faithfully: report the full total as open (visible and correctable)
   // rather than inventing a split. A PRESENT zero beside an unpaid enum is
   // handled in openBalance.
-  const balance = openBalance(ps, paid, remaining, total);
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: statedPaid,
+    balance: openBalance(ps, statedPaid, remaining, total),
+  });
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -343,21 +354,14 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     source: ps != null ? 'enum' : 'balance',
   };
 
-  // 381 for a supplier kreditfaktura: the one signal the importer reads
-  // (dto.ts). `IsCreditInvoice` is eAccounting's own flag; the negative total
-  // is the same backstop every supplier mapper has, for a payload that omits
-  // the flag. SupplierInvoiceApi names no credited invoice, so the credit
-  // note lands unpaired.
-  const invoiceTypeCode = creditNoteTypeCode(raw['IsCreditInvoice'] === true, total);
-
   return {
     id: String(raw['Id'] ?? ''),
     invoiceNumber: String(raw['InvoiceNumber'] ?? ''),
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveSupplierInvoiceStatus(raw, paid, invoiceTypeCode !== undefined),
-    invoiceTypeCode,
+    status: doc.status ?? deriveSupplierInvoiceStatus(raw, paid),
+    invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty((raw['SupplierName'] ?? '') as string),
     buyer: buildParty(''),
     lines,

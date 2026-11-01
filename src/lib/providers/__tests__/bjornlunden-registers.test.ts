@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  fetchCustomersDirect,
-  fetchSalesInvoicesDirect,
-  fetchSuppliersDirect,
-} from '../provider-data-fetcher';
+import { fetchMigrationPage, fetchSalesInvoicesDirect } from '../provider-data-fetcher';
+import type { CustomerDto, SupplierDto } from '../dto';
 
 /**
  * Björn Lundén answers its two register endpoints (/customer, /supplier) as
@@ -32,7 +29,7 @@ describe('Björn Lundén registers and batches', () => {
     vi.unstubAllEnvs();
   });
 
-  it('reads the whole customer register from the one bare-array answer, without paging params', async () => {
+  it('reads the whole customer register from the one bare-array answer, as one page', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       requested.push(url);
       return json([
@@ -42,13 +39,12 @@ describe('Björn Lundén registers and batches', () => {
       ]);
     }));
 
-    const customers = await fetchCustomersDirect('bjornlunden', 'token', 'user-key');
+    const page = await fetchMigrationPage('bjornlunden', 'token', 'user-key', 'customers', 1);
+    const customers = page.items as CustomerDto[];
 
     expect(requested).toHaveLength(1);
-    const url = new URL(requested[0]);
-    expect(url.pathname.endsWith('/customer')).toBe(true);
-    expect(url.searchParams.has('page')).toBe(false);
-    expect(url.searchParams.has('rows')).toBe(false);
+    expect(new URL(requested[0]).pathname.endsWith('/customer')).toBe(true);
+    expect(page.nextPage).toBeNull();
     expect(customers.map((c) => c.id)).toEqual(['1001', '1002', '1003']);
     expect(customers.map((c) => c.active)).toEqual([true, true, false]);
     expect(customers[0].party.identifications).toEqual([{ id: '5566778899', schemeId: 'SE:ORGNR' }]);
@@ -62,7 +58,7 @@ describe('Björn Lundén registers and batches', () => {
       ]);
     }));
 
-    const suppliers = await fetchSuppliersDirect('bjornlunden', 'token', 'user-key');
+    const suppliers = (await fetchMigrationPage('bjornlunden', 'token', 'user-key', 'suppliers', 1)).items as SupplierDto[];
 
     expect(requested).toHaveLength(1);
     expect(new URL(requested[0]).pathname.endsWith('/supplier')).toBe(true);

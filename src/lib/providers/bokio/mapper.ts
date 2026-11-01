@@ -15,7 +15,8 @@ import {
   lineVatFromPercent,
   multiplyIfBothPresent,
 } from '../amounts';
-import { creditNoteTypeCode, salesDocumentNumber, statedDocumentNumber } from '../dto';
+import { salesDocumentNumber, statedDocumentNumber } from '../dto';
+import { documentPayment, documentState } from '../document-state';
 
 /**
  * Bokio's live payloads have repeatedly differed from its published spec (the
@@ -49,25 +50,16 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
  * so this must not be used for them: every one of them would fall through
  * to 'draft'.
  */
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const status = (raw['status'] as string | undefined)?.toLowerCase();
+function deriveInvoiceStatus(status: string | undefined): InvoiceStatusCode {
   switch (status) {
-    case 'cancelled': return 'cancelled';
     case 'paid':
     case 'overpaid': return 'paid';
     case 'overdue': return 'overdue';
     case 'published':
     case 'underpaid': return 'sent';
-    case 'credited':
-    case 'credit': return 'credited';
-    case 'draft': return 'draft';
+    case 'credited': return 'credited';
     default: return 'draft';
   }
-}
-
-/** An /invoices row whose status says the row itself is a credit document. */
-function isBokioCreditStatus(raw: Record<string, unknown>): boolean {
-  return (raw['status'] as string | undefined)?.toLowerCase() === 'credit';
 }
 
 /**
@@ -258,7 +250,27 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+
+  const bokioStatus = (raw['status'] as string | undefined)?.toLowerCase();
+  // An /invoices row Bokio itself labels `credit` is a credit document,
+  // stated in magnitudes like everything else Bokio sends; the importer
+  // applies the sign. The /credit-notes form of the same document is
+  // preferred when both are listed (it names the credited invoice), see
+  // provider-data-fetcher.
+  const doc = documentState({
+    issued: bokioStatus !== 'draft',
+    cancelled: bokioStatus === 'cancelled',
+    creditFlag: bokioStatus === 'credit',
+    total: totalAmount,
+  });
+  const lifecycle = deriveInvoiceStatus(bokioStatus);
+  // Bokio's enum saying paid settles the invoice as its amount does: a paid
+  // row whose paidAmount is absent or short of the total owes nothing.
+  const statedPaid = lifecycle === 'paid' || (paidAmount >= totalAmount && totalAmount > 0);
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: statedPaid,
+    balance: lifecycle === 'paid' ? 0 : totalAmount - paidAmount,
+  });
 
   const customerRef = raw['customerRef'] as Record<string, unknown> | undefined;
   const lines = mapBokioSalesLines(raw['lineItems'] as Record<string, unknown>[] | undefined, currency);
@@ -275,23 +287,18 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: paidAmount >= totalAmount && totalAmount > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
-  const status = deriveInvoiceStatus(raw);
+  const status = doc.status ?? lifecycle;
 
   return {
     id: String(raw['id'] ?? ''),
     invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    // An /invoices row Bokio itself labels `credit` is a credit document,
-    // stated in magnitudes like everything else Bokio sends; the importer
-    // applies the sign. The /credit-notes form of the same document is
-    // preferred when both are listed (it names the credited invoice), see
-    // provider-data-fetcher.
-    invoiceTypeCode: isBokioCreditStatus(raw) ? '381' : undefined,
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
     status,
     supplier: buildParty(''),
@@ -330,7 +337,19 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+
+  // Bokio's credit-note enum is draft | published. A draft has not been
+  // issued and stays a draft; anything else is a terminal credit.
+  const doc = documentState({
+    issued: (raw['status'] as string | undefined)?.toLowerCase() !== 'draft',
+    cancelled: false,
+    creditFlag: true,
+    total: totalAmount,
+  });
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: paidAmount >= totalAmount && totalAmount > 0,
+    balance: totalAmount - paidAmount,
+  });
 
   const customerRef = raw['customerRef'] as Record<string, unknown> | undefined;
   const invoiceRef = raw['invoiceRef'] as Record<string, unknown> | null | undefined;
@@ -348,7 +367,7 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: paidAmount >= totalAmount && totalAmount > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
@@ -362,17 +381,14 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
         }
       : undefined;
 
-  // Bokio's credit-note enum is draft | published. A draft has not been
-  // issued and stays a draft; anything else is a terminal credit.
-  const status: InvoiceStatusCode =
-    (raw['status'] as string | undefined)?.toLowerCase() === 'draft' ? 'draft' : 'credited';
+  const status = doc.status ?? 'credited';
 
   return {
     id: String(raw['id'] ?? ''),
     invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['creditDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    invoiceTypeCode: '381',
+    invoiceTypeCode: doc.invoiceTypeCode,
     creditedInvoiceRef,
     currencyCode: currency,
     status,
@@ -619,13 +635,11 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
   // entry), or merely registered. 'sent' and 'booked' both land as
   // 'registered' in the migration; the distinction is kept because the DTO
   // has it and the next consumer may not collapse them.
-  // 381 for a supplier kreditfaktura: the one signal the importer reads (dto.ts).
-  const invoiceTypeCode = creditNoteTypeCode(false, totalAmount);
-  const status: InvoiceStatusCode = invoiceTypeCode
-    ? 'credited'
-    : paid
-      ? 'paid'
-      : (journalEntryRef?.['id'] ? 'booked' : 'sent');
+  // The schema has no lifecycle: the total alone says what the document is.
+  const doc = documentState({ issued: true, cancelled: false, creditFlag: false, total: totalAmount });
+  const status: InvoiceStatusCode = doc.status ?? (paid
+    ? 'paid'
+    : (journalEntryRef?.['id'] ? 'booked' : 'sent'));
 
   return {
     id: String(raw['id'] ?? ''),
@@ -636,7 +650,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
     invoiceNumber: statedDocumentNumber(raw['invoiceNumber']),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    invoiceTypeCode,
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
     status,
     supplier: buildParty(

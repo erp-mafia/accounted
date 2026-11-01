@@ -83,13 +83,13 @@ describe('POST /migrate: no registers, and the per-step flags', () => {
     },
   )
 
-  it('runs the asset register with every register off, whatever an older client omits', async () => {
+  it('runs the asset register, and the run names no register at all', async () => {
     const res = await handler(migrateRequest({ importAssets: true }), buildCtx([{ fiscal_year_start: '2026-01-01', fiscal_year_end: '2026-12-31' }]))
     expect(res.status).toBe(200)
-    expect(orchestratorOptions()).toMatchObject({
-      importAssets: true, importCustomers: false, importSuppliers: false, importSalesInvoices: false,
-      importSupplierInvoices: false, fiscalYearScope: null,
-    })
+    expect(orchestratorOptions()).toMatchObject({ importAssets: true })
+    for (const flag of ['importCustomers', 'importSuppliers', 'importSalesInvoices', 'importSupplierInvoices']) {
+      expect(orchestratorOptions()).not.toHaveProperty(flag)
+    }
   })
 
   it('forwards grantProven only when the client asserts it', async () => {

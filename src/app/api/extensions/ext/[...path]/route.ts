@@ -78,10 +78,7 @@ async function decorateResponse(response: Response, requestId: string): Promise<
 
 // Heavy extension routes (SIE import, entity migration) hold one request
 // open for the whole job. 800 s is the Pro-plan ceiling with Fluid compute
-// (the default is 300). The migration budgets itself against
-// MIGRATE_RUN_BUDGET_MS in extensions/general/arcim-migration/index.ts so it
-// hands back its result before this fires: a Björn Lundén company with 9 415
-// customer invoices was killed at 300 s on every attempt (2026-09-07).
+// (the default is 300).
 export const maxDuration = 800
 
 /**

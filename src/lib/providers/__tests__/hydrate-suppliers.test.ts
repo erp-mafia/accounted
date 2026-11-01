@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchSuppliersDirect, hydrateSuppliers } from '../provider-data-fetcher';
+import { fetchMigrationPage, hydrateSuppliers } from '../provider-data-fetcher';
 import type { SupplierDto } from '../dto';
 
 /**
@@ -42,6 +42,15 @@ const DETAIL = {
   },
 };
 
+/** The supplier register as the import job reads it: the listed page, then each record's detail form. */
+async function listedPage(): Promise<SupplierDto[]> {
+  return (await fetchMigrationPage('fortnox', 'token', undefined, 'suppliers', 1)).items as SupplierDto[];
+}
+
+async function register(): Promise<SupplierDto[]> {
+  return (await hydrateSuppliers('fortnox', 'token', undefined, await listedPage())).suppliers;
+}
+
 describe('Fortnox suppliers carry the country and VAT number only their detail form names', () => {
   let requested: string[];
 
@@ -69,7 +78,7 @@ describe('Fortnox suppliers carry the country and VAT number only their detail f
   it('reads a listed supplier\'s country, VAT number, phone, note and terms from its detail form', async () => {
     stubFetch((url) => url.includes('/suppliers/7') ? json(DETAIL) : json(listResponse([LISTED])));
 
-    const [supplier] = await fetchSuppliersDirect('fortnox', 'token');
+    const [supplier] = await register();
 
     expect(supplier?.party.postalAddress?.countryCode).toBe('DE');
     expect(supplier?.vatNumber).toBe('DE123456789');
@@ -84,7 +93,7 @@ describe('Fortnox suppliers carry the country and VAT number only their detail f
       ? json({ ErrorInformation: { error: 1, message: 'Kan inte hitta leverantören' } }, 404)
       : json(listResponse([LISTED])));
 
-    const suppliers = await fetchSuppliersDirect('fortnox', 'token');
+    const suppliers = await register();
 
     expect(suppliers).toHaveLength(1);
     expect(suppliers[0]?.party.name).toBe('Lieferant GmbH');
@@ -94,7 +103,7 @@ describe('Fortnox suppliers carry the country and VAT number only their detail f
 
   it('reports a supplier the budget did not reach instead of dropping it', async () => {
     stubFetch(() => json(listResponse([LISTED])));
-    const listed = await fetchSuppliersDirect('fortnox', 'token', undefined, { detailBudgetMs: 0 });
+    const listed = await listedPage();
     expect(listed).toHaveLength(1);
 
     const { suppliers, hydration, unhydratedIds } = await hydrateSuppliers('fortnox', 'token', undefined, listed, 0);

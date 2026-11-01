@@ -33,7 +33,7 @@ import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { fetchInvoiceCompletionDetail } from '@/lib/providers/provider-data-fetcher'
-import { ProviderCallError } from '@/lib/providers/with-provider-call'
+import { classifyProviderError, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { VismaApiError } from '@/lib/providers/visma/client'
 import {
   FiscalPeriodNotFoundError,
@@ -64,7 +64,7 @@ export type DeductionBackfillRefusal =
   | 'RECONNECT_REQUIRED'
   | 'DIFFERENT_COMPANY'
 
-export type DeductionBackfillStopReason = 'rate_limited' | 'reconnect' | 'period_locked' | 'accounts' | 'deadline'
+export type DeductionBackfillStopReason = 'rate_limited' | 'reconnect' | 'subscription' | 'period_locked' | 'accounts' | 'deadline'
 
 /** Review reasons the runner adds to the planner's own. */
 export type DeductionBackfillReviewReason =
@@ -350,17 +350,20 @@ async function loadCandidates(
 }
 
 function stopReasonOf(error: unknown): DeductionBackfillStopReason | null {
-  if (error instanceof ProviderCallError) {
-    if (error.code === 'PROVIDER_RATE_LIMITED') return 'rate_limited'
-    if (['PROVIDER_AUTH_EXPIRED', 'PROVIDER_RESOURCE_FORBIDDEN', 'PROVIDER_LICENSE_MISSING', 'PROVIDER_API_MODULE_INACTIVE'].includes(error.code)) {
+  switch (classifyProviderError(error)) {
+    case 'PROVIDER_RATE_LIMITED':
+      return 'rate_limited'
+    case 'PROVIDER_AUTH_EXPIRED':
+    case 'PROVIDER_RESOURCE_FORBIDDEN':
       return 'reconnect'
-    }
+    // The connection works and the subscription does not cover it: reconnecting
+    // loops for ever (isApiModuleInactiveError).
+    case 'PROVIDER_LICENSE_MISSING':
+    case 'PROVIDER_API_MODULE_INACTIVE':
+      return 'subscription'
+    default:
+      return null
   }
-  if (error instanceof VismaApiError) {
-    if (error.statusCode === 429) return 'rate_limited'
-    if (error.statusCode === 401 || error.statusCode === 403) return 'reconnect'
-  }
-  return null
 }
 
 /** Today's voucher cannot be booked: every invoice after this one would fail the same way. */

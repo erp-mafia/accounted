@@ -58,8 +58,10 @@ describe('migrationJobErrorMessageKey', () => {
   // Visma API module nor the licence (crm#1081).
   it('names what to activate when the subscription shuts the API out', () => {
     expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_API_MODULE_INACTIVE', provider: 'visma' })).toBe('ext_arcim_job_error_api_module')
+    expect(migrationJobErrorMessageKey({ error_code: 'BOKIO_PLAN_NO_API', provider: 'bokio' })).toBe('ext_arcim_job_error_bokio_plan')
+    expect(migrationIssueKind('BOKIO_PLAN_NO_API')).toBe('access')
     expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_LICENSE_MISSING', provider: 'fortnox' })).toBe('ext_arcim_job_error_api_license')
-    for (const key of ['ext_arcim_job_error_api_module', 'ext_arcim_job_error_api_license']) {
+    for (const key of ['ext_arcim_job_error_api_module', 'ext_arcim_job_error_api_license', 'ext_arcim_job_error_bokio_plan']) {
       for (const messages of [sv, en]) {
         const text = (messages as { extensions: Record<string, string> }).extensions[key]
         expect(text).toBeTruthy()

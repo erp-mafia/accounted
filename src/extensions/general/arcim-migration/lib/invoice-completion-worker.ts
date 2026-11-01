@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, queryInExecutionBudget, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { ProviderCallError } from '@/lib/providers/with-provider-call'
+import { isProviderRefusal, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 import { fortnoxCompletionBlock, type CompletionBlockReason } from '@/lib/providers/fortnox/completion-failure'
 import { readProviderRefusal } from '@/lib/providers/read-refusal'
@@ -66,32 +66,26 @@ function addReceipt(result: InvoiceCompletionSummary, receipt: Receipt) {
   }
 }
 
-const REFUSED_CREDENTIAL_CODES: ReadonlySet<string> = new Set([
-  'PROVIDER_AUTH_EXPIRED', 'PROVIDER_LICENSE_MISSING', 'PROVIDER_API_MODULE_INACTIVE', 'PROVIDER_RESOURCE_FORBIDDEN',
-])
-
 /**
- * How the provider refused this company's connection, or null when it did not:
- * a 401/403 on a data call, or 'credential' when resolving the connection was
- * refused for good (a dead grant, a missing licence). A refusal is the
+ * How the provider refused this company's connection, or null when it did not.
+ * 'aged' is a bare 401 on a data call, the token ageing mid-run: the next run
+ * refreshes it. 'refused' answers the same until the customer acts (a closed
+ * register under any status, a dead grant, a missing licence): that is the
  * customer's next step, not our fault.
  */
-function providerRefusal(error: unknown): 401 | 403 | 'credential' | null {
-  if (error instanceof ProviderCallError) return REFUSED_CREDENTIAL_CODES.has(error.code) ? 'credential' : null
-  const status = (error as { statusCode?: unknown } | null)?.statusCode
-  return status === 401 || status === 403 ? status : null
+function providerRefusal(error: unknown): 'aged' | 'refused' | null {
+  if (!isProviderRefusal(error)) return null
+  return (error as { statusCode?: unknown }).statusCode === 401 ? 'aged' : 'refused'
 }
 
 /**
- * One delay rule for every provider. A refusal that answers the same until
- * the customer acts (a 403, a dead grant) waits a day, anything else an hour,
- * and longer when the provider's Retry-After asks for it. A Visma and a Bokio
- * 403 were asked, and logged, every run for weeks (B11), and an opaque
- * Fortnox 403 every hour on a Fortnox-only hour floor (#51). A bare 401 is the
- * token ageing mid-run; the next run refreshes it, so it keeps the hour.
+ * One delay rule for every provider. A refusal waits a day, anything else an
+ * hour, and longer when the provider's Retry-After asks for it. A Visma and a
+ * Bokio 403 were asked, and logged, every run for weeks (B11), and an opaque
+ * Fortnox 403 every hour on a Fortnox-only hour floor (#51).
  */
 function completionRetrySeconds(error: unknown, refusal: ReturnType<typeof providerRefusal>): number {
-  const floor = refusal === 403 || refusal === 'credential' ? REFUSED_RETRY_SECONDS : 3600
+  const floor = refusal === 'refused' ? REFUSED_RETRY_SECONDS : 3600
   const retryAfter = error instanceof ProviderCallError ? error.retryAfterSeconds
     : error instanceof FortnoxApiError && error.retryAfterMs !== undefined ? error.retryAfterMs / 1000 : undefined
   return retryAfter !== undefined && Number.isFinite(retryAfter) ? Math.max(floor, Math.min(2_147_483_647, Math.ceil(retryAfter))) : floor
@@ -172,10 +166,9 @@ export async function completeInvoiceCompletionWork(
               fetchInvoiceCompletionDetail(work.provider, resolved.accessToken, resolved.providerCompanyId, row.source_ref!))
           } catch (error) {
             if (error instanceof ExecutionBudgetExceeded) throw error
-            if (work.provider === 'fortnox' && (fortnoxCompletionBlock(error) ||
-              error instanceof ProviderCallError || (error instanceof FortnoxApiError && error.statusCode === 429))) throw error
-            const status = (error as { statusCode?: number }).statusCode
-            if (status === 401 || status === 403) throw error
+            if (providerRefusal(error)) throw error
+            if (work.provider === 'fortnox' && (error instanceof ProviderCallError ||
+              (error instanceof FortnoxApiError && error.statusCode === 429))) throw error
             log.warn('invoice detail failed; retry scheduled', { ...fields, invoiceId: row.id, error: String(error) })
             await record(row, 'failed'); pendingIds.delete(row.id); continue
           }
@@ -252,7 +245,7 @@ export async function completeInvoiceCompletionWork(
         reason = fortnoxCompletionBlock(error)
         // The probe gets at most ten seconds. Out of time: no evidence this
         // run, and the refusal waits a day.
-        if (!reason && revision && refusal === 403 && connection && await readProviderRefusal(error, work.provider, connection,
+        if (!reason && revision && refusal === 'refused' && connection && await readProviderRefusal(error, work.provider, connection,
           Math.min(providerDeadline, Date.now() + 10_000)).catch(() => error) !== error) reason = 'PROVIDER_RESOURCE_FORBIDDEN'
       }
       if (reason && revision) block = { reason, revision }

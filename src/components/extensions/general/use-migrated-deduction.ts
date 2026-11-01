@@ -12,7 +12,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 export const MIGRATED_DEDUCTION_ROUTE = '/api/extensions/ext/arcim-migration/deduction-backfill'
 
 export type DeductionBackfillMode = 'preview' | 'apply'
-export type DeductionBackfillStopReason = 'rate_limited' | 'reconnect' | 'period_locked' | 'accounts' | 'deadline'
+export type DeductionBackfillStopReason = 'rate_limited' | 'reconnect' | 'subscription' | 'period_locked' | 'accounts' | 'deadline'
 export type DeductionBackfillBucket =
   | 'apply_unpaid'
   | 'apply_partially_paid'

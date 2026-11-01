@@ -144,10 +144,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: true,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
         importAssets: false,
       }),
       buildCtx(0),
@@ -167,10 +163,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: false,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
         importAssets: true,
       }),
       buildCtx(0),
@@ -190,10 +182,6 @@ describe('POST /migrate: SIE-import-required guard', () => {
       migrateRequest({
         consentId: 'consent-1',
         importCompanyInfo: true,
-        importCustomers: false,
-        importSuppliers: false,
-        importSalesInvoices: false,
-        importSupplierInvoices: false,
       }),
       buildCtx(0),
     )

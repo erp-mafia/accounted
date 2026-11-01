@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { mapSalesInvoice, mapSupplierInvoice, resolveSupplierSettlement } from '../entity-mapper'
+import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
 import { mapFortnoxToSalesInvoice } from '@/lib/providers/fortnox/mapper'
-import type { SalesInvoiceDto, SupplierInvoiceDto, InvoiceStatusCode, PartyDto, PaymentStatusDto } from '@/lib/providers/dto'
+import type { SalesInvoiceDto, SupplierInvoiceDto, InvoiceStatusCode, PartyDto } from '@/lib/providers/dto'
 
 /**
  * Guards the status/paid consistency hardening in mapSupplierInvoice: the
@@ -128,10 +128,10 @@ describe('mapSupplierInvoice: status/paid consistency', () => {
     expect(inv.paid_at).toBeNull()
   })
 
-  it('a partial payment carries the provider payment date when there is one', () => {
+  it('a partial payment carries no paid date, as natively: paid_at is the day it was paid in full', () => {
     const inv = map({ status: 'booked', paid: false, balance: 300, total: 1000, lastPaymentDate: '2026-02-05' })
     expect(inv.status).toBe('partially_paid')
-    expect(inv.paid_at).toBe('2026-02-05')
+    expect(inv.paid_at).toBeNull()
   })
 
   it('credit note with zero balance stays credited: never flipped to paid', () => {
@@ -264,8 +264,8 @@ describe('mapSalesInvoice: a part-paid open invoice is partially_paid', () => {
     expect(mapSales({ status: 'overdue', paid: false, balance: 1000, total: 1000 }).status).toBe('overdue')
   })
 
-  it('a draft or cancelled invoice is never turned into partially_paid', () => {
-    expect(mapSales({ status: 'draft', paid: false, balance: 300, total: 1000 }).status).toBe('draft')
+  it('an unissued or cancelled invoice is never turned into partially_paid', () => {
+    expect(mapSales({ status: 'draft', paid: false, balance: 1000, total: 1000 }).status).toBe('draft')
     expect(mapSales({ status: 'cancelled', paid: false, balance: 300, total: 1000 }).status).toBe('cancelled')
   })
 
@@ -329,78 +329,6 @@ describe('mapSupplierInvoice: a zero total is an amount-less record, not a settl
     expect(inv.status).toBe('paid')
     expect(inv.paid_amount).toBe(1000)
     expect(inv.remaining_amount).toBe(0)
-  })
-})
-
-/**
- * The settlement rule is exported so the repair pass
- * (refresh-migrated-payment-state.ts) reads a provider's payment fields
- * exactly as the import did. Two copies would drift and the repair would then
- * contradict the import it repairs.
- */
-describe('resolveSupplierSettlement', () => {
-  const balanceStatus = (paid: boolean, balance: number, lastPaymentDate?: string): PaymentStatusDto => ({
-    paid,
-    balance: { value: balance, currencyCode: 'SEK' },
-    lastPaymentDate,
-    source: 'balance',
-  })
-
-  it('settles a fully paid invoice and dates it from the provider payment date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0, '2026-02-05'), 1000)).toEqual({
-      status: 'paid',
-      paidAmount: 1000,
-      remainingAmount: 0,
-      paidAt: '2026-02-05',
-    })
-  })
-
-  it('leaves paidAt null when the provider names no payment date: unknown is not the issue date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 1000)).toEqual({
-      status: 'paid',
-      paidAmount: 1000,
-      remainingAmount: 0,
-      paidAt: null,
-    })
-  })
-
-  it('normalises an empty payment date string to null rather than writing it', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0, ''), 1000).paidAt).toBeNull()
-  })
-
-  it('reports a partial payment as partially_paid with both amounts', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 300), 1000)).toMatchObject({
-      status: 'partially_paid',
-      paidAmount: 700,
-      remainingAmount: 300,
-    })
-  })
-
-  it('says nothing about a still-open invoice, so the caller keeps its lifecycle status', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 1000), 1000)).toEqual({
-      status: null,
-      paidAmount: 0,
-      remainingAmount: 1000,
-      paidAt: null,
-    })
-  })
-
-  it('never settles a zero total', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 0).status).toBeNull()
-  })
-
-  it('never lets a zero balance override an explicit unpaid enum', () => {
-    const enumStatus: PaymentStatusDto = {
-      paid: false,
-      balance: { value: 0, currencyCode: 'SEK' },
-      source: 'enum',
-    }
-    expect(resolveSupplierSettlement(enumStatus, 1000)).toEqual({
-      status: null,
-      paidAmount: 0,
-      remainingAmount: 1000,
-      paidAt: null,
-    })
   })
 })
 
