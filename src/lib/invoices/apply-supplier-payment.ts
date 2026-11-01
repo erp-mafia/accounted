@@ -1,12 +1,11 @@
 /**
- * Single source of truth for applying a payment amount to a SUPPLIER invoice:
- * the supplier-side mirror of `planInvoicePayment` (@/lib/invoices/apply-invoice-payment).
+ * Applying a payment amount to a SUPPLIER invoice: `planInvoicePayment`
+ * (@/lib/invoices/apply-invoice-payment) under the supplier ledger's refusal
+ * code, and the whole plan of matching a bank row to a supplier invoice.
  *
  * Computes the new paid/remaining/status and REJECTS overpayment before the
  * caller creates any journal entry, so a doomed match never burns a voucher
- * number. The supplier match route previously inlined this math (and its
- * overshoot guard) directly; centralizing it keeps the two off-by-one tolerances
- * (overshoot vs öre absorption) honest and unit-testable without a DB.
+ * number.
  *
  * # Öresavrundning (opt-in)
  *
@@ -23,6 +22,10 @@
 import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fxSettlementOutcome } from '@/lib/bookkeeping/fx-settlement'
+import { clearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
+import { planInvoicePayment, type InvoicePaymentPlan } from '@/lib/invoices/apply-invoice-payment'
 
 export interface SupplierPaymentTotals {
   total: number
@@ -30,15 +33,7 @@ export interface SupplierPaymentTotals {
   remaining_amount?: number | null
 }
 
-export interface SupplierPaymentPlan {
-  newPaidAmount: number
-  newRemaining: number
-  isFullyPaid: boolean
-  newStatus: 'paid' | 'partially_paid'
-  /** True when an öre residual was absorbed (full settlement of an inexact
-   *  amount). Lets callers/tests assert the 3740 path without re-deriving it. */
-  oreSettled: boolean
-}
+export type SupplierPaymentPlan = InvoicePaymentPlan
 
 export type PlanSupplierPaymentResult =
   | { ok: true; plan: SupplierPaymentPlan }
@@ -48,71 +43,14 @@ export type PlanSupplierPaymentResult =
       details: { transaction_amount: number; remaining_amount: number; excess: number }
     }
 
+/** planInvoicePayment under the supplier ledger's refusal code: the same math on either ledger. */
 export function planSupplierPayment(
   invoice: SupplierPaymentTotals,
   paymentAmountInInvoiceCurrency: number,
   opts?: { absorbOreRounding?: boolean },
 ): PlanSupplierPaymentResult {
-  const absorbOre = opts?.absorbOreRounding === true
-  const currentRemaining =
-    invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-
-  // Overpayment past the tolerated band is a real overshoot → reject. With öre
-  // absorption the band is one krona (a rounded-up whole-krona payment is not an
-  // overpayment); otherwise it's the strict half-öre float tolerance. The öre
-  // band is open at one krona (the settlement below and supplierOreResidual
-  // absorb only a residual strictly under it), so an excess of exactly one
-  // krona is refused too: accepting it as a partial would push paid_amount
-  // past the total with no 3740 line to carry the krona.
-  const overshoots = absorbOre
-    ? roundOre(paymentAmountInInvoiceCurrency - currentRemaining) >= ORE_ROUNDING_SETTLEMENT_MAX
-    : paymentAmountInInvoiceCurrency > currentRemaining + ORE_TOLERANCE
-  if (overshoots) {
-    return {
-      ok: false,
-      code: 'MATCH_SI_AMOUNT_EXCEEDS_REMAINING',
-      details: {
-        transaction_amount: paymentAmountInInvoiceCurrency,
-        remaining_amount: roundOre(currentRemaining),
-        excess: roundOre(paymentAmountInInvoiceCurrency - currentRemaining),
-      },
-    }
-  }
-
-  const diff = roundOre(currentRemaining - paymentAmountInInvoiceCurrency)
-
-  // Within the öre band (and absorbing) → settle in full; the 3740 line carries
-  // the residual. Covers both a short whole-krona payment and a rounded-up one.
-  if (absorbOre && Math.abs(diff) < ORE_ROUNDING_SETTLEMENT_MAX) {
-    const newPaidAmount = roundOre((invoice.paid_amount || 0) + currentRemaining)
-    return {
-      ok: true,
-      plan: {
-        newPaidAmount,
-        newRemaining: 0,
-        isFullyPaid: true,
-        newStatus: 'paid',
-        // Only flag öre settlement when there is an actual residual to book:
-        // an exact payment needs no 3740 line.
-        oreSettled: Math.abs(diff) >= ORE_TOLERANCE,
-      },
-    }
-  }
-
-  const newPaidAmount = roundOre((invoice.paid_amount || 0) + paymentAmountInInvoiceCurrency)
-  const newRemaining = Math.max(0, roundOre(currentRemaining - paymentAmountInInvoiceCurrency))
-  const isFullyPaid = newRemaining <= 0
-
-  return {
-    ok: true,
-    plan: {
-      newPaidAmount,
-      newRemaining,
-      isFullyPaid,
-      newStatus: isFullyPaid ? 'paid' : 'partially_paid',
-      oreSettled: false,
-    },
-  }
+  const planned = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency, opts)
+  return planned.ok ? planned : { ...planned, code: 'MATCH_SI_AMOUNT_EXCEEDS_REMAINING' }
 }
 
 export interface SupplierBankFeeSplit {
@@ -165,7 +103,7 @@ export function splitSupplierBankFee(args: {
     args.bankSek != null
       ? roundOre((args.bankSek * excess) / args.paymentAmount)
       : args.invoiceRate != null && args.invoiceRate > 0
-        ? roundOre(excess * args.invoiceRate)
+        ? sekOfForeign(excess, args.invoiceRate)
         : null
   if (feeSek == null || feeSek <= 0 || feeSek > RESIDUAL_MAX_AMOUNT) return unchanged
 
@@ -255,11 +193,25 @@ export type PlanSupplierBankMatchResult =
  * 6570) reached only the copies their authors touched: the v1 door cleared the
  * whole bank row off 2440 with no fee line, no 3740 line and no overshoot
  * guard, so an overpayment pushed paid_amount past the invoice total.
+ *
+ * A row in another currency than the invoice says how much of the remainder it
+ * pays through fxSettlementOutcome, at `paymentRate`: a payment far short of it
+ * is a part payment, where it used to close the debt and book the rest as gain
+ * (and, under kontantmetoden, the whole invoice at the part's value). 2440 is
+ * cleared at `carriedSek` when the ledger can say, so nothing is stranded.
  */
 export function planSupplierBankMatch(args: {
   invoice: SupplierBankMatchInvoice
   transaction: SupplierBankMatchTransaction
   accountingMethod: string | null | undefined
+  /**
+   * SEK per unit of the invoice's currency on the payment day
+   * (fetchExchangeRate); null when there is none, and the invoice's own rate
+   * reads the band instead.
+   */
+  paymentRate?: number | null
+  /** What 244x carries for this invoice (carriedSekOf), null when the ledger cannot say. */
+  carriedSek?: number | null
 }): PlanSupplierBankMatchResult {
   const { invoice, transaction } = args
   const accountingMethod = args.accountingMethod || 'accrual'
@@ -285,9 +237,9 @@ export function planSupplierBankMatch(args: {
 
   // A same-currency row that pays MORE than the remaining balance (the invoice
   // plus a card or transfer fee) settles the invoice in full with the excess
-  // on 6570. A cross-currency match settles whatever remains: the bank figure
-  // is not in the invoice's currency, and storing it with the invoice's
-  // currency suffix would render "Betalt 239 USD" on a 25 USD invoice.
+  // on 6570. A cross-currency match reads the band below: the bank figure is
+  // not in the invoice's currency, and storing it with the invoice's currency
+  // suffix would render "Betalt 239 USD" on a 25 USD invoice.
   const feeSplit = sameCurrency
     ? splitSupplierBankFee({
         paymentAmount: txAmountAbs,
@@ -298,7 +250,35 @@ export function planSupplierBankMatch(args: {
       })
     : null
   const bankFeeSek = feeSplit?.feeSek ?? 0
-  const paymentAmountInvoiceCurrency = feeSplit ? feeSplit.paymentAmount : remaining
+
+  // A row in another currency states kronor, so its share of the remainder is
+  // read at the payment-day rate. A foreign row with no SEK on file states
+  // neither: it settles at the booked SEK with no kursdifferens, as below.
+  const invoiceFxRate = invoice.exchange_rate ?? null
+  let paymentAmountInvoiceCurrency = feeSplit ? feeSplit.paymentAmount : remaining
+  if (!sameCurrency && bankSekRow !== null) {
+    const bandRate = isKronorCurrency(invoice.currency) ? 1 : (args.paymentRate ?? invoiceFxRate)
+    if (!bandRate || bandRate <= 0) {
+      return {
+        ok: false,
+        code: 'SI_FX_RATE_MISSING',
+        details: { transaction_currency: transaction.currency, invoice_currency: invoice.currency },
+      }
+    }
+    const fx = fxSettlementOutcome(bankSekRow, bandRate, remaining, 'supplier')
+    if (fx.outcome === 'refused') {
+      return {
+        ok: false,
+        code: 'MATCH_SI_AMOUNT_EXCEEDS_REMAINING',
+        details: {
+          transaction_amount: fx.paidInInvoiceCurrency,
+          remaining_amount: roundOre(remaining),
+          excess: roundOre(fx.paidInInvoiceCurrency - remaining),
+        },
+      }
+    }
+    paymentAmountInvoiceCurrency = fx.paidInInvoiceCurrency
+  }
 
   // Ledger math and the overshoot guard. Öre absorption applies to every pure
   // SEK settlement, kontantmetoden included since #2852: a whole-krona payment
@@ -311,15 +291,14 @@ export function planSupplierBankMatch(args: {
   if (!ledger.ok) return { ok: false, code: ledger.code, details: ledger.details }
 
   // SEK the invoice was booked at for this payment portion: face value for a
-  // SEK invoice, portion x rate for a foreign one with a rate, else unknown.
-  // Rounded the way the registration entry rounds it (resolveSekAmountOrNull),
-  // so 2440 is cleared at the SEK it was credited with.
-  const invoiceFxRate = invoice.exchange_rate ?? null
+  // SEK invoice; for a foreign one what 244x carries, so a full settlement
+  // clears exactly what the registration left, else portion x rate; else unknown.
+  const carried = args.carriedSek ?? null
   const bookedSek =
     invoice.currency === 'SEK'
       ? paymentAmountInvoiceCurrency
-      : invoiceFxRate && invoiceFxRate > 0
-        ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
+      : carried !== null || (invoiceFxRate !== null && invoiceFxRate > 0)
+        ? clearedSek({ amount: paymentAmountInvoiceCurrency, remaining, carried, rate: invoiceFxRate ?? 0 })
         : null
 
   // SEK that left the bank for the invoice part (net of any fee). A foreign
@@ -338,11 +317,9 @@ export function planSupplierBankMatch(args: {
   const originalBookedSek = bookedSek ?? actualBankSek
   // Positive = kursvinst (2440 carried more SEK than the bank paid), negative
   // = kursförlust.
-  const exchangeRateDifference = Math.round((originalBookedSek - actualBankSek) * 100) / 100
+  const exchangeRateDifference = roundOre(originalBookedSek - actualBankSek)
 
-  // A cross-currency match is clamped to the remaining balance above, so it
-  // always pays it off; a same-currency one does when the ledger plan says so.
-  const fullSettlement = !sameCurrency || ledger.plan.isFullyPaid
+  const fullSettlement = ledger.plan.isFullyPaid
 
   // Route on the invoice's booking state, not only the company setting: an
   // invoice posted to 2440 at receipt is cleared off 2440. Only a true

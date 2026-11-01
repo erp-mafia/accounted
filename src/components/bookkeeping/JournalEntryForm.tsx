@@ -1,5 +1,6 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
@@ -881,7 +882,7 @@ export default function JournalEntryForm({
     : 0
   // The expected SEK equivalent based on foreign amount × rate
   const computedSekAmount = isForeign && rate > 0 && computedForeignAmount > 0
-    ? Math.round(computedForeignAmount * rate * 100) / 100
+    ? sekOfForeign(computedForeignAmount, rate)
     : 0
 
   // Month/period safety signals surfaced at the review step (not as a blocking

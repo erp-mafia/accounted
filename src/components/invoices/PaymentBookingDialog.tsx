@@ -21,8 +21,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -172,6 +174,13 @@ export default function PaymentBookingDialog({
           }),
         )
 
+        // A foreign invoice clears what 1510 carries.
+        const carried = await carriedSekOf(createClient(), company.id, 'customer', invoice).catch(() => {
+          // Safe: the proposal falls back to the invoice's rate, and the rows are the person's to edit.
+          return null
+        })
+        if (cancelled) return
+
         const proposed = proposePaymentLines({
           invoice: {
             id: invoice.id,
@@ -197,6 +206,7 @@ export default function PaymentBookingDialog({
             // partially_paid invoice (öre write-off when < 1 kr remains).
             paid_amount: invoice.paid_amount,
             remaining_amount: invoice.remaining_amount,
+            carried_sek: carried,
           },
           accountingMethod: proposalMethod,
           entityType,

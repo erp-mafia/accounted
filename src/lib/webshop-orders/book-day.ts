@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { AccountsNotInChartError, FiscalPeriodNotFoundError, isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -288,7 +288,7 @@ function orderGrossSek(order: WebshopOrder): number {
 function orderVatSek(order: WebshopOrder): number {
   return isLedgerCurrency(order.currency.toUpperCase())
     ? roundOre(order.total_tax)
-    : roundOre(order.total_tax * (order.exchange_rate ?? 0))
+    : sekOfForeign(order.total_tax, order.exchange_rate ?? 0)
 }
 
 async function archiveDaySummary(

@@ -1,3 +1,5 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { carriedSekOf, paidOfClearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
@@ -9,7 +11,6 @@ import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplica
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
-import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
@@ -227,13 +228,18 @@ export const POST = withRouteContext(
       : (invoice as { deduction_total?: number | null }).deduction_total ?? 0
     const deductionCapSek =
       deductionTotal > 0 && needsFxConversion
-        ? roundOre(deductionTotal * fxRate!)
+        ? sekOfForeign(deductionTotal, fxRate!)
         : deductionTotal
     const paymentAmount = customLines
       ? deriveCustomerSettlementAmount(customLines, deductionCapSek)
       : remainingAmount
     const paymentAmountInInvoiceCurrency = needsFxConversion
-      ? roundOre(paymentAmount / fxRate!)
+      ? paidOfClearedSek({
+          sek: paymentAmount,
+          remaining: remainingAmount,
+          carried: await carriedSekOf(supabase, companyId!, 'customer', invoice),
+          rate: fxRate!,
+        })
       : paymentAmount
 
     const paidRounded = Math.round(paymentAmountInInvoiceCurrency * 100) / 100

@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
-import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import {
@@ -237,9 +238,9 @@ export async function convertToInvoice(params: {
     }
     exchangeRate = rate.rate
     exchangeRateDate = rate.date
-    subtotalSek = convertToSEK(amounts.subtotal, rate.rate)
-    vatAmountSek = convertToSEK(amounts.vat_amount, rate.rate)
-    totalSek = convertToSEK(amounts.total, rate.rate)
+    subtotalSek = sekOfForeign(amounts.subtotal, rate.rate)
+    vatAmountSek = sekOfForeign(amounts.vat_amount, rate.rate)
+    totalSek = sekOfForeign(amounts.total, rate.rate)
   }
 
   const { data: invoice, error: invoiceError } = await supabase

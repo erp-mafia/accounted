@@ -459,6 +459,31 @@ describe('GET /api/transactions/[id]/match-invoice/preview: a customer overpayme
     )
     expect(rows.some(([account]) => account === '3960')).toBe(false)
   })
+
+  it('previews the clearing of what the registration left, the öre on the kursdifferens', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 1965.43, currency: 'SEK', date: '2026-10-26', invoice_id: null }), error: null })
+    enqueue({
+      data: makeInvoice({ id: VALID_UUID, status: 'sent', currency: 'EUR', exchange_rate: 11.123, total: 176.7, remaining_amount: 176.7, paid_amount: 0, journal_entry_id: 'je-sent' }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 1965.44 }, error: null }) // what 1510 carries
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2026-10-26' })
+
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    const rows = (body.lines as Array<{ account_number: string; debit_amount: number; credit_amount: number }>).map(
+      (l) => [l.account_number, l.debit_amount, l.credit_amount],
+    )
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        ['1930', 1965.43, 0],
+        ['1510', 0, 1965.44],
+        ['7960', 0.01, 0],
+      ]),
+    )
+  })
 })
 
 // crm#1364: a SEK payout short of the invoice by the payment provider's fee.

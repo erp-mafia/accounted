@@ -24,6 +24,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { buildInvoiceCashLines, buildInvoicePaymentLines } from '@/lib/bookkeeping/invoice-entries'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { dbError } from '@/lib/errors/db-error'
@@ -121,8 +122,11 @@ export async function buildMarkPaidPreview(
   supabase: SupabaseClient,
   companyId: string,
   invoice: StagedInvoiceRow,
-  /** The approval books the invoice's sale first (defer_invoice_booking): the payment clears that receivable. */
-  options: { booksSaleFirst?: boolean } = {},
+  /**
+   * Set when the approval books the invoice's sale first (defer_invoice_booking):
+   * the 1510 that sale leaves, off its dry run. No voucher holds it yet.
+   */
+  options: { saleFirstReceivableSek?: number } = {},
 ): Promise<MarkPaidPreview> {
   // Same read and defaults as loadBookingContext in the commit executor.
   const { data: settings } = await supabase
@@ -163,7 +167,8 @@ export async function buildMarkPaidPreview(
         { deferDeductionShare: companyMethod === 'cash' },
       ).lines
     } else {
-      lines = buildInvoicePaymentLines(invoice as unknown as Invoice, customerName, settlementAccount).lines
+      const carried_sek = options.saleFirstReceivableSek ?? (await carriedSekOf(supabase, companyId, 'customer', invoice))
+      lines = buildInvoicePaymentLines({ ...(invoice as unknown as Invoice), carried_sek }, customerName, settlementAccount).lines
     }
     journalEntryPreview = entryPreviewOf(lines)
   } catch (err) {
@@ -177,7 +182,7 @@ export async function buildMarkPaidPreview(
 
   const how = useCash
     ? 'under kontantmetoden: the invoice has no verifikat of its own, so revenue is recognised at payment'
-    : options.booksSaleFirst
+    : options.saleFirstReceivableSek !== undefined
       ? 'against the receivable its sale verifikat books first (preview.sale_entry: the Bokför step, dated on the invoice date)'
       : 'against the receivable booked when the invoice was issued'
   const next_description = journalEntryPreview

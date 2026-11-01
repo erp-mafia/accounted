@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
-import { roundOre } from '@/lib/money'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { PendingOperation } from '@/types'
 
 import { commitPendingOperation } from '../commit'
@@ -201,7 +201,7 @@ describe('approving a batch of staged foreign-currency bank rows', () => {
         currency: 'USD',
         exchange_rate: expected.value,
         exchange_rate_date: expected.date,
-        amount_sek: roundOre(amount * expected.value),
+        amount_sek: sekOfForeign(amount, expected.value),
       })
       expect(inserts['transactions'][i].amount_sek).not.toBe(amount)
     }
@@ -297,13 +297,13 @@ describe('approving a batch of staged foreign-currency bank rows', () => {
     expect(inserts['transactions'][0]).toMatchObject({
       currency: 'PLN',
       exchange_rate: pln.value,
-      amount_sek: roundOre(400 * pln.value),
+      amount_sek: sekOfForeign(400, pln.value),
     })
     // Quoted per ONE yen: 150 000 JPY is about 9 000 kr, not 900 000.
     expect(inserts['transactions'][2]).toMatchObject({
       currency: 'JPY',
       exchange_rate: jpy.value,
-      amount_sek: roundOre(150000 * jpy.value),
+      amount_sek: sekOfForeign(150000, jpy.value),
     })
     expect(inserts['transactions'][2].amount_sek as number).toBeLessThan(15000)
   })

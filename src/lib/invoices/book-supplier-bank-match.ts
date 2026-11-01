@@ -56,6 +56,7 @@ import type { Logger } from '@/lib/logger'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { buildSupplierBankMatchLines, createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -90,6 +91,7 @@ import {
   planRegistrationBeforeSettlement,
 } from '@/lib/supplier-invoices/registration-first'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 
 /**
  * The transactions row as the doors read it (`select('*')`): the fields the
@@ -165,6 +167,29 @@ export type BookSupplierBankMatchResult =
       /** Set when the route answers through errorResponse(error) rather than the code. */
       error?: unknown
     }
+
+/**
+ * What planSupplierBankMatch needs of the world, read one way for the POST and
+ * its preview: the payment-day rate of a row in another currency than the
+ * invoice, and what 244x carries for a foreign invoice. A registration this
+ * match books first has no voucher yet, so its dry run's skuld stands in.
+ * `dryRun` keeps a preview off the shared rate cache, as the customer preview.
+ */
+export async function supplierBankMatchFx(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Pick<SupplierInvoice, 'id' | 'currency'>,
+  transaction: Pick<Transaction, 'date' | 'currency'>,
+  opts: { pendingPayableSek?: number; dryRun?: boolean },
+): Promise<{ paymentRate: number | null; carriedSek: number | null }> {
+  let paymentRate: number | null = null
+  if (transaction.currency !== invoice.currency) {
+    const rate = await fetchExchangeRate(invoice.currency, new Date(transaction.date), opts.dryRun ? undefined : supabase)
+    paymentRate = rate && rate.rate > 0 ? rate.rate : null
+  }
+  const carriedSek = opts.pendingPayableSek ?? (await carriedSekOf(supabase, companyId, 'supplier', invoice))
+  return { paymentRate, carriedSek }
+}
 
 export async function bookSupplierBankMatch(
   supabase: SupabaseClient,
@@ -282,6 +307,16 @@ export async function bookSupplierBankMatch(
     }
   }
 
+  // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+  // without its verifikat is booked first by the Bokför step, then paid. Its
+  // dry run runs every check first, so a refusal books nothing, and it says
+  // what the payment will clear.
+  const opCtx = { supabase, companyId, userId, log }
+  const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice, {
+    settlementDate: transaction.date,
+  })
+  if (!registrationPlan.ok) return registrationPlan
+
   // One payment plan for every door that matches a bank row to a supplier
   // invoice (the dashboard POST, its preview, the v1 POST and the bank
   // payment order's own debit): the bank fee split (6570), the overshoot
@@ -289,7 +324,15 @@ export async function bookSupplierBankMatch(
   // the kontantmetoden refusals. User-edited lines are not exempt: the ledger
   // update below comes from this plan. Refusing here, BEFORE any JE is
   // created, keeps a doomed match from burning a voucher number.
-  const planned = planSupplierBankMatch({ invoice, transaction, accountingMethod })
+  let fx: Awaited<ReturnType<typeof supplierBankMatchFx>>
+  try {
+    fx = await supplierBankMatchFx(supabase, companyId, invoice, transaction, {
+      pendingPayableSek: registrationPlan.required ? registrationPlan.payableSek : undefined,
+    })
+  } catch (err) {
+    return { ok: false, code: 'MATCH_SI_JE_FAILED', error: err }
+  }
+  const planned = planSupplierBankMatch({ invoice, transaction, accountingMethod, ...fx })
   if (!planned.ok) {
     return { ok: false, code: planned.code, details: planned.details }
   }
@@ -347,14 +390,6 @@ export async function bookSupplierBankMatch(
     if (overCeiling) return { ok: false, code: overCeiling.code, error: overCeiling }
   }
 
-  // Faktureringsmetoden with defer_invoice_booking: an invoice registered
-  // without its verifikat is booked first by the Bokför step, then paid. Its
-  // dry run runs every check first, so a refusal books nothing.
-  const opCtx = { supabase, companyId, userId, log }
-  const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice, {
-    settlementDate: transaction.date,
-  })
-  if (!registrationPlan.ok) return registrationPlan
   const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
   if (!registration.ok) return registration
 

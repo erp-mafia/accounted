@@ -112,6 +112,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+import { decideBankRowRebookingById } from '@/lib/transactions/is-booked'
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
@@ -365,6 +366,21 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(500)
     expect(body.error.code).toBe('BATCH_RPC_FAILED')
+  })
+
+  it('refuses a foreign bank row with 400 BATCH_FOREIGN_CURRENCY before the RPC runs', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    vi.mocked(decideBankRowRebookingById).mockResolvedValueOnce({ outcome: 'open', currency: 'EUR' })
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_FOREIGN_CURRENCY')
+    expect(body.error.message).toContain('en faktura i taget')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
   it('refuses a quote in the allocation list before the RPC runs', async () => {

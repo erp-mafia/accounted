@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, renderToBuffer } from '@react-pdf/renderer'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, WebshopOrder } from '@/types'
 import { formatAmount, styles, type OrderUnderlagCompany } from './order-underlag'
@@ -69,7 +69,7 @@ type DayOrder = Pick<
 /** The order's amount in SEK as its lines book it (FX already resolved). */
 function sekOf(order: DayOrder, amount: number): number {
   if (isLedgerCurrency(order.currency.toUpperCase())) return roundOre(amount)
-  return roundOre(amount * (order.exchange_rate ?? 0))
+  return sekOfForeign(amount, order.exchange_rate ?? 0)
 }
 
 /** Build the render model. Pure; all money through roundOre. */

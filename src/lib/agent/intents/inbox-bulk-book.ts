@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 
@@ -63,7 +64,7 @@ function txSek(tx: {
   }
   const rate = tx.exchange_rate == null ? null : Number(tx.exchange_rate)
   if (rate == null || !Number.isFinite(rate) || rate <= 0) return null
-  const sek = Number(tx.amount) * rate
+  const sek = sekOfForeign(Number(tx.amount), rate)
   return Number.isFinite(sek) ? Math.abs(sek) : null
 }
 

@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { formatAmount } from '@/lib/utils'
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
@@ -179,7 +180,7 @@ export interface DeductionCurrencyContext {
  *
  * The conversion is the SAME one the ledger leg applies before it debits BAS
  * 1513 (`generateRotRutLines` in lib/bookkeeping/invoice-entries.ts): per
- * amount, `Math.round(amount * rate * 100) / 100`. Sharing it is what keeps
+ * amount, `sekOfForeign`. Sharing it is what keeps
  * the begäran om utbetalning and the 1513 receivable from disagreeing about
  * what the Skatteverket claim is worth.
  *
@@ -195,7 +196,7 @@ export function deductionSekConverter(
   if (currency === 'SEK') return (amount) => amount
   const rate = money?.exchangeRate
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null
-  return (amount) => Math.round(amount * rate * 100) / 100
+  return (amount) => sekOfForeign(amount, rate)
 }
 
 /**

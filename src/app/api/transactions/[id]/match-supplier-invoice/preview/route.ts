@@ -19,6 +19,7 @@ import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
+import { supplierBankMatchFx } from '@/lib/invoices/book-supplier-bank-match'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import type { SupplierInvoice } from '@/types'
@@ -106,19 +107,6 @@ export const GET = withRouteContext(
     const si = invoice as SupplierInvoice
     const siAlreadyBooked = !!si.registration_journal_entry_id
 
-    // The POST's own plan (planSupplierBankMatch): this preview is what the
-    // user approves, so it refuses exactly where the commit refuses (an
-    // overshoot past the fee cap, a missing rate, a kontantmetoden partial)
-    // and otherwise shows the lines the commit books, from the same builder
-    // with the same inputs (buildSupplierBankMatchLines): the 3740
-    // öresavrundning, the 6570 bank fee, the kursdifferens and the invoice's
-    // dimensions on every leg.
-    const planned = planSupplierBankMatch({ invoice: si, transaction, accountingMethod })
-    if (!planned.ok) {
-      return errorResponseFromCode(planned.code, log, { requestId, details: planned.details })
-    }
-    const { plan } = planned
-
     // The POST books a deferring company's unbooked invoice first, through
     // the Bokför step: its dry run is every check that booking runs, and the
     // verifikat the dialog shows above the payment.
@@ -128,6 +116,23 @@ export const GET = withRouteContext(
       { settlementDate: transaction.date },
     )
     if (!registrationPlan.ok) return sessionFailureResponse(registrationPlan, log, requestId)
+
+    // The POST's own plan (planSupplierBankMatch): this preview is what the
+    // user approves, so it refuses exactly where the commit refuses (an
+    // overshoot past the fee cap, a missing rate, a kontantmetoden partial)
+    // and otherwise shows the lines the commit books, from the same builder
+    // with the same inputs (buildSupplierBankMatchLines): the 3740
+    // öresavrundning, the 6570 bank fee, the kursdifferens and the invoice's
+    // dimensions on every leg.
+    const fx = await supplierBankMatchFx(supabase, companyId!, si, transaction, {
+      pendingPayableSek: registrationPlan.required ? registrationPlan.payableSek : undefined,
+      dryRun: true,
+    })
+    const planned = planSupplierBankMatch({ invoice: si, transaction, accountingMethod, ...fx })
+    if (!planned.ok) {
+      return errorResponseFromCode(planned.code, log, { requestId, details: planned.details })
+    }
+    const { plan } = planned
 
     // The momskoder the cash booking reads for a reverse-charge invoice.
     const chartVatTreatments = plan.booking.kind === 'cash' && si.reverse_charge

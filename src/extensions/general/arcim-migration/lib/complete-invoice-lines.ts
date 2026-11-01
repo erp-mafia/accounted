@@ -43,6 +43,7 @@
  * (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16).
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { InvoiceHeaderVatSplit } from '@/lib/invoices/complete-invoice-rows'
 import { createLogger } from '@/lib/logger'
 import { equalOre, roundOre } from '@/lib/money'
@@ -103,7 +104,7 @@ function headerHoldsNoVatEvidence(row: CandidateRow): boolean {
 /** SEK twin of an amount on this row, or null when the row has no rate. */
 function toRowSek(amount: number, row: CandidateRow): number | null {
   if (!row.currency || row.currency.toUpperCase() === 'SEK') return roundOre(amount)
-  return row.exchange_rate != null ? roundOre(amount * row.exchange_rate) : null
+  return row.exchange_rate != null ? sekOfForeign(amount, row.exchange_rate) : null
 }
 
 interface PlannedWrite {

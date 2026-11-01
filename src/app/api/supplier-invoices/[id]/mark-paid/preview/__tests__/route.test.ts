@@ -358,11 +358,8 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview: a foreign-currency 
   function enqueueUsd() {
     enqueue({ data: { ...usd(), supplier: { supplier_type: 'eu_business', name: 'Supplier Inc' }, items: [] } })
     enqueue({ data: { accounting_method: 'accrual' } })
-    // The ledger read: registration posted, not shared, no payments, 244x.
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
-    enqueue({ data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }] })
+    // What 244x carries.
+    enqueue({ data: { ok: true, sek: 361.55 } })
   }
 
   it('the ticket: 37.50 USD against 1686 previews D 2440 361.55 / K 1686 361.55, not 37.50', async () => {
@@ -430,8 +427,7 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview: a foreign-currency 
   it('an ambiguous ledger refuses to preview instead of guessing', async () => {
     enqueue({ data: { ...usd(), supplier: { supplier_type: 'eu_business' }, items: [] } })
     enqueue({ data: { accounting_method: 'accrual' } })
-    enqueue({ data: { id: 'je-reg', status: 'posted' } })
-    enqueue({ data: [{ id: 'si-other' }] }) // another invoice on the same registration
+    enqueue({ data: { ok: false, reason: 'registration_voucher_shared' } })
     const res = await GET(makeReq('amount=37.5'), createMockRouteParams({ id: 'si-1' }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)
     expect(status).toBe(409)

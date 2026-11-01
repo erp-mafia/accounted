@@ -61,11 +61,11 @@
 import type { CreateJournalEntryLineInput } from '@/types'
 import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
+import { clearedSek } from './ledger-carried-sek'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
-
-const TWO_DP = (n: number): number => Math.round(n * 100) / 100
+import { roundOre } from '@/lib/money'
 
 /**
  * Structured code for "the foreign-currency invoice carries no usable booking
@@ -144,6 +144,12 @@ export interface PaymentClearingInvoice {
   remaining_amount: number | null
   total: number
   paid_amount: number | null
+  /**
+   * What 1510 carries for this invoice (carriedSekOf): a full settlement clears
+   * exactly that, a part payment its share. Null or absent: the invoice's
+   * booking rate.
+   */
+  carried_sek?: number | null
 }
 
 export interface PaymentClearingLines {
@@ -205,7 +211,7 @@ export interface PaymentClearingLines {
  *
  * # Same-currency, foreign (EUR invoice settled by a EUR bank tx)
  *   The foreign units paid are known exactly (|tx.amount|), so:
- *     arSek     = |tx.amount| × invoice.exchange_rate (booking rate)
+ *     arSek     = the SEK 1510 carries for those units (clearedSek)
  *     fxDiffSek = arSek − bankSek
  *   1510 is cleared at the SEK value the receivable was booked at and the
  *   difference against the actual SEK bank leg is the REALIZED kursvinst /
@@ -219,7 +225,7 @@ export interface PaymentClearingLines {
  *   payment satisfies (typically computed as `bankSek / today_rate` where
  *   `today_rate` is the Riksbanken spot rate on the payment date: see
  *   `app/api/transactions/[id]/match-invoice/route.ts`). The helper then:
- *     arSek    = paidInInvoiceCurrency × invoice.exchange_rate (booking rate)
+ *     arSek    = the SEK 1510 carries for those units (clearedSek)
  *     fxDiffSek = arSek − bankSek
  *   For a partial cross-currency payment this credits 1510 by the
  *   proportional foreign amount (not the full remaining) and posts the
@@ -286,7 +292,7 @@ export function buildInvoicePaymentClearingLines(
   // Bank-leg: actual SEK that hit the bank. resolveSekAmount returns the
   // raw amount for SEK txs and amount * exchange_rate for foreign txs
   // (preferring the pre-computed amount_sek when set).
-  const bankSek = TWO_DP(
+  const bankSek = roundOre(
     resolveSekAmount(
       Math.abs(tx.amount),
       tx.amount_sek != null ? Math.abs(tx.amount_sek) : null,
@@ -299,6 +305,15 @@ export function buildInvoicePaymentClearingLines(
   const invoiceIsForeign = invoice.currency !== 'SEK'
   // Pure SEK both sides: the only place whole-krona öresavrundning applies.
   const pureSek = sameCurrency && invoice.currency === 'SEK'
+  const remainingInInvoiceCurrency = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
+  // What 1510 gives up for `amount` of the invoice's currency.
+  const arSekOf = (amount: number): number =>
+    clearedSek({
+      amount,
+      remaining: remainingInInvoiceCurrency,
+      carried: invoice.carried_sek ?? null,
+      rate: requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency),
+    })
 
   let arSek: number
   let fxDiffSek: number
@@ -310,7 +325,7 @@ export function buildInvoicePaymentClearingLines(
     // A whole-krona bank settlement of an öre-bearing SEK invoice leaves a
     // sub-krona residual. Clear the FULL remaining off 1510 (invoice → paid)
     // and let 3740 absorb the öre; a ≥1 kr short payment stays a real partial.
-    const remainingSek = TWO_DP(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0))
+    const remainingSek = roundOre(remainingInInvoiceCurrency)
     const oreDiff = oreSettlementResidual(remainingSek, bankSek)
     const excess = overpaymentExcess(remainingSek, bankSek)
     const shortfall = paymentFeeShortfall(remainingSek, bankSek)
@@ -342,28 +357,23 @@ export function buildInvoicePaymentClearingLines(
     // 1510 at the settlement-date value: a 1 000 EUR invoice booked at 11,30
     // (11 300,00 on 1510) settled by a tx worth 11 496,70 kr over-credited
     // 1510 by 196,70 and the realized kursvinst never reached 3960.
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    const paidForeign = Math.abs(tx.amount)
-    arSek = TWO_DP(paidForeign * invRate)
-    fxDiffSek = TWO_DP(arSek - bankSek)
+    arSek = arSekOf(Math.abs(tx.amount))
+    fxDiffSek = roundOre(arSek - bankSek)
   } else if (paidInInvoiceCurrency != null && paidInInvoiceCurrency > 0) {
     // Proper FX path: caller computed the invoice-currency equivalent
     // using today's spot rate. AR-leg comes off 1510 at the invoice's
     // BOOKING rate (so the GL credit matches what was originally posted
     // for those units of foreign currency). FX diff balances the verifikat.
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    arSek = TWO_DP(paidInInvoiceCurrency * invRate)
-    fxDiffSek = TWO_DP(arSek - bankSek)
+    arSek = arSekOf(paidInInvoiceCurrency)
+    fxDiffSek = roundOre(arSek - bankSek)
   } else {
     // Fallback when no paidInInvoiceCurrency is supplied (e.g. legacy
     // callers, Riksbanken lookup failed with no manual override). Same
     // pre-FX-rewrite behaviour: full-clear gets FX diff, partial defers.
-    const invRemainingForeign = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
-    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
-    const arSekFullRemaining = TWO_DP(invRemainingForeign * invRate)
+    const arSekFullRemaining = arSekOf(remainingInInvoiceCurrency)
     if (bankSek >= arSekFullRemaining - 0.005) {
       arSek = arSekFullRemaining
-      fxDiffSek = TWO_DP(arSek - bankSek)
+      fxDiffSek = roundOre(arSek - bankSek)
     } else {
       arSek = bankSek
       fxDiffSek = 0

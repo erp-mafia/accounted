@@ -123,7 +123,7 @@ beforeEach(() => {
 describe('gnubok_mark_invoice_as_paid staging: sale first', () => {
   it('shows the sale verifikat approval books first, with the payment date as the settlement date', async () => {
     const { supabase, findCall } = setup()
-    mockPlan.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY })
+    mockPlan.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 12500 })
 
     const result = (await markPaid.execute(
       { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
@@ -140,6 +140,31 @@ describe('gnubok_mark_invoice_as_paid staging: sale first', () => {
       { settlementDate: '2026-09-15' },
     )
     expect(findCall('pending_operations', 'insert')).toBeDefined()
+  })
+
+  it('previews what the sale will leave on 1510, as approval clears it: no voucher holds it yet', async () => {
+    // 141.36 + 35.34 EUR at 11.123 books 1965.44; the header at the rate says 1965.43.
+    const { supabase, setTable } = setup(
+      unbookedInvoice({
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        remaining_amount: 176.7,
+      }),
+    )
+    setTable('rpc:document_carried_sek', { data: { ok: false, reason: 'no_registration_voucher' } })
+    mockPlan.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 1965.44 })
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, ACTOR,
+    )) as { preview: { journal_entry_preview: { lines: Array<Record<string, unknown>> } } }
+
+    const lines = result.preview.journal_entry_preview.lines
+    expect(lines.find((l) => l.account_number === '1510')).toMatchObject({ credit_amount: 1965.44 })
+    expect(lines.find((l) => l.account_number === '1930')).toMatchObject({ debit_amount: 1965.44 })
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('refuses at staging with the Bokför step code and stages nothing', async () => {

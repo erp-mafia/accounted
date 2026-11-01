@@ -1,0 +1,1 @@
+[2026-11-01] What a foreign document carries on 1510 or 244x is one SQL function, public.document_carried_sek, which TypeScript reads too, not a TypeScript read with a twin: match_batch_allocate needs it inside its transaction, and two copies of a voucher walk is the bug this removes.

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { resolveSekAmountOrNull, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -8,7 +8,6 @@ import { postingPort } from '@/lib/posting/port'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
-import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
   Currency,
@@ -159,7 +158,7 @@ export async function resolveOrderFx(
       supabase,
     )
     if (rate?.rate) {
-      const totalSek = roundOre(order.total * rate.rate)
+      const totalSek = sekOfForeign(order.total, rate.rate)
       if (options.persist === false) {
         return { ...order, total_sek: totalSek, exchange_rate: rate.rate }
       }

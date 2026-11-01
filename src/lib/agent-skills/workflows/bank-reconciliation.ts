@@ -20,7 +20,7 @@ you already have in hand. Decide along two axes (**what you're connecting** and
 | You have… | …and the entry is | Use |
 |---|---|---|
 | One bank tx + one customer invoice | not yet booked | \`gnubok_match_transaction_to_invoice\` |
-| One bank receipt covering many invoices (customer **or** supplier) | not yet booked | \`gnubok_match_batch_allocate\` (samlingsbetalning, BFL 5 kap 6§) |
+| One bank receipt in SEK covering many invoices (customer **or** supplier) | not yet booked | \`gnubok_match_batch_allocate\` (samlingsbetalning, BFL 5 kap 6§) |
 | A whole period of unmatched income to clear | not yet booked | \`gnubok_auto_match_period\` (run \`dry_run=true\` first) |
 | One bank tx whose affärshändelse you already posted manually | already booked | \`gnubok_link_transaction_to_journal_entry\` |
 | A customer invoice you know is paid, payment already in a verifikat | already booked | \`gnubok_find_voucher_candidates_for_invoice\` → \`gnubok_link_invoice_to_voucher\` |
@@ -31,7 +31,9 @@ you already have in hand. Decide along two axes (**what you're connecting** and
 
 Rule of thumb: **match_\*** creates the payment bokföring; **link_\*** attaches to
 bokföring that already exists (no new verifikat). Every one of these stages a
-pending operation: the user approves before anything posts.
+pending operation: the user approves before anything posts. A bank row in a
+foreign currency is matched to one invoice at a time: the batch refuses it
+(\`BATCH_FOREIGN_CURRENCY\`).
 
 ### Kontantmetoden vs faktureringsmetoden
 

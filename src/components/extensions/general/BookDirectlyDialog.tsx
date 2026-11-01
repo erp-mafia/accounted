@@ -59,7 +59,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { resolveSekAmount, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
@@ -278,7 +278,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const targetSek = useMemo(() => {
     if (targetAmount == null) return null
     if (targetCurrency === 'SEK') return targetAmount
-    if (fxRate != null) return Math.round(targetAmount * fxRate * 100) / 100
+    if (fxRate != null) return sekOfForeign(targetAmount, fxRate)
     return null
   }, [targetAmount, targetCurrency, fxRate])
 

@@ -28,6 +28,8 @@
  * settlement-amount derivation, the duplicate guard and the dry run.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { carriedSekOf, paidOfClearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
@@ -57,7 +59,6 @@ import {
 } from '@/lib/invoices/sale-first'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
-import { roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { EntityType, Invoice } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -105,8 +106,8 @@ registerEndpoint({
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
     'Not payable: a quote (400 INVOICE_QUOTE_NOT_PAYABLE), a delivery note, a document outside sent/overdue/partially_paid, or an invoice with an active credit note, a draft included (400 INVOICE_PAID_NOT_PAYABLE; details.reason says which). A payment_date after today (Swedish calendar day) returns 400 PAYMENT_DATE_IN_FUTURE. All of these fire under dry-run too.',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
-    'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
-    'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
+    'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly: the bank takes that figure plus the delta, 1510 clears what it carries and the gap lands on 3960/7960. Omitting it on a non-SEK invoice books the bank at what 1510 carries, with no FX gain/loss.',
+    'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. A line total equal to what 1510 carries pays the whole remainder, any other its share of that (at `invoice.exchange_rate` when the ledger cannot say); a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
     'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the :book step (Debit 1510 / Credit revenue + output VAT, dated on the invoice date), then the payment clears that 1510. sale_journal_entry_id in the response names it, and the dry run returns it as sale_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year INVOICE_BOOK_NO_FISCAL_PERIOD, a partially paid invoice INVOICE_BOOK_INVALID_STATUS), or the payment date is locked (PERIOD_LOCKED with details.payment_date), the payment is refused with that code, details.sale_first is true, and nothing is booked.',
     'Credit notes: the refund is recorded for an issued SEK credit note with its verifikat and no ROT/RUT, up to what the customer has tillgodo (409 CREDIT_NOTE_REFUND_UNSUPPORTED or CREDIT_NOTE_REFUND_NOTHING_OWED otherwise). Custom `lines` must debit 1510 only. 409 CREDIT_NOTE_REFUND_LIKELY_BOOKED when a manual verifikat already debits 1510 with the amount; `force: true` (fresh Idempotency-Key) books it anyway.',
@@ -380,13 +381,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       : (typed as { deduction_total?: number | null }).deduction_total ?? 0
     const deductionCapSek =
       deductionTotal > 0 && needsFxConversion
-        ? roundOre(deductionTotal * fxRate!)
+        ? sekOfForeign(deductionTotal, fxRate!)
         : deductionTotal
+    const remainingAmount = typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0)
     const paymentAmount = customLines
       ? deriveCustomerSettlementAmount(customLines, deductionCapSek)
-      : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
+      : remainingAmount
     const paymentAmountInInvoiceCurrency = needsFxConversion
-      ? roundOre(paymentAmount / fxRate!)
+      ? paidOfClearedSek({
+          sek: paymentAmount,
+          remaining: remainingAmount,
+          carried: await carriedSekOf(ctx.supabase, ctx.companyId!, 'customer', typed),
+          rate: fxRate!,
+        })
       : paymentAmount
 
     // Ledger math + overpayment guard via the shared planInvoicePayment helper:

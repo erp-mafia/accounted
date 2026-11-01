@@ -25,6 +25,7 @@
  * shows nothing, rather than guessing a branch.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { AccountingFramework, Company, EntityType } from '@/types'
 import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
 import { accrualMateriality } from '@/lib/bokslut/accruals/materiality'
@@ -100,7 +101,7 @@ export function resolveAccrualAmountSek({
     return null
   }
 
-  return Math.round(amount * exchangeRate * 100) / 100
+  return sekOfForeign(amount, exchangeRate)
 }
 
 /**

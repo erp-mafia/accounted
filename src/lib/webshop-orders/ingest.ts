@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -226,7 +227,7 @@ async function resolveFx(
     cache.set(cacheKey, rate)
   }
   if (rate === null) return { total_sek: null, exchange_rate: null }
-  return { total_sek: round(row.total * rate), exchange_rate: rate }
+  return { total_sek: sekOfForeign(row.total, rate), exchange_rate: rate }
 }
 
 export async function upsertWebshopOrders(

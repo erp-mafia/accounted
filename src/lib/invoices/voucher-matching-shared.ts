@@ -10,8 +10,9 @@
  */
 import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fxDeviationTooLarge } from '@/lib/bookkeeping/fx-settlement'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { voucherLinkKursdifferensBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
@@ -241,8 +242,8 @@ export function sekBookedSettlement(
     rate < 100000
   if (!eligible) return { eligible: false, reason: 'not_eligible' }
   const sekTotal = roundOre(sekSideTotal)
-  const bookedSek = roundOre(remainingAmount * rate)
-  if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
+  const bookedSek = sekOfForeign(remainingAmount, rate)
+  if (fxDeviationTooLarge(sekTotal, bookedSek)) {
     return { eligible: false, reason: 'fx_deviation_too_large', sekTotal, bookedSek }
   }
   return { eligible: true, sekTotal, bookedSek }

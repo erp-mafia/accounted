@@ -10,6 +10,7 @@ import { buildInvoiceCashPartialLines } from '@/lib/bookkeeping/invoice-lines'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { ORE_TOLERANCE, equalOre, isZeroOre, roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
@@ -469,7 +470,8 @@ export async function settleInvoicePayment(
           supabase,
           companyId,
           userId,
-          invoice as Invoice,
+          // A sale booked first above is on the ledger by now.
+          { ...(invoice as Invoice), carried_sek: await carriedSekOf(supabase, companyId, 'customer', invoice) },
           paymentDate,
           exchangeRateDifference,
           invoice.customer?.name ?? undefined,

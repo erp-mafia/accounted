@@ -19,6 +19,9 @@
  *   1b. the row: already booked or ignored is refused by the gate every
  *      booking door asks (decideBankRowRebooking), before anything is
  *      written; the RPC reads the same anchors under its row lock;
+ *   1c. a foreign row is refused, as bulk book and the expense payout refuse
+ *      one: the verifikat's columns are kronor and neither this door nor the
+ *      RPC reads the row's SEK. Refused here so nothing is booked first for it;
  *   2. already-explained guard: posted vouchers that already book this bank
  *      row (each invoice marked paid by hand, a Bankgirot aggregate) refuse
  *      the batch unless force=true names exactly that set;
@@ -47,11 +50,11 @@
  * The invoices less the fees (customer) or plus the fees (supplier) equal
  * the row; every invoice still settles for what it owed.
  *
- * A dry run runs 1-3s, then reads the transaction and the invoices and
- * projects the verifikat the RPC would post (lib/invoices/batch-allocation-
- * preview.ts mirrors the migration), with the registrations 3b and the sales
- * 3s would book before it (registration_entries, sale_entries). It writes
- * nothing: no RPC, no events,
+ * A dry run runs 1-3s, then reads the transaction, the invoices and what the
+ * ledger carries for a foreign one and projects the verifikat the RPC would
+ * post (lib/invoices/batch-allocation-preview.ts mirrors the migration), with
+ * the registrations 3b and the sales 3s would book before it
+ * (registration_entries, sale_entries). It writes nothing: no RPC, no events,
  * no behandlingshistorik. It says when the guard in 2 was bypassed
  * (already_explained_by names the vouchers) or could not run
  * (duplicate_check_failed), so the approver never takes it for a clean check.
@@ -75,6 +78,9 @@ import {
 } from '@/lib/invoices/batch-cash-method-guard'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { fxDeviationTooLarge } from '@/lib/bookkeeping/fx-settlement'
+import { carriedSekOf, clearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import {
   buildBatchAllocationPreview,
   type BatchAllocationPreviewInvoice,
@@ -205,6 +211,12 @@ export async function matchTransactionBatch(
       code: bankRowRefusalCode(rebooking, 'BATCH_TX_ALREADY_BOOKED'),
       details: { journal_entry_id: rebooking.journalEntryId, voucher: rebooking.voucher, via: rebooking.via, undo: rebooking.undo },
     }
+  }
+
+  // 1c. A foreign row, on a dry run and a commit alike, before a sale or
+  // registration is booked for it.
+  if (rebooking.outcome === 'open' && !isKronorCurrency(rebooking.currency)) {
+    return { ok: false, code: 'BATCH_FOREIGN_CURRENCY', details: { currency: rebooking.currency } }
   }
 
   // 2. Already-explained guard (issue #2294). Fail-open on a detection error
@@ -623,6 +635,37 @@ async function previewMatchBatch(
     }
   }
 
+  // What a foreign invoice clears: what the ledger carries, read here as the
+  // RPC reads it under its locks. A sale or registration booked first has no
+  // voucher yet, so its dry run says. An amount past the limit is the RPC's
+  // refusal, answered on the dry run so a staged booking never waits for an
+  // approval that cannot post.
+  const bookedFirst = new Map<string, number>([
+    ...guard.registrations.map((plan): [string, number] => [plan.supplierInvoiceId, plan.payableSek]),
+    ...guard.sales.map((plan): [string, number] => [plan.invoiceId, plan.receivableSek]),
+  ])
+  for (const allocation of allocations) {
+    const id = allocation.kind === 'customer_invoice' ? allocation.invoice_id : allocation.supplier_invoice_id
+    const invoice = invoices.get(id)
+    if (!invoice || isKronorCurrency(invoice.currency)) continue
+    try {
+      invoice.carried_sek =
+        bookedFirst.get(id) ?? (await carriedSekOf(supabase, companyId, isCustomer ? 'customer' : 'supplier', { id, currency: invoice.currency }))
+    } catch (err) {
+      return failed(err)
+    }
+    const remaining = invoice.remaining_amount ?? invoice.total
+    if (remaining == null || !(Number(invoice.exchange_rate) > 0)) continue
+    const bookedSek = clearedSek({ amount: remaining, remaining, carried: invoice.carried_sek, rate: Number(invoice.exchange_rate) })
+    if (fxDeviationTooLarge(allocation.amount, bookedSek)) {
+      return {
+        ok: false,
+        code: 'BATCH_FX_DEVIATION_TOO_LARGE',
+        details: { invoice_id: id, allocation_amount: allocation.amount, expected_sek: bookedSek },
+      }
+    }
+  }
+
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
   const txAbs = Math.abs(transaction.amount)
   const totalFees = payoutFeeTotal(input.fees)
@@ -657,7 +700,7 @@ async function previewMatchBatch(
     return failed(err)
   }
   const expected = buildBatchAllocationPreview({
-    transaction: { amount: transaction.amount, currency, date: transaction.date },
+    transaction: { amount: transaction.amount, date: transaction.date },
     bankAccount,
     allocations,
     invoices,

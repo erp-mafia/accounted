@@ -34,9 +34,8 @@ import { loadDocumentReading, type PeppolReader } from '@/lib/documents/reading/
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
 import { underlagPaymentFacts } from '@/lib/documents/underlag-bank-candidates'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { pairInboxItems } from '@/lib/inkorg/pairs'
@@ -188,7 +187,7 @@ async function itemFacts(
   let amountSek = isKronorCurrency(facts.currency) ? facts.amount : null
   if (amountSek === null) {
     const rate = await (deps.rateFor ?? defaultRateFor(supabase))(facts.currency, facts.issueDate ?? arrivedOn)
-    amountSek = rate != null ? roundOre(facts.amount * rate) : null
+    amountSek = rate != null ? sekOfForeign(facts.amount, rate) : null
   }
   return { facts, amountSek }
 }

@@ -29,6 +29,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { fxSettlementOutcome } from '@/lib/bookkeeping/fx-settlement'
 import { isOverpaymentAccount, overpaymentAllowed } from '@/lib/bookkeeping/overpayment'
 import { isPaymentFeeAccount, paymentFeeAllowed, paymentFeeShortfall } from '@/lib/bookkeeping/payment-fee'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -212,40 +213,20 @@ export function planMatchPayment(
 }
 
 /**
- * How close a cross-currency payment must come to the invoice's remaining
- * amount to settle it in full: 2 % either way, in the invoice's currency.
- *
- * A EUR invoice paid in full reaches a SEK account converted at the bank's
- * rate, never at Riksbanken's mid rate: the spread and the transfer fee leave
- * the converted figure a little short (0.5 to 1.7 % on the payments matched in
- * production). Read at the mid rate, that payment was booked as a partial
- * payment, the invoice stayed open for the residual and the kursdifferens
- * landed on the wrong side (PH 227). Within the band the payment settles the
- * whole remaining: 1510 is credited at the invoice's booking rate and the
- * difference to the SEK received is the realised kursvinst (3960) or
- * kursförlust (7960). Outside it the payment stays a partial payment.
- */
-export const FX_FULL_SETTLEMENT_BAND = 0.02
-
-/**
- * A SEK payment of a foreign-currency invoice, in the invoice's currency:
- * `sek / rate`, to four decimals, or exactly the remaining amount when that
- * figure lies inside FX_FULL_SETTLEMENT_BAND of it (see there). Pure. Every
- * match door (dashboard route and its preview, the v1 route, the agent
- * stage and commit) converts through this one function, so the preview the
- * user approves is the booking the route makes.
+ * A SEK payment of a foreign-currency invoice, in the invoice's currency, as
+ * fxSettlementOutcome reads it: the whole remaining inside the band, else
+ * `sek / rate`. An amount above the band goes on to the overshoot guard in
+ * planMatchPayment, the refusal. Every match door (dashboard route and its
+ * preview, the v1 route, the agent stage and commit) converts through this,
+ * so the preview the user approves is the booking the route makes.
  */
 export function fxPaidInInvoiceCurrency(
   sekAmount: number,
   rate: number,
   invoice: InvoicePaymentTotals,
 ): number {
-  const converted = Math.round((sekAmount / rate) * 10000) / 10000
   const remaining = roundOre(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0))
-  if (remaining > 0 && Math.abs(converted - remaining) <= remaining * FX_FULL_SETTLEMENT_BAND) {
-    return remaining
-  }
-  return converted
+  return fxSettlementOutcome(sekAmount, rate, remaining, 'customer').paidInInvoiceCurrency
 }
 
 export async function planTransactionInvoiceMatch(
@@ -267,15 +248,14 @@ export async function planTransactionInvoiceMatch(
   ) {
     return { ok: false, code: 'MATCH_INVOICE_TX_FX_RATE_MISSING' }
   }
-  const txAbsSek =
-    Math.round(
-      resolveSekAmount(
-        Math.abs(transaction.amount),
-        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
-        transaction.currency,
-        transaction.exchange_rate,
-      ) * 100,
-    ) / 100
+  const txAbsSek = roundOre(
+    resolveSekAmount(
+      Math.abs(transaction.amount),
+      transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+      transaction.currency,
+      transaction.exchange_rate,
+    ),
+  )
 
   let fx: MatchFx = { required: false }
   if (transaction.currency !== invoice.currency) {

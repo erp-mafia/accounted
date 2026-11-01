@@ -277,7 +277,8 @@ export interface BankRowRefusal {
  *     says the booking is the row's own, so the door may offer to reverse it.
  */
 export type BankRowRebooking =
-  | { outcome: 'open' }
+  /** `currency`: read by decideBankRowRebookingById, for a door that takes kronor rows only. */
+  | { outcome: 'open'; currency?: string | null }
   | { outcome: 'replace'; journalEntryId: string }
   | BankRowRefusal
 
@@ -370,7 +371,7 @@ export async function decideBankRowRebookingById(
 ): Promise<BankRowRebooking> {
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, journal_entry_id, reconciliation_method, is_ignored, transaction_voucher_links(journal_entry_id, role)')
+    .select('id, currency, journal_entry_id, reconciliation_method, is_ignored, transaction_voucher_links(journal_entry_id, role)')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -378,7 +379,8 @@ export async function decideBankRowRebookingById(
     return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null }
   }
   if (!data) return { outcome: 'open' }
-  return decideBankRowRebooking(supabase, companyId, data as GatedBankRow, opts)
+  const rebooking = await decideBankRowRebooking(supabase, companyId, data as GatedBankRow, opts)
+  return rebooking.outcome === 'open' ? { ...rebooking, currency: (data as { currency?: string | null }).currency } : rebooking
 }
 
 /**

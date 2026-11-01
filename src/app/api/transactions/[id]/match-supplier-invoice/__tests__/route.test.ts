@@ -28,6 +28,13 @@ import {
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
 const { mockLoggerWarn } = vi.hoisted(() => ({ mockLoggerWarn: vi.fn() }))
+// The payment-day rate is a network read; null falls back to the invoice's own.
+const { mockFetchExchangeRate } = vi.hoisted(() => ({ mockFetchExchangeRate: vi.fn() }))
+vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/currency/riksbanken')>()),
+  fetchExchangeRate: mockFetchExchangeRate,
+}))
+
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -141,6 +148,7 @@ beforeEach(() => {
   mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
+  mockFetchExchangeRate.mockResolvedValue(null)
   mockDetectDuplicate.mockResolvedValue(null)
 })
 
@@ -175,6 +183,10 @@ function enqueueHappyPath(opts: {
   // ledger_account returned by the cash_accounts lookup; only enqueued when
   // the transaction carries a cash_account_id.
   cashAccountLedger?: string
+  // What the ledger carries for a foreign invoice, when it can say.
+  carriedSek?: number
+  // A registration booked first: its dry run says, so no ledger read happens.
+  noLedgerRead?: boolean
 }) {
   // 1. transactions fetch
   enqueue({
@@ -218,6 +230,13 @@ function enqueueHappyPath(opts: {
     enqueue({ data: { ledger_account: opts.cashAccountLedger ?? '1930' }, error: null })
   } else {
     enqueue({ data: [], error: null })
+  }
+  // 5b. what the ledger carries for a foreign invoice: nothing linked here
+  if (opts.invoice.currency !== 'SEK' && !opts.noLedgerRead) {
+    enqueue({
+      data: opts.carriedSek !== undefined ? { ok: true, sek: opts.carriedSek } : { ok: false, reason: 'no_registration_voucher' },
+      error: null,
+    })
   }
   // 6. transactions update: the row claim (CAS), right after the verifikat
   enqueue({ data: [{ id: TX_UUID }], error: null })
@@ -424,7 +443,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () =
   it('falls back to bank SEK when the invoice has no exchange_rate on file', async () => {
     // Foreign-currency invoice but exchange_rate is null on the row.
     // Without a rate we can't compute the AP-booked SEK precisely, so we
-    // pass the actual bank SEK and skip the FX diff.
+    // pass the actual bank SEK and skip the FX diff. The payment day's rate
+    // says 239 kr is the 25 USD.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 9.56, date: '2026-05-12' })
     enqueueHappyPath({
       transaction: { amount: -239, currency: 'SEK' },
       invoice: { currency: 'USD', exchange_rate: null, remaining_amount: 25 },
@@ -836,16 +857,73 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(res.status).toBe(200)
   })
 
-  it('does NOT trigger overshoot guard on currency mismatch (FX path clamps to remaining)', async () => {
-    // SEK transaction paying a EUR invoice. The currency-mismatch branch
-    // collapses paymentAmountInvoiceCurrency to invoice.remaining_amount and
-    // cannot overshoot, so the guard must not fire here.
+  it('does NOT trigger the overshoot guard on a cross-currency row inside the limit', async () => {
+    // SEK transaction paying a EUR invoice, 4 % over the rate: a card rate.
+    // The band reads it as the whole remainder, so the guard must not fire.
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a SEK row past the limit of a foreign remainder: never a kursförlust of 7 700 kr', async () => {
     enqueueHappyPath({
       transaction: { amount: -10000, currency: 'SEK' },
       invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('asks for the payment-day rate of the invoice currency on a cross-currency row, and only then', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(mockFetchExchangeRate).toHaveBeenCalledWith('EUR', new Date('2026-05-12'), expect.anything())
+
+    mockFetchExchangeRate.mockClear()
+    enqueueHappyPath({
+      transaction: { amount: -500, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 500 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('reads a part of the remainder at the payment-day rate: half a payment is a partial, not a gain', async () => {
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.4, date: '2026-05-12' })
+    enqueueHappyPath({
+      transaction: { amount: -5700, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 1000, exchange_rate: 11.3 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    // 500 EUR at the booking rate off 2440, 5 700 kr off the bank, 50 kr the loss.
+    expect(args[4]).toBe(5650)
+    expect(args[6]).toBeCloseTo(-50, 2)
+    expect(findCalls('supplier_invoices', 'update').at(-1)![0]).toMatchObject({ status: 'partially_paid', remaining_amount: 500 })
+  })
+
+  it('clears what 2440 carries on a full settlement, not the rate', async () => {
+    // The carried figure comes through the door's ledger read, in the queue.
+    enqueueHappyPath({
+      transaction: { amount: -1965.43, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 176.7, exchange_rate: 11.123 },
+      carriedSek: 1965.44,
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(1965.44)
+    expect(args[6]).toBeCloseTo(0.01, 2)
   })
 })
 
@@ -1286,6 +1364,30 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a deferred invoice
       lines: Array<{ account_number: string; debit_amount: number }>
     }
     expect(input.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(2390)
+  })
+
+  it('clears what the registration will leave on 2440, off its dry run: no voucher holds it yet', async () => {
+    // 141.36 + 35.34 EUR at 11.123: the registration credits 1965.44, the rate says 1965.43.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2026-05-12' })
+    enqueueHappyPath({
+      transaction: { amount: -1965.43, currency: 'SEK' },
+      invoice: { currency: 'EUR', exchange_rate: 11.123, remaining_amount: 176.7 },
+      noLedgerRead: true,
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({ ...requiredPlan, payableSek: 1965.44 })
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(1965.44)
+    expect(args[6]).toBeCloseTo(0.01, 2)
   })
 
   it('a refused registration refuses the match: no payment verifikat, no ledger update, no link', async () => {

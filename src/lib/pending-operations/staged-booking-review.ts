@@ -7,6 +7,7 @@
  * here, where both the booking-review rules and the supplier-invoice rules
  * may be read. Null when nothing it books is matched.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PendingOperation } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -75,7 +76,7 @@ async function supplierInvoiceReview(
   )
   const total = Number(params.total) || 0
   const exchangeRate = typeof params.exchange_rate === 'number' ? params.exchange_rate : null
-  const amountSek = Math.abs(total) * (exchangeRate ?? 1)
+  const amountSek = exchangeRate === null ? Math.abs(total) : sekOfForeign(Math.abs(total), exchangeRate)
   const header = {
     currency: typeof params.currency === 'string' ? params.currency : 'SEK',
     exchange_rate: exchangeRate,

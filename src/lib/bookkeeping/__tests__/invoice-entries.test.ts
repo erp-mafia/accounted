@@ -21,6 +21,7 @@ const mockedCreateEntry = vi.mocked(createJournalEntry)
 // Import functions under test AFTER mocks are set up
 const {
   createInvoiceJournalEntry,
+  buildInvoicePaymentLines,
   createInvoicePaymentJournalEntry,
   createCreditNoteJournalEntry,
   createInvoiceCashEntry,
@@ -1043,6 +1044,71 @@ describe('header fallback and payment path: strict FX conversion', () => {
     expect(input.lines).toHaveLength(2)
     expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(4600)
     expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(4600)
+  })
+
+  it('buildInvoicePaymentLines clears what 1510 carries, not total_sek, so no öre is stranded', () => {
+    const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11.123, total: 176.7, total_sek: 1965.43, remaining_amount: 176.7 })
+    const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 1965.44 }, undefined)
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 1965.44, 0],
+      ['1510', 0, 1965.44],
+    ])
+  })
+
+  describe('a stated difference, measured from the rate, on a ledger that says otherwise', () => {
+    const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+      lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+    it('keeps the bank at what arrived: the öre the ledger adds lands on 3960', () => {
+      // 176.70 EUR at 11.123 is 1965.43 at the rate, registered 1965.44; 1979.04 kr arrived.
+      const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11.123, total: 176.7, total_sek: 1965.43, remaining_amount: 176.7 })
+      const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 1965.44 }, undefined, '1930', 13.61)
+      expect(rows(lines)).toEqual([
+        ['1930', 1979.04, 0],
+        ['1510', 0, 1965.44],
+        ['3960', 0, 13.6],
+      ])
+    })
+
+    it('keeps the bank at what arrived after a rättelse: the gap is not 500 kr off the statement', () => {
+      // 1000 EUR at 11, ledger corrected to 10 500; 11 200 kr arrived.
+      const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11, total: 1000, total_sek: 11000, remaining_amount: 1000 })
+      const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 10500 }, undefined, '1930', 200)
+      expect(rows(lines)).toEqual([
+        ['1930', 11200, 0],
+        ['1510', 0, 10500],
+        ['3960', 0, 700],
+      ])
+    })
+
+    it('books a loss on 7960 when less arrived than the ledger carries', () => {
+      const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11, total: 1000, total_sek: 11000, remaining_amount: 1000 })
+      const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 11500 }, undefined, '1930', -100)
+      expect(rows(lines)).toEqual([
+        ['1930', 10900, 0],
+        ['1510', 0, 11500],
+        ['7960', 600, 0],
+      ])
+    })
+
+    it('adds no zero line when the difference closes the gap', () => {
+      const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11.123, total: 176.7, total_sek: 1965.43, remaining_amount: 176.7 })
+      const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 1965.44 }, undefined, '1930', 0.01)
+      expect(rows(lines)).toEqual([
+        ['1930', 1965.44, 0],
+        ['1510', 0, 1965.44],
+      ])
+    })
+
+    it('with no ledger figure, books the difference as stated', () => {
+      const invoice = makeInvoice({ currency: 'EUR', exchange_rate: 11, total: 1000, total_sek: 11000, remaining_amount: 1000 })
+      const { lines } = buildInvoicePaymentLines(invoice, undefined, '1930', 200)
+      expect(rows(lines)).toEqual([
+        ['1930', 11200, 0],
+        ['1510', 0, 11000],
+        ['3960', 0, 200],
+      ])
+    })
   })
 
   it('createInvoicePaymentJournalEntry keeps identical numbers when total_sek is present without a rate', async () => {

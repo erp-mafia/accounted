@@ -27,6 +27,7 @@
  */
 
 import type { Transaction, SupplierInvoice } from '@/types'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
 
@@ -58,27 +59,6 @@ function normalizeReference(ref: string): string {
  */
 function normalizeCurrency(code: string | null | undefined): string {
   return (code || 'SEK').toUpperCase()
-}
-
-/**
- * SEK value of an amount, or null when it cannot be established.
- *
- * This is `lib/bookkeeping/currency-utils.ts#resolveSekAmount` minus its final
- * "no conversion info → return the amount as-is" branch. That branch is safe
- * for booking legacy rows but fatal here: it would hand the matcher a raw EUR
- * total dressed up as kronor, which is the exact false match this guard exists
- * to stop. A missing rate must mean "not comparable", never "assume SEK".
- */
-function sekValue(
-  amount: number,
-  currency: string,
-  amountSek: number | null | undefined,
-  exchangeRate: number | null | undefined
-): number | null {
-  if (currency === 'SEK') return amount
-  if (amountSek != null) return Math.round(amountSek * 100) / 100
-  if (exchangeRate != null && exchangeRate > 0) return Math.round(amount * exchangeRate * 100) / 100
-  return null
 }
 
 /**
@@ -120,20 +100,10 @@ function comparableAmounts(
   }
 
   // Different currencies → compare in SEK, but only from stored conversions.
-  const txSek = sekValue(
-    transaction.amount,
-    txCurrency,
-    transaction.amount_sek,
-    transaction.exchange_rate
-  )
+  const txSek = resolveSekAmountOrNull(transaction.amount, transaction.amount_sek, txCurrency, transaction.exchange_rate)
   if (txSek === null) return null
 
-  const invoiceSek = sekValue(
-    remaining,
-    invoiceCurrency,
-    remainingTotalSek(invoice, remaining),
-    invoice.exchange_rate
-  )
+  const invoiceSek = resolveSekAmountOrNull(remaining, remainingTotalSek(invoice, remaining), invoiceCurrency, invoice.exchange_rate)
   if (invoiceSek === null) return null
 
   return { txValue: Math.abs(txSek), invoiceValue: Math.abs(invoiceSek) }

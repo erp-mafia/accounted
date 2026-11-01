@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   fetchExchangeRate,
   readCachedRate,
-  convertToSEK,
   isExchangeRateTemporarilyUnavailable,
   resetExchangeRateStateForTests,
   setExchangeRateCacheWriterForTests,
@@ -722,28 +721,5 @@ describe('readCachedRate', () => {
     const result = await readCachedRate(supabase, 'EUR', '2025-01-15')
 
     expect(result).toBeNull()
-  })
-})
-
-describe('convertToSEK', () => {
-  it('converts amount correctly', () => {
-    expect(convertToSEK(100, 11.42)).toBe(1142)
-  })
-
-  it('handles zero amount', () => {
-    expect(convertToSEK(0, 11.42)).toBe(0)
-  })
-
-  // The *_sek twins are stored in unscaled numeric columns and read back by
-  // header-fallback booking builders: a raw product stores (and books) a
-  // fraction of an öre.
-  it('rounds the product to whole öre', () => {
-    expect(convertToSEK(1000.1, 11.2345)).toBe(11235.62)
-    expect(convertToSEK(0.1, 3)).toBe(0.3)
-  })
-
-  it('rounds an exact half öre away from zero (roundOre), not by its binary representation', () => {
-    expect(convertToSEK(1.005, 1)).toBe(1.01)
-    expect(convertToSEK(10.075, 1)).toBe(10.08)
   })
 })

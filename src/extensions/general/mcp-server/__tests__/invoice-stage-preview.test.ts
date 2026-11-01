@@ -171,6 +171,31 @@ describe('gnubok_mark_invoice_as_paid: the preview shows the entry the method bo
     expect(stagedInsert(findCall).preview_data.journal_entry_preview).toEqual(entry)
   })
 
+  it('a foreign invoice previews what 1510 carries, as approval clears it', async () => {
+    // 141.36 + 35.34 EUR at 11.123 registered 1965.44; the header at the rate says 1965.43.
+    const { supabase, setTable } = setup(
+      { accounting_method: 'accrual' },
+      sentInvoice({
+        journal_entry_id: 'je-issue',
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        total_sek: 1965.43,
+        remaining_amount: 176.7,
+      }),
+    )
+    setTable('rpc:document_carried_sek', { data: { ok: true, sek: 1965.44 } })
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: { journal_entry_preview: { lines: PreviewLine[] } } }
+
+    const byAccount = Object.fromEntries(result.preview.journal_entry_preview.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510']).toMatchObject({ credit_amount: 1965.44 })
+    expect(byAccount['1930']).toMatchObject({ debit_amount: 1965.44 })
+  })
+
   it('faktureringsmetoden: the payment clears 1510', async () => {
     const { supabase } = setup({ accounting_method: 'accrual' }, sentInvoice({ journal_entry_id: 'je-issue' }))
 

@@ -41,7 +41,7 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { isKronorCurrency, resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, resolveSekAmountOrNull, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
@@ -126,7 +126,7 @@ export function resolveTransactionAmountSek(tx: TransactionAmountFields): number
   }
   if (tx.exchange_rate != null) {
     const rate = Number(tx.exchange_rate)
-    if (Number.isFinite(rate) && rate > 0) return roundOre(Math.abs(amount) * rate)
+    if (Number.isFinite(rate) && rate > 0) return sekOfForeign(Math.abs(amount), rate)
   }
 
   // Non-SEK row carrying neither a converted amount nor a rate: the shape a row

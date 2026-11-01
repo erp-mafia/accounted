@@ -1,0 +1,1 @@
+[2026-11-01] exchange_rate_difference on the customer mark-paid stays measured from the rate, as v1 documents: the bank takes the rate figure plus it, 1510 clears the ledger and the gap is 3960/7960, never the bank's. With none stated the bank takes what is cleared: a caller cannot read the ledger.
