@@ -82,6 +82,7 @@ import { mayHaveVoucherOwner, type VoucherOwner } from '@/lib/core/bookkeeping/v
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
+import { fetchRattelseFlags } from '@/lib/bookkeeping/rattelse-flags'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -403,23 +404,12 @@ export default function JournalEntryList({
     }
   }, [])
 
-  const fetchRattelseFlags = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
-    if (entryIds.length === 0) {
-      setRattelseFlags(new Set())
-      return
-    }
-    try {
-      const res = await fetch(
-        `/api/bookkeeping/journal-entries/rattelse-flags?ids=${entryIds.join(',')}`
-      )
-      if (!res.ok) return
-      const { data } = await res.json()
-      if (!isCurrent()) return
-      setRattelseFlags(new Set((data || []) as string[]))
-    } catch {
-      // Non-critical: silently ignore
-    }
-  }, [])
+  const fetchRattelseMarkers = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
+    const { corrected, incomplete } = await fetchRattelseFlags(entryIds)
+    if (!isCurrent()) return
+    setRattelseFlags(corrected)
+    if (incomplete) toast({ title: t('rattelse_flags_failed'), variant: 'destructive' })
+  }, [t, toast])
 
   const fetchNoDocRequired = useCallback(async () => {
     try {
@@ -697,7 +687,7 @@ export default function JournalEntryList({
       } else {
         fetchAttachmentCounts(ids, isCurrent)
       }
-      fetchRattelseFlags(ids, isCurrent)
+      fetchRattelseMarkers(ids, isCurrent)
     } catch {
       // A non-OK response or a network-level rejection (offline, aborted
       // response body): stale rows (if any) stay on screen, the empty case

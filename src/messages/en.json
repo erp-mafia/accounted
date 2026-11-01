@@ -7732,6 +7732,7 @@
     "remove_attachment": "Remove attachment"
   },
   "journal_list": {
+    "rattelse_flags_failed": "Could not read which vouchers have been corrected",
     "import_attn": "This list contains vouchers from an SIE import. If something went wrong, the whole import can be undone.",
     "import_attn_action": "Show import history",
     "import_missing_attn": "{count, plural, one {# imported voucher has} other {# imported vouchers have}} no supporting document in Accounted.",
