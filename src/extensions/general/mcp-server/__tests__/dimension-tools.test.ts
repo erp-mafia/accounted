@@ -137,8 +137,8 @@ describe('dimension tools registration', () => {
     expect(listDimensions).toBeDefined()
     expect(listDimensionValues).toBeDefined()
     expect(createDimensionValue).toBeDefined()
-    expect(TOOL_SCOPE_MAP.gnubok_list_dimensions).toBe('reports:read')
-    expect(TOOL_SCOPE_MAP.gnubok_list_dimension_values).toBe('reports:read')
+    expect(TOOL_SCOPE_MAP.gnubok_list_dimensions).toBe('dimensions:read')
+    expect(TOOL_SCOPE_MAP.gnubok_list_dimension_values).toBe('dimensions:read')
     expect(TOOL_SCOPE_MAP.gnubok_create_dimension_value).toBe('bookkeeping:write')
   })
 

@@ -10,6 +10,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
+  useEditedSinceOpen,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -99,27 +101,32 @@ interface Props {
  */
 export default function NewRecurringScheduleDialog({ open, onOpenChange, onSaved, schedule }: Props) {
   const t = useTranslations('invoice_recurring_new')
+  const { edited, editProps } = useEditedSinceOpen()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-        // A half-typed schedule must survive an accidental backdrop click or
-        // a stray Escape (the customer/currency selects portal outside the
-        // dialog). Closing is explicit: the header X or Avbryt. Same
-        // convention as NewInvoiceDialog.
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // Escape closes an untouched dialog, like every other overlay, but a
+        // half-typed schedule must survive a stray Escape (the customer and
+        // currency selects portal outside the dialog): then closing is
+        // explicit, the header X or Avbryt. Edit mode opens filled and the
+        // default dimensions live outside the form state, so "changed since
+        // open" decides (useEditedSinceOpen). A backdrop click never closes it.
+        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>{schedule ? t('edit_title') : t('title')}</DialogTitle>
         </DialogHeader>
-        <NewRecurringScheduleForm
-          schedule={schedule}
-          onSaved={onSaved}
-          onCancel={() => onOpenChange(false)}
-        />
+        <div className="contents" {...editProps}>
+          <NewRecurringScheduleForm
+            schedule={schedule}
+            onSaved={onSaved}
+            onCancel={() => onOpenChange(false)}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   )

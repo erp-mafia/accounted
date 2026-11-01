@@ -319,6 +319,14 @@ export const AUDITED_TABLES = [
   // person's review, added, replaced and archived by an owner or admin
   // through save_booking_review_rule and archive_booking_review_rule.
   'booking_review_rules',
+  // An employee's pay basis (migration 20261101003400, accounted#30): the
+  // trigger logs only the EMPLOYEE_PAY_FIELDS columns and the name, never the
+  // personnummer, bank account or contact details.
+  'employees',
+  // Skattekonto links and ignores (migration 20261101003500, accounted#50):
+  // who linked a Skatteverket row to a verifikat, unlinked it, set it aside
+  // or restored it. The sync's own updates of the mirror write nothing.
+  'skattekonto_transactions',
 ] as const
 
 /**
@@ -554,6 +562,62 @@ const BOOKING_TEMPLATE_FIELDS: Record<string, string> = {
   is_active: 'Aktiv',
 }
 
+/**
+ * An employee's pay basis: the columns audit_employee_pay_basis (migration
+ * 20261101003400) writes to audit_log, in its order. A unit test holds this
+ * list and the trigger's together.
+ */
+export const EMPLOYEE_PAY_FIELDS: Record<string, string> = {
+  employment_type: 'Anställningstyp',
+  personnel_category: 'Personalkategori',
+  employment_start: 'Anställningsdatum',
+  employment_end: 'Slutdatum',
+  employment_degree: 'Sysselsättningsgrad (%)',
+  hours_per_week: 'Timmar per vecka',
+  workdays_per_week: 'Arbetsdagar per vecka',
+  salary_type: 'Löneform',
+  monthly_salary: 'Månadslön',
+  hourly_rate: 'Timlön',
+  tax_table_number: 'Skattetabell',
+  tax_column: 'Skattekolumn',
+  is_sidoinkomst: 'Sidoinkomst (30 % skatteavdrag)',
+  jamkning_percentage: 'Jämkning (%)',
+  jamkning_valid_from: 'Jämkning gäller från',
+  jamkning_valid_to: 'Jämkning gäller till',
+  extra_tax_amount: 'Extra skatteavdrag (kr)',
+  extra_tax_percentage: 'Extra skatteavdrag (%)',
+  f_skatt_status: 'Skatteform',
+  f_skatt_verified_at: 'F-skatt verifierad',
+  vacation_rule: 'Semesterregel',
+  vacation_days_per_year: 'Semesterdagar per år',
+  vacation_days_saved: 'Sparade semesterdagar',
+  vacation_pay_rate: 'Semesterlön, procentsats',
+  semestertillagg_rate: 'Semestertillägg, procentsats',
+  housing_benefit_type: 'Bostadsförmån, typ',
+  vaxa_stod_eligible: 'Växa-stöd',
+  vaxa_stod_start: 'Växa-stöd från',
+  vaxa_stod_end: 'Växa-stöd till',
+  fora_fok_id: 'Fora-kod',
+  fora_fok_start_date: 'Fora-kod gäller från',
+  default_dimensions: 'Dimensioner (standard)',
+  is_active: 'Aktiv',
+}
+
+/** Display values for the coded employee columns (their CHECK constraints). */
+const EMPLOYEE_VALUE_LABELS: Record<string, Record<string, string>> = {
+  employment_type: { employee: 'Anställd', company_owner: 'Företagsledare', board_member: 'Styrelseledamot' },
+  personnel_category: { tjansteman: 'Tjänsteman', arbetare: 'Arbetare' },
+  salary_type: { monthly: 'Månadslön', hourly: 'Timlön' },
+  vacation_rule: {
+    procentregeln: 'Procentregeln',
+    sammaloneregeln: 'Sammalöneregeln',
+    semesterersattning: 'Semesterersättning',
+    none: 'Ingen semesteravsättning',
+  },
+  f_skatt_status: { a_skatt: 'A-skatt', f_skatt: 'F-skatt', fa_skatt: 'FA-skatt', not_verified: 'Ej verifierad' },
+  housing_benefit_type: { smahus: 'Småhus', ej_smahus: 'Annan bostad än småhus' },
+}
+
 /** Keys of salary_payroll_config that are bookkeeping constants (all but bookkeeping of the row itself). */
 const PAYROLL_CONFIG_EXCLUDED_KEYS = new Set(['id', 'created_at'])
 
@@ -586,6 +650,11 @@ const COLLAPSIBLE: Record<string, CollapseRule> = {
   'account.updated': { minSize: 10, event: 'Kontoplan ändrad', noun: 'konton', category: 'kontoplan', mode: 'accounts' },
   'account.deleted': { minSize: 10, event: 'Konton borttagna ur kontoplanen', noun: 'konton', category: 'kontoplan', mode: 'accounts' },
   'document.deleted': { minSize: 3, event: 'Underlag borttagna', noun: 'underlag', category: 'ovrigt', mode: 'documents' },
+  // A matched period or a set-aside history writes one row per Skatteverket event.
+  'skattekonto.linked': { minSize: 10, event: 'Skattekontohändelser kopplade till verifikat', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.unlinked': { minSize: 10, event: 'Skattekontohändelsers kopplingar borttagna', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.ignored': { minSize: 10, event: 'Skattekontohändelser ignorerade', noun: 'händelser', category: 'beslut', mode: 'documents' },
+  'skattekonto.restored': { minSize: 10, event: 'Ignorerade skattekontohändelser återställda', noun: 'händelser', category: 'beslut', mode: 'documents' },
 }
 
 const MAX_VALUE_LENGTH = 80
@@ -619,7 +688,7 @@ function fmtValue(value: unknown, key?: string): string {
   if (typeof value === 'boolean') return value ? 'Ja' : 'Nej'
   if (typeof value === 'number') return String(value)
   if (typeof value === 'string') {
-    const mapped = key ? SETTINGS_VALUE_LABELS[key]?.[value] : undefined
+    const mapped = key ? (SETTINGS_VALUE_LABELS[key] ?? EMPLOYEE_VALUE_LABELS[key])?.[value] : undefined
     return truncate(mapped ?? value)
   }
   if (Array.isArray(value)) {
@@ -778,6 +847,20 @@ interface NormaliseContext {
   /** journal_entry_id → committed metadata-rättelse timestamps (ms), to suppress the duplicate audit UPDATE row. */
   rattelseMetadataAt: Map<string, number[]>
   entryById: Map<string, EntryRow>
+  /**
+   * The verifikat skattekonto link rows name, read by id whatever their
+   * period (fetchLinkedEntries). Absent when nothing was looked up.
+   */
+  linkedEntryById?: Map<string, LinkedEntryRow>
+}
+
+/** A verifikat a skattekonto row was linked to or unlinked from: its label and its origin. */
+interface LinkedEntryRow {
+  id: string
+  voucher_series: string | null
+  voucher_number: number | null
+  source_type: string | null
+  source_id: string | null
 }
 
 const RATTELSE_DUPLICATE_WINDOW_MS = 30_000
@@ -2039,6 +2122,117 @@ export function auditRowToEvent(
         event: 'Bankfilsimport raderad',
         object: str(row.old_state?.filename),
       })
+    case 'employees':
+      return employeePayAuditEvent(row)
+    case 'skattekonto_transactions':
+      return skattekontoLinkAuditEvent(row, ctx)
+    default:
+      return null
+  }
+}
+
+/**
+ * The verifikat a skattekonto row points at, as the report names it: its
+ * voucher label, "utkast" before it is numbered, "borttaget" when it no
+ * longer exists (a deleted draft unlinks its rows), "okänt" when it was not
+ * looked up.
+ */
+function linkedEntryLabel(entryId: string, ctx: NormaliseContext): string {
+  const entry = ctx.linkedEntryById?.get(entryId) ?? ctx.entryById.get(entryId)
+  if (entry) return voucherLabel(entry.voucher_series, entry.voucher_number) ?? 'utkast'
+  return ctx.linkedEntryById ? 'borttaget' : 'okänt'
+}
+
+/**
+ * A skattekonto row linked, unlinked, ignored or restored (trigger
+ * audit_skattekonto_transactions_link, migration 20261101003500): the
+ * trigger writes write_audit_log's whole row, and only when journal_entry_id
+ * or is_ignored changed. A link to the verifikat Bokför created for the row
+ * (source 'system', source_id = the row) reads as booked.
+ */
+function skattekontoLinkAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'UPDATE') return null
+  const before = row.old_state ?? {}
+  const after = row.new_state ?? {}
+  const oldEntry = str(before.journal_entry_id)
+  const newEntry = str(after.journal_entry_id)
+  const ignoredBefore = before.is_ignored === true
+  const ignoredAfter = after.is_ignored === true
+  const linkChanged = oldEntry !== newEntry
+  const ignoreChanged = ignoredBefore !== ignoredAfter
+  if (!linkChanged && !ignoreChanged) return null
+
+  const object = [str(after.transaktionsdatum), str(after.transaktionstext)].filter(Boolean).join(' ') || null
+  const details: string[] = []
+  const amount = Number(after.belopp_skatteverket)
+  if (after.belopp_skatteverket !== null && after.belopp_skatteverket !== undefined && Number.isFinite(amount)) {
+    details.push(`Belopp: ${fmtAmount(amount)} kr`)
+  }
+
+  let code: string
+  let event: string
+  if (!linkChanged) {
+    code = ignoredAfter ? 'skattekonto.ignored' : 'skattekonto.restored'
+    event = ignoredAfter ? 'Skattekontohändelse ignorerad' : 'Ignorerad skattekontohändelse återställd'
+  } else {
+    if (newEntry && !oldEntry) {
+      const entry = ctx.linkedEntryById?.get(newEntry)
+      const booked = entry?.source_type === 'system' && !!entry.source_id && entry.source_id === row.record_id
+      code = booked ? 'skattekonto.booked' : 'skattekonto.linked'
+      event = booked ? 'Skattekontohändelse bokförd' : 'Skattekontohändelse kopplad till verifikat'
+      details.push(`Verifikat: ${linkedEntryLabel(newEntry, ctx)}`)
+    } else if (oldEntry && !newEntry) {
+      code = 'skattekonto.unlinked'
+      event = 'Skattekontohändelsens koppling borttagen'
+      details.push(`Verifikat: ${linkedEntryLabel(oldEntry, ctx)}`)
+    } else {
+      code = 'skattekonto.relinked'
+      event = 'Skattekontohändelse kopplad om'
+      details.push(`Verifikat: ${linkedEntryLabel(oldEntry!, ctx)} → ${linkedEntryLabel(newEntry!, ctx)}`)
+    }
+    if (ignoreChanged) details.push(`Ignorerad: ${fmtValue(ignoredBefore)} → ${fmtValue(ignoredAfter)}`)
+  }
+  return auditEvent(row, { category: 'beslut', code, event, object, details })
+}
+
+/**
+ * An employee's pay basis (audit_employee_pay_basis, migration
+ * 20261101003400): the starting values when the employee is created, the
+ * changed values after. The trigger writes no DELETE rows; the
+ * sammalöneregeln confirmation (GUARD_BYPASSED on employees) is handled
+ * before the table switch.
+ */
+function employeePayAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = [str(state?.first_name), str(state?.last_name)].filter(Boolean).join(' ') || null
+  switch (row.action) {
+    case 'INSERT': {
+      // What was set, in field order; an unset field or a "no" adds nothing.
+      const details = Object.entries(EMPLOYEE_PAY_FIELDS)
+        .filter(([key]) => {
+          const value = row.new_state?.[key]
+          return fmtValue(value, key) !== '(tomt)' && value !== false
+        })
+        .map(([key, label]) => `${label}: ${fmtValue(row.new_state?.[key], key)}`)
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'employee.created',
+        event: 'Anställd upplagd med lönegrunder',
+        object,
+        details,
+      })
+    }
+    case 'UPDATE': {
+      const { lines } = diffFields(row.old_state, row.new_state, EMPLOYEE_PAY_FIELDS)
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'employee.pay_basis_updated',
+        event: 'Lönegrunder ändrade',
+        object,
+        details: lines,
+      })
+    }
     default:
       return null
   }
@@ -2881,6 +3075,45 @@ async function fetchLedgerHistory(
   }
 }
 
+/** The verifikat ids the window's skattekonto link rows name, before and after. */
+export function skattekontoLinkedEntryIds(rows: AuditLogEntry[]): string[] {
+  const ids = new Set<string>()
+  for (const row of rows) {
+    if (row.table_name !== 'skattekonto_transactions') continue
+    for (const state of [row.old_state, row.new_state]) {
+      const id = str(state?.journal_entry_id)
+      if (id) ids.add(id)
+    }
+  }
+  return [...ids]
+}
+
+/** Ids per request: 100 uuids keep the request line well under the gateway's 8 KB. */
+const LINKED_ENTRY_CHUNK = 100
+
+/**
+ * The verifikat skattekonto rows were linked to or unlinked from, by id: a
+ * link made this year may name last year's verifikat, which the period's
+ * entries do not hold. A deleted draft is simply missing from the result.
+ */
+async function fetchLinkedEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: string[],
+): Promise<Map<string, LinkedEntryRow>> {
+  const out = new Map<string, LinkedEntryRow>()
+  for (const part of chunk(ids, LINKED_ENTRY_CHUNK)) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, voucher_series, voucher_number, source_type, source_id')
+      .eq('company_id', companyId)
+      .in('id', part)
+    if (error) throw dbError(error, null)
+    for (const entry of (data ?? []) as LinkedEntryRow[]) out.set(entry.id, entry)
+  }
+  return out
+}
+
 async function fetchMigrationResets(supabase: SupabaseClient, companyId: string): Promise<MigrationResetRow[]> {
   // Two equality queries instead of one `.or()`: the reset row is relevant to
   // both the archived source company and its replacement, and the schema guard
@@ -3192,7 +3425,9 @@ export async function generateBehandlingshistorik(
     raw.push(rattelseEvent(row, entryById))
   }
 
-  const ctx: NormaliseContext = { rattelseMetadataAt, entryById }
+  const linkedEntryIds = skattekontoLinkedEntryIds(auditRows)
+  const linkedEntryById = linkedEntryIds.length > 0 ? await fetchLinkedEntries(supabase, companyId, linkedEntryIds) : undefined
+  const ctx: NormaliseContext = { rattelseMetadataAt, entryById, linkedEntryById }
   for (const row of auditRows) {
     const ev = auditRowToEvent(row, ctx)
     if (ev) raw.push(ev)

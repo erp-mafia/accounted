@@ -28,7 +28,7 @@ export {
   argumentScopeFor,
 } from './scope-catalog'
 export type { ApiKeyScope } from './scope-catalog'
-import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalog'
+import { API_KEY_SCOPES, DEFAULT_SCOPES, scopeSatisfied, type ApiKeyScope } from './scope-catalog'
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
   if (scopes === null || scopes === undefined) return null
@@ -504,8 +504,9 @@ async function bindUnboundKey(
 }
 
 /**
- * Check if a given scope is allowed by the key's scopes.
+ * Check if a given scope is allowed by the key's scopes: held directly, or
+ * included in a broader scope the key holds (SCOPE_INCLUDED_IN).
  */
 export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
-  return keyScopes.includes(required)
+  return scopeSatisfied(keyScopes, required)
 }

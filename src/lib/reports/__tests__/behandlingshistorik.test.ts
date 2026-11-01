@@ -4,6 +4,7 @@ import path from 'node:path'
 import type { AuditLogEntry } from '@/types'
 import {
   AUDITED_TABLES,
+  EMPLOYEE_PAY_FIELDS,
   GLOBAL_ACTIONS,
   actorWithVerified,
   appReleaseEvent,
@@ -1878,6 +1879,264 @@ describe('auditRowToEvent: hard blocks (accounted#130)', () => {
     expect(auditRowToEvent(auditRow({ table_name: 'booking_review_rules', action: 'INSERT', new_state: single }))?.object).toBe(
       'Spärr: konto 6071, utan moms',
     )
+  })
+})
+
+describe('auditRowToEvent: employee pay basis (accounted#30)', () => {
+  // What audit_employee_pay_basis writes: the pay-basis columns and the name.
+  const basis = {
+    first_name: 'Test',
+    last_name: 'Testsson',
+    employment_type: 'employee',
+    personnel_category: 'tjansteman',
+    employment_start: '2026-01-01',
+    employment_end: null,
+    employment_degree: 100,
+    hours_per_week: 40,
+    workdays_per_week: 5,
+    salary_type: 'monthly',
+    monthly_salary: 30000,
+    hourly_rate: null,
+    tax_table_number: 33,
+    tax_column: 1,
+    is_sidoinkomst: false,
+    jamkning_percentage: null,
+    jamkning_valid_from: null,
+    jamkning_valid_to: null,
+    extra_tax_amount: null,
+    extra_tax_percentage: null,
+    f_skatt_status: 'a_skatt',
+    f_skatt_verified_at: null,
+    vacation_rule: 'procentregeln',
+    vacation_days_per_year: 25,
+    vacation_days_saved: 0,
+    vacation_pay_rate: null,
+    semestertillagg_rate: 0.0043,
+    housing_benefit_type: null,
+    vaxa_stod_eligible: false,
+    vaxa_stod_start: null,
+    vaxa_stod_end: null,
+    fora_fok_id: null,
+    fora_fok_start_date: null,
+    default_dimensions: {},
+    is_active: true,
+  }
+
+  /** The newest migration that (re)defines audit_employee_pay_basis. */
+  function liveTriggerMigration(): string {
+    const dir = path.join(__dirname, '..', '..', '..', '..', 'supabase', 'migrations')
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .filter((f) => readFileSync(path.join(dir, f), 'utf-8').includes('FUNCTION public.audit_employee_pay_basis('))
+    expect(files.length).toBeGreaterThan(0)
+    return readFileSync(path.join(dir, files[files.length - 1]), 'utf-8')
+  }
+
+  it('is an audited table', () => {
+    expect(AUDITED_TABLES).toContain('employees')
+  })
+
+  it('labels exactly the columns the trigger logs, and never an identifier, bank or contact column', () => {
+    const match = liveTriggerMigration().match(/c_pay_keys CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
+    expect(match).not.toBeNull()
+    const triggerKeys = [...match![1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(Object.keys(EMPLOYEE_PAY_FIELDS)).toEqual(triggerKeys)
+    for (const pii of ['personnummer', 'personnummer_last4', 'clearing_number', 'bank_account_number', 'email', 'phone', 'address_line1', 'postal_code', 'city', 'tax_municipality']) {
+      expect(triggerKeys).not.toContain(pii)
+    }
+  })
+
+  it('states the starting pay basis when an employee is created, without unset fields or a "no"', () => {
+    const event = auditRowToEvent(auditRow({ table_name: 'employees', action: 'INSERT', new_state: basis }))
+    expect(event).toMatchObject({
+      category: 'installningar',
+      code: 'employee.created',
+      event: 'Anställd upplagd med lönegrunder',
+      object: 'Test Testsson',
+      details: [
+        'Anställningstyp: Anställd',
+        'Personalkategori: Tjänsteman',
+        'Anställningsdatum: 2026-01-01',
+        'Sysselsättningsgrad (%): 100',
+        'Timmar per vecka: 40',
+        'Arbetsdagar per vecka: 5',
+        'Löneform: Månadslön',
+        'Månadslön: 30000',
+        'Skattetabell: 33',
+        'Skattekolumn: 1',
+        'Skatteform: A-skatt',
+        'Semesterregel: Procentregeln',
+        'Semesterdagar per år: 25',
+        'Sparade semesterdagar: 0',
+        'Semestertillägg, procentsats: 0.0043',
+        'Aktiv: Ja',
+      ],
+    })
+  })
+
+  it('states each changed pay-basis field, old and new, under the employee', () => {
+    const raised = { ...basis, monthly_salary: 32500, employment_degree: 80, vacation_rule: 'sammaloneregeln' }
+    expect(auditRowToEvent(auditRow({ table_name: 'employees', action: 'UPDATE', old_state: basis, new_state: raised }))).toMatchObject({
+      category: 'installningar',
+      code: 'employee.pay_basis_updated',
+      event: 'Lönegrunder ändrade',
+      object: 'Test Testsson',
+      details: [
+        'Sysselsättningsgrad (%): 100 → 80',
+        'Månadslön: 30000 → 32500',
+        'Semesterregel: Procentregeln → Sammalöneregeln',
+      ],
+    })
+  })
+
+  it('a soft delete reads as the employee turned inactive', () => {
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'employees', action: 'UPDATE', old_state: basis, new_state: { ...basis, is_active: false } }))?.details,
+    ).toEqual(['Aktiv: Ja → Nej'])
+  })
+
+  it('renders nothing for a name-only change, and never a column outside the pay basis', () => {
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'employees', action: 'UPDATE', old_state: basis, new_state: { ...basis, last_name: 'Annan' } })),
+    ).toBeNull()
+    // Rows only ever carry the pay basis; even if one carried more, it stays out.
+    const leaked = auditRowToEvent(auditRow({
+      table_name: 'employees',
+      action: 'UPDATE',
+      old_state: { ...basis, personnummer: 'old-ciphertext', bank_account_number: '1111' },
+      new_state: { ...basis, personnummer: 'new-ciphertext', bank_account_number: '2222', hourly_rate: 250 },
+    }))
+    expect(leaked?.details).toEqual(['Timlön: (tomt) → 250'])
+    expect(JSON.stringify(leaked)).not.toMatch(/ciphertext|1111|2222/)
+  })
+})
+
+describe('auditRowToEvent: skattekonto links and ignores (accounted#50)', () => {
+  // What write_audit_log stores for a skattekonto row (the whole row).
+  const row = {
+    id: 'skv-1',
+    company_id: 'company-1',
+    transaktionsidentitet: 123,
+    dedup_key: '123',
+    transaktionsdatum: '2026-03-12',
+    transaktionstext: 'Debiterad preliminärskatt',
+    belopp_skatteverket: -12345.5,
+    status: 'booked',
+    journal_entry_id: null,
+    suggested_journal_entry_id: 'entry-9',
+    is_ignored: false,
+  }
+  const linked = { ...row, journal_entry_id: 'entry-9', suggested_journal_entry_id: null }
+  const entries = new Map([
+    ['entry-9', { id: 'entry-9', voucher_series: 'A', voucher_number: 214, source_type: 'import', source_id: null }],
+    ['entry-10', { id: 'entry-10', voucher_series: 'S', voucher_number: 3, source_type: 'system', source_id: 'skv-1' }],
+  ])
+  const ctx = { rattelseMetadataAt: new Map(), entryById: new Map(), linkedEntryById: entries }
+  const skv = (old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null, action: AuditLogEntry['action'] = 'UPDATE') =>
+    auditRow({ table_name: 'skattekonto_transactions', record_id: 'skv-1', action, old_state, new_state })
+
+  it('is an audited table', () => {
+    expect(AUDITED_TABLES).toContain('skattekonto_transactions')
+  })
+
+  it('a link names the event, its amount and the verifikat, as a decision', () => {
+    expect(auditRowToEvent(skv(row, linked), ctx)).toMatchObject({
+      category: 'beslut',
+      code: 'skattekonto.linked',
+      event: 'Skattekontohändelse kopplad till verifikat',
+      object: '2026-03-12 Debiterad preliminärskatt',
+      details: ['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: A214'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('a link to the verifikat Bokför created for the row reads as booked', () => {
+    const booked = { ...row, journal_entry_id: 'entry-10' }
+    expect(auditRowToEvent(skv(row, booked), ctx)).toMatchObject({
+      code: 'skattekonto.booked',
+      event: 'Skattekontohändelse bokförd',
+      details: ['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: S3'],
+    })
+  })
+
+  it('an unlink names the verifikat it left, and a deleted draft as removed', () => {
+    expect(auditRowToEvent(skv(linked, row), ctx)).toMatchObject({
+      code: 'skattekonto.unlinked',
+      event: 'Skattekontohändelsens koppling borttagen',
+      details: ['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: A214'],
+    })
+    const gone = { ...row, journal_entry_id: 'entry-deleted' }
+    expect(auditRowToEvent(skv(gone, row), ctx)?.details).toEqual(['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: borttaget'])
+    // Without a lookup the report does not guess.
+    expect(auditRowToEvent(skv(gone, row))?.details).toEqual(['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: okänt'])
+  })
+
+  it('a link moved from one verifikat to another names both', () => {
+    expect(auditRowToEvent(skv(linked, { ...linked, journal_entry_id: 'entry-10' }), ctx)).toMatchObject({
+      code: 'skattekonto.relinked',
+      details: ['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: A214 → S3'],
+    })
+  })
+
+  it('ignoring and restoring a row', () => {
+    const ignored = { ...row, is_ignored: true, suggested_journal_entry_id: null }
+    expect(auditRowToEvent(skv(row, ignored), ctx)).toMatchObject({
+      category: 'beslut',
+      code: 'skattekonto.ignored',
+      event: 'Skattekontohändelse ignorerad',
+      details: ['Belopp: \u221212\u00a0345,50 kr'],
+    })
+    expect(auditRowToEvent(skv(ignored, row), ctx)).toMatchObject({
+      code: 'skattekonto.restored',
+      event: 'Ignorerad skattekontohändelse återställd',
+    })
+  })
+
+  it('renders nothing for a change that is neither a link nor an ignore, nor for INSERT or DELETE', () => {
+    expect(auditRowToEvent(skv(row, { ...row, suggested_journal_entry_id: null, status: 'upcoming' }), ctx)).toBeNull()
+    expect(auditRowToEvent(skv(null, linked, 'INSERT'), ctx)).toBeNull()
+    expect(auditRowToEvent(skv(linked, null, 'DELETE'), ctx)).toBeNull()
+  })
+
+  it('collapses a burst of ignores by one person into one row', () => {
+    const ignores = Array.from({ length: 12 }, (_, i) => auditRowToEvent(auditRow({
+      id: `ign-${i}`,
+      table_name: 'skattekonto_transactions',
+      created_at: `2026-03-10T10:00:${String(i).padStart(2, '0')}.000Z`,
+      old_state: { ...row, transaktionstext: `Händelse ${i}` },
+      new_state: { ...row, transaktionstext: `Händelse ${i}`, is_ignored: true },
+    }), ctx)!)
+    const out = collapseBursts(sortEvents(ignores))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ code: 'skattekonto.ignored.bulk', event: 'Skattekontohändelser ignorerade', object: '12 händelser', category: 'beslut', count: 12 })
+  })
+
+  it('the report looks up the linked verifikat once, whatever their period, and names them', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: [{ id: 'entry-old', voucher_series: 'B', voucher_number: 7, source_type: 'manual', source_id: null }] }],
+    }
+    rpcResults = {
+      behandlingshistorik_sources: ledger({
+        audit: [auditRow({
+          id: 'skv-a',
+          table_name: 'skattekonto_transactions',
+          record_id: 'skv-1',
+          created_at: '2026-04-01T08:00:00.000Z',
+          old_state: row,
+          new_state: { ...row, journal_entry_id: 'entry-old' },
+        })],
+      }),
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+
+    expect(client.from.mock.calls.filter(([t]: [string]) => t === 'journal_entries')).toHaveLength(1)
+    const event = report!.events.find((e) => e.id === 'audit:skv-a')
+    expect(event).toMatchObject({ code: 'skattekonto.linked', details: ['Belopp: \u221212\u00a0345,50 kr', 'Verifikat: B7'] })
+    expect(report!.by_category.beslut).toBe(1)
   })
 })
 

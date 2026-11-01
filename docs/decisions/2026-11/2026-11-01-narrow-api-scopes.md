@@ -1,0 +1,1 @@
+[2026-11-01] Narrow API scopes (invoices:draft, suppliers:register, dimensions:read) are included in their broader grants via one table read by hasScope, never the reverse: no existing key loses a door, a narrow key opens only pinned doors (crm#1548).

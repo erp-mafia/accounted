@@ -332,14 +332,40 @@ export function selfBillingUnsupportedReason(
  * is the row that would be written, but no ankomstnummer is drawn and nothing
  * is written.
  */
+/** The refusal a register-only caller (suppliers:register) gets for a registration that posts or issues something. */
+function registerOnlyRefusal(reason: 'posts_verifikat' | 'paid_privately' | 'self_billed'): CreateSupplierInvoiceFailure {
+  return {
+    ok: false,
+    code: 'INSUFFICIENT_SCOPE',
+    details: {
+      required_scope: 'suppliers:write',
+      reason,
+      message:
+        reason === 'self_billed'
+          ? 'A self-billing invoice is issued with its SF number at registration: it needs suppliers:write.'
+          : 'This registration posts a verifikat (faktureringsmetoden without deferred booking, or paid with private funds): it needs suppliers:write.',
+    },
+  }
+}
+
 export async function createSupplierInvoice(
   ctx: CreateSupplierInvoiceContext,
   body: CreateSupplierInvoiceInput,
-  options: { dryRun?: boolean } = {},
+  /**
+   * registerOnly: the caller may only register what posts nothing
+   * (suppliers:register, crm#1548). A registration that would post a
+   * verifikat, a private payment or a självfaktura is refused before any
+   * write, sequence number or document link.
+   */
+  options: { dryRun?: boolean; registerOnly?: boolean } = {},
 ): Promise<CreateSupplierInvoiceResult> {
   const { supabase, companyId, userId, log } = ctx
   const dryRun = options.dryRun === true
   const paidPrivately = body.paid_with_private_funds === true
+  if (options.registerOnly) {
+    if (body.is_self_billed) return registerOnlyRefusal('self_billed')
+    if (paidPrivately) return registerOnlyRefusal('paid_privately')
+  }
 
   // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on pension
   // premiums, so the flag is rejected on any non-741x account, and rejected
@@ -657,6 +683,7 @@ export async function createSupplierInvoice(
     },
     supplier.supplier_type as string | null,
   )
+  if (options.registerOnly && booksOnRegistration) return registerOnlyRefusal('posts_verifikat')
   if (booksOnRegistration || paidPrivately) {
     const lockVerdict = await checkPeriodLock(supabase, companyId, paidPrivately ? body.invoice_date : registrationDate)
     if (lockVerdict.locked) {

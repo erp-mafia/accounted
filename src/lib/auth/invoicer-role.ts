@@ -50,6 +50,7 @@ export const INVOICER_API_SCOPES: readonly ApiKeyScope[] = [
   'customers:read',
   'customers:write',
   'invoices:read',
+  'invoices:draft',
   'invoices:write',
   'articles:read',
   'articles:write',

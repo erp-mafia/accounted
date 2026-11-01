@@ -5209,7 +5209,7 @@ export const tools: McpTool[] = [
         if (required) {
           // Scoped tool: visible only if scopes were injected AND the caller has it.
           if (!scopesInjected) return false
-          if (!callerScopes.includes(required)) return false
+          if (!hasScope(callerScopes as ApiKeyScope[], required)) return false
         }
         if (scopeFilter && required !== scopeFilter) return false
         return true

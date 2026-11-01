@@ -80,6 +80,8 @@ describe('the invoicer allowlist', () => {
       'articles:write',
       'customers:read',
       'customers:write',
+      // Narrower than invoices:write, which the role already holds (crm#1548).
+      'invoices:draft',
       'invoices:read',
       'invoices:write',
     ])

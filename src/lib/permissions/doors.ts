@@ -173,10 +173,17 @@ export const SCOPE_DOORS: Readonly<Record<ApiKeyScope, DoorSpec | null>> = Objec
   'articles:read': INVOICING_READ,
   'articles:write': INVOICING_RECORD,
   'invoices:read': INVOICING_READ,
+  // Creating and editing a draft is invoicing, as the write scope it narrows.
+  'invoices:draft': INVOICING,
   'invoices:write': INVOICING,
   'suppliers:read': READ,
+  // Registering a supplier invoice that posts nothing, as the write scope it narrows.
+  'suppliers:register': BOOK,
   'suppliers:write': BOOK,
   'reports:read': READ,
+  // The dimension registry: a read of the books, as under reports:read. The
+  // invoicer role stays without it (no dimension page or route in its area).
+  'dimensions:read': READ,
   'bookkeeping:write': BOOK,
   'payroll:read': PAYROLL_READ,
   'payroll:write': PAYROLL,

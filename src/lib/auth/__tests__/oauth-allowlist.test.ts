@@ -282,6 +282,7 @@ describe('capScopesForRole', () => {
       'articles:write',
       'customers:read',
       'customers:write',
+      'invoices:draft',
       'invoices:read',
       'invoices:write',
     ])

@@ -1,0 +1,1 @@
+[2026-11-01] Employee pay-basis changes are audited by their own trigger (pay columns and name, never personnummer, bank or contact data) with the actor from the x-accounted-actor header, not the actor RPC accounted#30 proposed: the header already names API and MCP actors.

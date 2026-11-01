@@ -1590,7 +1590,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/supplier-invoices`
 
 **Register a new supplier invoice.**
-`scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
+`scope:suppliers:register · risk:medium · idempotent · dry-run · reversible`
 
 Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage, except for an EU goods acquisition (reverse_charge_kind eu_goods): ML 2023:200 7 kap. 26 § puts its reverse-charge moms in the period the invoice is issued whatever the accounting method, so it is booked like under faktureringsmetoden and its payment clears 2440. Under both methods an EU goods registration is dated on the invoice date, or on the 15th of the month after delivery_date when that is earlier (7 kap. 26 §: the moms belongs at the latest to the period holding that day); send delivery_date to apply it. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
@@ -1830,7 +1830,7 @@ Example response `200`:
 ### `PATCH /api/v1/companies/{companyId}/supplier-invoices/{id}`
 
 **Update a registered supplier invoice.**
-`scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
+`scope:suppliers:register · risk:low · idempotent · dry-run · reversible`
 
 Patches a supplier invoice with the supplied fields. Only allowed on `registered` status: once approved, paid, or credited, the record is effectively immutable from the API's perspective. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 

@@ -8,6 +8,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
+  useEditedSinceOpen,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -85,6 +87,8 @@ interface Props {
  * (no per-section cards) with a sticky Spara bar, to keep scrolling short.
  */
 export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Props) {
+  const { edited, editProps } = useEditedSinceOpen()
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -92,18 +96,22 @@ export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Pro
         // dialog is a fixed header + scrolling body + solid footer (flex
         // column), so the footer never overlaps scrolling content.
         className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
-        // A half-typed employee must survive an accidental backdrop click or
-        // a stray Escape (the municipality combobox and dimension pickers
-        // portal outside the dialog). Closing is explicit: the header X or
-        // Avbryt. Same convention as NewJournalEntryDialog.
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // Escape closes an untouched dialog, like every other overlay, but a
+        // half-typed employee must survive a stray Escape: then closing is
+        // explicit, the header X or Avbryt. The fields are uncontrolled (read
+        // on submit), so "changed since open" decides (useEditedSinceOpen). A
+        // backdrop click never closes it. Same convention as
+        // NewJournalEntryDialog.
+        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
           <DialogTitle>Ny anställd</DialogTitle>
         </DialogHeader>
-        <NewEmployeeForm onCreated={onCreated} onCancel={() => onOpenChange(false)} />
+        <div className="contents" {...editProps}>
+          <NewEmployeeForm onCreated={onCreated} onCancel={() => onOpenChange(false)} />
+        </div>
       </DialogContent>
     </Dialog>
   )

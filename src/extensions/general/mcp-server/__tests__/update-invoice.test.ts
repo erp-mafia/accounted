@@ -86,7 +86,7 @@ function enqueueItemsEdit(
 }
 
 describe('gnubok_update_invoice: registration', () => {
-  it('is a strict, staged invoices:write tool at medium risk', () => {
+  it('is a strict, staged invoices:draft tool at medium risk', () => {
     expect(tool()).toBeDefined()
     expect(tool().inputSchema.additionalProperties).toBe(false)
     expect(tool().annotations.readOnlyHint).toBe(false)
@@ -98,7 +98,7 @@ describe('gnubok_update_invoice: registration', () => {
     expect(isDefaultCatalogTool(tool())).toBe(true)
     expect(tool().description).toContain('gnubok_call_tool')
     expect(tool().description.length).toBeLessThanOrEqual(280)
-    expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:write')
+    expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:draft')
     expect(OPERATION_RISK_TIERS.update_invoice).toBe('medium')
   })
 

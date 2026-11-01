@@ -39,6 +39,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
+import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
@@ -426,7 +427,10 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'suppliers:write',
+  // suppliers:register (included in suppliers:write) registers only what
+  // posts nothing: the service refuses a registration that would post a
+  // verifikat, a private payment or a självfaktura for such a key.
+  scope: 'suppliers:register',
   risk: 'medium',
   idempotent: true,
   reversible: true,
@@ -484,7 +488,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const result = await createSupplierInvoice(
       { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
       body,
-      { dryRun: ctx.dryRun },
+      { dryRun: ctx.dryRun, registerOnly: !scopeSatisfied(ctx.scopes, 'suppliers:write') },
     )
     if (!result.ok) {
       if (result.error) return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })

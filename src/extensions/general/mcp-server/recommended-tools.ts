@@ -22,6 +22,7 @@
  * would mean new reads in the hot bootstrap path. Every loadout is returned
  * for every company; applicability is the agent's judgment call.
  */
+import { scopeSatisfied, type ApiKeyScope } from '@/lib/auth/scope-catalog'
 import { workflowSkills } from './skills'
 import {
   SEARCH_ONLY_READ_NOTE,
@@ -255,7 +256,9 @@ export function annotateLoadoutTools(
     const { required_scope, callable_via } = classify(name)
     // Scope first: it is enforced server-side for every client, so it blocks
     // even a client that can name unlisted tools, and the key owner fixes it.
-    if (required_scope && !grantedScopes.has(required_scope)) {
+    // A narrow scope is met by the broader grant including it (invoices:write
+    // meets invoices:draft), as hasScope decides at the call.
+    if (required_scope && !scopeSatisfied([...grantedScopes], required_scope as ApiKeyScope)) {
       return {
         name,
         callable: false,

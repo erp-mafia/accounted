@@ -402,7 +402,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/invoices`
 
 **Create a draft invoice, proforma, or delivery note.**
-`scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
+`scope:invoices:draft · risk:medium · idempotent · dry-run · reversible`
 
 Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer's allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. An invoice can state its own VAT treatment (vat_treatment, delivery_country for goods shipped abroad: export ruta 36, intra-EU supply ruta 35; reverse_charge_domestic for construction services, ruta 41) instead of the customer's, validated against the legal preconditions. Supports skattereduktion lines (items[].deduction_type = "rot"|"rut"|"gron_teknik" with invoice-level deduction_personnummer + deduction_housing_designation, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt), article linkage (items[].article_id + optional revenue_account override from the artikelregister), and project/cost-centre tagging (default_dimensions / items[].dimensions). Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty's number, not a draft.
 
@@ -648,7 +648,7 @@ Example response `200`:
 ### `PATCH /api/v1/companies/{companyId}/invoices/{id}`
 
 **Update a draft invoice (metadata fields, optionally replacing line items).**
-`scope:invoices:write · risk:low · idempotent · dry-run · reversible`
+`scope:invoices:draft · risk:low · idempotent · dry-run · reversible`
 
 Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), vat_treatment + delivery_country (the per-invoice VAT treatment, same rules as POST /invoices), and an optional items array. When items is present, it fully REPLACES the draft's line items and subtotal / VAT / total are recomputed against the invoice's existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.
 
@@ -2030,7 +2030,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/invoices/bulk-create`
 
 **Create up to 50 draft invoices in one call (partial-success).**
-`scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
+`scope:invoices:draft · risk:medium · idempotent · dry-run · reversible`
 
 Bulk-creation endpoint. Each invoice in the request array is validated and inserted independently. By default, individual failures do not roll back successes: the response carries a per-item results array with ok/error markers and a summary. Idempotent (the whole batch is keyed by the single Idempotency-Key). Dry-runnable.
 

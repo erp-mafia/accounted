@@ -17,10 +17,19 @@ export const API_KEY_SCOPES = {
   'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret' },
   'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar' },
   'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor och kundorder' },
+  // Narrow write scopes (crm#1548): an integration that may only prepare
+  // what a person then sends, books or pays. Each is included in its write
+  // scope (SCOPE_INCLUDED_IN), so a key holding the write scope keeps every
+  // door it had; a key holding only the narrow one opens nothing else.
+  'invoices:draft':     { label: 'Fakturor: utkast',    description: 'Skapa och ändra fakturautkast och offerter; aldrig skicka, bokföra, kreditera eller markera betald' },
   'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad; kundorder (skapa, bekräfta, leverera, fakturera)' },
   'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater' },
+  'suppliers:register': { label: 'Leverantörer: registrera', description: 'Registrera och ändra leverantörsfakturor som inte bokförs vid registreringen; aldrig godkänna, bokföra, kreditera eller betala' },
   'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor' },
   'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export' },
+  // The dimension registry alone, to tag invoice lines without reading the
+  // books (crm#1548). Included in reports:read and invoices:read.
+  'dimensions:read':    { label: 'Dimensioner: läs',    description: 'Lista dimensioner och deras värden (kostnadsställe, projekt, egna) för att märka rader' },
   'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar, kontoplan (skapa/ändra konton), verifikat-anteckningar' },
   'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal, körjournal' },
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
@@ -61,6 +70,25 @@ export const API_KEY_SCOPES = {
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
 
 export const ALL_SCOPES: ApiKeyScope[] = Object.keys(API_KEY_SCOPES) as ApiKeyScope[]
+
+/**
+ * Narrow scopes and the broader grants that include them. A door that needs
+ * `invoices:draft` opens for a key holding `invoices:write` too, so moving a
+ * door onto a narrow scope never takes it from an existing key. Inclusion
+ * runs one way only: a narrow scope never satisfies a broader door.
+ * hasScope (lib/auth/api-keys.ts) reads this; nothing else may widen a scope.
+ */
+export const SCOPE_INCLUDED_IN: Readonly<Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>>> = {
+  'invoices:draft': ['invoices:write'],
+  'suppliers:register': ['suppliers:write'],
+  'dimensions:read': ['reports:read', 'invoices:read'],
+}
+
+/** Does a key holding `keyScopes` satisfy a door that requires `required`? */
+export function scopeSatisfied(keyScopes: readonly string[], required: ApiKeyScope): boolean {
+  if (keyScopes.includes(required)) return true
+  return SCOPE_INCLUDED_IN[required]?.some((broader) => keyScopes.includes(broader)) ?? false
+}
 
 /** The read-only scopes assigned to keys with no explicit scopes (legacy/null). */
 export const DEFAULT_SCOPES: ApiKeyScope[] = [
@@ -127,7 +155,9 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'transactions:write',
   'customers:write',
   'articles:write',
+  'invoices:draft',
   'invoices:write',
+  'suppliers:register',
   'suppliers:write',
   'bookkeeping:write',
   'payroll:write',
@@ -192,8 +222,9 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'reconciliation',     label: 'Avstämning',          scopes: ['reconciliation:read', 'reconciliation:write', 'reconciliation:signoff'] },
   { domain: 'customers',          label: 'Kunder',              scopes: ['customers:read', 'customers:write'] },
   { domain: 'articles',           label: 'Artiklar',            scopes: ['articles:read', 'articles:write'] },
-  { domain: 'invoices',           label: 'Fakturor',            scopes: ['invoices:read', 'invoices:write'] },
-  { domain: 'suppliers',          label: 'Leverantörer',        scopes: ['suppliers:read', 'suppliers:write'] },
+  { domain: 'invoices',           label: 'Fakturor',            scopes: ['invoices:read', 'invoices:draft', 'invoices:write'] },
+  { domain: 'suppliers',          label: 'Leverantörer',        scopes: ['suppliers:read', 'suppliers:register', 'suppliers:write'] },
+  { domain: 'dimensions',         label: 'Dimensioner',         scopes: ['dimensions:read'] },
   { domain: 'reports',            label: 'Rapporter',           scopes: ['reports:read'] },
   { domain: 'forecast',           label: 'Likviditetsprognos',  scopes: ['forecast:write'] },
   { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
@@ -297,8 +328,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_invoices:                   'invoices:read',
   gnubok_get_invoice:                     'invoices:read',
   gnubok_get_invoice_deliveries:          'invoices:read',
-  gnubok_create_invoice:                  'invoices:write',
-  gnubok_update_invoice:                  'invoices:write',
+  // Drafts only (the update refuses anything past draft): invoices:draft,
+  // which invoices:write includes. Every door out of draft stays on write.
+  gnubok_create_invoice:                  'invoices:draft',
+  gnubok_update_invoice:                  'invoices:draft',
   gnubok_delete_draft_invoice:            'invoices:write',
   gnubok_send_invoice:                    'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
@@ -352,10 +385,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_fiscal_periods:             'reports:read',
   gnubok_get_reconciliation_status:       'reports:read',
   gnubok_list_accrual_schedules:          'reports:read',
-  // Dimensions (kostnadsställe/projekt) registry: reads next to the report
-  // tools; the staged value-create is a bookkeeping write (dimensions PR3).
-  gnubok_list_dimensions:                 'reports:read',
-  gnubok_list_dimension_values:           'reports:read',
+  // Dimensions (kostnadsställe/projekt) registry: dimensions:read, which
+  // reports:read and invoices:read include; the staged value-create is a
+  // bookkeeping write (dimensions PR3).
+  gnubok_list_dimensions:                 'dimensions:read',
+  gnubok_list_dimension_values:           'dimensions:read',
   gnubok_create_dimension_value:          'bookkeeping:write',
   // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
   gnubok_get_invoice_peppol_readiness: 'invoices:read',

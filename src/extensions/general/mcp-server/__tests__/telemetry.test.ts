@@ -28,7 +28,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       userId: 'user-1',
       companyId: '11111111-1111-4111-8111-111111111111',
       // Only reports:read: enough to call gnubok_get_trial_balance, NOT enough
-      // to call gnubok_create_invoice (invoices:write). Drives the scope-denied test.
+      // to call gnubok_create_invoice (invoices:draft). Drives the scope-denied test.
       scopes: ['reports:read'],
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
@@ -230,7 +230,7 @@ describe('mcp.tool_called telemetry', () => {
   it('emits errorKind=scope_denied when the API key lacks the required scope', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
-    // gnubok_create_invoice requires invoices:write; our test key has only reports:read.
+    // gnubok_create_invoice requires invoices:draft; our test key has only reports:read.
     await handleMcpRequest(
       mcpRequest('tools/call', {
         name: 'gnubok_create_invoice',
@@ -240,7 +240,7 @@ describe('mcp.tool_called telemetry', () => {
 
     const event = await eventPromise
     expect(event.tool).toBe('gnubok_create_invoice')
-    expect(event.requiredScope).toBe('invoices:write')
+    expect(event.requiredScope).toBe('invoices:draft')
     expect(event.success).toBe(false)
     expect(event.isError).toBe(true)
     expect(event.errorKind).toBe('scope_denied')
@@ -314,7 +314,7 @@ describe('mcp.tool_called telemetry', () => {
     // would also pass on a wrong-but-present value, which is no assertion.
     // And "some other string" is barely stronger, so pin the content that
     // makes the field worth storing: the scope the caller actually lacks.
-    expect(event.errorDetail).toContain('invoices:write')
+    expect(event.errorDetail).toContain('invoices:draft')
     expect(event.errorDetail).not.toBe(event.errorMessage)
   })
 
@@ -354,7 +354,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(payload.error.code).toBe('INSUFFICIENT_SCOPE')
     const event = await eventPromise
     expect(event.tool).toBe('gnubok_create_invoice')
-    expect(event.requiredScope).toBe('invoices:write')
+    expect(event.requiredScope).toBe('invoices:draft')
     expect(event.errorKind).toBe('scope_denied')
   })
 

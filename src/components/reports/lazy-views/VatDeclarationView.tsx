@@ -19,7 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Table, TableBody } from '@/components/ui/table'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, holdEscapeWhileUnsaved, useEditedSinceOpen } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -218,6 +218,7 @@ function VatBookingCard({
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
+  const { edited, editProps } = useEditedSinceOpen()
 
   // FormLine amounts are input strings; the proposal's numbers are already
   // öre-rounded server-side.
@@ -316,10 +317,12 @@ function VatBookingCard({
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent
             className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-            // A reviewed-but-unbooked proposal must survive an accidental
-            // backdrop click or stray Escape (same rationale as
-            // NewJournalEntryDialog): closing is explicit via the header X.
-            onEscapeKeyDown={(e) => e.preventDefault()}
+            // Escape closes it while the proposal is as it opened (the form
+            // opens filled, so "changed since open" decides:
+            // useEditedSinceOpen). An adjusted proposal survives a stray
+            // Escape: then closing is explicit via the header X. A backdrop
+            // click never closes it.
+            onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
             onPointerDownOutside={(e) => e.preventDefault()}
             onInteractOutside={(e) => e.preventDefault()}
           >
@@ -331,17 +334,19 @@ function VatBookingCard({
               datum, konton eller belopp vid behov och bokför sedan verifikatet.
             </p>
             {dialogOpen && (
-              <JournalEntryForm
-                bare
-                sourceType="vat_settlement"
-                initialDate={proposal.entry_date}
-                initialDescription={proposal.description}
-                initialLines={initialLines}
-                onCreated={() => {
-                  setDialogOpen(false)
-                  onRetry()
-                }}
-              />
+              <div className="contents" {...editProps}>
+                <JournalEntryForm
+                  bare
+                  sourceType="vat_settlement"
+                  initialDate={proposal.entry_date}
+                  initialDescription={proposal.description}
+                  initialLines={initialLines}
+                  onCreated={() => {
+                    setDialogOpen(false)
+                    onRetry()
+                  }}
+                />
+              </div>
             )}
           </DialogContent>
         </Dialog>

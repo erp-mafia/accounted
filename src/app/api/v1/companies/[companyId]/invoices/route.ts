@@ -29,6 +29,7 @@ import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
+import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
@@ -549,7 +550,10 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // A draft (or an open quote) books nothing: invoices:draft, which
+  // invoices:write includes. A self-billed sale books at once and needs
+  // invoices:write (checked in the handler).
+  scope: 'invoices:draft',
   risk: 'medium',
   idempotent: true,
   reversible: true,
@@ -596,6 +600,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // immediately (never a draft). Optional flag; delegated to the shared
     // self-billed-sale service so this and the internal dashboard route agree.
     if (input.is_self_billed) {
+      // Booked at once, never a draft: a key holding only invoices:draft is
+      // refused before anything is read (crm#1548).
+      if (!scopeSatisfied(ctx.scopes, 'invoices:write')) {
+        return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            required_scope: 'invoices:write',
+            granted_scopes: ctx.scopes,
+            message: 'A self-billed sale is booked at once, not drafted: it needs invoices:write.',
+          },
+        })
+      }
       if (!input.external_invoice_number || !input.received_date) {
         return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
           requestId: ctx.requestId,

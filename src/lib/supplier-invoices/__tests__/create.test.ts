@@ -506,3 +506,80 @@ describe('createSupplierInvoice: the supplier default dimensions', () => {
     expect(lines.find((l) => l.account_number === '2440')?.dimensions).toEqual({ '1': 'FAST01' })
   })
 })
+
+// crm#1548: a suppliers:register key registers only what posts nothing.
+describe('createSupplierInvoice registerOnly (suppliers:register)', () => {
+  it('refuses a faktureringsmetoden registration, which posts a verifikat, and writes nothing', async () => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+
+    const result = await createSupplierInvoice(ctx(), body(), { registerOnly: true })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INSUFFICIENT_SCOPE',
+      details: { required_scope: 'suppliers:write', reason: 'posts_verifikat' },
+    })
+    expectNothingWritten()
+  })
+
+  it('refuses the dry run the same way, so the preview never promises a write the call refuses', async () => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+
+    const result = await createSupplierInvoice(ctx(), body(), { dryRun: true, registerOnly: true })
+
+    expect(result).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE' })
+    expectNothingWritten()
+  })
+
+  it('refuses an EU goods acquisition under kontantmetoden, which books at registration', async () => {
+    setTable('company_settings', { data: { accounting_method: 'cash', vat_registered: true } })
+    setTable('suppliers', { data: makeSupplier({ id: SUPPLIER_ID, supplier_type: 'eu_business' }) })
+
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({
+        reverse_charge: true,
+        reverse_charge_kind: 'eu_goods',
+        items: [{ description: 'Varor', amount: 1000, account_number: '4010', vat_rate: 0 }],
+      } as Partial<CreateSupplierInvoiceInput>),
+      { dryRun: true, registerOnly: true },
+    )
+
+    expect(result).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE', details: { reason: 'posts_verifikat' } })
+    expectNothingWritten()
+  })
+
+  it('refuses a privately paid invoice (the utlägg verifikat) before anything is read', async () => {
+    const result = await createSupplierInvoice(ctx(), body({ paid_with_private_funds: true }), { registerOnly: true })
+
+    expect(result).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE', details: { reason: 'paid_privately' } })
+    expect(calls).toEqual([])
+    expectNothingWritten()
+  })
+
+  it('refuses a självfaktura, issued with its SF number at registration, before anything is read', async () => {
+    const result = await createSupplierInvoice(ctx(), body({ is_self_billed: true }), { registerOnly: true })
+
+    expect(result).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE', details: { reason: 'self_billed' } })
+    expect(calls).toEqual([])
+    expectNothingWritten()
+  })
+
+  it('lets a registration that posts nothing through: kontantmetoden', async () => {
+    setTable('company_settings', { data: { accounting_method: 'cash', vat_registered: true } })
+
+    const result = await createSupplierInvoice(ctx(), body(), { dryRun: true, registerOnly: true })
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.would_create_registration_journal_entry).toBe(false)
+  })
+
+  it('lets a registration that posts nothing through: deferred booking (#967)', async () => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', defer_invoice_booking: true } })
+
+    const result = await createSupplierInvoice(ctx(), body(), { dryRun: true, registerOnly: true })
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.would_create_registration_journal_entry).toBe(false)
+  })
+})

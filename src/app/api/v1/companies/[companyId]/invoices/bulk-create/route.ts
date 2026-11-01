@@ -135,7 +135,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // Drafts only (quotes and self-billed sales are refused per item):
+  // invoices:draft, which invoices:write includes.
+  scope: 'invoices:draft',
   risk: 'medium',
   idempotent: true,
   reversible: true,
