@@ -8,9 +8,11 @@ import { roundOre, sumOre } from '@/lib/money'
 import type { EntityType, InvoiceItem } from '@/types'
 import {
   generatePeppolBisBillingInvoice,
+  isPeppolPreviewXml,
   peppolAttachmentIssues,
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
+  PEPPOL_PREVIEW_INVOICE_NUMBER,
 } from '../peppol-bis-billing'
 import { countTextRowsLeftOutOfPeppol } from '../peppol-lines'
 
@@ -917,5 +919,82 @@ describe('peppolAttachmentIssues (crm#1545)', () => {
     expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 10 }])).toEqual([])
     expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: null, sizeBytes: 10 }]).map((i) => i.code))
       .toEqual(['PEPPOL_ATTACHMENT_NOT_PDF'])
+  })
+})
+
+describe('draft preview (accounted#44)', () => {
+  function makeDraftInput() {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, status: 'draft', invoice_number: null })
+    return input
+  }
+
+  it('still refuses a draft without a number when no preview is asked for', () => {
+    const result = generatePeppolBisBillingInvoice(makeDraftInput())
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('INVOICE_NUMBER_REQUIRED')
+  })
+
+  it('renders a draft with a marked placeholder number, the OCR derived from it, and a preview file name', () => {
+    const result = generatePeppolBisBillingInvoice({ ...makeDraftInput(), preview: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.preview).toBe(true)
+    expect(result.filename).toBe('peppol-invoice-preview-invoice-1.xml')
+    expect(result.xml).toContain(`<cbc:ID>${PEPPOL_PREVIEW_INVOICE_NUMBER}</cbc:ID>`)
+    expect(result.xml).toContain(`<cbc:PaymentID>${generateOcrReference(PEPPOL_PREVIEW_INVOICE_NUMBER)}</cbc:PaymentID>`)
+    expect(generateOcrReference(PEPPOL_PREVIEW_INVOICE_NUMBER)).toBe('000000')
+    expect(isPeppolPreviewXml(result.xml)).toBe(true)
+    // The marker sits between the declaration and the root element, so the
+    // UBL content is the same document finalize would produce.
+    const [declaration, comment, root] = result.xml.split('\n')
+    expect(declaration).toBe('<?xml version="1.0" encoding="UTF-8"?>')
+    expect(comment).toMatch(/^<!-- ACCOUNTED-PEPPOL-PREVIEW: .* -->$/)
+    expect(comment.slice(4, -3)).not.toContain('--')
+    expect(root).toMatch(/^<Invoice /)
+    // Everything after the marker matches the export of the same invoice
+    // numbered with the placeholder.
+    const numbered = makeDraftInput()
+    numbered.invoice = makeInvoice({ ...numbered.invoice, invoice_number: PEPPOL_PREVIEW_INVOICE_NUMBER })
+    const real = generatePeppolBisBillingInvoice(numbered)
+    expect(real.ok).toBe(true)
+    if (!real.ok) return
+    expect(result.xml.replace(`${comment}\n`, '')).toBe(real.xml)
+  })
+
+  it('keeps every other preflight check on a preview', () => {
+    const input = makeDraftInput()
+    input.invoice = makeInvoice({ ...input.invoice, your_reference: null, invoice_marking: null })
+
+    const result = generatePeppolBisBillingInvoice({ ...input, preview: true })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toEqual(['BUYER_REFERENCE_REQUIRED'])
+  })
+
+  it('is a no-op for an invoice that already has its number: that XML is the real document', () => {
+    const input = makeValidInput()
+
+    const preview = generatePeppolBisBillingInvoice({ ...input, preview: true })
+    const real = generatePeppolBisBillingInvoice(input)
+
+    expect(preview).toEqual(real)
+    expect(preview.ok && preview.preview).toBeFalsy()
+    expect(preview.ok && isPeppolPreviewXml(preview.xml)).toBe(false)
+  })
+
+  it('never reads user text as the preview marker', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, notes: '<!-- ACCOUNTED-PEPPOL-PREVIEW -->' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(isPeppolPreviewXml(result.xml)).toBe(false)
   })
 })

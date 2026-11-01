@@ -9,20 +9,39 @@ import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
 import { fileResponse } from '@/lib/api/file-response'
 
 const paramsSchema = z.object({ id: z.uuid() })
+/**
+ * preview=1 downloads a draft that has no invoice number yet (accounted#44):
+ * placeholder number and OCR, a marked preview file that staging refuses. An
+ * invoice that has its number gets its real document either way.
+ */
+const querySchema = z.object({ preview: z.enum(['0', '1']).optional() })
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.peppol',
-  async (_request, { supabase, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
     const parsedParams = paramsSchema.safeParse(await params)
-    if (!parsedParams.success) {
+    const parsedQuery = querySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams))
+    if (!parsedParams.success || !parsedQuery.success) {
       return privateNoStore(errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
-        details: { fields: parsedParams.error.flatten().fieldErrors },
+        details: {
+          fields: {
+            ...(parsedParams.success ? {} : parsedParams.error.flatten().fieldErrors),
+            ...(parsedQuery.success ? {} : parsedQuery.error.flatten().fieldErrors),
+          },
+        },
       }))
     }
     const { id } = parsedParams.data
 
-    const loaded = await loadPeppolDocument({ supabase, companyId, invoiceId: id, log, requestId })
+    const loaded = await loadPeppolDocument({
+      supabase,
+      companyId,
+      invoiceId: id,
+      log,
+      requestId,
+      preview: parsedQuery.data.preview === '1',
+    })
     if (!loaded.ok) return loaded.response
     const result = loaded.document
 

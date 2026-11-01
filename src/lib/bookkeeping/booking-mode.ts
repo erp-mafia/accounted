@@ -333,7 +333,9 @@ export interface SupplierCreditNoteOriginal {
  * original get booked", not "which accounting method is configured".
  *
  * Under faktureringsmetoden the original was booked at registration, so the
- * reversal always applies. Under kontantmetoden nothing is booked at
+ * reversal always applies; a deferred original that is still unbooked is
+ * booked first (supplierCreditBooksOriginalFirst), so the reversal applies
+ * there too. Under kontantmetoden nothing is booked at
  * registration, and skipping the credit note is correct while the invoice is
  * still unpaid: there is no entry to reverse and recognition waits for cash.
  * But once the invoice has been PAID, the payment verifikat has already booked
@@ -351,6 +353,18 @@ export function supplierCreditNoteNeedsJournalEntry(
   original: SupplierCreditNoteOriginal | null | undefined,
 ): boolean {
   if ((accountingMethod || 'accrual') === 'accrual') return true
+  return supplierOriginalReachedLedger(original)
+}
+
+/**
+ * Whether the supplier invoice's cost is in the ledger: its registration
+ * verifikat is linked, or a payment reached it. Under kontantmetoden that
+ * payment booked the whole invoice; a deferring company's payment books the
+ * registration first (lib/supplier-invoices/registration-first.ts), so a
+ * paid invoice without the link predates that rule and needs a rättelse, not
+ * a second registration here.
+ */
+function supplierOriginalReachedLedger(original: SupplierCreditNoteOriginal | null | undefined): boolean {
   if (!original) return false
   return (
     !!original.registration_journal_entry_id ||
@@ -359,4 +373,33 @@ export function supplierCreditNoteNeedsJournalEntry(
     !!original.paid_at ||
     Math.round(Math.abs(original.paid_amount ?? 0) * 100) !== 0
   )
+}
+
+/**
+ * Whether crediting this supplier invoice must first book its registration
+ * verifikat (accounted#58, the supplier twin of accounted#45).
+ *
+ * Under faktureringsmetoden with defer_invoice_booking (#967) an invoice is
+ * registered without a verifikat and booked later by the explicit Bokför
+ * step. The invoice and its kreditfaktura are both affärshändelser that must
+ * be bokförda (BFL 5 kap 1-2 §§), and the credit reverses the original's
+ * kontering, reducing ingående moms in the credit's period (ML 17 kap
+ * 22-23 §§). A reversal of a cost the books never recorded would understate
+ * the cost and ruta 48, and the original could never be booked afterwards
+ * (it is credited). So the credit books the registration first through the
+ * Bokför step, then posts its own reversal.
+ *
+ * Deferring companies only, as on the customer side
+ * (creditBooksOriginalFirst): a company that books at registration can hold
+ * unlinked originals whose cost is in the ledger through migrated or
+ * SIE-imported verifikat, and booking those again would double the cost.
+ * Kontantmetoden books the invoice at payment, never here.
+ */
+export function supplierCreditBooksOriginalFirst(
+  settings: Parameters<typeof booksInvoicesOnIssue>[0],
+  original: SupplierCreditNoteOriginal | null | undefined,
+): boolean {
+  if (!original) return false
+  if (invoiceBookingMoment(settings) !== 'manual') return false
+  return !supplierOriginalReachedLedger(original)
 }

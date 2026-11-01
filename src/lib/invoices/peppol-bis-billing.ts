@@ -73,6 +73,15 @@ export interface PeppolInvoiceInput {
   company: CompanySettings
   /** Embedded as cac:AdditionalDocumentReference (BG-24), in this order. */
   attachments?: PeppolAttachmentFile[]
+  /**
+   * Render an invoice that has no number yet (a draft) for review
+   * (accounted#44): PEPPOL_PREVIEW_INVOICE_NUMBER stands in for the number
+   * finalize assigns, the OCR is derived from it, the XML opens with the
+   * preview marker and the file is named as a preview. A no-op for an invoice
+   * that already has its number: that XML is the real document. A preview is
+   * never staged (lib/invoices/peppol-delivery.ts refuses it).
+   */
+  preview?: boolean
 }
 
 export type PeppolInvoiceResult =
@@ -82,8 +91,33 @@ export type PeppolInvoiceResult =
       filename: string
       sender: { scheme: '0007'; identifier: string }
       recipient: { scheme: '0007'; identifier: string }
+      /** Set when the XML is a draft preview with placeholder number and OCR. */
+      preview?: true
     }
   | { ok: false; issues: PeppolValidationIssue[] }
+
+/**
+ * The invoice number a draft preview carries (cbc:ID), and the OCR is derived
+ * from it (000000, Luhn-valid). Zeros so nobody mistakes it for a real number.
+ */
+export const PEPPOL_PREVIEW_INVOICE_NUMBER = 'UTKAST-00000'
+
+/**
+ * Opens the comment a preview carries before the root element. User text in
+ * the XML is escaped (`<` becomes `&lt;`), so only the generator can write it.
+ */
+const PEPPOL_PREVIEW_MARKER = '<!-- ACCOUNTED-PEPPOL-PREVIEW'
+
+const PEPPOL_PREVIEW_COMMENT = `${PEPPOL_PREVIEW_MARKER}: Förhandsgranskning av ett utkast. ` +
+  'Det här är ingen faktura och den kan inte skickas via Peppol. Fakturanummer (cbc:ID) och OCR ' +
+  '(cbc:PaymentID) är platshållare tills fakturan slutförs. Preview of a draft: not an invoice and ' +
+  'it cannot be sent over Peppol. The invoice number (cbc:ID) and OCR (cbc:PaymentID) are placeholders ' +
+  'until the invoice is finalized. -->'
+
+/** True for XML rendered as a draft preview: the send paths refuse it. */
+export function isPeppolPreviewXml(xml: string): boolean {
+  return xml.includes(PEPPOL_PREVIEW_MARKER)
+}
 
 interface PreparedParty {
   name: string
@@ -764,6 +798,7 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
+    input.preview ? PEPPOL_PREVIEW_COMMENT : null,
     '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"',
     '  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"',
     '  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">',
@@ -864,7 +899,11 @@ export function renderDelivery(invoice: Pick<Invoice, 'delivery_date' | 'deliver
 }
 
 export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): PeppolInvoiceResult {
-  const validation = prepareInvoice(input)
+  const preview = input.preview === true && !hasText(input.invoice.invoice_number)
+  const rendered: PeppolInvoiceInput = preview
+    ? { ...input, invoice: { ...input.invoice, invoice_number: PEPPOL_PREVIEW_INVOICE_NUMBER } }
+    : { ...input, preview: false }
+  const validation = prepareInvoice(rendered)
   if (validation.prepared === null) return { ok: false, issues: validation.issues }
 
   const filenameNumber = (input.invoice.invoice_number ?? input.invoice.id)
@@ -872,9 +911,10 @@ export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): Pepp
     .replace(/^-+|-+$/g, '') || input.invoice.id
   return {
     ok: true,
-    xml: renderInvoiceXml(input, validation.prepared),
-    filename: `peppol-invoice-${filenameNumber}.xml`,
+    xml: renderInvoiceXml(rendered, validation.prepared),
+    filename: preview ? `peppol-invoice-preview-${filenameNumber}.xml` : `peppol-invoice-${filenameNumber}.xml`,
     sender: { scheme: '0007', identifier: validation.prepared.supplier.orgNumber },
     recipient: { scheme: '0007', identifier: validation.prepared.buyer.orgNumber },
+    ...(preview ? { preview: true as const } : {}),
   }
 }

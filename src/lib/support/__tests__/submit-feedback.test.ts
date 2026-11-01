@@ -395,5 +395,43 @@ describe('submitFeedback', () => {
       expect(result.ok).toBe(false)
       expect(result.error).toBe('Du kan bifoga max 5 filer')
     })
+
+    // The dialog says where the answer comes (accounted#55): the address the
+    // route set as the mail's Reply-To.
+    it('carries the reply address the route reports for a mailed message', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ data: { sent: true, reply_to: 'user@example.test' } }),
+        })
+      )
+
+      const result = await submitFeedback({
+        message: 'Se bilagan',
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+      })
+
+      expect(result).toEqual({ ok: true, channels: ['email'], replyTo: 'user@example.test' })
+    })
+
+    it('still counts the mail as sent when the response body is unreadable', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => {
+            throw new SyntaxError('Unexpected end of JSON input')
+          },
+        })
+      )
+
+      const result = await submitFeedback({
+        message: 'Se bilagan',
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+      })
+
+      expect(result).toStrictEqual({ ok: true, channels: ['email'] })
+    })
   })
 })

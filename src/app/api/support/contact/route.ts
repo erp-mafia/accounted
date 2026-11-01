@@ -183,5 +183,7 @@ export async function POST(request: Request) {
     )
   }
 
-  return NextResponse.json({ data: { sent: true } })
+  // The address the answer goes to (the mail's Reply-To), so the dialog can
+  // say where to look for it instead of only "thanks" (accounted#55).
+  return NextResponse.json({ data: { sent: true, reply_to: user.email ?? null } })
 }

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  MAX_INVOICE_ATTACHMENTS,
   MAX_INVOICE_ATTACHMENT_FILE_BYTES,
+  archivedAttachmentRefusal,
+  formatAttachmentSize,
   invoiceAttachmentSizeVerdict,
   isPeppolAttachmentFile,
   offersInvoiceAttachments,
@@ -70,5 +73,63 @@ describe('isPeppolAttachmentFile (crm#1545)', () => {
     expect(isPeppolAttachmentFile({ type: '', name: 'Dagbok.PDF' })).toBe(true)
     expect(isPeppolAttachmentFile({ type: 'image/png', name: 'kvitto.pdf' })).toBe(false)
     expect(isPeppolAttachmentFile({ type: '', name: 'tidrapport.docx' })).toBe(false)
+  })
+})
+
+describe('archivedAttachmentRefusal (accounted#42)', () => {
+  const pdf = (bytes: number) => ({ file_name: 'grossist-faktura.pdf', mime_type: 'application/pdf', file_size_bytes: bytes })
+  const none = { count: 0, bytes: 0 }
+
+  it('takes a booked supplier invoice PDF by email and over Peppol', () => {
+    expect(archivedAttachmentRefusal(pdf(200 * 1024), none, 'email')).toBeNull()
+    expect(archivedAttachmentRefusal(pdf(200 * 1024), none, 'peppol')).toBeNull()
+  })
+
+  it('takes a photo or an office file by email but only a PDF over Peppol, as the upload path does', () => {
+    const photo = { file_name: 'kvitto.jpg', mime_type: 'image/jpeg', file_size_bytes: 1 * MB }
+    const sheet = { file_name: 'tid.xlsx', mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', file_size_bytes: 1 * MB }
+    expect(archivedAttachmentRefusal(photo, none, 'email')).toBeNull()
+    expect(archivedAttachmentRefusal(sheet, none, 'email')).toBeNull()
+    expect(archivedAttachmentRefusal(photo, none, 'peppol')).toBe('peppol_pdf_only')
+    expect(archivedAttachmentRefusal(sheet, none, 'peppol')).toBe('peppol_pdf_only')
+  })
+
+  it('reads the type off the name when the record stores none', () => {
+    expect(archivedAttachmentRefusal({ file_name: 'Faktura.PDF', mime_type: null, file_size_bytes: 1000 }, none, 'peppol')).toBeNull()
+  })
+
+  it('refuses what an upload would refuse: a mail body or an archive file', () => {
+    expect(archivedAttachmentRefusal({ file_name: 'mejl.html', mime_type: 'text/html', file_size_bytes: 1000 }, none, 'email')).toBe('unsupported_type')
+    expect(archivedAttachmentRefusal({ file_name: 'filer.zip', mime_type: 'application/zip', file_size_bytes: 1000 }, none, 'email')).toBe('unsupported_type')
+  })
+
+  it('refuses a stored file over the per-file ceiling: nothing is shrunk, the stored file is what goes out', () => {
+    expect(archivedAttachmentRefusal(pdf(MAX_INVOICE_ATTACHMENT_FILE_BYTES), none, 'email')).toBeNull()
+    expect(archivedAttachmentRefusal(pdf(MAX_INVOICE_ATTACHMENT_FILE_BYTES + 1), none, 'email')).toBe('too_large')
+    expect(
+      archivedAttachmentRefusal({ file_name: 'foto.jpg', mime_type: 'image/jpeg', file_size_bytes: 12 * MB }, none, 'email'),
+    ).toBe('too_large')
+  })
+
+  it('counts what the invoice carries and what is picked so far toward the count and the total', () => {
+    expect(archivedAttachmentRefusal(pdf(1000), { count: MAX_INVOICE_ATTACHMENTS - 1, bytes: 0 }, 'email')).toBeNull()
+    expect(archivedAttachmentRefusal(pdf(1000), { count: MAX_INVOICE_ATTACHMENTS, bytes: 0 }, 'email')).toBe('too_many')
+    expect(archivedAttachmentRefusal(pdf(2 * MB), { count: 3, bytes: 24 * MB }, 'email')).toBe('total_too_large')
+    expect(archivedAttachmentRefusal(pdf(2 * MB), { count: 1, bytes: 3 * MB }, 'email')).toBeNull()
+  })
+
+  it('holds a Peppol send to its 5 MB total, so a 6 MB PDF can never ride inside the e-faktura', () => {
+    expect(archivedAttachmentRefusal(pdf(2 * MB), { count: 1, bytes: 3 * MB }, 'peppol')).toBeNull()
+    expect(archivedAttachmentRefusal(pdf(2 * MB + 1), { count: 1, bytes: 3 * MB }, 'peppol')).toBe('total_too_large')
+    expect(archivedAttachmentRefusal(pdf(6 * MB), none, 'peppol')).toBe('total_too_large')
+  })
+})
+
+describe('formatAttachmentSize', () => {
+  it('shows KB under a megabyte and MB above, in the reader\'s locale', () => {
+    expect(formatAttachmentSize(null, 'sv')).toBe('')
+    expect(formatAttachmentSize(512, 'en')).toBe('0.5 KB')
+    expect(formatAttachmentSize(5 * MB, 'en')).toBe('5 MB')
+    expect(formatAttachmentSize(1.5 * MB, 'sv')).toBe('1,5 MB')
   })
 })

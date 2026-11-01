@@ -86,6 +86,8 @@ const SECTION_LABEL_CLASS = 'mb-2 text-[11px] font-medium uppercase tracking-wid
 
 const POLL_MS = 20_000
 
+const SENT_CLOSE_MS = 6_000
+
 function totalBytes(files: File[]): number {
   return files.reduce((sum, file) => sum + file.size, 0)
 }
@@ -115,6 +117,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const [isPreparing, setIsPreparing] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [unread, setUnread] = useState(0)
+  // Where the answer to a mailed message goes (the mail's Reply-To), for 'sent'.
+  const [sentTo, setSentTo] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const attachmentGenerationRef = useRef(0)
   const listRef = useRef<HTMLDivElement>(null)
@@ -361,8 +365,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       await bootstrap(currentTicketId())
       return
     }
+    setSentTo(result.replyTo ?? null)
     setView('sent')
-    setTimeout(() => handleOpenChange(false), 2000)
+    // Long enough to read where the answer will come, not only "thanks".
+    setTimeout(() => handleOpenChange(false), SENT_CLOSE_MS)
   }
 
   async function handleReply(e: React.FormEvent) {
@@ -672,7 +678,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             <div className="p-3 rounded-full bg-success/10">
               <PaperAirplaneIcon className="h-6 w-6 text-success" />
             </div>
-            <p className="text-sm font-medium">{t('thanks')}</p>
+            <p className="text-sm font-medium">{t('sent_by_email')}</p>
+            <p className="text-center text-sm text-muted-foreground break-words">
+              {sentTo ? t('reply_to_address', { email: sentTo }) : t('reply_to_own_address')}
+            </p>
           </div>
         )}
 
