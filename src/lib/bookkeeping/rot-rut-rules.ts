@@ -1,3 +1,4 @@
+import { formatAmount } from '@/lib/utils'
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import type { ArticleType, DeductionType } from '@/types'
@@ -831,10 +832,6 @@ export function deductionCapWarnings(
   const priorRut = Math.max(0, priorYear?.rut ?? 0)
   const priorGronTeknik = Math.max(0, priorYear?.gron_teknik ?? 0)
 
-  // Warning-text amounts: sv-SE digits, always two decimals, same convention
-  // as maxText below.
-  const svAmount = (n: number): string =>
-    n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const maxTextOf = (max: number): string => `${max.toLocaleString('sv-SE')} kr`
 
   const rotSek = toSek ? toSek(totals.rot) : null
@@ -853,21 +850,21 @@ export function deductionCapWarnings(
   ): void => {
     if (amount <= 0) return
     const maxText = maxTextOf(max)
-    const priorText = prior > 0 ? ` plus ${wording.prior} (${svAmount(prior)} kr)` : ''
+    const priorText = prior > 0 ? ` plus ${wording.prior} (${formatAmount(prior)} kr)` : ''
 
     if (amountSek === null) {
       // No booking rate: we cannot know whether the ceiling is breached.
       // Saying so beats both silence and a fabricated kronor comparison.
       warnings.push(
-        `${subject} på denna faktura (${svAmount(amount)} ${currencyLabel}) kan inte stämmas av mot ` +
+        `${subject} på denna faktura (${formatAmount(amount)} ${currencyLabel}) kan inte stämmas av mot ` +
           `årsmaximum ${maxText}: fakturan saknar växelkurs. ` + advice,
       )
       return
     }
     if (amountSek + prior <= max) return
     const figure = currencyLabel === 'SEK'
-      ? `${svAmount(amount)} kr`
-      : `${svAmount(amount)} ${currencyLabel} = ${svAmount(amountSek)} kr`
+      ? `${formatAmount(amount)} kr`
+      : `${formatAmount(amount)} ${currencyLabel} = ${formatAmount(amountSek)} kr`
     // Over the ceiling on its own: no remaining headroom can absorb it, so
     // "check your headroom" would be the wrong advice.
     const kindAdvice = amountSek > max && wording.overOnItsOwn ? wording.overOnItsOwn : advice
@@ -891,9 +888,9 @@ export function deductionCapWarnings(
     if (bothKinds && combined > COMBINED_MAX && rotYear <= ROT_MAX && rutYear <= RUT_MAX) {
       const thisInvoice = roundOre(rotSek + rutSek)
       const priorSum = priorRot + priorRut
-      const priorText = priorSum > 0 ? ` plus tidigare avdrag i år (${svAmount(priorSum)} kr)` : ''
+      const priorText = priorSum > 0 ? ` plus tidigare avdrag i år (${formatAmount(priorSum)} kr)` : ''
       warnings.push(
-        `ROT- och RUT-avdragen på denna faktura (${svAmount(thisInvoice)} kr)${priorText} överstiger tillsammans ` +
+        `ROT- och RUT-avdragen på denna faktura (${formatAmount(thisInvoice)} kr)${priorText} överstiger tillsammans ` +
           `det gemensamma årsmaximum ${maxTextOf(COMBINED_MAX)}. ` + advice,
       )
     }

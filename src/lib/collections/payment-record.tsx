@@ -2,7 +2,8 @@ import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-p
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { roundOre } from '@/lib/money'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatAmount, formatOrgNumber } from '@/lib/utils'
+import { pdfText } from '@/lib/pdf/number-text'
 
 /**
  * The payment record of a payment the collections provider collected
@@ -115,12 +116,8 @@ export function paymentRecordFilename(model: Pick<PaymentRecordModel, 'invoiceNu
   return `Inbetalning_inkasso${invoice ? `_${invoice}` : ''}_${model.paidAt}_${ref}.pdf`
 }
 
-const UNICODE_MINUS = String.fromCharCode(0x2212)
-
 export function formatRecordAmount(amount: number): string {
-  return new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    .format(amount)
-    .replaceAll(UNICODE_MINUS, '-')
+  return pdfText(formatAmount(amount))
 }
 
 /** The rows of the record, in order, as label and value. Pure, so the content is testable without react-pdf. */

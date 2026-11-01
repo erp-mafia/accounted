@@ -4,6 +4,10 @@
  * active one is read. The webhooks make arrival prompt; this sweep makes it
  * certain. Bounded by a time budget so one slow provider never runs the
  * function past its limit: what is left waits for the next run.
+ *
+ * An active Kivra mailbox the webhook is proven to carry is read about once a
+ * day instead of every run: Kivra retries an undelivered webhook for about a
+ * week, so a daily read is the safety net they advise (crm#1524).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
@@ -19,8 +23,48 @@ export interface SweepSummary {
   failed: number
   /** Connections not reached in this run's budget. */
   deferred: number
+  /** Kivra connections the webhook carries, not due for their daily read. */
+  resting: number
   errors: Array<{ companyId: string; provider: string; reason: string }>
   skipped?: 'not_configured' | 'inbox_unavailable'
+}
+
+/**
+ * How long a Kivra mailbox the webhook carries rests between reads: a day,
+ * less half a sweep interval, so the read keeps its ten-minute slot instead
+ * of drifting one slot later every day.
+ */
+export const KIVRA_SAFETY_NET_MS = (24 * 60 - 5) * 60 * 1000
+
+/** Whether the connection's daily safety-net read is due (never read counts as due). */
+export function kivraDailyReadDue(connection: Pick<DigitalMailboxConnection, 'last_synced_at'>, nowMs: number): boolean {
+  const last = connection.last_synced_at ? Date.parse(connection.last_synced_at) : Number.NaN
+  return !Number.isFinite(last) || nowMs - last >= KIVRA_SAFETY_NET_MS
+}
+
+/**
+ * Whether Kivra's webhook carries this connection: it is active and the newest
+ * document the company has from Kivra was filed by the webhook. Proven by
+ * delivery, not assumed from configuration. A document the webhook missed is
+ * filed by a sweep or a person, which puts the connection back on every run
+ * until the webhook delivers again; so does a mailbox the webhook has not
+ * delivered to yet. A failed lookup reads as not carried: when in doubt, read.
+ */
+export async function kivraWebhookCarries(
+  service: SupabaseClient,
+  connection: Pick<DigitalMailboxConnection, 'company_id' | 'receive_state'>,
+): Promise<boolean> {
+  if (connection.receive_state !== 'active') return false
+  const { data, error } = await service
+    .from('arrivals')
+    .select('fetched_by')
+    .eq('company_id', connection.company_id)
+    .eq('source', 'kivra')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return false
+  return (data as { fetched_by: { type?: unknown } | null }).fetched_by?.type === 'webhook'
 }
 
 export async function sweepDigitalMailboxes(
@@ -30,7 +74,15 @@ export async function sweepDigitalMailboxes(
   const now = args.now ?? Date.now
   const deadline = now() + (args.budgetMs ?? 240_000)
   const providers = getDigitalMailboxProviders()
-  const summary: SweepSummary = { connections: 0, activated: 0, filed: 0, failed: 0, deferred: 0, errors: [] }
+  const summary: SweepSummary = {
+    connections: 0,
+    activated: 0,
+    filed: 0,
+    failed: 0,
+    deferred: 0,
+    resting: 0,
+    errors: [],
+  }
   if (!providers.kivra?.receiver && !providers.billo?.receiver) return { ...summary, skipped: 'not_configured' }
 
   const rows = await listReceivingConnections(service)
@@ -44,6 +96,15 @@ export async function sweepDigitalMailboxes(
     const receiver = providers[connection.provider]?.receiver ?? null
     if (!receiver) continue
     try {
+      if (
+        connection.provider === 'kivra' &&
+        providers.kivra?.config.webhookSecret &&
+        !kivraDailyReadDue(connection, now()) &&
+        (await kivraWebhookCarries(service, connection))
+      ) {
+        summary.resting++
+        continue
+      }
       if (connection.provider === 'kivra' && connection.receive_state === 'pending' && providers.kivra) {
         const identity = await loadCompanyIdentity(service, connection.company_id)
         if (!identity?.orgNumber) continue

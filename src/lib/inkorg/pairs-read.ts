@@ -7,6 +7,7 @@
  * doors have none). Throws on a failed read: every caller treats a pairing
  * it could not read as no pairing.
  */
+import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { PairableItem } from './pairs'
@@ -31,12 +32,6 @@ function fail(what: string, error: { message: string }): never {
   throw new Error(`inbox pairing: ${what} failed: ${error.message}`)
 }
 
-function chunked<T>(items: readonly T[]): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += ID_CHUNK) out.push(items.slice(i, i + ID_CHUNK))
-  return out
-}
-
 /** The arrivals that produced each of `itemIds`, by item id; items without one are absent. */
 export async function readArrivalIds(
   supabase: SupabaseClient,
@@ -44,7 +39,7 @@ export async function readArrivalIds(
   itemIds: readonly string[],
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
-  for (const ids of chunked([...new Set(itemIds)])) {
+  for (const ids of chunked([...new Set(itemIds)], ID_CHUNK)) {
     const { data, error } = await supabase
       .from('arrival_outputs')
       .select('arrival_id, output_id')
@@ -89,7 +84,7 @@ export async function readRegisteredStates(
   }
   const out: RegisteredStates = { awaitingPayment: new Set(), paid: new Set(), paymentEntry: new Map() }
   const payable = new Set<string>(MATCHABLE_SUPPLIER_INVOICE_STATUSES)
-  for (const ids of chunked([...itemsBySupplierInvoice.keys()])) {
+  for (const ids of chunked([...itemsBySupplierInvoice.keys()], ID_CHUNK)) {
     const { data, error } = await supabase
       .from('supplier_invoices')
       .select('id, status, payment_journal_entry_id')
@@ -119,7 +114,7 @@ export async function readArrivalOutputs(
   arrivalIds: readonly string[],
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
-  for (const ids of chunked([...new Set(arrivalIds)])) {
+  for (const ids of chunked([...new Set(arrivalIds)], ID_CHUNK)) {
     const { data, error } = await supabase
       .from('arrival_outputs')
       .select('arrival_id, output_id')
@@ -156,12 +151,12 @@ export async function readDeliveriesOf(
   const add = (data: unknown[] | null) => {
     for (const row of (data ?? []) as unknown as PairableRow[]) if (!rows.has(row.id)) rows.set(row.id, row)
   }
-  for (const ids of chunked(mailIds)) {
+  for (const ids of chunked(mailIds, ID_CHUNK)) {
     const { data, error } = await supabase.from('invoice_inbox_items').select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id').eq('company_id', companyId).in('resend_email_id', ids)
     if (error) fail('mail siblings read', error)
     add(data)
   }
-  for (const ids of chunked(messageIds)) {
+  for (const ids of chunked(messageIds, ID_CHUNK)) {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
       .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
@@ -171,7 +166,7 @@ export async function readDeliveriesOf(
     add(data)
   }
   const missing = [...arrivalOutputs.keys()].filter((id) => !rows.has(id))
-  for (const ids of chunked(missing)) {
+  for (const ids of chunked(missing, ID_CHUNK)) {
     const { data, error } = await supabase.from('invoice_inbox_items').select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id').eq('company_id', companyId).in('id', ids)
     if (error) fail('arrival siblings read', error)
     add(data)

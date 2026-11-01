@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { SettingsGroup, SettingsSeg } from '@/components/settings/SettingsRows'
 import {
@@ -24,6 +25,7 @@ import {
 import type { ApiKeyRow } from '@/components/settings/useApiKeys'
 import type { PickerCompany } from '@/components/settings/CompanyPickerList'
 import { KeyCompaniesDialog } from '@/components/settings/KeyCompaniesDialog'
+import { grantedScopeGroups, groupLabelKey, scopeLabelKey, scopeVerb } from '@/components/settings/scope-labels'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { claudeConnectorLink } from '@/lib/onboarding/checklist'
 import { getBranding } from '@/lib/branding/service'
@@ -104,6 +106,73 @@ function ClientMark({ kind, size = 'md' }: { kind: ConnectionKind | ConnectTarge
         <Icon className={cn(kind === 'local' || kind === 'key' ? 'text-muted-foreground' : 'text-foreground', size === 'lg' ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
       )}
     </span>
+  )
+}
+
+/**
+ * What a connection may do, behind its "5 behörigheter": each group it holds
+ * scopes in with the verbs ("Fakturor: läs, skriv"), then how to change them.
+ * A key's scopes are fixed at creation (PATCH /api/settings/api-keys/[id]
+ * does not take them, so the separation-of-duties check that runs on POST
+ * cannot be bypassed): other permissions mean a new key or a new sign-in.
+ * With every scope held the summary already says it all and only the hint
+ * remains. Exported for its render test.
+ */
+export function PermissionDetail({ scopes, source }: { scopes: readonly string[]; source?: ApiKeyRow['source'] }) {
+  const t = useTranslations('settings_api_keys')
+  const locale = useLocale()
+  const groups = scopes.length === ALL_SCOPES.length ? [] : grantedScopeGroups(scopes)
+  return (
+    <div className="space-y-2">
+      {groups.length > 0 && (
+        <ul className="space-y-1">
+          {groups.map(({ group, scopes: held }) => (
+            <li key={group.domain}>
+              {t(groupLabelKey(group))}
+              <span className="text-muted-foreground">
+                {': '}
+                {held.map((scope) => scopeVerb(t(scopeLabelKey(scope))).toLocaleLowerCase(locale)).join(', ')}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {t(source === 'signin' ? 'permissions_change_signin' : 'permissions_change_key')}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * A connection row's permission count, with PermissionDetail in a tooltip.
+ * The count alone did not say which permissions a key has. Focusable, so the
+ * tooltip opens from the keyboard too (Radix opens it on focus).
+ */
+function PermissionSummary({ scopes, source }: { scopes: readonly string[]; source?: ApiKeyRow['source'] }) {
+  const t = useTranslations('settings_api_keys')
+  const summary =
+    scopes.length === ALL_SCOPES.length
+      ? t('all_permissions')
+      : scopes.length === 0
+        ? t('no_permissions')
+        : t('permissions_count', { count: scopes.length })
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          // The span truncates itself (not its column), so the column does
+          // not clip the focus ring.
+          className="inline-block max-w-full cursor-help truncate rounded-sm align-top underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {summary}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-xs">
+        <PermissionDetail scopes={scopes} source={source} />
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -340,13 +409,6 @@ export function McpConnectionsPanel({
           <ul className="pt-2">
             {keys.map((key) => {
               const kind = connectionKind(key)
-              const scopeCount = key.scopes?.length ?? 0
-              const permissionSummary =
-                scopeCount === ALL_SCOPES.length
-                  ? t('all_permissions')
-                  : scopeCount === 0
-                    ? t('no_permissions')
-                    : t('permissions_count', { count: scopeCount })
               return (
                 <li key={key.id} className="flex items-center gap-3 border-b border-border px-1 py-2">
                   <ClientMark kind={kind} />
@@ -384,8 +446,8 @@ export function McpConnectionsPanel({
                       t('via_signin')
                     )}
                   </span>
-                  <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground lg:block">
-                    {permissionSummary}
+                  <span className="hidden w-28 shrink-0 text-xs text-muted-foreground lg:block">
+                    <PermissionSummary scopes={key.scopes ?? []} source={key.source} />
                   </span>
                   {/* Only the key's owner may change its companies (the
                       route answers 403 for anyone else), and "2 of 5" is

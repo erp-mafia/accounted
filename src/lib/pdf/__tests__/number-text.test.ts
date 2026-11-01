@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pdfNumberText, pdfText, UNICODE_MINUS } from '../number-text'
+import { pdfAmount, pdfNumberText, pdfText, UNICODE_MINUS } from '../number-text'
 
 describe('pdfNumberText', () => {
   it('maps every U+2212 to the ASCII hyphen-minus', () => {
@@ -40,5 +40,30 @@ describe('pdfText', () => {
     expect(pdfText(`${UNICODE_MINUS}0,5 × lön`)).toBe('-0,5 × lön')
     expect(pdfText('grundlön + tillägg')).toBe('grundlön + tillägg')
     expect(pdfText('')).toBe('')
+  })
+})
+
+describe('pdfAmount', () => {
+  // The PDF templates that used to inline this Intl call now share it, so the
+  // contract they print by is pinned here.
+  it('prints two decimals with sv-SE grouping and an ASCII minus', () => {
+    expect(pdfAmount(1234.5)).toMatch(/^1\s234,50$/)
+    expect(pdfAmount(-50)).toBe('-50,00')
+    expect(pdfAmount(-1234.5)).toMatch(/^-1\s234,50$/)
+    expect(pdfAmount(0)).toBe('0,00')
+    expect(pdfAmount(-1234.5)).not.toContain(UNICODE_MINUS)
+  })
+
+  it('prints a negative zero and sub-öre noise unsigned', () => {
+    expect(pdfAmount(-0)).toBe('0,00')
+    expect(pdfAmount(-0.004)).toBe('0,00')
+    expect(pdfAmount(-0.005)).toBe('-0,01')
+  })
+
+  it('is the same text as pdfNumberText over the sv-SE two-decimal format', () => {
+    const intl = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    for (const n of [0, -0, 1.005, -1.005, 2.675, -2.675, 1e9 + 0.5, -0.001, 18563, -18563.456]) {
+      expect(pdfAmount(n)).toBe(pdfNumberText(intl.format(n)))
+    }
   })
 })

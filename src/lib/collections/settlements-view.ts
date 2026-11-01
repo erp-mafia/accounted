@@ -1,3 +1,4 @@
+import { chunk as chunks } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { roundOre } from '@/lib/money'
@@ -81,12 +82,6 @@ export const SETTLEMENTS_LIST_LIMIT = 200
 /** Ids per `.in()` lookup: keeps the request line short however long the list. */
 const LOOKUP_CHUNK = 200
 
-function chunks<T>(items: readonly T[], size = LOOKUP_CHUNK): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
 /** Rows by id, first seen wins, newest first by `dateKey` (then id, for a stable order). */
 function mergeNewestFirst(lists: Record<string, unknown>[][], dateKey: string): Record<string, unknown>[] {
   const byId = new Map<string, Record<string, unknown>>()
@@ -124,7 +119,7 @@ function settlementItem(raw: Record<string, unknown>, vouchers: VoucherNumbers =
 async function loadVoucherNumbers(db: SupabaseClient, companyId: string, ids: readonly (string | null)[]): Promise<VoucherNumbers> {
   const unique = [...new Set(ids.filter((id): id is string => !!id))]
   const numbers = new Map<string, string>()
-  for (const part of chunks(unique)) {
+  for (const part of chunks(unique, LOOKUP_CHUNK)) {
     const { data, error } = await db
       .from('journal_entries')
       .select('id, voucher_series, voucher_number')
@@ -149,14 +144,14 @@ async function loadInvoiceLabels(
   const labels = new Map<string, { invoiceNumber: string | null; customerName: string | null }>()
   if (unique.length === 0) return labels
   const invoices: { id: string; invoice_number: string | null; customer_id: string | null }[] = []
-  for (const part of chunks(unique)) {
+  for (const part of chunks(unique, LOOKUP_CHUNK)) {
     const { data, error } = await db.from('invoices').select('id, invoice_number, customer_id').eq('company_id', companyId).in('id', part)
     if (error) throw new Error(`invoices lookup failed: ${error.message}`)
     invoices.push(...((data ?? []) as { id: string; invoice_number: string | null; customer_id: string | null }[]))
   }
   const customerIds = [...new Set(invoices.map((i) => i.customer_id).filter((id): id is string => !!id))]
   const names = new Map<string, string>()
-  for (const part of chunks(customerIds)) {
+  for (const part of chunks(customerIds, LOOKUP_CHUNK)) {
     const customers = await db.from('customers').select('id, name').eq('company_id', companyId).in('id', part)
     if (customers.error) throw new Error(`customers lookup failed: ${customers.error.message}`)
     for (const c of (customers.data ?? []) as { id: string; name: string | null }[]) if (c.name) names.set(c.id, c.name)

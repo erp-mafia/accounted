@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createLogger } from '@/lib/logger'
@@ -193,12 +194,6 @@ export function buildOperationDecisionRows(
     // Why the stager proposed it, as the approver saw it.
     ...agentReasonColumn(agentReason),
   }))
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
 }
 
 /** The ids among `ids` posted at or after `since`, in the order given. */

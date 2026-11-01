@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
 import type { PosDay, PosTenderKind } from '@accounted/connect-contract'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfAmount, pdfNumberText } from '@/lib/pdf/number-text'
 import type { CreateJournalEntryLineInput } from '@/types'
 
 /**
@@ -44,9 +44,7 @@ const TENDER_LABELS: Record<PosTenderKind, string> = {
 }
 
 export function formatReportAmount(amount: number): string {
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
-  )
+  return pdfAmount(amount)
 }
 
 function rateLabel(rate: number): string {

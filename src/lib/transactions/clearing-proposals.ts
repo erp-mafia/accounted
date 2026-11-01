@@ -18,6 +18,7 @@
  *
  * The proposers depend on this file's types only.
  */
+import { chunk as chunks } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { BookingProposal } from '@/lib/bookkeeping/proposal'
 import { fetchEntriesWithAccountLines, fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
@@ -156,12 +157,6 @@ function ownIbanReader(supabase: SupabaseClient, companyId: string): () => Promi
 /** PostgREST rejects very long URLs, so `.in()` lists are chunked. */
 const IN_CHUNK = 100
 
-function chunks<T>(values: readonly T[]): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < values.length; i += IN_CHUNK) out.push(values.slice(i, i + IN_CHUNK))
-  return out
-}
-
 /**
  * How far past the window a verifikat that clears it may be dated: a
  * samlingsverifikat for a month's Swish rows is often dated the month's last day.
@@ -236,7 +231,7 @@ export function clearingBankRows(supabase: SupabaseClient, companyId: string): C
 
       const byId = new Map<string, RowLike>()
       const linked = new Set<string>()
-      for (const ids of chunks(entryIds)) {
+      for (const ids of chunks(entryIds, IN_CHUNK)) {
         const direct = await fetchAllRows<RowLike>(({ from: start, to: end }) =>
           supabase
             .from('transactions')
@@ -261,7 +256,7 @@ export function clearingBankRows(supabase: SupabaseClient, companyId: string): C
         )
         for (const link of links) if (!byId.has(link.transaction_id)) linked.add(link.transaction_id)
       }
-      for (const ids of chunks([...linked])) {
+      for (const ids of chunks([...linked], IN_CHUNK)) {
         const { data, error } = await supabase
           .from('transactions')
           .select(

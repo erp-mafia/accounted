@@ -148,6 +148,9 @@ interface Props {
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
   onDuplicateMatched?: (journalEntryId: string) => void
+  /** Fired on mount and whenever the form gains or loses unsaved input, so a
+   *  host dialog can let Escape close it only while nothing would be lost. */
+  onHasContentChange?: (hasContent: boolean) => void
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -175,6 +178,7 @@ export default function JournalEntryForm({
   seriesPicker,
   cashAccountId,
   onDuplicateMatched,
+  onHasContentChange,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -324,6 +328,9 @@ export default function JournalEntryForm({
     lines.some(l => l.account_number !== '' || l.debit_amount !== '' || l.credit_amount !== '') ||
     uploadedFiles.length > 0
   useUnsavedChanges(hasContent)
+  useEffect(() => {
+    onHasContentChange?.(hasContent)
+  }, [hasContent, onHasContentChange])
 
   // Resolve + set the default voucher series for a source type from the cached
   // company config: prefer the per-source-type mapping, fall back to the legacy

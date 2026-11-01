@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { LinkIcon, Square2StackIcon } from '@/components/icons'
 import {
@@ -7,6 +8,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -61,6 +63,7 @@ export default function NewJournalEntryDialog({
 }: Props) {
   const t = useTranslations('bookkeeping')
   const activeSkvPrefill = copyPrefill ? null : (skvPrefill ?? null)
+  const [hasUnsavedInput, setHasUnsavedInput] = useState(false)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -70,13 +73,15 @@ export default function NewJournalEntryDialog({
         // were squeezed against the account search. Capped at 6xl so it stays
         // a dialog on an ultrawide screen.
         className="sm:max-w-5xl lg:max-w-6xl max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
-        // A half-typed verifikat must survive an accidental backdrop click or a
-        // stray Escape (easy to hit across multiple windows/screens, or when you
-        // only meant to dismiss a combobox dropdown). Closing is explicit: the
-        // header X. This also stops nested popovers (AccountCombobox, date
-        // pickers) and the form's own confirm dialogs from collapsing the parent
-        // when they portal outside it.
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // Escape closes an untouched dialog, like every other overlay, but a
+        // half-typed verifikat must survive a stray Escape (easy to hit across
+        // multiple windows/screens, or when you only meant to dismiss a
+        // combobox dropdown): then closing is explicit, the header X. See
+        // holdEscapeWhileUnsaved. A backdrop click never closes it. This also
+        // stops nested popovers (AccountCombobox, date pickers) and the form's
+        // own confirm dialogs from collapsing the parent when they portal
+        // outside it.
+        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, hasUnsavedInput)}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
@@ -126,6 +131,7 @@ export default function NewJournalEntryDialog({
               initialDate={activeSkvPrefill?.date}
               initialDescription={copyPrefill?.description ?? activeSkvPrefill?.description}
               initialNotes={copyPrefill?.notes}
+              onHasContentChange={setHasUnsavedInput}
             />
           </>
         )}

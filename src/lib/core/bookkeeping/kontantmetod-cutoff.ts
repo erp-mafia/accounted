@@ -61,6 +61,7 @@
  * VAT check warns KONTANTMETOD_CUTOFF_INCOMPLETE on the period holding its
  * period end.
  */
+import { chunk as chunked } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
@@ -1742,12 +1743,6 @@ function supplierOutstandingAsOf(
 /** Ids per round trip for `.in()` reads (keeps the request URL bounded). */
 const IN_CHUNK = 200
 
-function chunked<T>(values: T[], size = IN_CHUNK): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size))
-  return out
-}
-
 /**
  * Supplier invoice statuses the per-invoice cut-off reads: every state in
  * which the invoice can still be owed on period end. Only 'reversed' (the
@@ -2292,7 +2287,7 @@ async function findDeductionShareCarries(
     request: { status: string; decided_total: number | string | null; settlement_journal_entry_id: string | null } | null
   }
   const itemsByInvoice = new Map<string, ItemRow[]>()
-  for (const chunk of chunked(ids)) {
+  for (const chunk of chunked(ids, IN_CHUNK)) {
     const [payments, items] = await Promise.all([
       supabase
         .from('invoice_payments')
@@ -2323,7 +2318,7 @@ async function findDeductionShareCarries(
   const entryIds = [...new Set([...[...vouchersByInvoice.values()].flat(), ...settlementIds])]
   const live = new Map<string, { source_type: string | null; entry_date: string }>()
   const with1513 = new Set<string>()
-  for (const chunk of chunked(entryIds)) {
+  for (const chunk of chunked(entryIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('journal_entries')
       .select('id, status, reversed_by_id, source_type, entry_date')
@@ -2335,7 +2330,7 @@ async function findDeductionShareCarries(
     }
   }
   const paymentIds = [...new Set([...vouchersByInvoice.values()].flat())].filter((id) => live.has(id))
-  for (const chunk of chunked(paymentIds)) {
+  for (const chunk of chunked(paymentIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('journal_entry_lines')
       .select('journal_entry_id')
@@ -2530,7 +2525,7 @@ async function loadCarryDocs(
   const supplierIds = candidates.filter((c) => c.side === 'supplier').map((c) => c.id)
   const customerRows = new Map<string, Record<string, unknown>>()
   const supplierRows = new Map<string, Record<string, unknown>>()
-  for (const ids of chunked(customerIds)) {
+  for (const ids of chunked(customerIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('invoices')
       .select('*, items:invoice_items(*)')
@@ -2541,7 +2536,7 @@ async function loadCarryDocs(
     }
     for (const row of (data ?? []) as Array<Record<string, unknown>>) customerRows.set(row.id as string, row)
   }
-  for (const ids of chunked(supplierIds)) {
+  for (const ids of chunked(supplierIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('supplier_invoices')
       .select('*, items:supplier_invoice_items(*), supplier:suppliers(id, name, supplier_type)')
@@ -2706,7 +2701,7 @@ async function findPaidBeforePosting(
     lines: CarryClearingLine[]
   }>()
   const rowsPerEntry = new Map<string, number>()
-  for (const ids of chunked(entryIds)) {
+  for (const ids of chunked(entryIds, IN_CHUNK)) {
     const [entryRead, customerLinks, supplierLinks] = await Promise.all([
       supabase
         .from('journal_entries')
@@ -2978,7 +2973,7 @@ async function resolveLiveCarries(
   const customerMarkers = carryMarkers.filter((m) => m.kind === 'receivable_invoice' && m.invoice_id)
   const supplierMarkers = carryMarkers.filter((m) => m.kind === 'payable_invoice' && m.supplier_invoice_id)
 
-  for (const batch of chunked(customerMarkers)) {
+  for (const batch of chunked(customerMarkers, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('invoices')
       .select('id, invoice_number, journal_entry_id, total, credited_invoice_id')
@@ -2999,7 +2994,7 @@ async function resolveLiveCarries(
       }
     }
   }
-  for (const batch of chunked(supplierMarkers)) {
+  for (const batch of chunked(supplierMarkers, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('supplier_invoices')
       .select('id, supplier_invoice_number, registration_journal_entry_id, is_credit_note')
@@ -3268,7 +3263,7 @@ async function loadEntriesWithLines(
   ids: string[],
 ): Promise<Map<string, LoadedEntry>> {
   const entries = new Map<string, LoadedEntry>()
-  for (const batch of chunked([...new Set(ids)])) {
+  for (const batch of chunked([...new Set(ids)], IN_CHUNK)) {
     const { data, error } = await supabase
       .from('journal_entries')
       .select('id, status, entry_date, voucher_series, voucher_number, lines:journal_entry_lines(*)')

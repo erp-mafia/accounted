@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
@@ -156,10 +157,7 @@ export async function fetchAnchoredTransactionIds(
 ): Promise<Set<string>> {
   const anchored = new Set<string>()
   if (transactionIds.length === 0) return anchored
-  const chunks: string[][] = []
-  for (let i = 0; i < transactionIds.length; i += ANCHOR_LOOKUP_CHUNK) {
-    chunks.push(transactionIds.slice(i, i + ANCHOR_LOOKUP_CHUNK))
-  }
+  const chunks = chunk(transactionIds, ANCHOR_LOOKUP_CHUNK)
   // At most one request in flight per table: the three tables in parallel,
   // each table's chunks in turn. This runs on every report read (data_status),
   // so the work stays proportional to the candidates without a burst of

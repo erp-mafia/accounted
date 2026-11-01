@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import { swedishMonthName } from '@/lib/dates/swedish-months'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfAmount } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 import type { SalaryRunUnderlagData } from '@/lib/salary/run-underlag'
 
@@ -121,17 +121,9 @@ const styles = StyleSheet.create({
   },
 })
 
-function fmt(amount: number): string {
-  // pdfNumberText: Intl writes negatives with U+2212, which the bundled
-  // Helvetica cannot draw (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
-  )
-}
-
 /** Debit/credit cells stay blank for a zero, as on a printed verifikat. */
 function fmtOrBlank(amount: number): string {
-  return amount === 0 ? '' : fmt(amount)
+  return amount === 0 ? '' : pdfAmount(amount)
 }
 
 export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) {
@@ -185,25 +177,25 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
             <View key={`${row.employeeId}-${i}`} style={i % 2 === 1 ? styles.rowAlt : styles.row} wrap={false}>
               <Text style={styles.colName}>{row.employeeName}</Text>
               <Text style={styles.colPnr}>{row.personnummerLast4}</Text>
-              <Text style={styles.colAmount}>{fmt(row.grossSalary)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.taxWithheld)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.netSalary)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.avgifterAmount)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.vacationAccrual)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.vacationAccrualAvgifter)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.totalEmployerCost)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.grossSalary)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.taxWithheld)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.netSalary)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.avgifterAmount)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.vacationAccrual)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.vacationAccrualAvgifter)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.totalEmployerCost)}</Text>
             </View>
           ))}
           <View style={styles.totalRow} wrap={false}>
             <Text style={styles.colName}>Summa ({data.rows.length} anställda)</Text>
             <Text style={styles.colPnr}></Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.grossSalary)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.taxWithheld)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.netSalary)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.avgifterAmount)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.vacationAccrual)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.vacationAccrualAvgifter)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.totalEmployerCost)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.grossSalary)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.taxWithheld)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.netSalary)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.avgifterAmount)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.vacationAccrual)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.vacationAccrualAvgifter)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.totalEmployerCost)}</Text>
           </View>
           {/* AGI amounts are whole kronor and Skatteverket computes the avgift
               on whole-krona underlag with öretal dropped, so the declared
@@ -215,7 +207,7 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
               <Text style={styles.colAmount}></Text>
               <Text style={styles.colAmount}></Text>
               <Text style={styles.colAmount}></Text>
-              <Text style={styles.colAmount}>{fmt(data.declaredAvgifter)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(data.declaredAvgifter)}</Text>
               <Text style={styles.colAmount}></Text>
               <Text style={styles.colAmount}></Text>
               <Text style={styles.colAmount}></Text>
@@ -255,8 +247,8 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
                   <Text style={styles.colAccount}></Text>
                   <Text style={styles.colAccountName}>Summa</Text>
                   <Text style={styles.colLineDesc}></Text>
-                  <Text style={styles.colAmount}>{fmt(entry.totalDebit)}</Text>
-                  <Text style={styles.colAmount}>{fmt(entry.totalCredit)}</Text>
+                  <Text style={styles.colAmount}>{pdfAmount(entry.totalDebit)}</Text>
+                  <Text style={styles.colAmount}>{pdfAmount(entry.totalCredit)}</Text>
                 </View>
               </View>
             ))

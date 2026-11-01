@@ -1,3 +1,4 @@
+import { formatAmount } from '@/lib/utils'
 import type {
   KontantmetodCutoffVatFacts,
   VatAccountWithoutRuta,
@@ -162,15 +163,11 @@ export interface VatDeclarationCheckContext {
 /** How many accounts REVENUE_ACCOUNT_WITHOUT_RUTA and VAT_ACCOUNT_WITHOUT_RUTA name before summarising the rest. */
 const ACCOUNTS_NAMED_MAX = 5
 
-function formatOre(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 function describeAccount(account: VatRevenueAccountWithoutRuta | VatAccountWithoutRuta): string {
   const label = account.account_name
     ? `${account.account_number} ${account.account_name}`
     : account.account_number
-  return `${label} (${formatOre(account.amount)} kr)`
+  return `${label} (${formatAmount(account.amount)} kr)`
 }
 
 /**

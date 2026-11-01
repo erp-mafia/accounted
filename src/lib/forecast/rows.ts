@@ -15,6 +15,7 @@
  *   - an invoice, supplier invoice or dimension value a row points at must be
  *     the company's (the database refuses it too: cash_forecast_rows_same_company).
  */
+import { chunk as chunks } from '@/lib/utils'
 import { z } from 'zod'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import { roundOre } from '@/lib/money'
@@ -201,7 +202,7 @@ async function foreignReferences(ctx: OperationContext, rows: readonly ForecastR
   for (const { table, field } of checks) {
     const ids = [...new Set(rows.map((r) => r[field]).filter((v): v is string => !!v))]
     const found = new Set<string>()
-    for (const chunk of chunks(ids)) {
+    for (const chunk of chunks(ids, IN_CHUNK)) {
       const { data, error } = await ctx.supabase.from(table).select('id').eq('company_id', ctx.companyId).in('id', chunk)
       if (error) return { error }
       for (const r of (data ?? []) as Array<{ id: string }>) found.add(r.id)
@@ -214,12 +215,6 @@ async function foreignReferences(ctx: OperationContext, rows: readonly ForecastR
 
 /** Ids per `.in()` filter: the list travels in the URL. */
 const IN_CHUNK = 100
-
-function chunks<T>(items: readonly T[]): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += IN_CHUNK) out.push(items.slice(i, i + IN_CHUNK))
-  return out
-}
 
 export async function upsertForecastRows(
   ctx: OperationContext,
@@ -237,7 +232,7 @@ export async function upsertForecastRows(
   const bySource = new Map<string, string[]>()
   for (const row of input.rows) bySource.set(row.external_source, [...(bySource.get(row.external_source) ?? []), row.external_id])
   for (const [source, ids] of bySource) {
-    for (const chunk of chunks(ids)) {
+    for (const chunk of chunks(ids, IN_CHUNK)) {
       const { data, error } = await ctx.supabase
         .from('cash_forecast_rows')
         .select('id, external_id, status')

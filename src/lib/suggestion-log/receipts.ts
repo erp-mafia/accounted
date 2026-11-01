@@ -1,3 +1,4 @@
+import { chunk } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -521,12 +522,6 @@ export function toCompactDecision(receipts: DecisionReceipt[]): CompactDecision 
 }
 
 // ── IO ──────────────────────────────────────────────────────────────
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
 
 /** The suggestion_log rows about one voucher, bank line or document, newest first. */
 export async function fetchDecisionRows(

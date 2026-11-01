@@ -1,3 +1,4 @@
+import { chunk as chunks } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntriesWithAccountLines, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { fetchEcbEuroRate, type EcbRateLookup } from '@/lib/currency/ecb'
@@ -590,12 +591,6 @@ const EU_DESTINATIONS = EU_COUNTRIES.map((country) => country.code).filter((code
 
 const ID_CHUNK = 100
 
-function chunks<T>(items: readonly T[]): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += ID_CHUNK) out.push(items.slice(i, i + ID_CHUNK))
-  return out
-}
-
 /** The company's OSS revenue and VAT accounts. */
 async function loadOssAccounts(supabase: SupabaseClient, companyId: string) {
   const revenueAccounts = new Set<string>()
@@ -671,7 +666,7 @@ async function loadLinkedOrders(supabase: SupabaseClient, companyId: string, ent
   }
   // Literal selects and columns, one query per link: the phantom-column
   // guard (tests/schema/no-phantom-columns.test.ts) checks only what it can read.
-  for (const chunk of chunks(entryIds)) {
+  for (const chunk of chunks(entryIds, ID_CHUNK)) {
     const booked = await supabase
       .from('webshop_orders')
       .select('id, platform, row_type, parent_order_id, order_number, customer_country, currency, exchange_rate, vat_breakdown, journal_entry_id, manually_booked_journal_entry_id, manually_booked_at, invoice_id, legacy_transaction_id, is_paid, paid_date, order_date')
@@ -702,7 +697,7 @@ async function loadParentBookingDates(
   if (parentIds.length === 0) return dates
 
   const parents: Array<Pick<OssOrder, 'id' | 'journal_entry_id' | 'manually_booked_journal_entry_id'>> = []
-  for (const chunk of chunks(parentIds)) {
+  for (const chunk of chunks(parentIds, ID_CHUNK)) {
     const { data, error } = await supabase
       .from('webshop_orders')
       .select('id, journal_entry_id, manually_booked_journal_entry_id')
@@ -714,7 +709,7 @@ async function loadParentBookingDates(
 
   const entryIds = Array.from(new Set(parents.map(linkedEntryId).filter((id): id is string => !!id)))
   const entryDates = new Map<string, string>()
-  for (const chunk of chunks(entryIds)) {
+  for (const chunk of chunks(entryIds, ID_CHUNK)) {
     const { data, error } = await supabase
       .from('journal_entries')
       .select('id, entry_date')

@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import { swedishMonthName } from '@/lib/dates/swedish-months'
-import { pdfNumberText, pdfText } from '@/lib/pdf/number-text'
+import { pdfText, pdfAmount } from '@/lib/pdf/number-text'
 import { roundOre } from '@/lib/money'
 import { getBranding } from '@/lib/branding/service'
 
@@ -269,16 +269,11 @@ export interface PayslipLineItem {
   text?: boolean
 }
 
-function fmt(amount: number): string {
-  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica, so a
-  // negative line (deduction, absence) would print as an addition (issue
-  // #1982). The two other U+2212 sources on this page are handled at their
-  // render sites: the Preliminär skatt prefix (an ASCII hyphen) and the
-  // breakdown formula strings from the calculation engine (pdfText).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
-  )
-}
+// Amounts print through pdfAmount, whose sign guard keeps a negative line
+// (deduction, absence) from printing as an addition (issue #1982). The two
+// other U+2212 sources on this page are handled at their render sites: the
+// Preliminär skatt prefix (an ASCII hyphen) and the breakdown formula strings
+// from the calculation engine (pdfText).
 
 export function PayslipPDF({ data }: { data: PayslipData }) {
   const periodLabel = `${swedishMonthName(data.periodMonth)} ${data.periodYear}`
@@ -351,8 +346,8 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
               <View key={i} style={i % 2 === 1 ? styles.rowAlt : styles.row}>
                 <Text style={styles.colDesc}>{item.description}</Text>
                 <Text style={styles.colQty}>{item.quantity != null ? item.quantity : ''}</Text>
-                <Text style={styles.colRate}>{item.unitPrice != null ? fmt(item.unitPrice) : ''}</Text>
-                <Text style={styles.colAmount}>{fmt(item.amount)}</Text>
+                <Text style={styles.colRate}>{item.unitPrice != null ? pdfAmount(item.unitPrice) : ''}</Text>
+                <Text style={styles.colAmount}>{pdfAmount(item.amount)}</Text>
               </View>
             ),
           )}
@@ -362,21 +357,21 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
         <View style={styles.section}>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Bruttolön</Text>
-            <Text style={styles.summaryValue}>{fmt(data.grossSalary)}</Text>
+            <Text style={styles.summaryValue}>{pdfAmount(data.grossSalary)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Preliminär skatt ({data.taxReference})</Text>
-            <Text style={styles.summaryValue}>-{fmt(roundOre(data.taxWithheld - extraTax))}</Text>
+            <Text style={styles.summaryValue}>-{pdfAmount(roundOre(data.taxWithheld - extraTax))}</Text>
           </View>
           {extraTax > 0 && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Extra skatteavdrag (begärt)</Text>
-              <Text style={styles.summaryValue}>-{fmt(extraTax)}</Text>
+              <Text style={styles.summaryValue}>-{pdfAmount(extraTax)}</Text>
             </View>
           )}
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Nettolön (utbetalas)</Text>
-            <Text style={styles.totalValue}>{fmt(data.netSalary)}</Text>
+            <Text style={styles.totalValue}>{pdfAmount(data.netSalary)}</Text>
           </View>
         </View>
 
@@ -386,19 +381,19 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
             <Text style={styles.sectionTitle}>Arbetsgivarkostnad</Text>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Arbetsgivaravgifter ({(data.employerCost.avgifterRate * 100).toFixed(2)}%)</Text>
-              <Text style={styles.summaryValue}>{fmt(data.employerCost.avgifterAmount)}</Text>
+              <Text style={styles.summaryValue}>{pdfAmount(data.employerCost.avgifterAmount)}</Text>
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Semesteravsättning</Text>
-              <Text style={styles.summaryValue}>{fmt(data.employerCost.vacationAccrual)}</Text>
+              <Text style={styles.summaryValue}>{pdfAmount(data.employerCost.vacationAccrual)}</Text>
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Sociala avgifter på semester</Text>
-              <Text style={styles.summaryValue}>{fmt(data.employerCost.vacationAccrualAvgifter)}</Text>
+              <Text style={styles.summaryValue}>{pdfAmount(data.employerCost.vacationAccrualAvgifter)}</Text>
             </View>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total arbetsgivarkostnad</Text>
-              <Text style={styles.totalValue}>{fmt(data.employerCost.totalEmployerCost)}</Text>
+              <Text style={styles.totalValue}>{pdfAmount(data.employerCost.totalEmployerCost)}</Text>
             </View>
           </View>
         )}
@@ -408,15 +403,15 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           <Text style={[styles.sectionTitle, { fontSize: 9 }]}>Ackumulerat {data.periodYear}</Text>
           <View style={styles.ytdRow}>
             <Text style={styles.ytdLabel}>Brutto</Text>
-            <Text style={styles.ytdValue}>{fmt(data.ytdGross)}</Text>
+            <Text style={styles.ytdValue}>{pdfAmount(data.ytdGross)}</Text>
           </View>
           <View style={styles.ytdRow}>
             <Text style={styles.ytdLabel}>Skatt</Text>
-            <Text style={styles.ytdValue}>{fmt(data.ytdTax)}</Text>
+            <Text style={styles.ytdValue}>{pdfAmount(data.ytdTax)}</Text>
           </View>
           <View style={styles.ytdRow}>
             <Text style={styles.ytdLabel}>Netto</Text>
-            <Text style={styles.ytdValue}>{data.ytdNet === null ? 'Underlag saknas' : fmt(data.ytdNet)}</Text>
+            <Text style={styles.ytdValue}>{data.ytdNet === null ? 'Underlag saknas' : pdfAmount(data.ytdNet)}</Text>
           </View>
         </View>
 
@@ -428,7 +423,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
               <View key={i} style={styles.breakdownRow}>
                 <Text style={styles.breakdownLabel}>{step.label}</Text>
                 <Text style={styles.breakdownFormula}>{pdfText(step.formula)}</Text>
-                <Text style={styles.breakdownValue}>{fmt(step.output)}</Text>
+                <Text style={styles.breakdownValue}>{pdfAmount(step.output)}</Text>
               </View>
             ))}
           </View>

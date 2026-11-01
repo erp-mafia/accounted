@@ -4,16 +4,15 @@
  * minutes always match the payload the registers and the bookings read.
  * A text a person wrote wins. Swedish only, like every statutory document.
  */
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { pdfNumberText, pdfAmount } from '@/lib/pdf/number-text'
 import { parseDecisionPayload } from './payloads'
 import type { JusterareState } from './rules'
 import type { DecisionKind, DecisionOutcome, MeetingKind, MeetingOrgan } from './types'
 
 const INT = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 })
-const KR = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export function formatKr(n: number): string {
-  return `${pdfNumberText(KR.format(n))} kr`
+  return `${pdfAmount(n)} kr`
 }
 
 export function formatInt(n: number): string {

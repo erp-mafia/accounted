@@ -56,6 +56,7 @@
  * The parser exists (parseSIEFile objectOpeningBalances, planObjectBalances),
  * but the file transport through the dashboard, v1 and MCP doors does not.
  */
+import { chunk as chunks } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -509,12 +510,6 @@ interface RegistryDimension {
   resets_annually: boolean
 }
 
-function chunks<T>(items: readonly T[], size = IN_CHUNK): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
 async function readIbLines(supabase: SupabaseClient, entryId: string): Promise<CurrentIbLine[]> {
   const rows = await fetchAllRows<{
     id: string
@@ -577,7 +572,7 @@ async function readRegistry(supabase: SupabaseClient, companyId: string): Promis
 
 async function readAccountNames(supabase: SupabaseClient, companyId: string, accounts: string[]): Promise<Map<string, string>> {
   const names = new Map<string, string>()
-  for (const part of chunks(accounts)) {
+  for (const part of chunks(accounts, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('chart_of_accounts')
       .select('account_number, account_name')
@@ -593,7 +588,7 @@ async function readAccountNames(supabase: SupabaseClient, companyId: string, acc
 
 async function readLinesWithDocuments(supabase: SupabaseClient, lineIds: string[]): Promise<Set<string>> {
   const linked = new Set<string>()
-  for (const part of chunks(lineIds)) {
+  for (const part of chunks(lineIds, IN_CHUNK)) {
     const { data, error } = await supabase
       .from('document_attachments')
       .select('journal_entry_line_id')
@@ -650,7 +645,7 @@ async function resolveBags(
 
   const found = new Map<string, { name: string; is_active: boolean }>()
   const dimensionIds = [...new Set(lookups.map((lookup) => lookup.dimension.id))]
-  for (const part of chunks([...new Set(lookups.map((lookup) => lookup.code))])) {
+  for (const part of chunks([...new Set(lookups.map((lookup) => lookup.code))], IN_CHUNK)) {
     if (dimensionIds.length === 0) break
     const { data, error } = await supabase
       .from('dimension_values')

@@ -23,6 +23,7 @@
  * Detection failures fail OPEN (the booking RPCs remain the atomicity
  * boundary); callers log the miss through `onDetectError`.
  */
+import { formatAmount } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   detectDuplicatePaymentVoucher,
@@ -97,8 +98,7 @@ export function alreadyExplainedDetails(
   }
 }
 
-const sek = (amount: number): string =>
-  `${amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+const sek = (amount: number): string => `${formatAmount(amount)} kr`
 
 /** "A57 + A58 (1930, 2026-07-31, 88 250,00 kr)": the set as a human reads it. */
 export function describeExplainingSet(set: ExplainingVoucherSet): string {
