@@ -121,6 +121,18 @@ export function pickConnectedAiClient(clients: AiClient[], preferred?: AiClient)
 }
 
 /**
+ * The client Hem asks for a first task: a live key, and no agent of this
+ * person has had a working tool call yet. "Connected" alone is where the
+ * product used to stop: the sign-in ends on the client's settings page, the
+ * checklist ticks the step and the Hem chip goes away, so nothing ever asked
+ * for the first question. Null once any agent has worked, and for a
+ * connection no chat can be opened in (Cursor, a localhost bridge).
+ */
+export function firstTaskClient(connection: AiConnection, agentWorked: boolean): AiClient | null {
+  return agentWorked ? null : pickConnectedAiClient(connection.clients)
+}
+
+/**
  * Open an empty chat. Company identifiers and task details must never enter
  * third-party URLs, browser history or URL logs. The user reviews and copies
  * the prompt inside Accounted, then pastes it into their chosen client.

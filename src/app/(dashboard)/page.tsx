@@ -9,7 +9,7 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
-import { readAiConnection } from '@/lib/onboarding/ai-clients.server'
+import { readAiConnection, readFirstTaskClient } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
@@ -119,6 +119,10 @@ export default async function DashboardPage() {
       hasSkatteverketOmbudReadAccess(companyId),
     ])
 
+  // A key only proves the sign-in. Until an agent has worked, Hem asks for a
+  // first task (Kopplingar chip), and that chip is the page's agent prompt.
+  const firstTask = await readFirstTaskClient(serviceClient, user.id, aiConnection)
+
   // A FAILED settings read must not masquerade as "onboarding not done":
   // that sent fully onboarded users back to the wizard on a transient query
   // failure (issue #1053). Throw to the error boundary (retryable) and only
@@ -188,7 +192,7 @@ export default async function DashboardPage() {
     <DashboardContent
       companyId={companyId}
       agentBuilt={agentBuilt}
-      agentConnected={aiConnection.connected}
+      agentConnected={aiConnection.connected && !firstTask}
       userFirstName={userFirstName}
       initialSetup={initialSetup}
       notices={notices}
@@ -201,6 +205,7 @@ export default async function DashboardPage() {
             setupOpen={setupOpen}
             hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess}
             aiConnection={aiConnection}
+            firstTaskClient={firstTask}
           />
         </Suspense>
       }

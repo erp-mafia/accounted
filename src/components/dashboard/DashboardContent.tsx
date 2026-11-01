@@ -21,8 +21,8 @@ interface DashboardContentProps {
    */
   agentBuilt?: boolean
   /**
-   * An agent is connected over MCP (AiConnection.connected). Until one is,
-   * the Kopplingar agent chip under Att göra is Hem's agent prompt, so the
+   * An agent is connected over MCP and past its first task. Until then the
+   * Kopplingar agent chip under Att göra is Hem's agent prompt, so the
    * build-assistant promo waits: one agent prompt on the page, not two.
    */
   agentConnected?: boolean
@@ -98,8 +98,8 @@ export default function DashboardContent({
           of a full-screen onboarding takeover. While the stepped first-run
           checklist is visible it already carries the assistant as its last
           step, so the promo waits until that block is dismissed or completed.
-          It also waits for a connected agent: until then the Kopplingar
-          agent chip (same checklist gate) is the page's agent prompt. */}
+          It also waits for a connected agent that has worked: until then
+          the Kopplingar agent chip is the page's agent prompt. */}
       {!agentBuilt && agentConnected && (initialSetup.dismissedAt || initialSetup.completedAt) && (
         <AgentPromo companyId={companyId} />
       )}

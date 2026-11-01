@@ -3,7 +3,7 @@ import { countCompletedSieImports, countInboxItems, countTransactions, readActiv
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import { hasSkatteverketOmbudReadAccess, isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
-import type { AiConnection } from '@/lib/onboarding/ai-clients'
+import type { AiClient, AiConnection } from '@/lib/onboarding/ai-clients'
 import ResumePane from '@/components/dashboard/ResumePane'
 import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
@@ -251,6 +251,7 @@ export async function HemPanesSection({
   setupOpen,
   hasSkatteverketConnected,
   aiConnection,
+  firstTaskClient,
 }: {
   companyId: string
   now: Date
@@ -258,6 +259,8 @@ export async function HemPanesSection({
   hasSkatteverketConnected: boolean
   /** See AttGoraSection.aiConnection. */
   aiConnection: AiConnection
+  /** See AttGoraSection.firstTaskClient. */
+  firstTaskClient: AiClient | null
 }) {
   const { supabase, user } = await getDashboardAuthContext()
   // Fetched once at the scan cap: the worklist count is the list's length,
@@ -403,6 +406,7 @@ export async function HemPanesSection({
           hasSkatteverketConnection={hasSkatteverketConnected}
           skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
           aiConnection={aiConnection}
+          firstTaskClient={firstTaskClient}
           // While the getting-started checklist is open it carries the bank
           // and Skatteverket steps itself; afterwards the kopplingar row keeps
           // the connections visible for whoever declined them in the books act.

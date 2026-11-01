@@ -600,11 +600,12 @@ export default function NewUserChecklist({
           )}
           footnote={
             <div className="mt-2">
-              {/* What the click leads to on Claude's side. Tools list before
-                  any sign-in (lazy auth, by design), so without this line a
-                  "connected" status with an unanswered first question reads
-                  as a broken connection (issue #2133). The guide carries the
-                  full sequence; one language per URL, see ApiKeysPanel. */}
+              {/* What the click leads to on Claude's side: the link carries
+                  auth=required, so adding the connector opens the sign-in,
+                  and the connection then waits for a first question in a new
+                  chat (the sign-in ends on Claude's settings page). The guide
+                  carries the full sequence; one language per URL, see
+                  ApiKeysPanel. */}
               <p className="mb-2 max-w-prose text-xs leading-5 text-muted-foreground">
                 {t('step_claude_expectation')}{' '}
                 <a
