@@ -24,7 +24,7 @@ export default async function ClientsPage() {
     redirect('/login')
   }
 
-  const overview = await fetchClientOverview(supabase, user.id)
+  const overview = await fetchClientOverview(supabase, user.id, { includeAttest: true })
   if (!overview) {
     // Not a byrå team member: the cockpit is byrå-exclusive in v1.
     redirect('/')

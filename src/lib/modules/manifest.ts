@@ -664,7 +664,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary: 'Tools for accounting firms working across client companies: the client portfolio and cross-company reads.',
     dependsOn: [],
     layer: 'surface',
-    uses: ['bank-feed', 'deadlines'],
+    // supplier-invoices: the client list's Väntar på kund and Redo att betala read its attest queues (crm#1569).
+    uses: ['bank-feed', 'deadlines', 'supplier-invoices'],
     libFolders: ['byra', 'clients', 'portfolio'],
     operationPrefixes: [],
     v1Segments: ['portfolio'],

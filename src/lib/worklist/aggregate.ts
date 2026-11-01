@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
+  AttestedToPayDue,
   BankSwitchDue,
   DocumentToSignDue,
   ExpensePayoutDue,
@@ -17,6 +18,7 @@ import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { inboxHref, isInkorgV2Enabled } from '@/lib/inkorg/flag'
 import { inboxCompanionIds } from './inbox-companions'
 import {
+  countAttestedToPayDue,
   countBankSwitchDue,
   countDeadlinesNeedingAction,
   countDocumentsToSign,
@@ -120,6 +122,12 @@ export interface GetWorklistCountsOptions {
    */
   documentsToSign?: DocumentToSignDue[] | Promise<DocumentToSignDue[]>
   /**
+   * The attested supplier invoices to pay the caller is already fetching
+   * (Hem renders them as one Betala row): the count is taken from it instead
+   * of a second read. Pass null for "nothing ready".
+   */
+  attestedToPayDue?: AttestedToPayDue | null | Promise<AttestedToPayDue | null>
+  /**
    * Whose per-person work to count when no list is passed (documents_to_sign:
    * a signature asked of this user). Without it the per-person count is 0.
    */
@@ -168,6 +176,7 @@ export async function getWorklistCounts(
     supplierPayeeChange,
     documentsToSign,
     paymentFailed,
+    attestedToPay,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -222,6 +231,9 @@ export async function getWorklistCounts(
     options.paymentsFailedDue
       ? Promise.resolve(options.paymentsFailedDue).then((rows) => rows.length)
       : countPaymentsFailedDue(supabase, companyId),
+    options.attestedToPayDue !== undefined
+      ? Promise.resolve(options.attestedToPayDue).then((due) => due?.count ?? 0)
+      : countAttestedToPayDue(supabase, companyId),
   ])
 
   // The overdue customer invoices are one grouped row (lib/worklist/types.ts
@@ -261,6 +273,7 @@ export async function getWorklistCounts(
       supplier_payee_change: supplierPayeeChange,
       documents_to_sign: documentsToSign,
       payment_failed: paymentFailed,
+      attested_to_pay: attestedToPay,
     },
     total:
       bookTransaction +
@@ -291,7 +304,9 @@ export async function getWorklistCounts(
       paymentsVerificationRenewal +
       supplierPayeeChange +
       documentsToSign +
-      paymentFailed,
+      paymentFailed +
+      // One payment run, however many invoices it pays (lib/worklist/types.ts).
+      (attestedToPay > 0 ? 1 : 0),
     overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
     inboxHref: inboxHref(isInkorgV2Enabled(companyId)),
   }

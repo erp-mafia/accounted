@@ -43,6 +43,7 @@ import {
   canMarkSupplierInvoiceBankEntered,
   companyAttestsSupplierInvoices,
 } from '@/lib/supplier-invoices/lifecycle'
+import { isAwaitingAttestInList, isToPayInList } from '@/lib/supplier-invoices/list-tabs'
 import {
   sortSupplierInvoiceList,
   type SupplierInvoiceListSort,
@@ -112,20 +113,6 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   paid: 'tab_paid',
 }
 
-/**
- * Att betala is what still waits for someone to pay it. An invoice with an
- * open bank payment is not: the bank has it (or a person is approving and
- * signing it under Betalningar), every payment channel refuses it, and
- * offering it again invites paying it twice (crm#1243). An invoice in a
- * payment file stays: a generated file may never have reached the bank.
- */
-function isToPay(inv: ListInvoice): boolean {
-  return (
-    (inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue') &&
-    !inv.auto_debit &&
-    openPaymentMarker(inv) !== 'bank_payment'
-  )
-}
 
 /** Debited by the supplier itself on the due date and not settled yet (crm#1463). */
 function awaitsAutoDebit(inv: ListInvoice): boolean {
@@ -170,7 +157,12 @@ export default function SupplierInvoicesPage() {
   const company = useCompanyOptional()?.company ?? null
   const [invoices, setInvoices] = useState<ListInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<ListTab>('all')
+  // ?tab= opens a status tab directly: the Att göra row and the byrå client
+  // list link to Att betala (to_pay) and the attest queue (registered).
+  const [activeTab, setActiveTab] = useState<ListTab>(() => {
+    const param = searchParams.get('tab')
+    return param && TABS.includes(param as never) ? (param as ListTab) : 'all'
+  })
   // The flow (UI v2 PR 6) lives on each invoice as a strip; the list keeps
   // the status picker (founder call 2026-09-07: a bar of stages over two
   // invoices was chrome, not information).
@@ -282,13 +274,14 @@ export default function SupplierInvoicesPage() {
   // "Att betala" is the full payment queue: registered invoices are already
   // booked as debt (2440), so they belong here too. Approval stays the gate
   // for paying, not for visibility; unapproved rows get a hover approve.
-  // "I betalning" is what is already set up for payment (isToPay).
+  // "I betalning" is what is already set up for payment (isToPayInList).
   const filteredInvoices = invoices.filter((inv) => {
     const matchesTab = (() => {
       switch (activeTab) {
-        case 'registered': return inv.status === 'registered'
+        // Not attested yet, overdue ones included (lib/supplier-invoices/list-tabs.ts).
+        case 'registered': return isAwaitingAttestInList(inv)
         case 'approved': return inv.status === 'approved'
-        case 'to_pay': return isToPay(inv)
+        case 'to_pay': return isToPayInList(inv)
         case 'in_payment': return openPaymentMarker(inv) !== null
         case 'paid': return inv.status === 'paid'
         default: return true
@@ -406,8 +399,8 @@ export default function SupplierInvoicesPage() {
     })
   }
 
-  const registeredCount = invoices.filter((inv) => inv.status === 'registered').length
-  const toPayCount = invoices.filter(isToPay).length
+  const registeredCount = invoices.filter(isAwaitingAttestInList).length
+  const toPayCount = invoices.filter(isToPayInList).length
   const inPaymentCount = invoices.filter((inv) => openPaymentMarker(inv) !== null).length
 
   // An invoice with an open bank payment takes no new payment: no checkbox

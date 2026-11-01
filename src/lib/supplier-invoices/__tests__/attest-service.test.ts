@@ -11,6 +11,11 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+const notifyAttestDecisionSafely = vi.fn()
+vi.mock('../attest-decision-notify', () => ({
+  notifyAttestDecisionSafely: (...args: unknown[]) => notifyAttestDecisionSafely(...args),
+}))
+
 import { createServiceClient } from '@/lib/supabase/server'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import {
@@ -41,6 +46,9 @@ const policyRow = (overrides: Record<string, unknown> = {}) => ({
 })
 
 const members = { data: [ANNA, BO, CILLA].map((user_id) => ({ user_id, role: 'member' })) }
+
+/** A door's decision batch (AttestDecisionInput), recording what the service adds. */
+const decisionBatch = () => ({ add: vi.fn(), size: 0, flush: vi.fn() })
 
 function setup(options: {
   invoice?: object | null
@@ -123,6 +131,55 @@ describe('approveSupplierInvoice', () => {
     expect(link.writer.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([
       { p_company_id: 'company-1', p_invoice_id: 'inv-1', p_user_id: ANNA, p_source: 'email_link', p_via_key: false, p_key_ceiling: null },
     ])
+  })
+
+  it('tells the registrant once the attest is complete, unless the door sends one mail for several', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: writerClient })
+    expect(notifyAttestDecisionSafely).toHaveBeenCalledTimes(1)
+    expect(notifyAttestDecisionSafely).toHaveBeenCalledWith(writerClient, 'company-1', ANNA, { invoiceId: 'inv-1', decision: 'approved', comment: null })
+
+    notifyAttestDecisionSafely.mockClear()
+    const batch = setup({ policy: policyRow() })
+    batch.writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    const decisions = decisionBatch()
+    await approveSupplierInvoice(batch.ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: batch.writerClient, decisions })
+    expect(notifyAttestDecisionSafely).not.toHaveBeenCalled()
+    expect(decisions.add).toHaveBeenCalledWith('company-1', ANNA, { invoiceId: 'inv-1', decision: 'approved', comment: null })
+
+    // An approval that leaves the invoice waiting for the next attester tells nobody yet.
+    const first = setup({ policy: policyRow({ mode: 'all' }) })
+    first.writer.setTable('rpc:attest_supplier_invoice', { data: { ...attested, approved: false, status: 'registered' } })
+    const firstDecisions = decisionBatch()
+    await approveSupplierInvoice(first.ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: first.writerClient, decisions: firstDecisions })
+    await approveSupplierInvoice(first.ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: first.writerClient })
+    expect(notifyAttestDecisionSafely).not.toHaveBeenCalled()
+    expect(firstDecisions.add).not.toHaveBeenCalled()
+  })
+
+  it('sends the registrant\'s mail after the event, so a slow mail never holds up the event', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    const order: string[] = []
+    vi.spyOn(eventBus, 'emit').mockImplementation(async () => {
+      order.push('event')
+    })
+    notifyAttestDecisionSafely.mockImplementation(async () => {
+      order.push('mail')
+    })
+    await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: writerClient })
+    expect(order).toEqual(['event', 'mail'])
+  })
+
+  it('collects the answer the moment the attest is stored, so a read that fails after it loses nobody\'s answer', async () => {
+    const { session, writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    // The reads after the attest (the policy for the progress answer) fail.
+    session.setTable('company_attest_policies', { error: { message: 'connection reset' } })
+    const decisions = decisionBatch()
+    await expect(approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'mcp', writer: writerClient, decisions })).rejects.toBeTruthy()
+    expect(decisions.add).toHaveBeenCalledWith('company-1', ANNA, { invoiceId: 'inv-1', decision: 'approved', comment: null })
   })
 
   it('answers the database\'s refusals in the doors\' codes, and emits nothing', async () => {
@@ -240,6 +297,50 @@ describe('rejectSupplierInvoice', () => {
     expect(outcome).toMatchObject({ ok: true, data: { attestation_id: 'att-1', status: 'registered' } })
     expect(writer.payloads('supplier_invoice_attestations', 'insert')[0]).toMatchObject({ decision: 'rejected', comment: 'Fel belopp', user_id: BO })
     expect(writer.payloads('supplier_invoice_attest_links', 'update')[0]).toMatchObject({ consumed_at: expect.any(String) })
+  })
+
+  it('tells the registrant the invoice will not be paid, with the comment, unless the door sends one mail for several', async () => {
+    notifyAttestDecisionSafely.mockClear()
+    const { ctx, writerClient } = setup({ policy: policyRow() })
+    await rejectSupplierInvoice(ctx(BO), { invoiceId: 'inv-1', comment: '  Fel belopp  ', source: 'app', writer: writerClient })
+    expect(notifyAttestDecisionSafely).toHaveBeenCalledWith(writerClient, 'company-1', BO, { invoiceId: 'inv-1', decision: 'rejected', comment: 'Fel belopp' })
+
+    notifyAttestDecisionSafely.mockClear()
+    const batch = setup({ policy: policyRow() })
+    const decisions = decisionBatch()
+    await rejectSupplierInvoice(batch.ctx(BO), { invoiceId: 'inv-1', comment: 'Inte beställt', source: 'email_link', writer: batch.writerClient, decisions })
+    expect(decisions.add).toHaveBeenCalledWith('company-1', BO, { invoiceId: 'inv-1', decision: 'rejected', comment: 'Inte beställt' })
+    // Without a policy a rejection is no attest answer anyone waits on.
+    const unrestricted = setup({ policy: null })
+    const none = decisionBatch()
+    await rejectSupplierInvoice(unrestricted.ctx(BO), { invoiceId: 'inv-1', source: 'app', writer: unrestricted.writerClient, decisions: none })
+    await rejectSupplierInvoice(unrestricted.ctx(BO), { invoiceId: 'inv-1', source: 'app', writer: unrestricted.writerClient })
+    expect(notifyAttestDecisionSafely).not.toHaveBeenCalled()
+    expect(none.add).not.toHaveBeenCalled()
+  })
+
+  it('closes the other attesters\' links before the rejection mail goes out, and still mails when closing them fails', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    let linksClosedAtMail = -1
+    notifyAttestDecisionSafely.mockImplementation(async () => {
+      linksClosedAtMail = writer.payloads('supplier_invoice_attest_links', 'update').length
+    })
+    await rejectSupplierInvoice(ctx(BO), { invoiceId: 'inv-1', comment: 'Fel belopp', source: 'app', writer: writerClient })
+    expect(linksClosedAtMail).toBe(1)
+
+    notifyAttestDecisionSafely.mockReset()
+    const failing = setup({ policy: policyRow() })
+    failing.writer.setTable('supplier_invoice_attest_links', { error: { message: 'connection reset' } })
+    await expect(rejectSupplierInvoice(failing.ctx(BO), { invoiceId: 'inv-1', source: 'app', writer: failing.writerClient })).rejects.toBeTruthy()
+    expect(notifyAttestDecisionSafely).toHaveBeenCalledWith(failing.writerClient, 'company-1', BO, { invoiceId: 'inv-1', decision: 'rejected', comment: null })
+  })
+
+  it('collects a stored rejection even when closing its links fails after it', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('supplier_invoice_attest_links', { error: { message: 'connection reset' } })
+    const decisions = decisionBatch()
+    await expect(rejectSupplierInvoice(ctx(BO), { invoiceId: 'inv-1', source: 'email_link', writer: writerClient, decisions })).rejects.toBeTruthy()
+    expect(decisions.add).toHaveBeenCalledWith('company-1', BO, { invoiceId: 'inv-1', decision: 'rejected', comment: null })
   })
 
   it('refuses an invoice that does not wait for attest, and someone the policy does not let decide', async () => {

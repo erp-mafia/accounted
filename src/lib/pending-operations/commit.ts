@@ -69,6 +69,7 @@ import {
 } from '@/lib/bookkeeping/invoice-business-events'
 import { postingPort } from '@/lib/posting/port'
 import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoices/attest-service'
+import type { AttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { claimInboxItemOrReverseEntry, readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
@@ -405,6 +406,14 @@ export interface CommitOptions {
    * applies: the stricter of the two wins.
    */
   grant?: { grantId: string; grantVersion: number; useId: string }
+  /**
+   * The attest answers of a bulk approval, told once: each staged attest
+   * passes it to the attest service (AttestDecisionInput in
+   * lib/supplier-invoices/attest-service.ts), which adds the answer the
+   * moment the attest is stored instead of mailing, and the caller flushes
+   * it in a finally. Without it each attest mails as it completes.
+   */
+  attestDecisions?: AttestDecisionBatch
 }
 
 // ensureFiscalPeriod moved to lib/transactions/categorize-core.ts (imported
@@ -4731,7 +4740,8 @@ async function commitApproveSupplierInvoice(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  attestDecisions?: AttestDecisionBatch,
 ): Promise<ExecutorResult> {
   const id = params.supplier_invoice_id as string
   if (!id) return { error: 'supplier_invoice_id is required', status: 400 }
@@ -4741,9 +4751,11 @@ async function commitApproveSupplierInvoice(
   // as the dashboard and v1 (lib/supplier-invoices/attest-service.ts).
   // Staged operations can be committed twice (retry, two approvers): the
   // service's optimistic guard sets approved_at and emits the event once.
+  // In a bulk approval the registrant hears once, for all of them: the
+  // service adds the answer to the batch the moment the attest is stored.
   const outcome = await approveSupplierInvoice(
     { supabase, companyId, userId, log: createLogger('pending-operations/approve-supplier-invoice') },
-    { invoiceId: id, source: 'mcp' },
+    { invoiceId: id, source: 'mcp', ...(attestDecisions ? { decisions: attestDecisions } : {}) },
   )
   if (!outcome.ok) {
     const entry = getErrorEntry(outcome.code)
@@ -7781,7 +7793,7 @@ async function commitPendingOperationInner(
         result = await commitExplainVoucherGap(supabase, userId, companyId, pendingOp.params)
         break
       case 'approve_supplier_invoice':
-        result = await commitApproveSupplierInvoice(supabase, userId, companyId, pendingOp.params)
+        result = await commitApproveSupplierInvoice(supabase, userId, companyId, pendingOp.params, opts.attestDecisions)
         break
       case 'create_supplier_invoice_from_inbox':
         result = isRegisterBookedInvoiceParams(pendingOp.params)

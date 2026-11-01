@@ -53,6 +53,7 @@ import { canApproveSupplierInvoice, resolveUnsettledStatus } from './lifecycle'
 import { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
+import { notifyAttestDecisionSafely, type AttestDecisionBatch, type AttestDecisionNotice } from './attest-decision-notify'
 
 export { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy }
 
@@ -157,7 +158,7 @@ function normalizeComment(comment: string | null | undefined): string | null {
   return trimmed ? trimmed.slice(0, ATTEST_COMMENT_MAX) : null
 }
 
-export interface ApproveSupplierInvoiceInput {
+export interface ApproveSupplierInvoiceInput extends AttestDecisionInput {
   invoiceId: string
   source: AttestSource
   /** Answer what the approval would do and write nothing (v1 ?dry_run, the agent's staging preview). */
@@ -166,6 +167,34 @@ export interface ApproveSupplierInvoiceInput {
   select?: string
   /** A service-role client the door already holds (see serviceWriter). */
   writer?: SupabaseClient
+}
+
+/**
+ * How a door tells the registrant about a decision (attest-decision-notify.ts).
+ *
+ * Without `decisions` the service mails the registrant itself, the moment the
+ * decision is stored (an approval only when it completes the attest). A door
+ * that decides several invoices in one go (a bulk approval of staged attests,
+ * a batch attest page) passes one createAttestDecisionBatch() to every call:
+ * the service then adds the answer to it at that same moment instead of
+ * mailing, before any later read that could fail, and the door flushes it
+ * once, in a finally, so the registrant gets one mail per company and
+ * attester and no stored answer is lost.
+ */
+export interface AttestDecisionInput {
+  decisions?: AttestDecisionBatch
+}
+
+/** Tell the registrant about a stored decision: into the door's batch, else by mail now. */
+async function tellRegistrant(
+  service: SupabaseClient,
+  companyId: string,
+  attesterId: string,
+  notice: AttestDecisionNotice,
+  decisions: AttestDecisionBatch | undefined,
+): Promise<void> {
+  if (decisions) decisions.add(companyId, attesterId, notice)
+  else await notifyAttestDecisionSafely(service, companyId, attesterId, notice)
 }
 
 export interface ApproveSupplierInvoiceResult {
@@ -326,6 +355,14 @@ export async function approveSupplierInvoice(
     return refusalOutcome(answer)
   }
 
+  // The attest is stored. A door's batch takes the answer now, before any
+  // read below can fail (AttestDecisionInput); the direct mail waits until
+  // the event is out, so a slow mail provider never holds the event up.
+  const approvedNotice = { invoiceId: invoice.id, decision: 'approved' as const, comment: null }
+  if (answer.approved && input.decisions) {
+    await tellRegistrant(service, companyId, userId, approvedNotice, input.decisions)
+  }
+
   // The attest is committed: the event goes out whatever the reads below
   // answer, else a failed read would lose it and a retry finds the invoice attested.
   const current = await readInvoiceRow(supabase, companyId, invoice.id, selectColumns).catch((error) => {
@@ -348,6 +385,8 @@ export async function approveSupplierInvoice(
     } catch (error) {
       log.warn('supplier_invoice.approved emit failed', error as Error)
     }
+    // After the event and before the reads below, which can throw.
+    if (!input.decisions) await tellRegistrant(service, companyId, userId, approvedNotice, undefined)
   }
   const [policy, accountingMethod, attestations, members, limits] = await Promise.all([
     loadAttestPolicy(supabase, companyId),
@@ -419,7 +458,13 @@ export interface RejectSupplierInvoiceResult {
  */
 export async function rejectSupplierInvoice(
   ctx: OperationContext,
-  input: { invoiceId: string; comment?: string | null; source: AttestSource; writer?: SupabaseClient; dryRun?: boolean },
+  input: AttestDecisionInput & {
+    invoiceId: string
+    comment?: string | null
+    source: AttestSource
+    writer?: SupabaseClient
+    dryRun?: boolean
+  },
 ): Promise<OperationOutcome<RejectSupplierInvoiceResult>> {
   const { supabase, companyId, userId } = ctx
   const invoice = await loadInvoice(supabase, companyId, input.invoiceId)
@@ -445,8 +490,21 @@ export async function rejectSupplierInvoice(
     }
   }
 
-  const attestationId = await recordDecision(service, companyId, invoice.id, userId, 'rejected', input.source, normalizeComment(input.comment))
-  await consumeOpenLinks(service, companyId, invoice.id)
+  const comment = normalizeComment(input.comment)
+  const attestationId = await recordDecision(service, companyId, invoice.id, userId, 'rejected', input.source, comment)
+  // The rejection is stored and ends the round. The other attesters' open
+  // links close first, so none approves the invoice while the mail is sent;
+  // whoever registered it still hears that it will not be paid, and why,
+  // when closing them fails.
+  if (ruling.kind === 'record') {
+    try {
+      await consumeOpenLinks(service, companyId, invoice.id)
+    } finally {
+      await tellRegistrant(service, companyId, userId, { invoiceId: invoice.id, decision: 'rejected', comment }, input.decisions)
+    }
+  } else {
+    await consumeOpenLinks(service, companyId, invoice.id)
+  }
   return {
     ok: true,
     data: {

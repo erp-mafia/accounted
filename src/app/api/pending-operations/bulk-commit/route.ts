@@ -5,6 +5,7 @@ import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { sharedAcknowledgmentGroup } from '@/lib/pending-operations/shared-acknowledgment'
+import { createAttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
@@ -55,64 +56,73 @@ export const POST = withRouteContext(
 
     const opsById = new Map((ops ?? []).map((op) => [op.id, op as PendingOperation]))
     const results: BulkCommitItemResult[] = []
+    // Staged attests approved together reach their registrant as one mail, after the loop.
+    const attestDecisions = createAttestDecisionBatch()
 
-    for (const id of ids) {
-      const op = opsById.get(id)
-      if (!op) {
-        results.push({ id, status: 'failed', error: 'Åtgärden kunde inte hittas.' })
-        continue
-      }
-      if (op.status !== 'pending') {
-        results.push({
-          id,
-          status: 'skipped',
-          error: `Redan hanterad (${STATUS_LABELS_SV[op.status] ?? op.status})`,
-        })
-        continue
-      }
-      const sharedGroup = sharedAcknowledgmentGroup(op)
-      if (op.risk_level === 'high' && !(sharedGroup && acknowledged.has(sharedGroup))) {
-        results.push({
-          id,
-          status: 'skipped',
-          error: 'Hög risk: kräver individuellt godkännande',
-        })
-        continue
-      }
+    // The answers already stored are told even when an approval throws: the
+    // flush is in a finally, one mail per company and attester.
+    try {
+      for (const id of ids) {
+        const op = opsById.get(id)
+        if (!op) {
+          results.push({ id, status: 'failed', error: 'Åtgärden kunde inte hittas.' })
+          continue
+        }
+        if (op.status !== 'pending') {
+          results.push({
+            id,
+            status: 'skipped',
+            error: `Redan hanterad (${STATUS_LABELS_SV[op.status] ?? op.status})`,
+          })
+          continue
+        }
+        const sharedGroup = sharedAcknowledgmentGroup(op)
+        if (op.risk_level === 'high' && !(sharedGroup && acknowledged.has(sharedGroup))) {
+          results.push({
+            id,
+            status: 'skipped',
+            error: 'Hög risk: kräver individuellt godkännande',
+          })
+          continue
+        }
 
-      const result = await commitPendingOperation(supabase, user.id, companyId, op, {
-        userEmail: user.email,
-        commitMethod: 'bulk_accept',
-        actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
-      })
-      await recordAppApproval({
-        companyId,
-        userId: user.id,
-        operation: op,
-        commitMethod: 'bulk_accept',
-        outcome: result.status,
-        ...(sharedGroup ? { sharedAcknowledgment: sharedGroup } : {}),
-      })
-      if (result.status === 'committed') {
-        results.push({ id, status: 'committed' })
-      } else {
-        // The executor's error strings mix Swedish user messages with raw
-        // Supabase/Zod English: map to Swedish before they land in the
-        // user-visible per-item results (issue #337). Raw stays in logs.
-        log.warn('bulk commit item failed', {
-          operationId: id,
-          rawError: result.error,
-          status: result.http_status,
+        const result = await commitPendingOperation(supabase, user.id, companyId, op, {
+          userEmail: user.email,
+          commitMethod: 'bulk_accept',
+          actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
+          attestDecisions,
         })
-        const mapped = getErrorMessage(result.error ?? null, {
-          statusCode: result.http_status ?? 500,
+        await recordAppApproval({
+          companyId,
+          userId: user.id,
+          operation: op,
+          commitMethod: 'bulk_accept',
+          outcome: result.status,
+          ...(sharedGroup ? { sharedAcknowledgment: sharedGroup } : {}),
         })
-        if (result.status === 'rejected' && result.auto_rejected) {
-          results.push({ id, status: 'rejected', error: mapped })
+        if (result.status === 'committed') {
+          results.push({ id, status: 'committed' })
         } else {
-          results.push({ id, status: 'failed', error: mapped })
+          // The executor's error strings mix Swedish user messages with raw
+          // Supabase/Zod English: map to Swedish before they land in the
+          // user-visible per-item results (issue #337). Raw stays in logs.
+          log.warn('bulk commit item failed', {
+            operationId: id,
+            rawError: result.error,
+            status: result.http_status,
+          })
+          const mapped = getErrorMessage(result.error ?? null, {
+            statusCode: result.http_status ?? 500,
+          })
+          if (result.status === 'rejected' && result.auto_rejected) {
+            results.push({ id, status: 'rejected', error: mapped })
+          } else {
+            results.push({ id, status: 'failed', error: mapped })
+          }
         }
       }
+    } finally {
+      await attestDecisions.flush()
     }
 
     const summary = {

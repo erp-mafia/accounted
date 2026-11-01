@@ -49,11 +49,13 @@ import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import type {
+  AttestedToPayDue,
   BankSwitchDue,
   DocumentToSignDue,
   ExpensePayoutDue,
@@ -412,6 +414,40 @@ export async function listSupplierInvoiceAttestsDue(
     logAndZero('supplier_invoice_attest_due', companyId, error)
     return []
   }
+}
+
+/**
+ * The attested supplier invoices still to pay (attested_to_pay): the ready
+ * queue of lib/supplier-invoices/attest-queues.ts, the same one the byrå
+ * client list counts, less the invoices the payment_failed row shows
+ * (listPaymentsFailedDue, the very list it renders): one payment is one row.
+ * An invoice that row does not show stays here, so none falls between the
+ * two. Hem passes the failed list it already reads; otherwise it is read
+ * only when an attested invoice could be ready. Null when there is nothing
+ * ready, the policy is off or the company keeps kontantmetoden. Soft-fails
+ * to null, like every count here.
+ */
+export async function listAttestedToPayDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { today?: string; paymentsFailed?: PaymentFailedDue[] | Promise<PaymentFailedDue[]> } = {},
+): Promise<AttestedToPayDue | null> {
+  try {
+    const leaveOut = async () =>
+      new Set((await (options.paymentsFailed ?? listPaymentsFailedDue(supabase, companyId))).map((p) => p.supplier_invoice_id))
+    const queues = await loadAttestQueues(supabase, [companyId], options.today ?? todayIsoStockholm(), { leaveOut })
+    const ready = queues.get(companyId)?.ready
+    if (!ready || ready.count === 0 || !ready.next_due) return null
+    return { count: ready.count, next_due: ready.next_due, overdue: ready.overdue }
+  } catch (error) {
+    logAndZero('attested_to_pay', companyId, error)
+    return null
+  }
+}
+
+/** How many attested supplier invoices wait to be paid (listAttestedToPayDue's count). */
+export async function countAttestedToPayDue(supabase: SupabaseClient, companyId: string): Promise<number> {
+  return (await listAttestedToPayDue(supabase, companyId))?.count ?? 0
 }
 
 /**

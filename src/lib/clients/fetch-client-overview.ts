@@ -27,6 +27,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
+import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import {
   clientBankSwitchFrom,
   countByCompany,
@@ -64,6 +66,12 @@ export interface OverviewRowsOptions {
    * the portfolio reads keep their payload.
    */
   includeBankSwitch?: boolean
+  /**
+   * Also return each row's attest queues (`attest`): waiting for the
+   * client's attest and ready to pay. The byrå client list asks for it; the
+   * portfolio reads and the byrå home keep their payload.
+   */
+  includeAttest?: boolean
 }
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
@@ -112,6 +120,7 @@ export async function getByraMembership(
 export async function fetchClientOverview(
   supabase: SupabaseClient,
   userId: string,
+  options: Pick<OverviewRowsOptions, 'includeAttest'> = {},
 ): Promise<ClientOverview | null> {
   const membership = await getByraMembership(supabase, userId)
   if (!membership) return null
@@ -140,7 +149,7 @@ export async function fetchClientOverview(
   return {
     team: { id: membership.teamId, name: membership.teamName },
     role: membership.role,
-    clients: await fetchOverviewRowsForCompanies(supabase, companies, { includeBankSwitch: true }),
+    clients: await fetchOverviewRowsForCompanies(supabase, companies, { includeBankSwitch: true, includeAttest: options.includeAttest }),
   }
 }
 
@@ -306,6 +315,17 @@ export async function fetchOverviewRowsForCompanies(
     switchStates = await switchStatesForCompanies(supabase, companyIds).catch(() => null)
   }
 
+  // 9. The attest queues (lib/supplier-invoices/attest-queues.ts), the same
+  // definition as the client company's own Att göra row. Best-effort, like
+  // the bank switch column: a failed read leaves the columns empty.
+  let attestQueues: Awaited<ReturnType<typeof loadAttestQueues>> | null = null
+  if (options.includeAttest) {
+    attestQueues = await loadAttestQueues(supabase, companyIds, todayIsoStockholm()).catch((error) => {
+      log.warn('attest queues lookup failed', { error: error instanceof Error ? error.message : String(error) })
+      return null
+    })
+  }
+
   const rows: ClientOverviewRow[] = companies.map((company) => {
     const settings = settingsByCompany.get(company.id)
     const row: ClientOverviewRow = {
@@ -320,6 +340,7 @@ export async function fetchOverviewRowsForCompanies(
     }
     if (deadlinesByCompany) row.deadlines = deadlinesByCompany.get(company.id) ?? []
     if (switchStates) row.bankSwitch = clientBankSwitchFrom(switchStates.get(company.id))
+    if (attestQueues) row.attest = attestQueues.get(company.id) ?? null
     return row
   })
 
