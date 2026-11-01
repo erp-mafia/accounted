@@ -10,6 +10,7 @@ import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
 import type {
   BudgetComparison,
   CompanySettings,
+  DimensionCrossReport,
   LatestVoucherPerSeries,
   ResultatrapportReport,
   BalansrapportReport,
@@ -455,6 +456,74 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote, b
 
         <FooterBlock company={company} generatedAt={generatedAt} />
       </Page>
+    </Document>
+  )
+}
+
+/** Value columns per page of the cross report: the width of a landscape A4 page. */
+const CROSS_COLUMNS_PER_PAGE = 7
+const UNTAGGED_LABEL = '(Utan dimension)'
+
+interface DimensionCrossPDFProps {
+  report: DimensionCrossReport
+  company: CompanySettings
+  generatedAt: string
+  /** What the cells sum: the result, or a range of accounts. */
+  measureNote: string
+}
+
+/**
+ * Resultat across two dimensions (accounted#133): dimension A down, B
+ * across. Columns beyond a page's width continue on the next page with the
+ * row labels repeated; Totalt is the last column, and the Totalt row closes
+ * every page.
+ */
+export function DimensionCrossPDF({ report, company, generatedAt, measureNote }: DimensionCrossPDFProps) {
+  const label = (v: { code: string | null; name: string | null }) =>
+    v.code === null ? UNTAGGED_LABEL : v.name ? `${v.code} ${v.name}` : v.code
+  const columns = [...report.columns.map(label), 'Totalt']
+  const rows = report.rows.map((row, i) => ({ label: label(row), values: [...report.cells[i], report.row_totals[i]] }))
+  const footer = [...report.column_totals, report.total]
+  const chunks: number[][] = []
+  for (let start = 0; start < columns.length; start += CROSS_COLUMNS_PER_PAGE) {
+    chunks.push(columns.slice(start, start + CROSS_COLUMNS_PER_PAGE).map((_, k) => start + k))
+  }
+
+  return (
+    <Document>
+      {chunks.map((chunk, page) => (
+        <Page key={page} size="A4" orientation="landscape" style={styles.page}>
+          <HeaderBlock
+            title={`Resultat per ${report.dim_a.name} och ${report.dim_b.name}`}
+            company={company}
+            period={report.period}
+            filterNote={measureNote}
+          />
+          <View style={styles.tableHeader}>
+            <Text style={[styles.tableHeaderText, styles.colName]}>
+              {report.dim_a.name} / {report.dim_b.name}
+            </Text>
+            {chunk.map((j) => (
+              <Text key={j} style={[styles.tableHeaderText, styles.colAmount]}>{columns[j]}</Text>
+            ))}
+          </View>
+          {rows.map((row, i) => (
+            <View key={i} style={styles.row} wrap={false}>
+              <Text style={styles.colName}>{row.label}</Text>
+              {chunk.map((j) => (
+                <Text key={j} style={styles.colAmount}>{formatAmount(row.values[j])}</Text>
+              ))}
+            </View>
+          ))}
+          <View style={styles.subtotalRow} wrap={false}>
+            <Text style={[styles.colName, { fontWeight: 'bold' }]}>Totalt</Text>
+            {chunk.map((j) => (
+              <Text key={j} style={[styles.colAmount, { fontWeight: 'bold' }]}>{formatAmount(footer[j])}</Text>
+            ))}
+          </View>
+          <FooterBlock company={company} generatedAt={generatedAt} />
+        </Page>
+      ))}
     </Document>
   )
 }

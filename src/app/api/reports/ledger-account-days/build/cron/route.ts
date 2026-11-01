@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import type { Logger } from '@/lib/logger'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { isMissingRpcSignature } from '@/lib/bookkeeping/actor-rpc'
 
 export const maxDuration = 60
 
@@ -44,7 +45,8 @@ function stockholmHour(now: Date): number {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', hour: 'numeric', hourCycle: 'h23' }).format(now))
 }
 
-// Keeps ledger_account_days (migration 20261023093900) compact and complete.
+// Keeps ledger_account_days (migration 20261023093900) and ledger_tagset_days
+// (20261101121500) compact and complete.
 //
 // Builds the companies that existed before it: until a company is built its
 // reports keep the line-level path, so this only makes them fast, never
@@ -110,6 +112,47 @@ export const GET = withCronContext('cron.ledger_account_days_build', async (_req
     }
   }
 
-  ctx.log.info('ledger_account_days build run', { built, compacted, skipped, deferred, durationMs: Date.now() - started })
-  return NextResponse.json({ data: { built, compacted, skipped, deferred } })
+  // The tag set summary (migration 20261101121500, the dimension cross
+  // report): each company listed before it existed is rebuilt once from its
+  // tagged verifikat (a company without tags is instant, so no night rule),
+  // then its slot rows are folded like the others. Code ships before CI
+  // applies the migration; until then the listing RPCs are missing and this
+  // part waits for the next run.
+  let tagsetsBuilt = 0
+  let tagsetsCompacted = 0
+  const tagsetSteps = [
+    { list: 'ledger_tagset_days_pending', work: 'build_ledger_tagset_days' },
+    { list: 'ledger_tagset_days_unfolded', work: 'compact_ledger_tagset_days' },
+  ] as const
+  tagsets: for (const step of tagsetSteps) {
+    while (Date.now() - started < TIME_BUDGET_MS) {
+      const { data, error } = await supabase.rpc(step.list, { p_limit: BATCH + failed.size })
+      if (error) {
+        if (isMissingRpcSignature(error)) break tagsets
+        throw error
+      }
+      const ids = ((data ?? []) as string[]).filter((id) => !failed.has(id))
+      if (ids.length === 0) break
+
+      for (const companyId of ids) {
+        if (Date.now() - started >= TIME_BUDGET_MS) break
+        const { error: workError } = await supabase.rpc(step.work, { p_company_id: companyId })
+        if (workError) {
+          failed.add(companyId)
+          skipped++
+          ctx.log.warn('ledger_tagset_days step skipped', { companyId, step: step.work, code: workError.code })
+          continue
+        }
+        if (step.work === 'build_ledger_tagset_days') tagsetsBuilt++
+        else tagsetsCompacted++
+      }
+    }
+  }
+
+  ctx.log.info('ledger_account_days build run', {
+    built, compacted, skipped, deferred, tagsetsBuilt, tagsetsCompacted, durationMs: Date.now() - started,
+  })
+  return NextResponse.json({
+    data: { built, compacted, skipped, deferred, tagsets_built: tagsetsBuilt, tagsets_compacted: tagsetsCompacted },
+  })
 })

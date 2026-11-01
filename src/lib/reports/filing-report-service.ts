@@ -50,11 +50,17 @@ import {
 } from '@/lib/reports/behandlingshistorik'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
+import {
+  DimensionCrossNotReadyError,
+  dimensionCrossAxesError,
+  fetchDimensionCrossLines,
+  generateDimensionCross,
+} from '@/lib/reports/dimension-cross'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { filesIncomeReturn, resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { DimensionPnlReport, VatPeriodType } from '@/types'
+import type { DimensionCrossLinesPage, DimensionCrossReport, DimensionPnlReport, VatPeriodType } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -532,5 +538,110 @@ export async function getDimensionPnl(
       code: 'REPORT_GENERATION_FAILED',
       details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Resultat across two dimensions (accounted#133)
+// ─────────────────────────────────────────────────────────────────
+
+export interface DimensionCrossInput {
+  period_id: string
+  /** The row dimension and the column dimension, SIE numbers as strings. */
+  dim_a: string
+  dim_b: string
+  /** The measure's accounts inside 3000-8999, both or neither; default the whole result. */
+  account_from?: string
+  account_to?: string
+  from_date?: string
+  to_date?: string
+}
+
+/** The period, its window and the axes, checked as the dashboard routes check them. */
+async function dimensionCrossScope(ctx: OperationContext, input: DimensionCrossInput) {
+  const invalid = dimensionCrossAxesError({
+    dimA: input.dim_a,
+    dimB: input.dim_b,
+    accountFrom: input.account_from,
+    accountTo: input.account_to,
+  })
+  if (invalid) return { ok: false as const, failure: { ok: false as const, code: 'VALIDATION_ERROR', messageSv: invalid } }
+  const period = await loadReportPeriod(ctx, input.period_id)
+  if (!period.ok) return { ok: false as const, failure: period }
+  const range = new URLSearchParams()
+  if (input.from_date) range.set('from_date', input.from_date)
+  if (input.to_date) range.set('to_date', input.to_date)
+  const parsed = parseReportDateRange(range, period.period)
+  if (!parsed.ok) return { ok: false as const, failure: { ok: false as const, code: 'VALIDATION_ERROR', messageSv: parsed.error } }
+  return {
+    ok: true as const,
+    options: {
+      dimA: input.dim_a,
+      dimB: input.dim_b,
+      accountFrom: input.account_from,
+      accountTo: input.account_to,
+      fromDate: parsed.range.fromDate,
+      toDate: parsed.range.toDate,
+    },
+  }
+}
+
+function dimensionCrossFailed(ctx: OperationContext, err: unknown, input: object): Failure {
+  if (err instanceof DimensionCrossNotReadyError) return { ok: false, code: 'REPORT_NOT_READY' }
+  ctx.log.error('dimension cross generation failed', err as Error, { ...input })
+  return {
+    ok: false,
+    code: 'REPORT_GENERATION_FAILED',
+    details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
+  }
+}
+
+export async function getDimensionCross(
+  ctx: OperationContext,
+  input: DimensionCrossInput,
+): Promise<OperationOutcome<DimensionCrossReport>> {
+  const scope = await dimensionCrossScope(ctx, input)
+  if (!scope.ok) return scope.failure
+  try {
+    return { ok: true, data: await generateDimensionCross(ctx.supabase, ctx.companyId, input.period_id, scope.options) }
+  } catch (err) {
+    return dimensionCrossFailed(ctx, err, input)
+  }
+}
+
+export interface DimensionCrossLinesInput extends DimensionCrossInput {
+  /** The cell: a value of dim_a and of dim_b; omitted is the "(Utan dimension)" row or column. */
+  code_a?: string
+  code_b?: string
+  after_date?: string
+  after_voucher?: number
+  after_line?: string
+  limit?: number
+}
+
+export async function getDimensionCrossLines(
+  ctx: OperationContext,
+  input: DimensionCrossLinesInput,
+): Promise<OperationOutcome<DimensionCrossLinesPage>> {
+  const scope = await dimensionCrossScope(ctx, input)
+  if (!scope.ok) return scope.failure
+  const cursor = [input.after_date, input.after_voucher, input.after_line]
+  if (cursor.some((v) => v !== undefined) && cursor.some((v) => v === undefined)) {
+    return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'after_date, after_voucher och after_line anges tillsammans.' }
+  }
+  try {
+    const data = await fetchDimensionCrossLines(ctx.supabase, ctx.companyId, input.period_id, {
+      ...scope.options,
+      codeA: input.code_a ?? null,
+      codeB: input.code_b ?? null,
+      after:
+        input.after_date !== undefined && input.after_voucher !== undefined && input.after_line !== undefined
+          ? { date: input.after_date, voucher_number: input.after_voucher, line_id: input.after_line }
+          : undefined,
+      limit: input.limit,
+    })
+    return { ok: true, data }
+  } catch (err) {
+    return dimensionCrossFailed(ctx, err, input)
   }
 }

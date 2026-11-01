@@ -2048,6 +2048,218 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/reports/dimension-cross`
+
+**Result across two dimensions: one dimension's values as rows, another's as columns, one amount per cell.**
+`scope:reports:read · risk:low · idempotent`
+
+A matrix over two SIE dimensions tagged on the same journal lines: rows are dim_a's values, columns dim_b's, each cell the result (or the accounts account_from to account_to) of the lines carrying both tags, with row and column totals. "(Utan dimension)" rows and columns (code null) hold the lines without that tag, and total equals the resultatrapport for the same window and accounts. Read the lines behind a cell with GET /reports/dimension-cross/lines. Read-only.
+
+**Use when:** Following up result per region and channel, per project and cost centre, or any two dimensions the books tag, for the year or one quarter or month.
+**Do not use for:** One dimension (GET /reports/dimension-pnl, accounts as rows) or one value only (GET /reports/income-statement with dim_no and dim_code).
+
+**Pitfalls:**
+- dim_a and dim_b must be two different dimensions; both are tags on the same line. A property of a dimension value (a home's region kept on the home) is not a tag and is not read.
+- Amounts are credit minus debit, as in the resultatrapport: revenue positive, costs negative.
+- Lines without a tag on a dimension land in its "(Utan dimension)" row or column (code null); the untagged x untagged cell is the remainder of the resultatrapport, so the cells sum to total.
+- What the bokslut run posts (source year_end) and the IB verifikat are left out, as in the resultatrapport.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id, from GET /fiscal-periods. |
+| `dim_a` | query | `string` | yes | The row dimension, an SIE dimension number: "1" kostnadsställe, "6" projekt, or a custom one. |
+| `dim_b` | query | `string` | yes | The column dimension, a different SIE dimension number. |
+| `account_from` | query | `string` | no | First account of the measure, 3000-8999, sent with account_to. Default: the whole result. |
+| `account_to` | query | `string` | no | Last account of the measure (inclusive), 3000-8999. |
+| `from_date` | query | `string` | no | YYYY-MM-DD inside the period. Default: the period start. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the period, not before from_date. Default: the period end. |
+
+Response `200`:
+```ts
+{
+  data: {
+    dim_a: { sie_dim_no: string, name: string },
+    dim_b: { sie_dim_no: string, name: string },
+    accounts: { from: string, to: string },
+    rows: { code: string | null, name: string | null }[],
+    columns: { code: string | null, name: string | null }[],
+    cells: number[][],
+    row_totals: number[],
+    column_totals: number[],
+    total: number,
+    period: { start: string, end: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dim_a": {
+      "sie_dim_no": "1",
+      "name": "Kostnadsställe"
+    },
+    "dim_b": {
+      "sie_dim_no": "6",
+      "name": "Projekt"
+    },
+    "accounts": {
+      "from": "3000",
+      "to": "8999"
+    },
+    "rows": [
+      {
+        "code": "NORR",
+        "name": "Region Norr"
+      },
+      {
+        "code": null,
+        "name": null
+      }
+    ],
+    "columns": [
+      {
+        "code": "WEB",
+        "name": "Webb"
+      },
+      {
+        "code": null,
+        "name": null
+      }
+    ],
+    "cells": [
+      [
+        120000,
+        15000
+      ],
+      [
+        0,
+        -40000
+      ]
+    ],
+    "row_totals": [
+      135000,
+      -40000
+    ],
+    "column_totals": [
+      120000,
+      -25000
+    ],
+    "total": 95000,
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/dimension-cross/lines`
+
+**The journal lines behind one cell of the two-dimension result, a page at a time.**
+`scope:reports:read · risk:low · idempotent`
+
+The lines one cell of GET /reports/dimension-cross sums: same period, window, accounts and entry set, the lines whose dim_a tag is code_a and dim_b tag is code_b (codes compared trimmed; leave a code out for the "(Utan dimension)" row or column). In date and voucher order, at most limit (default 200, at most 1000); pass next.after_date, next.after_voucher and next.after_line back for the next page. Each line names its verifikat (journal_entry_id, voucher_series, voucher_number). Read-only.
+
+**Use when:** Checking what makes up one cell of the two-dimension report.
+**Do not use for:** All lines of an account (GET /reports/general-ledger).
+
+**Pitfalls:**
+- Send the same dim_a, dim_b, account range and window as the report, or the lines will not add up to the cell.
+- A code left out means "no tag on that dimension", not "any value".
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id, from GET /fiscal-periods. |
+| `dim_a` | query | `string` | yes | The row dimension, an SIE dimension number: "1" kostnadsställe, "6" projekt, or a custom one. |
+| `dim_b` | query | `string` | yes | The column dimension, a different SIE dimension number. |
+| `account_from` | query | `string` | no | First account of the measure, 3000-8999, sent with account_to. Default: the whole result. |
+| `account_to` | query | `string` | no | Last account of the measure (inclusive), 3000-8999. |
+| `from_date` | query | `string` | no | YYYY-MM-DD inside the period. Default: the period start. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the period, not before from_date. Default: the period end. |
+| `code_a` | query | `string` | no | The value of dim_a; leave out for the "(Utan dimension)" row. |
+| `code_b` | query | `string` | no | The value of dim_b; leave out for the "(Utan dimension)" column. |
+| `after_date` | query | `string` | no | next.after_date from the previous page. |
+| `after_voucher` | query | `number` | no | next.after_voucher from the previous page. |
+| `after_line` | query | `string` | no | next.after_line from the previous page. |
+| `limit` | query | `number` | no | Page size, 1-1000 (default 200). |
+
+Response `200`:
+```ts
+{
+  data: {
+    lines: (Record<string, unknown>)[],
+    has_more: boolean,
+    next: { after_date: string, after_voucher: number, after_line: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "lines": [
+      {
+        "line_id": "5d1e…",
+        "journal_entry_id": "9a0b…",
+        "entry_date": "2026-03-02",
+        "voucher_series": "A",
+        "voucher_number": 12,
+        "description": "Bokning 1042",
+        "line_description": null,
+        "account_number": "3010",
+        "debit_amount": 0,
+        "credit_amount": 4800,
+        "dimensions": {
+          "1": "NORR",
+          "6": "WEB"
+        }
+      }
+    ],
+    "has_more": true,
+    "next": {
+      "after_date": "2026-03-02",
+      "after_voucher": 12,
+      "after_line": "5d1e…"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/reports/dimension-pnl`
 
 **Resultat per projekt or kostnadsställe: the income statement with one column per dimension value.**

@@ -4165,6 +4165,15 @@ const REPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Rapporten kunde inte genereras.',
     message_en: 'Failed to generate the report.',
   },
+  // A report whose database functions arrive with a migration that has not
+  // reached this database yet: Vercel serves new code up to an hour before
+  // CI applies the migration (accounted#133, the dimension cross report).
+  REPORT_NOT_READY: {
+    httpStatus: 503,
+    message_sv: 'Rapporten är inte tillgänglig än. Försök igen om en stund.',
+    message_en: 'This report is not available yet. Try again in a while.',
+    retryable: true,
+  },
   REPORT_PDF_TOO_LARGE: {
     httpStatus: 413,
     message_sv: 'Rapporten är för stor för PDF. Ladda ner den som CSV eller Excel i stället.',

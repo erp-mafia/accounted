@@ -61,6 +61,12 @@ const ALLOWED_DIMENSION_READ_OPERATIONS = new Set([
   // paths, and budget_lines' CHECK admits no other account, so the filter
   // never reaches a balance account. Not a statutory report.
   'reports.budget-vs-actual',
+  // dim_a and dim_b pick the matrix's two axes (accounted#133); the lines
+  // read takes code_a and code_b to name one cell. Result accounts only:
+  // get_dimension_cross_buckets and get_dimension_cross_lines keep
+  // 3000-8999 on every path, so neither reaches a balance account.
+  'reports.dimension-cross',
+  'reports.dimension-cross-lines',
 ])
 
 /** MCP tools allowed to apply a dimension filter. */
