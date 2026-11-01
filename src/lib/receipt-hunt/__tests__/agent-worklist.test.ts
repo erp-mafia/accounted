@@ -430,4 +430,60 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
     expect(item(31).mail_searchable).toBe(true)
     expect(item(32)).toMatchObject({ mail_searchable: true, portal: { vendor: 'Microsoft 365' } })
   })
+  // crm#1584: a migrated payment names its invoice verifikat only in the text,
+  // and the invoice PDF is already on it. A mail search finds the same PDF.
+  it('hands over the invoice already on the verifikat a payment names, instead of a mail search', async () => {
+    mockFetchCandidateTransactions.mockResolvedValue([])
+    const rows = [
+      {
+        journal_entry_id: 'je-pay',
+        voucher_series: 'V',
+        voucher_number: 27,
+        entry_date: '2026-01-26',
+        description: 'Leverantörsfaktura #1001 betald till Konsultbolaget AB (V299)',
+        source_type: 'import',
+        gross_amount: 45475,
+      },
+    ]
+    const supabase = mockSupabase(
+      {
+        ...fixture(),
+        pending_operations: [],
+        supplier_invoices: [],
+        transactions: [],
+        journal_entries: [
+          {
+            id: 'je-inv',
+            company_id: 'co-1',
+            status: 'posted',
+            entry_date: '2025-12-28',
+            voucher_series: 'V',
+            voucher_number: 299,
+            source_voucher_series: 'V',
+            source_voucher_number: 299,
+          },
+        ],
+        journal_entry_lines: [
+          { journal_entry_id: 'je-pay', account_number: '2440', debit_amount: 45475, credit_amount: 0 },
+          { journal_entry_id: 'je-pay', account_number: '1932', debit_amount: 0, credit_amount: 45475 },
+          { journal_entry_id: 'je-inv', account_number: '2440', debit_amount: 0, credit_amount: 45475 },
+          { journal_entry_id: 'je-inv', account_number: '6550', debit_amount: 45475, credit_amount: 0 },
+        ],
+        document_attachments: [
+          { id: 'doc-v299', company_id: 'co-1', journal_entry_id: 'je-inv', is_current_version: true, created_at: '2026-10-31T21:12:00Z' },
+        ],
+      },
+      { ok: true, total_count: 1, verifikat: rows },
+    )
+
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+
+    expect(items[0]).toMatchObject({
+      journal_entry_id: 'je-pay',
+      mail_searchable: false,
+      portal: null,
+      next_step: 'Fakturan finns redan på V299 (2025-12-28): koppla en kopia av den till det här verifikatet.',
+      underlag_on: { voucher: 'V299', journal_entry_id: 'je-inv', entry_date: '2025-12-28', document_id: 'doc-v299' },
+    })
+  })
 })

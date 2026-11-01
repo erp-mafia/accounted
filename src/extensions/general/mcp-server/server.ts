@@ -8731,6 +8731,16 @@ export const tools: McpTool[] = [
               },
               tip_possible: { type: 'boolean', description: 'Restaurant or bar: the charge is the bill plus a tip, so a receipt up to a quarter smaller is still this purchase.' },
               next_step: { type: 'string', description: 'One Swedish sentence for the user when the document cannot be fetched: where the receipt is and what to do. Report it verbatim.' },
+              underlag_on: {
+                type: ['object', 'null'],
+                description: 'This verifikat pays an invoice whose underlag is already on the invoice\'s verifikat. Do not search mail: stage document_id on this journal_entry_id with copy: true.',
+                properties: {
+                  voucher: { type: 'string' },
+                  journal_entry_id: { type: 'string' },
+                  entry_date: { type: 'string' },
+                  document_id: { type: 'string' },
+                },
+              },
             },
           },
         },

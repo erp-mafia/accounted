@@ -122,6 +122,34 @@ export function booksPurchase(lines: readonly Pick<PlausibilityLine, 'account_nu
   )
 }
 
+/** Kundfordringar: what a customer invoice is booked on, and paid off. */
+const isCustomerReceivable = (a: string) => inRange(a, '1510', '1519')
+
+/** Whose invoice a verifikat settles or registers. */
+export type InvoiceSide = 'supplier' | 'customer'
+
+/**
+ * Which invoice a verifikat pays off, from what it books: a payment of a
+ * supplier invoice debits leverantörsskulder, a payment of a customer invoice
+ * credits kundfordringar. Null for anything else. Kvittojakten reads it
+ * (lib/receipt-hunt/underlag-elsewhere).
+ */
+export function invoiceSettled(lines: readonly PlausibilityLine[]): InvoiceSide | null {
+  if (sum(lines, isSupplierLiability, 'debit') > 0) return 'supplier'
+  if (sum(lines, isCustomerReceivable, 'credit') > 0) return 'customer'
+  return null
+}
+
+/**
+ * Whether a verifikat registers an invoice of that side: it credits
+ * leverantörsskulder, or debits kundfordringar.
+ */
+export function registersInvoice(lines: readonly PlausibilityLine[], side: InvoiceSide): boolean {
+  return side === 'supplier'
+    ? sum(lines, isSupplierLiability, 'credit') > 0
+    : sum(lines, isCustomerReceivable, 'debit') > 0
+}
+
 export function checkVoucherPlausibility(lines: readonly PlausibilityLine[]): VoucherWarning[] {
   const warnings: VoucherWarning[] = []
 
