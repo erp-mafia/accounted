@@ -36,6 +36,9 @@ export interface SubmitFeedbackResult {
   ok: boolean
   channels: SupportChannel[]
   error?: string
+  /** Mail delivery only: the address the answer goes to (the mail's Reply-To,
+   *  the signed-in user's own), when the server reported it. */
+  replyTo?: string
 }
 
 /**
@@ -61,16 +64,30 @@ function buildEmailRequest({ message, subject, files }: SubmitFeedbackInput): Re
   return { method: 'POST', body: form }
 }
 
+/** The Reply-To the server set on the mail. Delivery never depends on this:
+ *  an unreadable body still counts as sent, just without the address. */
+async function readReplyTo(res: Response): Promise<string | undefined> {
+  try {
+    const value = (await res.json())?.data?.reply_to
+    return typeof value === 'string' && value ? value : undefined
+  } catch {
+    // The mail already went out (res.ok); only the address is missing, and
+    // the dialog then names "your email address" instead.
+    return undefined
+  }
+}
+
 async function submitViaEmail(
   input: SubmitFeedbackInput
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; replyTo?: string } | { ok: false; error: string }> {
   try {
     const res = await fetch('/api/support/contact', buildEmailRequest(input))
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       return { ok: false, error: data.error || 'Kunde inte skicka meddelandet' }
     }
-    return { ok: true }
+    const replyTo = await readReplyTo(res)
+    return replyTo ? { ok: true, replyTo } : { ok: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Nätverksfel' }
   }
@@ -179,7 +196,7 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Submit
   if (input.files?.length) {
     const emailResult = await submitViaEmail(input)
     noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket: 'skipped' })
-    if (emailResult.ok) return { ok: true, channels: ['email'] }
+    if (emailResult.ok) return emailDelivered(emailResult.replyTo)
     return { ok: false, channels: [], error: emailResult.error }
   }
 
@@ -194,6 +211,10 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Submit
 
   const emailResult = await submitViaEmail(input)
   noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket })
-  if (emailResult.ok) return { ok: true, channels: ['email'] }
+  if (emailResult.ok) return emailDelivered(emailResult.replyTo)
   return { ok: false, channels: [], error: emailResult.error }
+}
+
+function emailDelivered(replyTo?: string): SubmitFeedbackResult {
+  return replyTo ? { ok: true, channels: ['email'], replyTo } : { ok: true, channels: ['email'] }
 }

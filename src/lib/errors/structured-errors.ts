@@ -6677,6 +6677,32 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte kreditera leverantörsfakturan.',
     message_en: 'Failed to credit supplier invoice.',
   },
+  // accounted#58: a deferring company's credit of a supplier invoice that has
+  // no verifikat books its registration first (the Bokför step). These two
+  // refuse the credit when that booking cannot happen; nothing was written.
+  SI_CREDIT_ORIGINAL_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan saknar verifikation och måste bokföras innan den krediteras, men dess fakturadatum ligger i en låst eller stängd period. Finns kostnaden redan i bokföringen, koppla fakturan till den verifikationen. Annars: lås upp perioden och försök igen.',
+    message_en:
+      'The supplier invoice has no voucher and must be booked before it is credited, but its invoice date is in a locked or closed period. If the cost is already in the books, link the invoice to that voucher. Otherwise unlock the period and try again.',
+    remediation: {
+      description:
+        'Under faktureringsmetoden with deferred booking, crediting a supplier invoice that has no verifikat first books its registration on its own invoice date (the Bokför step, gnubok_book_supplier_invoice), then posts the credit. details.invoice_date and details.reason say which lock refused it. If the cost is already in the books (a migrated or imported verifikat), link the invoice to it (gnubok_link_supplier_invoice_to_voucher) and credit again. Otherwise unlock that period (gnubok_unlock_period, if it is locked and not closed) and retry. Nothing was written.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  SI_CREDIT_ORIGINAL_BOOK_FAILED: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan saknar verifikation och kunde inte bokföras, så den har inte krediterats. Finns kostnaden redan i bokföringen, koppla fakturan till den verifikationen. Annars: öppna fakturan och välj Bokför för att se vad som hindrar.',
+    message_en:
+      'The supplier invoice has no voucher and could not be booked, so it was not credited. If the cost is already in the books, link the invoice to that voucher. Otherwise open the invoice and choose Book to see what stops it.',
+    remediation: {
+      description:
+        "Under faktureringsmetoden with deferred booking, crediting a supplier invoice that has no verifikat first books its registration (the Bokför step, gnubok_book_supplier_invoice), then posts the credit. That booking was refused: details.original_booking_code is the Bokför step's own code (e.g. SI_BOOK_NO_FISCAL_PERIOD). If the cost is already in the books (a migrated or imported verifikat), link the invoice to it (gnubok_link_supplier_invoice_to_voucher) and credit again. Otherwise book the invoice first, fix what that refusal names, then credit it. Nothing was written.",
+    },
+  },
   // crm#1094: a credit reverses the original's rows, so rows that do not add
   // up to the invoice would take another amount off 2440 than it owes.
   SI_CREDIT_ROWS_MISMATCH: {

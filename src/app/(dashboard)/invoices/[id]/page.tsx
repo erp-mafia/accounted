@@ -1323,14 +1323,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /**
+   * The Peppol XML. A draft without a number downloads as a marked preview
+   * with a placeholder number and OCR (accounted#44), never sendable.
+   */
   async function downloadPeppolXml() {
     if (!invoice) return
+    const preview = !invoice.invoice_number
     setIsDownloadingPeppol(true)
 
     try {
       const result = await downloadFile({
-        url: `/api/invoices/${invoice.id}/peppol`,
-        filename: `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`,
+        url: `/api/invoices/${invoice.id}/peppol${preview ? '?preview=1' : ''}`,
+        filename: preview ? `peppol-invoice-preview-${invoice.id}.xml` : `peppol-invoice-${invoice.invoice_number}.xml`,
         preferServerFilename: true,
         locale: downloadLocale,
         errorContext: 'invoice',
@@ -1346,8 +1351,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       }
 
       toast({
-        title: t('peppol_downloaded_title'),
-        description: t('peppol_downloaded_description'),
+        title: t(preview ? 'peppol_preview_downloaded_title' : 'peppol_downloaded_title'),
+        description: t(preview ? 'peppol_preview_downloaded_description' : 'peppol_downloaded_description'),
       })
     } catch (error) {
       toast({
@@ -2532,13 +2537,29 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     {showPeppolActions && (
                       <>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onSelect={() => void downloadPeppolXml()}
-                          disabled={isDownloadingPeppol || !invoice.invoice_number}
-                        >
-                          <DocumentTextIcon className="h-4 w-4" />
-                          {t('download_peppol_xml')}
-                        </DropdownMenuItem>
+                        {invoice.invoice_number || invoice.status !== 'draft' ? (
+                          <DropdownMenuItem
+                            onSelect={() => void downloadPeppolXml()}
+                            disabled={isDownloadingPeppol || !invoice.invoice_number}
+                          >
+                            <DocumentTextIcon className="h-4 w-4" />
+                            {t('download_peppol_xml')}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onSelect={() => void downloadPeppolXml()}
+                            disabled={isDownloadingPeppol}
+                            className="items-start"
+                          >
+                            <DocumentTextIcon className="mt-0.5 h-4 w-4" />
+                            <span className="min-w-0">
+                              <span className="block">{t('preview_peppol_xml')}</span>
+                              <span className="block text-[11px] leading-snug text-muted-foreground">
+                                {t('preview_peppol_xml_hint')}
+                              </span>
+                            </span>
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           onSelect={() => void preparePeppolDelivery()}
                           disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}

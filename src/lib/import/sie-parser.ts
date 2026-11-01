@@ -11,6 +11,7 @@
  */
 
 import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import {
   describeObjectBalancePlan,
@@ -1352,11 +1353,30 @@ export function selectObjectOpeningBalances(
 }
 
 /**
+ * The refusal for a file kept in another currency than kronor, or null.
+ *
+ * #VALUTA names the currency of every amount in the file (ISO 4217; absent
+ * means SEK, SIE 4B). The ledger is kronor only and the import never
+ * converts, so a EUR file would post EUR figures as kronor, and an entry
+ * scaled by an exchange rate still balances: nothing later would catch it.
+ * Both gates call this (validateSIEFile for the preview, validateSIEJobInput
+ * at submit and in the worker), so every door refuses before any write.
+ */
+export function sieCurrencyRefusal(header: Pick<SIEHeader, 'currency'>): string | null {
+  const currency = header.currency.trim().toUpperCase().slice(0, 10)
+  if (isLedgerCurrency(currency)) return null
+  return `SIE-filens belopp är i ${currency} (#VALUTA ${currency}). Accounted bokför bara i svenska kronor, och beloppen skulle bokföras som kronor utan omräkning, så filen importeras inte. Exportera bokföringen i SEK om källsystemet kan det.`
+}
+
+/**
  * Validate a parsed SIE file
  */
 export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
+
+  const currencyRefusal = sieCurrencyRefusal(parsed.header)
+  if (currencyRefusal) errors.push(currencyRefusal)
 
   // Check #FLAGGA for already-imported files
   if (parsed.header.flagga === 1) {

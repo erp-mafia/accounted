@@ -25,6 +25,9 @@ export interface ArkivDocumentRow {
   document_id: string
   created_at: string
   file_name: string
+  /** The stored file's type and size: what a picker that sends the file on checks (accounted#42). */
+  mime_type: string | null
+  file_size_bytes: number | null
   /** What the document is called: read off its record, the file name when nothing was read. */
   title: string
   /** The date the document carries; the upload date stands in when it has none. */
@@ -108,7 +111,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
+    .select('id, created_at, file_name, mime_type, file_size_bytes, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
     .eq('company_id', ctx.companyId)
     .in('admission_state', ['admitted', 'held'])
     .or(NOT_STRUCTURED_MIME_FILTER)
@@ -118,7 +121,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (pageOrder) query = query.in('id', pageOrder)
   const { data, error } = await query
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
+  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; mime_type?: string | null; file_size_bytes?: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
   if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
   // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
@@ -212,6 +215,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
       document_id: d.id,
       created_at: d.created_at,
       file_name: d.file_name,
+      mime_type: d.mime_type ?? null,
+      file_size_bytes: d.file_size_bytes ?? null,
       title: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload, agreementTitle: agreement?.title ?? null }),
       document_date: documentDate(d.doc_type, payload) ?? (d.journal_entry_id ? (entryDateOf.get(d.journal_entry_id) ?? null) : null),
       doc_type: d.doc_type,

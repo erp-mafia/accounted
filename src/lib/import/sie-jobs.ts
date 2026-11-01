@@ -3,7 +3,7 @@ import { userFacing } from '@/lib/errors/user-facing'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountMapping, ParsedSIEFile, SIEVoucher } from './types'
-import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
+import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile, sieCurrencyRefusal } from './sie-parser'
 import { ensureFiscalPeriod } from './sie-import'
 import { NO_MATCHING_FISCAL_YEAR } from './sie-admission'
 import { SIE_JOB_VERSION, SIE_LIMITS, type SIEJob } from './sie-job-contract'
@@ -311,6 +311,8 @@ export function validateSIEJobInput(content: string, parsed: ParsedSIEFile, mapp
   if (!content || Buffer.byteLength(content, 'utf8') > SIE_LIMITS.fileBytes) {
     throw new SIEJobValidationError('SIE-filen måste vara högst 50 MB och får inte vara tom.')
   }
+  const currencyRefusal = sieCurrencyRefusal(parsed.header)
+  if (currencyRefusal) throw new SIEJobValidationError(currencyRefusal)
   const parseErrors = parsed.issues.filter(issue => issue.severity === 'error')
   if (parseErrors.length) {
     const details = parseErrors.slice(0, 5).map(issue => `Rad ${issue.line}: ${issue.message}`).join(' ')

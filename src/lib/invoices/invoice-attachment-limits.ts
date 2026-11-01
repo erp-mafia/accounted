@@ -1,4 +1,5 @@
 import { isShrinkableImage } from '@/lib/documents/upload-size'
+import { isAllowedDocumentFile } from '@/lib/documents/upload-types'
 import type { EditorChannel } from '@/lib/invoices/editor/channel'
 
 /**
@@ -85,4 +86,40 @@ export function offersInvoiceAttachments(input: {
 /** A file an e-faktura can carry: a PDF, by its stored or picked type or its name. */
 export function isPeppolAttachmentFile(file: { type: string | null; name: string }): boolean {
   return file.type === PEPPOL_ATTACHMENT_MIME_TYPE || (!file.type && /\.pdf$/i.test(file.name))
+}
+
+/** Why a file cannot join an invoice's attachments; the same reasons the upload path names. */
+export type InvoiceAttachmentRefusal = 'unsupported_type' | 'peppol_pdf_only' | 'too_large' | 'too_many' | 'total_too_large'
+
+/**
+ * Why a document already in the archive cannot join the invoice's attachments
+ * (accounted#42: a wholesaler's invoice behind invoiced material), or null
+ * when it fits. The checks the upload path makes on a picked file, in the same
+ * order, read off the stored type, name and size; nothing is shrunk, the
+ * stored file is what goes out. `current` is what the invoice already carries
+ * plus what is picked so far.
+ */
+export function archivedAttachmentRefusal(
+  doc: { file_name: string; mime_type: string | null; file_size_bytes: number | null },
+  current: { count: number; bytes: number },
+  channel: 'email' | 'peppol',
+): InvoiceAttachmentRefusal | null {
+  const file = { name: doc.file_name, type: doc.mime_type }
+  if (!isAllowedDocumentFile(file)) return 'unsupported_type'
+  const peppol = channel === 'peppol'
+  if (peppol && !isPeppolAttachmentFile(file)) return 'peppol_pdf_only'
+  const size = doc.file_size_bytes ?? 0
+  if (size > MAX_INVOICE_ATTACHMENT_FILE_BYTES) return 'too_large'
+  if (current.count + 1 > MAX_INVOICE_ATTACHMENTS) return 'too_many'
+  const totalLimit = peppol ? MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES : MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES
+  if (current.bytes + size > totalLimit) return 'total_too_large'
+  return null
+}
+
+/** A file size as the attachment lists show it: KB under a megabyte, MB above, in the reader's locale. */
+export function formatAttachmentSize(bytes: number | null, locale: string): string {
+  if (bytes === null) return ''
+  const number = new Intl.NumberFormat(locale === 'en' ? 'en-GB' : 'sv-SE', { maximumFractionDigits: 1 })
+  if (bytes < 1024 * 1024) return `${number.format(Math.max(bytes / 1024, 0.1))} KB`
+  return `${number.format(bytes / (1024 * 1024))} MB`
 }

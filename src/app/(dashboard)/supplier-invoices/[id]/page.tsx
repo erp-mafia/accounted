@@ -31,6 +31,7 @@ import {
 } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { isCreditableSupplierInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
+import { supplierCreditBooksOriginalFirst } from '@/lib/bookkeeping/booking-mode'
 import { formatDate, cn } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -382,9 +383,12 @@ export default function SupplierInvoiceDetailPage() {
   }
 
   async function handleCredit() {
+    // accounted#58: a deferring company's unbooked invoice is booked first,
+    // on its own date, then reversed by the credit.
+    const booksFirst = !!invoice && supplierCreditBooksOriginalFirst(companySettings, invoice)
     const ok = await confirmAction({
       title: t('credit_confirm_title'),
-      description: t('credit_confirm_description'),
+      description: t(booksFirst ? 'credit_confirm_description_books_first' : 'credit_confirm_description'),
       confirmLabel: t('credit_confirm_label'),
       variant: 'warning',
     })

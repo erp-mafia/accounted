@@ -37,6 +37,11 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   }
 })
 
+const bookSupplierInvoiceMock = vi.fn()
+vi.mock('../book-service', () => ({
+  bookSupplierInvoice: (...args: unknown[]) => bookSupplierInvoiceMock(...args),
+}))
+
 import { creditSupplierInvoice, CreditSupplierInvoiceInputSchema } from '../credit'
 import {
   SupplierCreditNoteRowsMismatchError,
@@ -148,6 +153,11 @@ beforeEach(() => {
   reset()
   createCreditEntryMock.mockResolvedValue({ id: 'je-credit' })
   cancelSchedulesMock.mockResolvedValue({ cancelledSchedules: 1, reversedEntries: 1, failedReversals: 0 })
+  bookSupplierInvoiceMock.mockImplementation(async (_ctx: unknown, _id: string, options?: { dryRun?: boolean }) =>
+    options?.dryRun
+      ? { ok: true, dryRun: true, preview: { journal_entry: { entry_date: '2026-09-01', lines: [] } } }
+      : { ok: true, data: { supplier_invoice: { id: ORIGINAL_ID }, journal_entry_id: 'je-original' }, warnings: [] },
+  )
 })
 
 describe('creditSupplierInvoice: plain Kreditera', () => {
@@ -459,5 +469,170 @@ describe('CreditSupplierInvoiceInputSchema', () => {
     expect(CreditSupplierInvoiceInputSchema.safeParse({ credit_date: '18/9 2026' }).success).toBe(false)
     expect(CreditSupplierInvoiceInputSchema.safeParse({ inbox_item_id: 'nope' }).success).toBe(false)
     expect(CreditSupplierInvoiceInputSchema.safeParse({ amount: 100 }).success).toBe(false)
+  })
+})
+
+describe('creditSupplierInvoice: a deferred original that was never booked (accounted#58)', () => {
+  const deferredSettings = { accounting_method: 'accrual', defer_invoice_booking: true, bookkeeping_locked_through: null }
+
+  function deferredTables() {
+    happyTables()
+    setTable('company_settings', { data: deferredSettings })
+  }
+
+  const realBokforCalls = () => bookSupplierInvoiceMock.mock.calls.filter((call) => !(call[2] as { dryRun?: boolean } | undefined)?.dryRun)
+
+  it('books the registration first through the Bokför step, then posts the credit', async () => {
+    deferredTables()
+    const order: string[] = []
+    bookSupplierInvoiceMock.mockImplementation(async (_ctx: unknown, _id: string, options?: { dryRun?: boolean }) => {
+      if (options?.dryRun) return { ok: true, dryRun: true, preview: { journal_entry: { lines: [] } } }
+      order.push('bokfor')
+      return { ok: true, data: { supplier_invoice: { id: ORIGINAL_ID }, journal_entry_id: 'je-original' }, warnings: [] }
+    })
+    createCreditEntryMock.mockImplementation(async () => {
+      order.push('credit')
+      return { id: 'je-credit' }
+    })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      data: { journal_entry_id: 'je-credit', original_journal_entry_id: 'je-original' },
+    })
+    expect(order).toEqual(['bokfor', 'credit'])
+    expect(realBokforCalls()).toHaveLength(1)
+    expect(realBokforCalls()[0]?.[1]).toBe(ORIGINAL_ID)
+    // The credit still reverses the original's own rows.
+    expect(createCreditEntryMock.mock.calls[0]?.[4]).toBe(originalItems)
+  })
+
+  it('says on a dry run that the original books first, with its verifikat, and writes nothing', async () => {
+    deferredTables()
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { dryRun: true, emit })
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: {
+        would_create_reversal_journal_entry: true,
+        would_book_original_first: true,
+        original_journal_entry: { entry_date: '2026-09-01' },
+      },
+    })
+    expect(realBokforCalls()).toHaveLength(0)
+    expectNothingWritten()
+  })
+
+  it('refuses with SI_CREDIT_ORIGINAL_PERIOD_LOCKED when the original\'s date is locked, before anything is written', async () => {
+    deferredTables()
+    bookSupplierInvoiceMock.mockResolvedValue({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { reason: 'period_locked', invoice_date: '2026-09-01' },
+    })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'SI_CREDIT_ORIGINAL_PERIOD_LOCKED',
+      details: { original_id: ORIGINAL_ID, reason: 'period_locked', invoice_date: '2026-09-01' },
+    })
+    expect(getErrorEntry('SI_CREDIT_ORIGINAL_PERIOD_LOCKED')).toMatchObject({ httpStatus: 400 })
+    expect(realBokforCalls()).toHaveLength(0)
+    expectNothingWritten()
+  })
+
+  it('refuses with SI_CREDIT_ORIGINAL_BOOK_FAILED and the Bokför code on any other refusal', async () => {
+    deferredTables()
+    bookSupplierInvoiceMock.mockResolvedValue({ ok: false, code: 'SI_BOOK_NO_FISCAL_PERIOD', details: { invoiceDate: '2026-09-01' } })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'SI_CREDIT_ORIGINAL_BOOK_FAILED',
+      details: { original_id: ORIGINAL_ID, original_booking_code: 'SI_BOOK_NO_FISCAL_PERIOD' },
+    })
+    expect(getErrorEntry('SI_CREDIT_ORIGINAL_BOOK_FAILED')).toMatchObject({ httpStatus: 400 })
+    expectNothingWritten()
+  })
+
+  it('refuses when the Bokför step itself refuses at commit (a change since the dry run), before the credit note exists', async () => {
+    deferredTables()
+    bookSupplierInvoiceMock.mockImplementation(async (_ctx: unknown, _id: string, options?: { dryRun?: boolean }) =>
+      options?.dryRun
+        ? { ok: true, dryRun: true, preview: { journal_entry: { lines: [] } } }
+        : { ok: false, code: 'SI_BOOK_CONFLICT' },
+    )
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'SI_CREDIT_ORIGINAL_BOOK_FAILED', details: { original_booking_code: 'SI_BOOK_CONFLICT' } })
+    expectNothingWritten()
+  })
+
+  it('names the booked original when the credit fails after it (failed_partial, never a silent half)', async () => {
+    deferredTables()
+    createCreditEntryMock.mockResolvedValue(null)
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'SI_CREDIT_FAILED',
+      details: { original_journal_entry_id: 'je-original' },
+      partialPostedIds: { original_journal_entry_id: 'je-original' },
+    })
+  })
+
+  it('credits against a concurrent Bokför\'s verifikat without booking again', async () => {
+    deferredTables()
+    bookSupplierInvoiceMock.mockResolvedValue({ ok: false, code: 'SI_BOOK_ALREADY_BOOKED' })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({ ok: true, data: { journal_entry_id: 'je-credit', original_journal_entry_id: null } })
+    expect(realBokforCalls()).toHaveLength(0)
+  })
+
+  it('books nothing first for an original that is already booked', async () => {
+    happyTables()
+    setTable('supplier_invoices', [
+      { data: { ...original, registration_journal_entry_id: 'je-reg' } },
+      { data: creditNoteRow },
+      { data: null },
+      { data: { id: ORIGINAL_ID } },
+    ])
+    setTable('company_settings', { data: deferredSettings })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({ ok: true, data: { journal_entry_id: 'je-credit', original_journal_entry_id: null } })
+    expect(bookSupplierInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves a company that books at registration as before: an unlinked original there is reversed directly', async () => {
+    happyTables()
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({ ok: true, data: { journal_entry_id: 'je-credit', original_journal_entry_id: null } })
+    expect(bookSupplierInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  it('books nothing at all under kontantmetoden for an unpaid original, defer flag or not', async () => {
+    happyTables()
+    setTable('supplier_invoices', [{ data: original }, { data: creditNoteRow }, { data: { id: ORIGINAL_ID } }])
+    setTable('company_settings', { data: { accounting_method: 'cash', defer_invoice_booking: true, bookkeeping_locked_through: null } })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({ ok: true, data: { journal_entry_id: null, original_journal_entry_id: null } })
+    expect(bookSupplierInvoiceMock).not.toHaveBeenCalled()
+    expect(createCreditEntryMock).not.toHaveBeenCalled()
   })
 })

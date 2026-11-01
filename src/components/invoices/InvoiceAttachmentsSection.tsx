@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { DocumentTextIcon, PaperClipIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
+import { ArchiveBoxIcon, DocumentTextIcon, PaperClipIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
+import { InvoiceArchivePicker, type ArchivedAttachmentPick } from '@/components/invoices/InvoiceArchivePicker'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -16,6 +17,7 @@ import {
   MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES,
   MAX_INVOICE_ATTACHMENT_FILE_BYTES,
   MAX_PEPPOL_ATTACHMENTS_TOTAL_BYTES,
+  formatAttachmentSize as formatSize,
   invoiceAttachmentSizeVerdict,
   isPeppolAttachmentFile,
 } from '@/lib/invoices/invoice-attachment-limits'
@@ -50,13 +52,6 @@ interface PendingFile {
   file_size_bytes: number
 }
 
-function formatSize(bytes: number | null, locale: string): string {
-  if (bytes === null) return ''
-  const number = new Intl.NumberFormat(locale === 'en' ? 'en-GB' : 'sv-SE', { maximumFractionDigits: 1 })
-  if (bytes < 1024 * 1024) return `${number.format(Math.max(bytes / 1024, 0.1))} KB`
-  return `${number.format(bytes / (1024 * 1024))} MB`
-}
-
 let pendingCounter = 0
 
 /**
@@ -66,7 +61,10 @@ let pendingCounter = 0
  * archive (POST /api/documents, the same pipeline and checks as every other
  * upload). On a saved draft it is attached at once, so the list is the
  * invoice's own and survives closing the dialog; before the document exists
- * the caller holds the list (see InvoiceAttachmentsTarget). Removing a file
+ * the caller holds the list (see InvoiceAttachmentsTarget). "Välj från
+ * arkivet" attaches a document already in the archive instead, such as a
+ * supplier invoice's underlag (accounted#42): the same link, no upload, and
+ * the document itself does not move (it keeps its verifikat). Removing a file
  * before the send takes it off the invoice; the upload stays in the archive.
  * After the send the attachments are fixed. On a Peppol send (crm#1545) the
  * files go inside the e-faktura: PDF only, within the Peppol size ceiling.
@@ -95,6 +93,7 @@ export function InvoiceAttachmentsSection({
   const [pending, setPending] = useState<PendingFile[]>([])
   const [removing, setRemoving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const busy = pending.length > 0 || removing !== null
   useEffect(() => {
@@ -243,6 +242,46 @@ export function InvoiceAttachmentsSection({
     [attached.length, fileLimitBytes, hosted, locale, peppol, pending, t, tooLarge, totalLimitBytes, uploadAndAttach, usedBytes],
   )
 
+  // Documents already in the archive: linked as they are, in the order picked.
+  const attachArchived = useCallback(
+    async (docs: ArchivedAttachmentPick[]) => {
+      setError(null)
+      const fresh = docs.filter((d) => !attached.some((a) => a.document_id === d.document_id))
+      if (fresh.length === 0) return
+      if (stagedOnChange) {
+        stagedOnChange((current) => [
+          ...current,
+          ...fresh.filter((d) => !current.some((a) => a.document_id === d.document_id)),
+        ])
+        return
+      }
+      const waiting = fresh.map((d) => ({
+        key: `invoice-attachment-${++pendingCounter}`,
+        file_name: d.file_name,
+        file_size_bytes: d.file_size_bytes ?? 0,
+      }))
+      setPending((current) => [...current, ...waiting])
+      try {
+        const res = await fetch(`/api/invoices/${invoiceId}/attachments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ document_ids: fresh.map((d) => d.document_id) }),
+        })
+        if (!res.ok) {
+          setError(await getResponseErrorMessage(res, 'invoice', locale))
+          return
+        }
+        const json = (await res.json()) as { data?: InvoiceAttachmentFile[] }
+        setLinked(json.data ?? [])
+      } catch {
+        setError(t('link_failed'))
+      } finally {
+        setPending((current) => current.filter((p) => !waiting.some((w) => w.key === p.key)))
+      }
+    },
+    [attached, invoiceId, locale, stagedOnChange, t],
+  )
+
   const remove = useCallback(
     async (documentId: string) => {
       setError(null)
@@ -270,7 +309,7 @@ export function InvoiceAttachmentsSection({
 
   return (
     <div className="space-y-2 rounded-lg border border-border p-3">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1">
           <p className="text-sm font-medium">{t('title')}</p>
           <HelpPopover>
@@ -283,19 +322,32 @@ export function InvoiceAttachmentsSection({
                     size: formatSize(totalLimitBytes, locale),
                   })}
             </p>
+            <p className="mt-2">{t('help_archive')}</p>
             <p className="mt-2">{t('help_retention')}</p>
           </HelpPopover>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => inputRef.current?.click()}
-          disabled={disabled || loading || full}
-        >
-          <PaperClipIcon className="mr-2 h-4 w-4" />
-          {t('add')}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setPickerOpen(true)}
+            disabled={disabled || loading || full}
+          >
+            <ArchiveBoxIcon className="mr-2 h-4 w-4" />
+            {t('add_from_archive')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => inputRef.current?.click()}
+            disabled={disabled || loading || full}
+          >
+            <PaperClipIcon className="mr-2 h-4 w-4" />
+            {t('add')}
+          </Button>
+        </div>
         <input
           ref={inputRef}
           type="file"
@@ -367,6 +419,16 @@ export function InvoiceAttachmentsSection({
           {error}
         </p>
       )}
+
+      <InvoiceArchivePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        channel={channel}
+        attachedIds={attached.map((a) => a.document_id)}
+        usedCount={attached.length + pending.length}
+        usedBytes={usedBytes + pending.reduce((sum, p) => sum + p.file_size_bytes, 0)}
+        onPick={(docs) => void attachArchived(docs)}
+      />
     </div>
   )
 }

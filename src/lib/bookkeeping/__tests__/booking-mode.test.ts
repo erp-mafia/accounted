@@ -11,6 +11,7 @@ import {
   creditNoteNeedsJournalEntry,
   creditBooksOriginalFirst,
   supplierCreditNoteNeedsJournalEntry,
+  supplierCreditBooksOriginalFirst,
 } from '../booking-mode'
 
 describe('booksInvoicesOnIssue (#967)', () => {
@@ -399,5 +400,52 @@ describe('supplierCreditNoteNeedsJournalEntry', () => {
     expect(supplierCreditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: null })).toBe(false)
     expect(supplierCreditNoteNeedsJournalEntry('cash', null)).toBe(false)
     expect(supplierCreditNoteNeedsJournalEntry('cash', undefined)).toBe(false)
+  })
+})
+
+describe('supplierCreditBooksOriginalFirst (accounted#58)', () => {
+  const deferred = { accounting_method: 'accrual', defer_invoice_booking: true }
+  const unbooked = {
+    registration_journal_entry_id: null,
+    payment_journal_entry_id: null,
+    status: 'approved',
+    paid_at: null,
+    paid_amount: 0,
+  }
+
+  it('books a registered, approved or overdue deferred original that has no verifikat first', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, unbooked)).toBe(true)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'registered' })).toBe(true)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'overdue' })).toBe(true)
+  })
+
+  it('leaves an original that reached the ledger alone: linked, or reached by a payment', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, registration_journal_entry_id: 'je-1' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, payment_journal_entry_id: 'je-2' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'paid' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, paid_at: '2026-10-01T10:00:00Z' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, paid_amount: 100 })).toBe(false)
+  })
+
+  it('never books first where the company books at registration: an unlinked original there was migrated or imported booked', () => {
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'accrual', defer_invoice_booking: false }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'accrual' }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(null, unbooked)).toBe(false)
+  })
+
+  it('never books first under kontantmetoden, defer flag or not', () => {
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'cash', defer_invoice_booking: true }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'cash' }, unbooked)).toBe(false)
+    // ...where an unpaid original's credit posts nothing at all.
+    expect(supplierCreditNoteNeedsJournalEntry('cash', unbooked)).toBe(false)
+  })
+
+  it('needs an original to read', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, null)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, undefined)).toBe(false)
+  })
+
+  it('still has the credit post its own verifikat after the original is booked', () => {
+    expect(supplierCreditNoteNeedsJournalEntry('accrual', unbooked)).toBe(true)
   })
 })

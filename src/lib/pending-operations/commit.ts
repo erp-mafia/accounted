@@ -5480,6 +5480,9 @@ async function commitCreditSupplierInvoice(
       // credit note, rows_payable_sek and invoice_payable_sek of rows that
       // do not add up) reach the approver as they reach the routes' callers.
       data: outcome.details,
+      // accounted#58: the deferred original was booked before the credit
+      // failed: failed_partial with its verifikat id, never a plain refusal.
+      ...(outcome.partialPostedIds ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }
   }
   if (outcome.dryRun) return { data: outcome.preview }
@@ -5487,6 +5490,8 @@ async function commitCreditSupplierInvoice(
     data: {
       credit_note_id: outcome.data.credit_note.id,
       journal_entry_id: outcome.data.journal_entry_id,
+      // accounted#58: the deferred original was booked first, on its own date.
+      ...(outcome.data.original_journal_entry_id ? { original_journal_entry_id: outcome.data.original_journal_entry_id } : {}),
       document_id: outcome.data.document_id,
       inbox_item_id: outcome.data.inbox_item_id,
       ...(outcome.warnings && outcome.warnings.length > 0 ? { warnings: outcome.warnings } : {}),

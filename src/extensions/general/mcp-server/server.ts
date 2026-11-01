@@ -23669,6 +23669,7 @@ export const tools: McpTool[] = [
         credit_date: string
         date_source: string
         would_create_reversal_journal_entry: boolean
+        would_book_original_first?: boolean
       }
 
       return stage({
@@ -23687,6 +23688,8 @@ export const tools: McpTool[] = [
           credit_date: p.credit_date,
           credit_date_source: p.date_source,
           posts_journal_entry: p.would_create_reversal_journal_entry,
+          // accounted#58: the unbooked original is booked first, on its own date.
+          ...(p.would_book_original_first ? { books_original_first: true } : {}),
           ...(parsed.data.inbox_item_id ? { inbox_item_id: parsed.data.inbox_item_id } : {}),
         },
         actor,

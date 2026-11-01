@@ -135,7 +135,7 @@ Exports outside EU: 0% moms, full avdragsrätt retained. Ruta 36, BAS 3105. Proo
 
 ### 2.6 Periodisk sammanställning (EC Sales List)
 
-Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only (35 kap. 3 § SFL). Goods may be reported quarterly on request if goods supplies do not exceed SEK 500,000 excl. moms in the current quarter or any of the four preceding quarters (35 kap. 4 § SFL). Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (48 kap. 6 § SFL). No extension available. Amounts must match Ruta 35 + 38 (goods) and Ruta 39 (services).
+Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only (35 kap. 3 § SFL). Goods may be reported quarterly on request if goods supplies do not exceed SEK 500,000 excl. moms in the current quarter or any of the four preceding quarters (35 kap. 4 § SFL). Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (48 kap. 6 § SFL). No extension available. Skatteverket: PS amounts match the momsdeklaration "i de flesta fall" (Ruta 35 + 38 goods, Ruta 39 services), not always. A services row is owed only for main-rule B2B services where the buyer has given a VAT number, so Ruta 39 can legitimately exceed the PS total.
 
 From 1 July 2030, ViDA replaces the periodisk sammanställning with mandatory e-invoicing and transaction-based digital reporting for intra-EU B2B supplies (Directive (EU) 2025/516).
 
@@ -459,9 +459,9 @@ Deducting full VAT without 300 SEK cap. Confusing income tax deductibility (abol
 
 | Violation | Consequence |
 |------|------|
-| Incorrect declaration | Skattetillägg: 20% of underpaid/overclaimed |
-| Period error within 4 months | Skattetillägg: 2% |
-| Period error in annual reporting | Skattetillägg: 5% |
+| Incorrect declaration | Skattetillägg: 20% of underpaid/overclaimed (49 kap. 11 § SFL) |
+| Period error, redovisningsperiod max 3 months, moved max 4 months | Skattetillägg: 2% (49 kap. 13 § SFL) |
+| Other period errors (longer period, or moved more than 4 months) | Skattetillägg: 5% (49 kap. 13 § SFL) |
 | Late filing (skattedeklaration) | Förseningsavgift: 625 SEK (1,250 after föreläggande) |
 | Late periodisk sammanställning | 1,250 SEK per report |
 | Failure to file (skönsbeskattning) | 20% skattetillägg on estimated amount |
@@ -497,8 +497,8 @@ Replaced ML (1994:200) on 1 July 2023. Key terminology: "omsättning" → "lever
 | 7 kap. | Registration (§1 who must register, §4 notification, §§10-12 refusal/deregistration/VIES invalid from 2026-07-01) |
 | 26 kap. | Skattedeklaration (§§10-11 periods, §13 voluntary changes/24mo lock-in, §§15-16 timing, §26 deadline 12th, §30 large entity 26th, §§33-33b annual) |
 | 35 kap. | Periodisk sammanställning (§§3-4 periods, §9 deadline) |
-| 48 kap. | Förseningsavgift |
-| 49 kap. | Skattetillägg (§4: 20%, §11: 2% period errors) |
+| 48 kap. | Förseningsavgift (§1 grounds, §6 amounts) |
+| 49 kap. | Skattetillägg (§4 oriktig uppgift, §10 exemptions incl. own rättelse, §11: 20% on VAT, §13: 2%/5% period errors) |
 | 62 kap. | Payment deadlines (§3) |
 | 63 a kap. | Withheld crediting of överskjutande ingående moms (from 2026-07-01) |
 
