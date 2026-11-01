@@ -67,7 +67,6 @@ export async function bookFinanceLeasesYearEnd(args: BookFinanceLeasesArgs): Pro
       entry_date: args.periodEnd,
       description: `Finansiella leasingavtal ${args.periodEnd}`,
       source_type: 'year_end',
-      voucher_series: 'A',
       lines,
     },
   })

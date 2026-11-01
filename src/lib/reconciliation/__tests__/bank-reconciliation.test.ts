@@ -579,6 +579,17 @@ describe('runReconciliation', () => {
     expect(result.applied).toBe(0)
   })
 
+  it('rejects when the GL lines read fails, so a sweep counts an error instead of a clean run (accounted#115)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // RPC: get_unlinked_gl_lines fails
+    enqueue({ error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+    // from('transactions').select: one unmatched row that would otherwise read as "nothing to match"
+    enqueue({ data: [makeTransaction({ id: 'tx-1', amount: 100, date: '2024-06-15', currency: 'SEK' })] })
+
+    await expect(runReconciliation(supabase as never, 'company-1', 'user-1')).rejects.toThrow('statement timeout')
+  })
+
   it('dry run returns matches without applying', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 

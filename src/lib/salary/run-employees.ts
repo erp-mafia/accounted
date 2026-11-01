@@ -17,16 +17,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { runDeviationWindow } from '@/lib/salary/deviation-period'
-import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
+import { HOURS_WORKED_MAX, SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/base-salary-line'
 import type { SalaryLineItemType } from '@/types'
 
 export type RunEmployeeResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: string; details?: Record<string, unknown> }
-
-/** Upper bound for hours in one pay month: 31 days of 24 hours. */
-export const HOURS_WORKED_MAX = 744
 
 export interface SalaryRunEmployeeRow {
   id: string

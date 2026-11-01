@@ -917,7 +917,9 @@ export async function executeYearEndClosing(
       entry_date: period.period_end,
       description: `Årsbokslut ${period.name}`,
       source_type: 'year_end',
-      voucher_series: 'A',
+      // No voucher_series: the engine takes the company's series for
+      // year_end (default_voucher_series_per_source_type, the map the
+      // systemdokumentation publishes), as every other producer does.
       lines: preview.closingLines,
     },
   })
@@ -1198,7 +1200,6 @@ export async function generateOpeningBalances(
     entry_date: nextPeriod.period_start,
     description: `Ingående balans ${nextPeriod.name}`,
     source_type: 'opening_balance' as const,
-    voucher_series: 'A',
     lines,
   })
   // One event for the IB, whichever attempt posts it: its id is made once.

@@ -106,3 +106,38 @@ describe('buildInvoiceWriteData: upplupen intäkt (17xx)', () => {
     expect(result.ok).toBe(true)
   })
 })
+
+// accounted#113: a förutbetald intäkt (29xx) of months that ended before the
+// invoice month would book them all on the invoice date.
+describe('buildInvoiceWriteData: a 29xx deferral of past months', () => {
+  it('refuses September on 2970 on an October invoice, naming the row and 1790', async () => {
+    const result = await build([
+      line({ start: '2026-11-01', end: '2026-12-31' }),
+      line({ start: '2026-09-01', end: '2026-09-30' }),
+    ])
+    expect(result).toEqual({
+      ok: false,
+      code: 'INVOICE_DEFERRED_INCOME_PERIOD_PAST',
+      details: { rows: [2], invoiceDate: '2026-10-15', suggestedAccount: '1790' },
+    })
+  })
+
+  it('stores 1790 when the account is omitted (the form\'s suggestion), so the months book as upplupen intäkt', async () => {
+    const result = await build([{ ...line({ start: '2026-08-01', end: '2026-09-30' }), accrual_balance_account: undefined }])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ accrual_balance_account: '1790' })
+  })
+
+  it('stores 2970 when the account is omitted for months from the invoice month on', async () => {
+    const result = await build([{ ...line({ start: '2026-11-01', end: '2027-04-30' }), accrual_balance_account: null }])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items[0]).toMatchObject({ accrual_balance_account: '2970' })
+  })
+
+  it('keeps an overlapping period on 2970 (Sep-Nov on an October invoice)', async () => {
+    const result = await build([line({ start: '2026-09-01', end: '2026-11-30' })])
+    expect(result.ok).toBe(true)
+  })
+})

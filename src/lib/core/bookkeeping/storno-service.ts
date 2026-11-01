@@ -716,6 +716,19 @@ export async function correctEntry(
     ...(documentRelinkError ? { documentRelinkError } : {}),
   }
 
+  // Both new verifikat are posted vouchers like any other: announce each as
+  // committed, as reverseEntry does for its storno, so webhook subscribers to
+  // journal_entry.committed see them (accounted#58). commit_journal_entry
+  // already wrote their event_log rows; the handler's write for the same
+  // dedupe_key adds nothing there.
+  for (const entry of [result.reversal, result.corrected]) {
+    if (!entry) continue
+    await eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry, userId, companyId },
+    })
+  }
+
   await eventBus.emit({
     type: 'journal_entry.corrected',
     payload: {

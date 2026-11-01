@@ -14,9 +14,9 @@ import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
 
-// Failure logs route through the structured logger so third-party error
-// strings pass its redaction. The budget + summary logs / capability skip
-// stay on console.*: their content is fixed internal strings.
+// Every line goes through the structured logger: third-party error strings
+// pass its redaction, and log.error is the level that reaches error tracking
+// (console.* ends in Vercel stdout only, accounted#115).
 const log = createLogger('agi-kvittenser-cron')
 
 // Cron responses must never be cached: they report a point-in-time run.
@@ -118,7 +118,7 @@ export async function GET(request: Request) {
 
   for (const decl of pending) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
-      console.log(`[agi-kvittenser-cron] Time budget reached after ${results.length} declarations`)
+      log.info('time budget reached', { declarations: results.length })
       break
     }
 
@@ -127,7 +127,7 @@ export async function GET(request: Request) {
     const period = formatRedovisningsperiod('monthly', decl.period_year as number, decl.period_month as number)
 
     if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) {
-      console.info('[agi-kvittenser-cron] skip: capability not entitled', { companyId })
+      log.info('skip: capability not entitled', { companyId })
       continue
     }
 
@@ -218,9 +218,15 @@ export async function GET(request: Request) {
   const errors = results.filter(r => r.status === 'error').length
   const gatewayRefused = refusedRoutes.size > 0
 
-  console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${errors} errors${gatewayRefused ? ', stopped: gateway refused the APIGW client' : ''}`,
-  )
+  log.info('agi kvittens reconciliation run', {
+    processed: results.length,
+    signed,
+    stillPending,
+    alreadyClaimed,
+    expired,
+    errors,
+    gatewayRefused,
+  })
 
   return NextResponse.json(
     {

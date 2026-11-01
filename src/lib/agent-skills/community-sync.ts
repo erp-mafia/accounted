@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { COMMUNITY_DIR, communityRepoUrl, parseCommunitySkillMd, type ParsedCommunitySkill } from './community-repo'
 import { COMMUNITY_REPO } from './community-repo-name'
 import { communityBodySha } from './community-approval'
+import { canonicalJson } from '@/lib/operations/preview-token'
 
 /**
  * Publishing: what is merged into community/ in erp-mafia/accounted-skills
@@ -40,10 +41,13 @@ function githubHeaders(): Record<string, string> {
   return { Accept: 'application/vnd.github+json', 'User-Agent': 'accounted-community-sync', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
 }
 
-/** The folders under community/ on main. */
+/**
+ * The folders under community/ on main. Every failure throws, a 404 included:
+ * a moved or renamed repository and a token without access answer 404 too,
+ * and an empty listing would switch off every published item (accounted#115).
+ */
 async function listFolders(fetchImpl: Fetch): Promise<string[]> {
   const response = await fetchImpl(`https://api.github.com/repos/${COMMUNITY_REPO}/contents/${COMMUNITY_DIR}?ref=main`, { headers: githubHeaders(), cache: 'no-store' })
-  if (response.status === 404) return []
   if (!response.ok) throw new Error(`GitHub listing failed: ${response.status}`)
   const entries = await response.json() as Array<{ type: string; name: string }>
   return entries.filter((e) => e.type === 'dir').map((e) => e.name).sort()
@@ -103,7 +107,9 @@ export async function syncCommunityFromRepo(supabase: SupabaseClient, fetchImpl:
     const approved = !withdrawnAt && (previouslyApproved === sha || (item.submissionId !== null && approvedBySubmission.get(item.submissionId) === sha))
     const approvedSha = withdrawnAt ? null : approved ? sha : previouslyApproved
     const unchanged = before?.is_active && before.mcp_exposed === approved && before.body === item.body && before.title === item.title && before.description === item.description
-      && JSON.stringify(before.trigger_signals ?? {}) === JSON.stringify(signals(item, approvedSha, withdrawnAt))
+      // Structural: jsonb hands keys back in its own order, so comparing
+      // JSON.stringify output re-upserted every item on every run.
+      && canonicalJson(before.trigger_signals ?? {}) === canonicalJson(signals(item, approvedSha, withdrawnAt))
     if (withdrawnAt) result.withdrawn.push(id)
     else if (!approved) result.pending.push(id)
     if (!unchanged) {

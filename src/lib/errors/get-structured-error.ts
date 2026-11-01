@@ -35,6 +35,8 @@ import {
   AccruedCostPeriodLockedError,
   AccruedIncomePeriodInvalidError,
   AccruedIncomePeriodLockedError,
+  DeferralPeriodPastError,
+  deferralPeriodPastDetails,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -755,6 +757,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   }
   if (err instanceof AccruedCostPeriodLockedError || err instanceof AccruedIncomePeriodLockedError) {
     return { code: err.code, details: { blocked: err.blocked } }
+  }
+  if (err instanceof DeferralPeriodPastError) {
+    return { code: err.code, details: deferralPeriodPastDetails(err) }
   }
   if (err instanceof BookkeepingDatabaseError) {
     return { code: err.code, details: { operation: err.operation, ...(err.pgCode ? { pgCode: err.pgCode } : {}) } }

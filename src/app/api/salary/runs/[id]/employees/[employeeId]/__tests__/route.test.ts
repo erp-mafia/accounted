@@ -210,6 +210,123 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   })
 })
 
+describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours (accounted#1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  const draftRun = {
+    id: 'run-1',
+    status: 'draft',
+    period_year: 2026,
+    period_month: 9,
+    deviation_period_start: null,
+    deviation_period_end: null,
+  }
+  const hourlyRow = {
+    id: 'sre-1',
+    employee_id: 'emp-1',
+    employment_degree: 100,
+    salary_type: 'hourly',
+    monthly_salary: 0,
+    hours_worked: null,
+    employee: { salary_type: 'hourly', employment_type: 'employee' },
+  }
+
+  function patch(body: Record<string, unknown>) {
+    return PATCH(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await patch({ hours_worked: 26 })
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 400 for hours outside 0 to 744 and writes nothing', async () => {
+    const { findCalls } = authed()
+    const negative = await patch({ hours_worked: -1 })
+    const tooMany = await patch({ hours_worked: 745 })
+    expect(negative.status).toBe(400)
+    expect(tooMany.status).toBe(400)
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('returns 400 when both monthly_salary and hours_worked are sent', async () => {
+    const { findCalls } = authed()
+    const response = await patch({ monthly_salary: 30000, hours_worked: 26 })
+    expect(response.status).toBe(400)
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('returns 404 when the run does not exist', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([{ data: null }])
+    const response = await patch({ hours_worked: 26 })
+    expect(response.status).toBe(404)
+  })
+
+  it('sets the total on the run row and prices the Timlön line', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([
+      { data: draftRun }, // service: salary_runs draft gate
+      { data: hourlyRow }, // service: salary_run_employees select
+      { data: [] }, // service: salary_worked_days in the period, none
+      { data: { hourly_rate: 187.5 } }, // service: employees hourly_rate
+      { data: null }, // service: salary_run_employees update
+      { data: null }, // service: salary_line_items Timlön refresh
+    ])
+
+    const response = await patch({ hours_worked: 26 })
+    const { status, body } = await parseJsonResponse<{ data: { hours_worked: number; salary_type: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ hours_worked: 26, salary_type: 'hourly' })
+    expect(findCalls('salary_run_employees', 'update')[0]![0]).toEqual({ hours_worked: 26, calculation_breakdown: null })
+    expect(findCalls('salary_line_items', 'update')[0]![0]).toEqual({ amount: 4875, quantity: 26, unit_price: 187.5 })
+  })
+
+  it('refuses with 409 when the period already has days in the calendar', async () => {
+    const { enqueueMany, findCalls } = authed()
+    enqueueMany([
+      { data: draftRun },
+      { data: hourlyRow },
+      { data: [{ hours: 20 }, { hours: 6 }] }, // calendar days in the period
+    ])
+
+    const response = await patch({ hours_worked: 30 })
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_RUN_HOURS_FROM_CALENDAR')
+    expect(body.error).toContain('kalendern')
+    expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+  })
+
+  it('refuses hours for a monthly-paid employee by its own reason', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: draftRun },
+      { data: { ...hourlyRow, salary_type: 'monthly', employee: { salary_type: 'monthly', employment_type: 'employee' } } },
+    ])
+
+    const response = await patch({ hours_worked: 26 })
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.code).toBe('SALARY_RUN_SALARY_FIELD_MISMATCH')
+    expect(body.error).toContain('timavlönade')
+  })
+})
+
 describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter override', () => {
   beforeEach(() => {
     vi.clearAllMocks()

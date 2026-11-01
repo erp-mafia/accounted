@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 import { detectArticleColumns } from '@/lib/import/articles/column-detector'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -103,5 +103,22 @@ describe('GET /api/export/articles', () => {
     // UTF-8 BOM
     expect([buf[0], buf[1], buf[2]]).toEqual([0xef, 0xbb, 0xbf])
     expect(buf.toString('utf-8')).toContain('Webdesign')
+  })
+
+  it('pages in a total order: name, then id (accounted#58)', async () => {
+    // fetchAllRows pages with .range(); names repeat, so ordering by name
+    // alone let a tie on a page boundary repeat or drop a row.
+    mockFetchAllRows.mockImplementation(async (build: (r: { from: number; to: number }) => unknown) => {
+      build({ from: 0, to: 999 })
+      return [ARTICLE]
+    })
+    enqueue({ data: { company_name: 'Acme AB' } })
+    const res = await GET(createMockRequest('/api/export/articles'), { params: Promise.resolve({}) })
+
+    expect(res.status).toBe(200)
+    expect(findCalls('articles', 'order')).toEqual([
+      ['name', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
   })
 })

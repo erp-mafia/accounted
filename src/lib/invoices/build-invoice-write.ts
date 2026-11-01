@@ -16,9 +16,10 @@ import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-a
 import { roundOre } from '@/lib/money'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import {
-  DEFAULT_DEFERRED_REVENUE_ACCOUNT,
   isAccruedIncomeAccount,
+  pastPeriodDeferralSuggestion,
   periodEndsBeforeInvoiceMonth,
+  suggestRevenueBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
@@ -398,6 +399,32 @@ export async function buildInvoiceWriteData(params: {
         ok: false,
         code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
         details: { rows: accruedIncomeRows, invoiceDate: input.invoice_date },
+      }
+    }
+    // The opposite (accounted#113): a förutbetald intäkt (29xx) of months
+    // that ended before the invoice month would book all of them on the
+    // invoice date, so it is refused naming the upplupen account. An omitted
+    // account gets that account below instead. Booking checks it again
+    // (assertAccruedIncomeLinesBookable).
+    const pastDeferrals = items.flatMap((item, index) => {
+      if (!item.accrual_period_start || !item.accrual_balance_account) return []
+      const suggested = pastPeriodDeferralSuggestion(
+        { direction: 'revenue' },
+        item.accrual_balance_account,
+        item.accrual_period_end,
+        input.invoice_date,
+      )
+      return suggested ? [{ row: index + 1, suggested }] : []
+    })
+    if (pastDeferrals.length > 0) {
+      return {
+        ok: false,
+        code: 'INVOICE_DEFERRED_INCOME_PERIOD_PAST',
+        details: {
+          rows: pastDeferrals.map((entry) => entry.row),
+          invoiceDate: input.invoice_date,
+          suggestedAccount: pastDeferrals[0].suggested,
+        },
       }
     }
   }
@@ -865,8 +892,9 @@ export async function buildInvoiceWriteData(params: {
           ? (item.brf_org_number ?? input.deduction_brf_org_number?.trim() ?? null) || null
           : null,
       // Periodisering (förutbetald intäkt 29xx, upplupen intäkt 17xx): frozen
-      // onto the line. The schedule itself is created when the invoice is
-      // sent/booked. ROT/RUT lines never defer (schema-enforced); the guard
+      // onto the line; an omitted account takes the form's suggestion (1790
+      // for months before the invoice month, else 2970). The schedule itself
+      // is created when the invoice is sent/booked. ROT/RUT lines never defer (schema-enforced); the guard
       // above restricted this to real invoices under faktureringsmetoden.
       accrual_period_start:
         documentType === 'invoice' && !deductionType
@@ -878,7 +906,8 @@ export async function buildInvoiceWriteData(params: {
           : null,
       accrual_balance_account:
         documentType === 'invoice' && !deductionType && item.accrual_period_start && item.accrual_period_end
-          ? (item.accrual_balance_account ?? DEFAULT_DEFERRED_REVENUE_ACCOUNT)
+          ? (item.accrual_balance_account ??
+            suggestRevenueBalanceAccount(item.accrual_period_end, input.invoice_date))
           : null,
       dimensions: item.dimensions ?? {},
     }

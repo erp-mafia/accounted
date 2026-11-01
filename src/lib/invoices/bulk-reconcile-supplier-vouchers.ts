@@ -6,8 +6,8 @@
  * vouchers that settle accounts payable (Dr 2440 / Cr 1930): is imported
  * separately via SIE. Supplier invoices are imported as standalone
  * `supplier_invoices` rows with NO link to those vouchers (the entity mapper
- * never sets `payment_journal_entry_id`). Fortnox is queried with
- * `?filter=unpaid`, so an invoice whose payment was booked in the source GL but
+ * never sets `payment_journal_entry_id`). Only open Fortnox invoices are
+ * imported by default, so an invoice whose payment was booked in the source GL but
  * never registered against the leverantörsfaktura object arrives here as an
  * open payable. Once its due date passes the nightly cron flips it to
  * `overdue`: even though the settling voucher already exists in the GL.

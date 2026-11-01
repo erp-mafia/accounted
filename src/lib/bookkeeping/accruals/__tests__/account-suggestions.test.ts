@@ -5,6 +5,7 @@ import {
   isAccruedCostAccount,
   isAccruedIncomeAccount,
   isValidBalanceAccount,
+  pastPeriodDeferralSuggestion,
   periodEndsBeforeInvoiceMonth,
   suggestBalanceAccount,
   suggestExpenseBalanceAccount,
@@ -200,5 +201,46 @@ describe('accrualValueAfterEdit: a supplier invoice line', () => {
     expect(
       accounts(typeInto(costLine('5020'), { start: '2026-07-01', end: '2026-09-30', balanceAccount: '2990' }, [{ balanceAccount: '1790' }])),
     ).toEqual(['1790'])
+  })
+})
+
+// accounted#113: a deferral (17xx cost, 29xx revenue) of months that ended
+// before the invoice month books them all on the invoice date.
+describe('pastPeriodDeferralSuggestion', () => {
+  const revenue = { direction: 'revenue' as const }
+  const cost = (targetAccount: string) => ({ direction: 'expense' as const, targetAccount })
+
+  it('names 1790 for a 29xx revenue period wholly before the invoice month (September on an October invoice)', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, '2970', '2026-09-30', '2026-10-26')).toBe('1790')
+  })
+
+  it('names 2990, or 2960 for räntekostnader, for a 17xx cost period wholly before the invoice month', () => {
+    expect(pastPeriodDeferralSuggestion(cost('6540'), '1790', '2026-09-30', '2026-10-08')).toBe('2990')
+    expect(pastPeriodDeferralSuggestion(cost('8410'), '1740', '2026-09-30', '2026-10-08')).toBe('2960')
+  })
+
+  it('treats a missing account as the deferral the booking falls back to', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, null, '2026-09-30', '2026-10-26')).toBe('1790')
+    expect(pastPeriodDeferralSuggestion(cost('5020'), undefined, '2026-09-30', '2026-10-26')).toBe('2990')
+  })
+
+  it('leaves a period that overlaps the invoice month (Sep-Nov on an October invoice)', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, '2970', '2026-11-30', '2026-10-26')).toBeNull()
+    expect(pastPeriodDeferralSuggestion(cost('5020'), '1790', '2026-11-30', '2026-10-26')).toBeNull()
+  })
+
+  it('leaves a period after the invoice month', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, '2970', '2027-03-31', '2026-10-26')).toBeNull()
+    expect(pastPeriodDeferralSuggestion(cost('6310'), '1730', '2027-09-30', '2026-10-26')).toBeNull()
+  })
+
+  it('leaves an upplupen post, which is the right kind for past months', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, '1790', '2026-09-30', '2026-10-26')).toBeNull()
+    expect(pastPeriodDeferralSuggestion(cost('5020'), '2990', '2026-09-30', '2026-10-26')).toBeNull()
+  })
+
+  it('answers null for a date that is not ISO shaped', () => {
+    expect(pastPeriodDeferralSuggestion(revenue, '2970', '2026-09-30', '')).toBeNull()
+    expect(pastPeriodDeferralSuggestion(revenue, '2970', null, '2026-10-26')).toBeNull()
   })
 })

@@ -293,13 +293,17 @@ async function applyLedgerSettlements(
   let live: LedgerSettlementMember[] | undefined
   let items = ledgerItems
   if (!items) {
+    // A failed read shows no settlement here, as before: the listing itself
+    // must not fail over the pairs it decorates.
+    let read: Awaited<ReturnType<typeof fetchOpen>>
     try {
       live = await fetchLiveLedgerSettlements(supabase, companyId, ledgerAccount)
+      if (live.length === 0) return
+      read = await fetchOpen(window.from ?? undefined, window.to ?? undefined)
     } catch {
       return
     }
-    if (live.length === 0) return
-    const { lines, open } = await fetchOpen(window.from ?? undefined, window.to ?? undefined)
+    const { lines, open } = read
     items = new Map()
     for (const l of lines) {
       if (items.has(l.journal_entry_id)) continue

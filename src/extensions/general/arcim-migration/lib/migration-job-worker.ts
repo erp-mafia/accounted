@@ -175,8 +175,8 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   const listed = dto as InvoiceDto
   // A supplier invoice cancelled (makulerad) in Fortnox was never a payable,
   // and the supplier-invoice register has no cancelled state: it would land
-  // as credited. ?filter=unpaid never lists one; the whole register, listed
-  // on request (crm#1114), does.
+  // as credited. The default listing leaves it out (fortnoxSupplierInvoiceNotOpen);
+  // the whole register, listed on request (crm#1114), keeps it.
   if (c.resource === 'supplierInvoices' && job.provider === 'fortnox' && listed.status === 'cancelled') {
     return { id: c.id, skip: 'cancelled' }
   }
@@ -760,7 +760,8 @@ export async function runProviderMigrationWorker(options: {
             if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
             await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
               p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
-            log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total })
+            log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total,
+              ...(page.declined ? { declined: page.declined } : {}) })
           }
         } else {
           const state = { import: 'pending', link: 'imported', reconcile: 'linked', settle: 'planned', completed: 'done' }[job.phase]

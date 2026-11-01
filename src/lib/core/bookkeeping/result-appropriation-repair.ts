@@ -429,7 +429,6 @@ export async function postHistoricalResultRepair(
       description: `Omföring av föregående års resultat (${RESULT_ACCOUNT} → ${PRIOR_RESULT_ACCOUNT})`,
       source_type: 'result_appropriation',
       source_id: plan.openingBalanceEntryId,
-      voucher_series: 'A',
       notes: `Underlag: ingående balans, ${underlagLabel} (${plan.openingBalanceEntryId}). Historisk rättelse av kvarliggande föregående års resultat på ${RESULT_ACCOUNT}.`,
       lines: plan.lines,
     },

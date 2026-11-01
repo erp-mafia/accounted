@@ -12,7 +12,6 @@
           "entry_date": "2026-01-01",
           "description": "Omföring av föregående års resultat (2099 → 2098)",
           "source_type": "result_appropriation",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "2099",
@@ -44,7 +43,6 @@
           "entry_date": "2026-01-01",
           "description": "Omföring av föregående års resultat (2099 → 2098)",
           "source_type": "result_appropriation",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "2098",
@@ -76,7 +74,6 @@
           "entry_date": "2026-01-01",
           "description": "Omföring av föregående års resultat (2069 → 2068)",
           "source_type": "result_appropriation",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "2069",
@@ -109,7 +106,6 @@
           "description": "Omföring av föregående års resultat (2099 → 2098)",
           "source_type": "result_appropriation",
           "source_id": "00000000-0000-4000-8000-0000000e0001",
-          "voucher_series": "A",
           "notes": "Underlag: ingående balans, verifikat A1 (00000000-0000-4000-8000-0000000e0001). Historisk rättelse av kvarliggande föregående års resultat på 2099.",
           "lines": [
             {

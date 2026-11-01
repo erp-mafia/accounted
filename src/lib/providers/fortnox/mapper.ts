@@ -11,7 +11,7 @@ import type {
 import { creditNoteTypeCode } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
-import { roundOre } from '@/lib/money';
+import { ORE_TOLERANCE, roundOre } from '@/lib/money';
 
 /**
  * A row amount net of VAT.
@@ -124,6 +124,25 @@ function isUnissuedDraft(raw: Record<string, unknown>): boolean {
 function isFullyPaid(raw: Record<string, unknown>): boolean {
   if (isUnissuedDraft(raw)) return false;
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+}
+
+/**
+ * Why a Fortnox supplier invoice from the register list is not an open
+ * payable, or null when it is one. Read from the list form's own fields, not
+ * from Fortnox's `?filter=unpaid`: that filtered list came back empty for a
+ * company whose ledger held five booked supplier invoices without a payment,
+ * the whole 2440 balance (PH 230). Unbooked stays out: it has no verifikat in
+ * the imported ledger, so 2440 would not agree with the register. An absent
+ * Balance says nothing and is kept; a negative one is an open credit.
+ */
+export function fortnoxSupplierInvoiceNotOpen(
+  raw: Record<string, unknown>,
+): 'cancelled' | 'unbooked' | 'paid' | null {
+  // The list form spells cancellation `Cancel`, the detail form `Cancelled`.
+  if (raw['Cancel'] === true || raw['Cancelled'] === true) return 'cancelled';
+  if (raw['Booked'] === false) return 'unbooked';
+  const balance = readNumber(raw, ['Balance']);
+  return balance !== undefined && Math.abs(balance) < ORE_TOLERANCE ? 'paid' : null;
 }
 
 /**
@@ -385,9 +404,10 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   // downstream read it as no amount (crm#1157).
   const total = readNumber(raw, ['Total']) ?? 0;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
-  // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
-  // Balance must not be mistaken for "settled": that would flip a genuinely
-  // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
+  // The default import keeps only open invoices (fortnoxSupplierInvoiceNotOpen),
+  // so a missing Balance must not be mistaken for "settled": that would flip a
+  // genuinely open payable to paid downstream. A present Balance (incl. 0) is
+  // used as-is.
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.

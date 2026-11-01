@@ -47,6 +47,8 @@ export const SI_ACCRUED_COST_PERIOD_INVALID = 'SI_ACCRUED_COST_PERIOD_INVALID' a
 export const SI_ACCRUED_COST_PERIOD_LOCKED = 'SI_ACCRUED_COST_PERIOD_LOCKED' as const
 export const INVOICE_ACCRUED_INCOME_PERIOD_INVALID = 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID' as const
 export const INVOICE_ACCRUED_INCOME_PERIOD_LOCKED = 'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED' as const
+export const SI_PREPAID_COST_PERIOD_PAST = 'SI_PREPAID_COST_PERIOD_PAST' as const
+export const INVOICE_DEFERRED_INCOME_PERIOD_PAST = 'INVOICE_DEFERRED_INCOME_PERIOD_PAST' as const
 export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
 export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
@@ -726,6 +728,43 @@ export class AccruedIncomePeriodLockedError extends Error {
 }
 
 /**
+ * Raised before an invoice's verifikat is posted when a line defers
+ * (förutbetald: a cost on 17xx, revenue on 29xx) a period that ends before
+ * the invoice month (accounted#113). Those months are over: the deferral
+ * would release all of them on the invoice date. The line needs the upplupen
+ * account instead (suggestedAccount: 2990/2960 for a cost, 1790 for revenue),
+ * which books each month on its own last day.
+ */
+export class DeferralPeriodPastError extends Error {
+  readonly code: typeof SI_PREPAID_COST_PERIOD_PAST | typeof INVOICE_DEFERRED_INCOME_PERIOD_PAST
+  constructor(
+    public readonly direction: 'expense' | 'revenue',
+    public readonly periodStart: string,
+    public readonly periodEnd: string,
+    public readonly invoiceDate: string,
+    public readonly balanceAccount: string | null,
+    public readonly suggestedAccount: string
+  ) {
+    super(
+      `The period ${periodStart} to ${periodEnd} ends before the month of the invoice dated ${invoiceDate}, so it cannot be deferred on ${balanceAccount ?? 'the default account'}: book it as ${direction === 'expense' ? 'an accrued cost' : 'accrued income'} on ${suggestedAccount}.`
+    )
+    this.code = direction === 'expense' ? SI_PREPAID_COST_PERIOD_PAST : INVOICE_DEFERRED_INCOME_PERIOD_PAST
+    this.name = 'DeferralPeriodPastError'
+  }
+}
+
+/** The details a DeferralPeriodPastError answers with, in every envelope. */
+export function deferralPeriodPastDetails(err: DeferralPeriodPastError) {
+  return {
+    periodStart: err.periodStart,
+    periodEnd: err.periodEnd,
+    invoiceDate: err.invoiceDate,
+    balanceAccount: err.balanceAccount,
+    suggestedAccount: err.suggestedAccount,
+  }
+}
+
+/**
  * A kontantmetod year-end carry (årsomföring, #3440) may only be stornoed on
  * its own date: the moms it declared in the closed year's final VAT period
  * must leave that same period. The database refuses the same thing
@@ -1041,6 +1080,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof AccruedCostPeriodLockedError ||
     err instanceof AccruedIncomePeriodInvalidError ||
     err instanceof AccruedIncomePeriodLockedError ||
+    err instanceof DeferralPeriodPastError ||
     err instanceof CutoffCarryReversalDateError ||
     err instanceof KontantmetodCarryHasSettlementsError ||
     err instanceof CutoffCarryCorrectionRefusedError ||
@@ -1478,6 +1518,13 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { periodStart: err.periodStart, periodEnd: err.periodEnd, invoiceDate: err.invoiceDate },
         },
       },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof DeferralPeriodPastError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: deferralPeriodPastDetails(err) } },
       { status: 400 }
     )
   }

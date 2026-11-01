@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
+import type { Logger } from '@/lib/logger'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 export const maxDuration = 60
@@ -15,6 +16,28 @@ const BATCH = 200
  */
 const LARGE_COMPANY_ENTRIES = 20_000
 const NIGHT_END_HOUR = 5
+
+/** lock_not_available: the company's lock wait gave up after its 2 s lock_timeout. */
+const LOCK_NOT_AVAILABLE = '55P03'
+
+/**
+ * A lock wait that gave up (the company is busy with an import) is the one
+ * failure the next run fixes by itself: a warning. Any other failure comes
+ * back the same way every ten minutes, so it is an error a person must look
+ * at, not a warning nobody reads (accounted#115).
+ */
+function logSkipped(
+  log: Logger,
+  step: 'build' | 'compaction',
+  companyId: string,
+  error: { code?: string; message?: string },
+): void {
+  if (error.code === LOCK_NOT_AVAILABLE) {
+    log.warn(`ledger_account_days ${step} skipped`, { companyId, code: error.code })
+  } else {
+    log.error(`ledger_account_days ${step} failed`, { companyId, code: error.code ?? null, reason: error.message ?? null })
+  }
+}
 
 /** The hour in Stockholm, 0-23. */
 function stockholmHour(now: Date): number {
@@ -32,7 +55,8 @@ function stockholmHour(now: Date): number {
 // Then folds the slot rows writers left (each backend adds to its own row so
 // postings never queue on each other) into one row per key, so reports read
 // one row per account and day. A company busy with an import gives up its
-// lock wait after 2 s and is retried on the next run.
+// lock wait after 2 s and is retried on the next run; any other failure is
+// retried too, but logged as an error.
 export const GET = withCronContext('cron.ledger_account_days_build', async (_request, ctx) => {
   const supabase = createServiceClientNoCookies()
   const started = Date.now()
@@ -59,7 +83,7 @@ export const GET = withCronContext('cron.ledger_account_days_build', async (_req
       if (buildError) {
         failed.add(companyId)
         skipped++
-        ctx.log.warn('ledger_account_days build skipped', { companyId, code: buildError.code })
+        logSkipped(ctx.log, 'build', companyId, buildError)
         continue
       }
       built++
@@ -79,7 +103,7 @@ export const GET = withCronContext('cron.ledger_account_days_build', async (_req
       if (compactError) {
         failed.add(companyId)
         skipped++
-        ctx.log.warn('ledger_account_days compaction skipped', { companyId, code: compactError.code })
+        logSkipped(ctx.log, 'compaction', companyId, compactError)
         continue
       }
       compacted++

@@ -138,19 +138,31 @@ export async function unapproveSalaryRun(
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_NOT_APPROVED', details: { current_status: runRow.status } }
   }
 
-  const { data: agiDeclaration } = await supabase
+  // Every declaration of the run, not .single(): nothing makes salary_run_id
+  // unique there, and .single() answers both "none" and "more than one" with
+  // the same error, so a run with two rows read as having none. A failed read
+  // refuses: whether the AGI is filed is unknown, and recalling a filed run
+  // is what this check exists to stop (accounted#58).
+  const { data: agiRows, error: agiError } = await supabase
     .from('agi_declarations')
     .select('id, status')
     .eq('company_id', companyId)
     .eq('salary_run_id', salaryRunId)
-    .single()
-  const agi = agiDeclaration as { id: string; status: string } | null
+  if (agiError) {
+    log.error('salary run unapprove: AGI declaration read failed', agiError as Error)
+    return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }
+  }
+  const declarations = (agiRows ?? []) as Array<{ id: string; status: string }>
+  const filedAgi = declarations.find((row) => AGI_FILED_STATUSES.includes(row.status))
+  // Only a run's one declaration is replaced as stale; with several, none is
+  // deleted, as before.
+  const agi = filedAgi ?? (declarations.length === 1 ? declarations[0] : null)
 
-  if (runRow.agi_submitted_at || AGI_FILED_STATUSES.includes(agi?.status ?? '')) {
+  if (runRow.agi_submitted_at || filedAgi) {
     return {
       ok: false,
       code: 'SALARY_RUN_UNAPPROVE_AGI_FILED',
-      details: { agi_status: agi?.status ?? null, agi_submitted_at: runRow.agi_submitted_at },
+      details: { agi_status: (agi ?? declarations[0])?.status ?? null, agi_submitted_at: runRow.agi_submitted_at },
     }
   }
 

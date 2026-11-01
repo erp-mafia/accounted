@@ -11,7 +11,8 @@ import type { BjornLundenResourceConfig, ProviderName } from './types';
 
 import { FortnoxClient } from './fortnox/client';
 import { ISO_DATE_RE } from '@/lib/invariants';
-import { FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT, FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
+import { FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
+import { fortnoxSupplierInvoiceNotOpen } from './fortnox/mapper';
 import { VismaClient } from './visma/client';
 import { VISMA_RESOURCE_CONFIGS } from './visma/config';
 import { BrioxClient } from './briox/client';
@@ -113,15 +114,33 @@ export async function fetchInvoiceCompletionDetail(
  */
 export const MIGRATION_LIST_TIMEOUT_MS = 60_000
 
+/** Fortnox supplier invoices a listed page left out of the default import, by reason. */
+export type FortnoxNotOpenCounts = Partial<Record<NonNullable<ReturnType<typeof fortnoxSupplierInvoiceNotOpen>>, number>>;
+
+/** The open payables of a Fortnox supplier-invoice list, and what was left out and why. */
+function keepOpenFortnoxSupplierInvoices(items: Record<string, unknown>[]): {
+  open: Record<string, unknown>[]; declined: FortnoxNotOpenCounts;
+} {
+  const declined: FortnoxNotOpenCounts = {};
+  const open = items.filter((item) => {
+    const reason = fortnoxSupplierInvoiceNotOpen(item);
+    if (reason) declined[reason] = (declined[reason] ?? 0) + 1;
+    return !reason;
+  });
+  return { open, declined };
+}
+
 /**
  * One provider page, never a whole-register loop. The worker persists its cursor.
  * `allSupplierInvoices` is the job's request for Fortnox's paid supplier
- * invoices too; every other provider lists the whole register regardless.
+ * invoices too; without it a Fortnox page keeps only the open ones and says
+ * how many it left out (`declined`). Every other provider lists the whole
+ * register regardless.
  */
 export async function fetchMigrationPage(
   provider: ProviderName, accessToken: string, providerCompanyId: string | undefined,
   resource: MigrationResource, page: number, options: { allSupplierInvoices?: boolean } = {},
-): Promise<{ items: MigrationDto[]; nextPage: number | null; total: number }> {
+): Promise<{ items: MigrationDto[]; nextPage: number | null; total: number; declined?: FortnoxNotOpenCounts }> {
   const kind = { customers: ResourceType.Customers, suppliers: ResourceType.Suppliers,
     salesInvoices: ResourceType.SalesInvoices, supplierInvoices: ResourceType.SupplierInvoices }[resource];
   const configs = { fortnox: FORTNOX_RESOURCE_CONFIGS, visma: VISMA_RESOURCE_CONFIGS,
@@ -136,9 +155,7 @@ export async function fetchMigrationPage(
   if (provider === 'visma') {
     result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'fortnox') {
-    const listEndpoint = kind === ResourceType.SupplierInvoices && options.allSupplierInvoices
-      ? FORTNOX_ALL_SUPPLIER_INVOICES_ENDPOINT : config.listEndpoint;
-    result = await fortnoxClient.getPage(accessToken, listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
+    result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'briox') {
     result = await brioxClient.getPage(accessToken, config.listEndpoint, BRIOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'bokio') {
@@ -164,6 +181,11 @@ export async function fetchMigrationPage(
   const nextPage = result.items.length > 0 && page < result.totalPages ? page + 1 : null;
   let items = result.items;
   let total = result.totalCount;
+  let declined: FortnoxNotOpenCounts | undefined;
+  if (provider === 'fortnox' && resource === 'supplierInvoices' && !options.allSupplierInvoices) {
+    // After the page checks above: a page of only paid invoices is no end of the register.
+    ({ open: items, declined } = keepOpenFortnoxSupplierInvoices(items));
+  }
   if (provider === 'bokio' && resource === 'salesInvoices' && page === 1) {
     // Bokio keeps kreditfakturor on /credit-notes, not in /invoices. The job
     // worker persists ONE cursor per resource and its page RPC
@@ -181,6 +203,7 @@ export async function fetchMigrationPage(
     items: items.map(item => config.mapper(item) as MigrationDto),
     nextPage,
     total,
+    ...(declined ? { declined } : {}),
   };
 }
 
@@ -593,10 +616,11 @@ export async function fetchSupplierInvoicesDirect(
 ): Promise<SupplierInvoiceDto[]> {
   if (provider === 'fortnox') {
     const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.SupplierInvoices]!;
+    // The open register, read the way the migration job reads it.
     const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
+      accessToken, config.listEndpoint, config.listKey, { pageSize: 500 },
     );
-    return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
+    return keepOpenFortnoxSupplierInvoices(items).open.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
 
   if (provider === 'visma') {

@@ -75,6 +75,8 @@ describe('bookContractRevenueAdjustment', () => {
       entry_date: '2026-12-31',
       source_type: 'year_end',
     })
+    // The engine takes the company's year_end series (accounted#58).
+    expect(call.input).not.toHaveProperty('voucher_series')
     expect(call.input.lines).toEqual(result.lines)
     expect(call.input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
       ['1620', 200_000, 0],

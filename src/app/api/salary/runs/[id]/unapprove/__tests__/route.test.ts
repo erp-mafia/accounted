@@ -100,7 +100,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                              // salary_runs lookup
-      { data: { id: 'agi-1', status: 'submitted' } },     // agi_declarations lookup
+      { data: [{ id: 'agi-1', status: 'submitted' }] },   // agi_declarations lookup
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
@@ -114,13 +114,77 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
+  // accounted#58: the read of the run's AGI declarations failed open. A failed
+  // read now refuses, and a run with more than one declaration is judged on
+  // all of them (.single() read two rows as none).
+  it('refuses with 500 and writes nothing when the AGI declaration read fails', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                                                  // salary_runs lookup
+      { data: null, error: { code: '57014', message: 'statement timeout' } }, // agi_declarations lookup
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_FAILED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when any of several AGI declarations of the run is filed', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                     // salary_runs lookup
+      { data: [
+        { id: 'agi-1', status: 'generated' },
+        { id: 'agi-2', status: 'pending_signature' },
+      ] },                                       // agi_declarations lookup
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_AGI_FILED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('recalls a run with several unfiled declarations and deletes none of them', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                       // salary_runs lookup
+      { data: [
+        { id: 'agi-1', status: 'generated' },
+        { id: 'agi-2', status: 'generated' },
+      ] },                                         // agi_declarations lookup
+      { data: { id: 'run-1', status: 'review' } }, // salary_runs update
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCall('agi_declarations', 'delete')).toBeUndefined()
+  })
+
   it('returns 409 when the run itself is stamped agi_submitted_at', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
 
     enqueueMany([
       { data: { ...approvedRun, agi_submitted_at: '2026-07-01T10:00:00Z' } }, // run lookup
-      { data: null, error: { message: 'No rows' } },                          // agi lookup
+      { data: [] },                                                           // agi lookup (none)
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
@@ -136,7 +200,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                            // salary_runs lookup
-      { data: null, error: { message: 'No rows' } },    // agi_declarations lookup
+      { data: [] },                                     // agi_declarations lookup (none)
       // salary_run_recall_guard_bank_payments refuses the update
       { data: null, error: { code: '23514', message: 'salary run has bank payments', hint: 'salary_run_in_bank_payment' } },
     ])
@@ -156,7 +220,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                            // salary_runs lookup
-      { data: null, error: { message: 'No rows' } },    // agi_declarations lookup
+      { data: [] },                                     // agi_declarations lookup (none)
       { data: null, error: { code: 'PGRST116', message: 'no rows returned' } }, // update matched 0 rows
     ])
 
@@ -177,7 +241,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                          // salary_runs lookup
-      { data: null, error: { message: 'No rows' } },  // agi_declarations lookup (none)
+      { data: [] },                                   // agi_declarations lookup (none)
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
     ])
 
@@ -205,7 +269,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: approvedRun },                          // salary_runs lookup
-      { data: { id: 'agi-1', status: 'generated' } }, // agi_declarations lookup
+      { data: [{ id: 'agi-1', status: 'generated' }] }, // agi_declarations lookup
       { data: { id: 'run-1', status: 'review' } },    // salary_runs update
       { data: [{ id: 'agi-1' }] },                    // agi_declarations delete
     ])
@@ -230,7 +294,7 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     enqueueMany([
       { data: { ...approvedRun, is_correction: true } }, // salary_runs lookup
-      { data: { id: 'agi-1', status: 'generated' } },    // agi_declarations lookup
+      { data: [{ id: 'agi-1', status: 'generated' }] },  // agi_declarations lookup
       { data: { id: 'run-1', status: 'review' } },       // salary_runs update
     ])
 

@@ -2196,25 +2196,23 @@ export async function fetchUnlinkedGLLines(
   // candidates and undercount unmatched_gl_line_count. The .order() chain
   // preserves the RPC's chronological order for consumers (the UI table, the
   // picker) while the unique line_id tiebreaker keeps pages stable: several
-  // lines of one entry share entry_date/voucher_number. Errors keep the legacy
-  // contract: callers get [] rather than a throw.
-  try {
-    return await fetchAllRows<UnlinkedGLLine>(({ from, to }) =>
-      supabase
-        .rpc('get_unlinked_gl_lines', {
-          p_company_id: companyId,
-          p_account_number: accountNumber,
-          p_date_from: dateFrom || null,
-          p_date_to: dateTo || null,
-        })
-        .order('entry_date')
-        .order('voucher_number')
-        .order('line_id')
-        .range(from, to),
-    )
-  } catch {
-    return []
-  }
+  // lines of one entry share entry_date/voucher_number. A failed read throws:
+  // an empty list would read as "nothing to match", so runReconciliation and
+  // the unattended sweeps would record a clean run that never looked
+  // (accounted#115).
+  return fetchAllRows<UnlinkedGLLine>(({ from, to }) =>
+    supabase
+      .rpc('get_unlinked_gl_lines', {
+        p_company_id: companyId,
+        p_account_number: accountNumber,
+        p_date_from: dateFrom || null,
+        p_date_to: dateTo || null,
+      })
+      .order('entry_date')
+      .order('voucher_number')
+      .order('line_id')
+      .range(from, to),
+  )
 }
 
 /**
@@ -2247,8 +2245,7 @@ export function openAmountByEntry(lines: UnlinkedGLLine[], currency: string): Ma
  * Ids of the given transactions that are anchored to a verifikat through
  * transaction_voucher_links (journal_entry_id NULL on the row itself). Chunked
  * on the id list so a busy window never pushes the .in() past URL limits;
- * a failed read returns the empty set rather than throwing, mirroring
- * fetchUnlinkedGLLines' legacy contract.
+ * a failed read returns the empty set rather than throwing.
  */
 export async function fetchJunctionLinkedTxIds(
   supabase: SupabaseClient,

@@ -13,7 +13,6 @@
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "3001",
@@ -47,7 +46,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",
@@ -130,7 +128,6 @@
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "3001",
@@ -164,7 +161,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",
@@ -238,7 +234,6 @@
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "3001",
@@ -272,7 +267,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",
@@ -350,7 +344,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",
@@ -419,7 +412,6 @@
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "3001",
@@ -466,7 +458,6 @@
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "3001",
@@ -500,7 +491,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",
@@ -590,7 +580,6 @@
           "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
-          "voucher_series": "A",
           "lines": [
             {
               "account_number": "1470",

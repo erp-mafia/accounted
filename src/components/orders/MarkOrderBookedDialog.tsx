@@ -19,6 +19,7 @@ import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { WebshopOrder } from '@/types'
+import { addDaysIso } from '@/lib/dates/iso'
 
 interface MarkOrderBookedDialogProps {
   open: boolean
@@ -50,13 +51,6 @@ function candidateGross(entry: EntryCandidate): number | null {
 // search drops the window (search over all posted entries instead).
 const WINDOW_DAYS = 45
 const CANDIDATE_LIMIT = 30
-
-function shiftDate(isoDate: string, deltaDays: number): string {
-  const d = new Date(isoDate)
-  if (Number.isNaN(d.getTime())) return isoDate
-  d.setDate(d.getDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
-}
 
 /**
  * Marks one order/refund row as already booked/handled outside the
@@ -95,8 +89,8 @@ export default function MarkOrderBookedDialog({
           params.set('search', query)
         } else {
           const anchor = order.paid_date ?? order.order_date
-          params.set('date_from', shiftDate(anchor, -WINDOW_DAYS))
-          params.set('date_to', shiftDate(anchor, WINDOW_DAYS))
+          params.set('date_from', addDaysIso(anchor, -WINDOW_DAYS))
+          params.set('date_to', addDaysIso(anchor, WINDOW_DAYS))
         }
         const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
         if (!res.ok) throw new Error(`list failed: ${res.status}`)

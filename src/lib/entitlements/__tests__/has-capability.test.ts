@@ -10,6 +10,20 @@ import {
 } from '../has-capability'
 import { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
 
+// A grants read failure must reach error tracking (accounted#115): only
+// `error` is swapped, every other level stays the real logger.
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
+
 /**
  * Per-table mock: each table resolves to its own configured result, so a
  * function that queries several tables in one call (companies → capability_grants
@@ -231,7 +245,13 @@ describe('hasCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: null, error: { message: 'boom' } },
     })
+    logError.mockClear()
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
+    expect(logError).toHaveBeenCalledWith('capability grants read failed; failing closed', expect.objectContaining({
+      companyId: '11111111-1111-4111-8111-111111111111',
+      capability: CAPABILITY.ai,
+      reason: 'boom',
+    }))
   })
 
   // A byrå client's user is a member of the company but not of the team, so

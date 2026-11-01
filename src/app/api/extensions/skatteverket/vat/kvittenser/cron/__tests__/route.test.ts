@@ -5,6 +5,22 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+// The route logs through '@/lib/logger' (accounted#115): its warn/error lines
+// are observed through these recorders.
+const { warnRecorder, errorRecorder } = vi.hoisted(() => ({
+  warnRecorder: vi.fn(),
+  errorRecorder: vi.fn(),
+}))
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: warnRecorder,
+    error: errorRecorder,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
@@ -242,7 +258,7 @@ describe('VAT kvittenser cron', () => {
         kvittensnummer: 'KV-123',
       }),
     )
-    expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
   })
 
   it('quarterly picker params record the quarter', async () => {
@@ -278,11 +294,11 @@ describe('VAT kvittenser cron', () => {
 
     expect(body.signed).toBe(1)
     expect(mockSendKvittensNotification).toHaveBeenCalled()
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[vat-kvittenser-cron] Failed to record filing on the moms deadline',
+    expect(errorRecorder).toHaveBeenCalledWith(
+      'Failed to record filing on the moms deadline',
       expect.objectContaining({ companyId: 'comp-1', message: 'insert failed' }),
     )
-    errorSpy.mockClear()
+    errorRecorder.mockClear()
   })
 
   it('yearly picker params record the filing through the same store as the other cadences', async () => {
@@ -375,7 +391,7 @@ describe('VAT kvittenser cron', () => {
       status: 'error',
       error: 'Något gick fel. Försök igen.',
     })
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
   })
 
   it('a failing signed-state update yields an error row and skips deadline + notification', async () => {
@@ -408,7 +424,7 @@ describe('VAT kvittenser cron', () => {
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
   })
 
   function stubTwoCompanyTables() {
@@ -458,7 +474,7 @@ describe('VAT kvittenser cron', () => {
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
     expect(mockRecordGrantRefusal).toHaveBeenCalledTimes(1)
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnRecorder).toHaveBeenCalledTimes(1)
   })
 
   it('a throwing markNeedsReconsent does not abort the remaining companies', async () => {
@@ -482,6 +498,6 @@ describe('VAT kvittenser cron', () => {
       error: 'SESSION_EXPIRED',
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnRecorder).toHaveBeenCalledTimes(1)
   })
 })

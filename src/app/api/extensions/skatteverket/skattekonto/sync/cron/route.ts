@@ -126,7 +126,7 @@ export async function GET(request: Request) {
       { dedupeBy: token => `${token.user_id}:${token.company_id}` },
     )
   } catch (error) {
-    console.error('[skattekonto-sync-cron] Failed to fetch tokens', {
+    log.error('Failed to fetch tokens', {
       message: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json({ error: 'Failed to fetch tokens' }, { status: 500 })
@@ -156,7 +156,7 @@ export async function GET(request: Request) {
   for (const token of tokens) {
     const companyId = token.company_id as string | null
     if (!companyId) {
-      console.warn('[skattekonto-sync-cron] token without company_id skipped', {
+      log.warn('token without company_id skipped', {
         userId: token.user_id,
       })
       continue
@@ -177,7 +177,7 @@ export async function GET(request: Request) {
       CAPABILITY.skatteverket,
     )
   } catch (error) {
-    console.error('[skattekonto-sync-cron] Failed to resolve entitled companies', {
+    log.error('Failed to resolve entitled companies', {
       message: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json({ error: 'Failed to resolve entitlements' }, { status: 500 })
@@ -210,7 +210,7 @@ export async function GET(request: Request) {
       }
     }
   } catch (error) {
-    console.warn('[skattekonto-sync-cron] last-synced read failed; keeping token order', {
+    log.warn('last-synced read failed; keeping token order', {
       message: error instanceof Error ? error.message : String(error),
     })
   }
@@ -224,7 +224,7 @@ export async function GET(request: Request) {
   }
   const entitledWork = orderByStalestSync(eligibleWork, lastAskedAtByCompany).slice(0, MAX_COMPANIES_PER_RUN)
 
-  console.info('[skattekonto-sync-cron] Work list built', {
+  log.info('Work list built', {
     candidates: work.length,
     entitledCompanies: entitledCompanyIds.size,
     selected: entitledWork.length,
@@ -295,7 +295,7 @@ export async function GET(request: Request) {
       if (shadowMode) {
         // Rollout signal only: would this company have run on system auth?
         const grantReady = await hasVerifiedGrant(companyId, 'lasombud')
-        console.info('[skattekonto-sync-cron] shadow: grant state', { companyId, grantReady })
+        log.info('shadow: grant state', { companyId, grantReady })
       }
 
       const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
@@ -364,7 +364,7 @@ export async function GET(request: Request) {
       }
 
       const felkod = err instanceof SkatteverketSkattekontoError ? err.felkod : null
-      console.error('[skattekonto-sync-cron] Sync failed', {
+      log.error('Sync failed', {
         userId,
         companyId,
         source,
@@ -398,7 +398,7 @@ export async function GET(request: Request) {
     if (result) results.push(result)
   }
   if (budgetReached) {
-    console.log(`[skattekonto-sync-cron] Time budget reached after ${results.length} companies`)
+    log.info('time budget reached', { companies: results.length })
   }
 
   const synced = results.filter(r => r.status === 'synced').length
@@ -410,9 +410,17 @@ export async function GET(request: Request) {
   const systemAuthFailures = results.filter(r => r.status === 'system_auth_failed').length
   const errors = results.filter(r => r.status === 'error').length
 
-  console.log(
-    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${unavailable} unavailable at Skatteverket, ${expired} expired, ${grantWithdrawn} grant withdrawn, ${grantRefused} grant refused, ${systemAuthFailures} system-auth failures, ${errors} errors`,
-  )
+  log.info('skattekonto sync run', {
+    processed: results.length,
+    synced,
+    skipped,
+    unavailable,
+    expired,
+    grantWithdrawn,
+    grantRefused,
+    systemAuthFailures,
+    errors,
+  })
 
   return NextResponse.json({
     processed: results.length,

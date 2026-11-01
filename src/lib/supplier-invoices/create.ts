@@ -41,7 +41,7 @@ import {
   createSchedulesForSupplierInvoice,
 } from '@/lib/bookkeeping/accruals/from-invoices'
 import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accrued-cost-guard'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { supplierInvoiceBooksOnRegistration, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
@@ -550,12 +550,15 @@ export async function createSupplierInvoice(
       // supplier charges no VAT (vat_rate stays 0); the engine self-assesses
       // at this rate, defaulting to 25 % huvudregeln when null.
       reverse_charge_rate: reverseCharge ? (item.reverse_charge_rate ?? null) : null,
-      // Periodisering: frozen onto the line at create time. The balance
-      // account defaults from the cost account's BAS convention.
+      // Periodisering: frozen onto the line at create time. An omitted
+      // balance account takes the form's suggestion (accounted#113): 2990
+      // (2960 for 84xx) for months before the invoice month, else the 17xx
+      // account the cost account's BAS convention gives.
       accrual_period_start: hasAccrual ? (item.accrual_period_start ?? null) : null,
       accrual_period_end: hasAccrual ? (item.accrual_period_end ?? null) : null,
       accrual_balance_account: hasAccrual
-        ? (item.accrual_balance_account ?? suggestBalanceAccount('expense', item.account_number))
+        ? (item.accrual_balance_account ??
+          suggestExpenseBalanceAccount(item.account_number, item.accrual_period_end, body.invoice_date))
         : null,
       // Per-item dimensions bag, merged over default_dimensions on the
       // expense line at booking.

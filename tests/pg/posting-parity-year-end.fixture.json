@@ -4,8 +4,8 @@
       "flow": "aktiebolag: bokslutsdispositioner from the year-end wizard (periodiseringsfond, then bolagsskatt)",
       "entries": [
         {
-          "voucher_series": "A",
-          "voucher_number": 5,
+          "voucher_series": "I",
+          "voucher_number": 1,
           "entry_date": "2025-12-31",
           "description": "Bokslutsdisposition: Avsättning till periodiseringsfond 2025",
           "source_type": "year_end",
@@ -37,8 +37,8 @@
           ]
         },
         {
-          "voucher_series": "A",
-          "voucher_number": 6,
+          "voucher_series": "I",
+          "voucher_number": 2,
           "entry_date": "2025-12-31",
           "description": "Bokslutsdisposition: Bolagsskatt 20,6 %",
           "source_type": "year_end",
@@ -175,40 +175,7 @@
         },
         {
           "voucher_series": "A",
-          "voucher_number": 2,
-          "entry_date": "2026-01-01",
-          "description": "Omföring av föregående års resultat (2099 → 2098)",
-          "source_type": "result_appropriation",
-          "status": "posted",
-          "notes": null,
-          "lines": [
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "48735",
-              "exchange_rate": null,
-              "account_number": "2098",
-              "line_description": "Föregående års resultat",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "48735",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "2099",
-              "line_description": "Omföring av föregående års resultat",
-              "amount_in_currency": null
-            }
-          ]
-        },
-        {
-          "voucher_series": "A",
-          "voucher_number": 7,
+          "voucher_number": 5,
           "entry_date": "2025-12-31",
           "description": "Omvärdering utländsk valuta 2025-12-31",
           "source_type": "currency_revaluation",
@@ -240,8 +207,41 @@
           ]
         },
         {
-          "voucher_series": "A",
-          "voucher_number": 8,
+          "voucher_series": "I",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Omföring av föregående års resultat (2099 → 2098)",
+          "source_type": "result_appropriation",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "48735",
+              "exchange_rate": null,
+              "account_number": "2098",
+              "line_description": "Föregående års resultat",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "48735",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2099",
+              "line_description": "Omföring av föregående års resultat",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "I",
+          "voucher_number": 3,
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
           "source_type": "year_end",
@@ -492,7 +492,7 @@
           ]
         },
         {
-          "voucher_series": "A",
+          "voucher_series": "I",
           "voucher_number": 3,
           "entry_date": "2025-12-31",
           "description": "Årsbokslut 2025",
@@ -541,8 +541,8 @@
       "flow": "migrated aktiebolag: the historical omföring of the 2099 its imported ingående balans carries",
       "entries": [
         {
-          "voucher_series": "A",
-          "voucher_number": 2,
+          "voucher_series": "I",
+          "voucher_number": 1,
           "entry_date": "2026-01-01",
           "description": "Omföring av föregående års resultat (2099 → 2098)",
           "source_type": "result_appropriation",
@@ -584,7 +584,7 @@
         "is_closed": true,
         "locked": true,
         "continuity_verified": null,
-        "closing_voucher": "A8",
+        "closing_voucher": "I3",
         "opening_voucher": null
       },
       {
@@ -602,7 +602,7 @@
         "is_closed": true,
         "locked": true,
         "continuity_verified": null,
-        "closing_voucher": "A3",
+        "closing_voucher": "I3",
         "opening_voucher": null
       },
       {

@@ -28,6 +28,11 @@
  * same two rules, called from buildInvoiceJournalEntryInput, so every door
  * that books a customer invoice (issue, send, bulk, the deferred Bokför and
  * its dry run) refuses before anything is written.
+ *
+ * Both also refuse the opposite mistake (accounted#113): a deferral (a cost
+ * on 17xx, revenue on 29xx) of a period that ends before the invoice month.
+ * A deferral releases from the invoice date on, so every one of those past
+ * months would book on the invoice date; they are upplupna instead.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -37,6 +42,7 @@ import {
   AccruedCostPeriodLockedError,
   AccruedIncomePeriodInvalidError,
   AccruedIncomePeriodLockedError,
+  DeferralPeriodPastError,
   type AccruedCostBlockReason,
   type AccruedCostBlockedDate,
 } from '@/lib/bookkeeping/errors'
@@ -44,14 +50,49 @@ import {
   isAccruedCostAccount,
   isAccruedIncomeAccount,
   itemHasAccrual,
+  pastPeriodDeferralSuggestion,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
+import type { AccrualDirection } from '@/types'
 import { accruedCostReleaseDates } from '@/lib/bookkeeping/accruals/compute'
 
 interface AccruedCostLine {
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
+  /** A supplier invoice line's cost account: picks 2960 over 2990 for 84xx. */
+  account_number?: string | null
+}
+
+/**
+ * Throws DeferralPeriodPastError for the first line that defers a period
+ * ending before the invoice month (pastPeriodDeferralSuggestion names the
+ * upplupen account it needs). Pure: no reads.
+ */
+function assertNoPastPeriodDeferral(
+  direction: AccrualDirection,
+  invoiceDate: string,
+  items: ReadonlyArray<AccruedCostLine>,
+): void {
+  for (const item of items) {
+    if (!itemHasAccrual(item)) continue
+    const suggested = pastPeriodDeferralSuggestion(
+      { direction, targetAccount: item.account_number },
+      item.accrual_balance_account,
+      item.accrual_period_end,
+      invoiceDate,
+    )
+    if (suggested) {
+      throw new DeferralPeriodPastError(
+        direction,
+        item.accrual_period_start as string,
+        item.accrual_period_end as string,
+        invoiceDate,
+        item.accrual_balance_account ?? null,
+        suggested,
+      )
+    }
+  }
 }
 
 /**
@@ -86,8 +127,9 @@ async function blockedMonthEnds(
 
 /**
  * Throws AccruedCostPeriodInvalidError or AccruedCostPeriodLockedError when a
- * 29xx line cannot be booked as an upplupen kostnad; a no-op (and no reads)
- * when no line is one.
+ * 29xx line cannot be booked as an upplupen kostnad, and
+ * DeferralPeriodPastError for a 17xx line whose period ends before the
+ * invoice month; a no-op (and no reads) when no line is a 29xx one.
  */
 export async function assertAccruedCostLinesBookable(
   supabase: SupabaseClient,
@@ -95,6 +137,7 @@ export async function assertAccruedCostLinesBookable(
   invoiceDate: string,
   items: ReadonlyArray<AccruedCostLine>,
 ): Promise<void> {
+  assertNoPastPeriodDeferral('expense', invoiceDate, items)
   const accrued = items.filter(
     (item) => itemHasAccrual(item) && isAccruedCostAccount(item.accrual_balance_account),
   )
@@ -114,10 +157,11 @@ export async function assertAccruedCostLinesBookable(
 
 /**
  * Throws AccruedIncomePeriodInvalidError or AccruedIncomePeriodLockedError
- * when a 17xx line cannot be booked as an upplupen intäkt; a no-op (and no
- * reads) when no line is one. Text and ROT/RUT rows never carry a
- * periodisering (the invoice schema refuses it), so every 17xx line here is
- * one the schedule service will post.
+ * when a 17xx line cannot be booked as an upplupen intäkt, and
+ * DeferralPeriodPastError for a 29xx line whose period ends before the
+ * invoice month; a no-op (and no reads) when no line is a 17xx one. Text and
+ * ROT/RUT rows never carry a periodisering (the invoice schema refuses it),
+ * so every 17xx line here is one the schedule service will post.
  */
 export async function assertAccruedIncomeLinesBookable(
   supabase: SupabaseClient,
@@ -125,6 +169,7 @@ export async function assertAccruedIncomeLinesBookable(
   invoiceDate: string,
   items: ReadonlyArray<AccruedCostLine>,
 ): Promise<void> {
+  assertNoPastPeriodDeferral('revenue', invoiceDate, items)
   const accrued = items.filter(
     (item) => itemHasAccrual(item) && isAccruedIncomeAccount(item.accrual_balance_account),
   )

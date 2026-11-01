@@ -811,6 +811,25 @@ describe('correctEntry', () => {
     )
   })
 
+  // accounted#58: reverseEntry announces its storno as committed; correctEntry
+  // posts two verifikat and announced neither, so committed webhooks missed them.
+  it('emits journal_entry.committed for the storno and the corrected verifikat, before corrected', async () => {
+    setupResults()
+
+    const order: string[] = []
+    const committed = vi.fn((payload: { entry: { id: string } }) => { order.push(`committed:${payload.entry.id}`) })
+    eventBus.on('journal_entry.committed', committed)
+    eventBus.on('journal_entry.corrected', () => { order.push('corrected') })
+
+    const supabase = makeClient()
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    expect(committed).toHaveBeenCalledTimes(2)
+    expect(committed).toHaveBeenCalledWith({ entry: result.reversal, userId: 'user-1', companyId: 'company-1' })
+    expect(committed).toHaveBeenCalledWith({ entry: result.corrected, userId: 'user-1', companyId: 'company-1' })
+    expect(order).toEqual([`committed:${result.reversal.id}`, `committed:${result.corrected.id}`, 'corrected'])
+  })
+
   // #2364: a bank row has two anchors (transactions.journal_entry_id and the
   // transaction_voucher_links junction). Both must follow the correction, or
   // the original keeps its link and the row reads double-anchored.

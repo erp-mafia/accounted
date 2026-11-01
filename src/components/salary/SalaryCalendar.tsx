@@ -133,6 +133,14 @@ export interface SalaryCalendarProps {
    *  reloads. Used so the parent can show day badges that update instantly
    *  on save (without waiting for a recalculation snapshot). */
   onAbsenceCountsChange?: (counts: { sick: number; vab: number; parental: number }) => void
+  /** Hourly: the worked hours in the period, emitted once loaded and on every
+   *  reload, so the payslip's total-hours field knows whether the calendar
+   *  is the source (calendar days win at calculation). */
+  onWorkedHoursChange?: (hours: number) => void
+  /** Hourly: the period's hours are set as one total on the run row
+   *  (accounted#1). The calendar then takes no worked hours, so a day
+   *  entered here cannot silently replace that total; absence stays. */
+  workedHoursFromTotal?: boolean
 }
 
 export function SalaryCalendar({
@@ -146,6 +154,8 @@ export function SalaryCalendar({
   readOnly = false,
   onChange,
   onAbsenceCountsChange,
+  onWorkedHoursChange,
+  workedHoursFromTotal = false,
 }: SalaryCalendarProps) {
   const t = useTranslations('salary_calendar')
   const locale = useLocale()
@@ -164,6 +174,7 @@ export function SalaryCalendar({
   )
   const [absences, setAbsences] = useState<AbsenceDay[]>([])
   const [worked, setWorked] = useState<WorkedDay[]>([])
+  const [workedLoaded, setWorkedLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -206,6 +217,7 @@ export function SalaryCalendar({
           return
         }
         setWorked(wJson?.data ?? [])
+        setWorkedLoaded(true)
       }
     } catch (e) {
       setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
@@ -252,6 +264,15 @@ export function SalaryCalendar({
       .reduce((sum, w) => Math.round((sum + Number(w.hours)) * 100) / 100, 0)
   }, [worked, periodStart, periodEnd])
 
+  // Only after the first load: an empty list before it is not "no hours".
+  useEffect(() => {
+    if (!onWorkedHoursChange || !isHourly || !workedLoaded) return
+    onWorkedHoursChange(periodTotalHours)
+  }, [periodTotalHours, workedLoaded, isHourly, onWorkedHoursChange])
+
+  // Worked hours can be entered day by day only while no total is set.
+  const canEnterWorked = isHourly && !workedHoursFromTotal
+
   const handleCellClick = (date: Date, e: React.MouseEvent) => {
     if (readOnly) return
     const key = format(date, 'yyyy-MM-dd')
@@ -291,7 +312,7 @@ export function SalaryCalendar({
   }
 
   const handleFillWeekdays = () => {
-    if (readOnly || !isHourly) return
+    if (readOnly || !canEnterWorked) return
     const weekdays = eachDayOfInterval({ start: periodStartDate, end: periodEndDate })
       .filter(d => {
         const dow = d.getDay()
@@ -374,7 +395,7 @@ export function SalaryCalendar({
           </Button>
           {loading && <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
-        {isHourly && !readOnly && (
+        {canEnterWorked && !readOnly && (
           <Button
             variant="outline"
             size="sm"
@@ -465,10 +486,16 @@ export function SalaryCalendar({
       {/* Summary + hint */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-[11px] text-muted-foreground">
         <span>
-          {isHourly && (
+          {canEnterWorked && (
             <>
               {t('worked_hours_in_period')}{' '}
               <span className="tabular-nums font-medium text-foreground">{periodTotalHours} h</span>
+              {' · '}
+            </>
+          )}
+          {isHourly && workedHoursFromTotal && (
+            <>
+              {t('worked_hours_from_total')}
               {' · '}
             </>
           )}
@@ -527,7 +554,7 @@ export function SalaryCalendar({
             <Button variant="outline" size="sm" onClick={() => setBulkMode('absence')} disabled={deleting}>
               {t('absence_action')}
             </Button>
-            {isHourly && (
+            {canEnterWorked && (
               <Button size="sm" onClick={() => setBulkMode('worked')} disabled={deleting}>
                 {t('worked_hours_action')}
               </Button>

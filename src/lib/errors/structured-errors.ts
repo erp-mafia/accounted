@@ -1766,6 +1766,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Accrued income (17xx) must cover months before the invoice month. The period reaches the month of the invoice: split the line into the months before the invoice month (17xx) and the rest (29xx or the revenue account).',
   },
+  // A 29xx deferral of months that ended before the invoice month
+  // (accounted#113): those months are an upplupen intäkt (1790).
+  INVOICE_DEFERRED_INCOME_PERIOD_PAST: {
+    httpStatus: 400,
+    message_sv:
+      'Perioden slutar före fakturamånaden, så intäkten är redan intjänad: den är en upplupen intäkt, inte en förutbetald. Välj 1790 (Övriga förutbetalda kostnader och upplupna intäkter) som balanskonto, så bokförs varje månads intäkt i sin egen månad. På 29xx skulle hela beloppet bokföras på fakturadatumet.',
+    message_en:
+      'The period ends before the invoice month, so the revenue is already earned: it is accrued income, not deferred income. Choose 1790 (Övriga förutbetalda kostnader och upplupna intäkter) as the balance account and each month books in its own month. On 29xx the whole amount would book on the invoice date.',
+  },
   INVOICE_ACCRUED_INCOME_PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv:
@@ -6530,6 +6539,15 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       'En upplupen kostnad (29xx) måste avse månader före fakturamånaden. Perioden fortsätter in i fakturans månad: dela raden i en del för månaderna före fakturamånaden (29xx) och en del för resten (17xx eller kostnadskontot).',
     message_en:
       'An accrued cost (29xx) must cover months before the invoice month. The period reaches the month of the invoice: split the line into the months before the invoice month (29xx) and the rest (17xx or the cost account).',
+  },
+  // A 17xx deferral of months that ended before the invoice month
+  // (accounted#113): those months are an upplupen kostnad (2990, 2960).
+  SI_PREPAID_COST_PERIOD_PAST: {
+    httpStatus: 400,
+    message_sv:
+      'Perioden slutar före fakturamånaden, så kostnaden hör till månader som redan har passerat: den är en upplupen kostnad, inte en förutbetald. Välj 2990 (Övriga upplupna kostnader, 2960 för räntekostnader) som balanskonto, så bokförs varje månads kostnad i sin egen månad. På 17xx skulle hela beloppet bokföras på fakturadatumet.',
+    message_en:
+      'The period ends before the invoice month, so the cost belongs to months that are already over: it is an accrued cost, not a prepaid one. Choose 2990 (Övriga upplupna kostnader, 2960 for interest) as the balance account and each month books in its own month. On 17xx the whole amount would book on the invoice date.',
   },
   SI_ACCRUED_COST_PERIOD_LOCKED: {
     httpStatus: 400,

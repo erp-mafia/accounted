@@ -55,6 +55,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
  *    only in `draft`. 0 is valid (an intentional nollkörning). The engine reads
  *    this per-run value (not the employee master) when the run is calculated, so
  *    each month's gross can differ without touching the employee's standard pay.
+ *    hours_worked is the hourly counterpart (accounted#1): the period's worked
+ *    hours as one total, for a period kept without calendar days. Same draft
+ *    gate and the same service (setRunEmployeeSalary) as the MCP tool.
  *
  *  • tax_withheld_override / avgifter_*_override: manual tax/avgifter
  *    adjustment (advanced mode). Allowed only in `review`: the engine has run
@@ -72,10 +75,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
     if (!parsed.success) return parsed.response
 
     // Two distinct operations share this endpoint, gated to different statuses:
-    //   • monthly_salary  → edit this month's base salary (draft only)
-    //   • *_override       → manual tax/avgifter adjustment (review only)
+    //   • monthly_salary / hours_worked → this month's base pay (draft only)
+    //   • *_override                    → manual tax/avgifter adjustment (review only)
     // They must not be mixed in one request.
-    const wantsSalaryEdit = parsed.data.monthly_salary !== undefined
+    const wantsHours = parsed.data.hours_worked !== undefined
+    const wantsSalaryEdit = parsed.data.monthly_salary !== undefined || wantsHours
     const wantsOverride =
       parsed.data.tax_withheld_override !== undefined ||
       parsed.data.avgifter_amount_override !== undefined ||
@@ -92,11 +96,13 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
     // ── Draft-stage edit of this month's base salary ──
     // The shared service owns the run lookup + draft gate for this branch.
     if (wantsSalaryEdit) {
+      // Both fields go through: the service refuses a request carrying both.
       const result = await setRunEmployeeSalary(supabase, {
         companyId,
         salaryRunId: id,
         employeeId,
-        monthlySalary: parsed.data.monthly_salary as number,
+        monthlySalary: parsed.data.monthly_salary,
+        hoursWorked: parsed.data.hours_worked,
       })
 
       if (!result.ok) {
@@ -112,10 +118,24 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
         if (result.code === 'SALARY_RUN_EMPLOYEE_NOT_FOUND') {
           return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
         }
-        if (result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH') {
+        if (result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH' && !wantsHours) {
           return NextResponse.json(
             { error: 'Månadslön kan bara sättas för månadsavlönade. Timavlönade får sin lön från arbetade timmar.' },
             { status: 400 },
+          )
+        }
+        // The hours refusals carry their own Swedish reason and status: days
+        // already in the calendar (409), no timlön on the employee, a pay
+        // type that is not hourly.
+        if (
+          result.code === 'SALARY_RUN_HOURS_FROM_CALENDAR' ||
+          result.code === 'SALARY_RUN_HOURLY_RATE_MISSING' ||
+          result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH'
+        ) {
+          const entry = getErrorEntry(result.code)
+          return NextResponse.json(
+            { error: entry?.message_sv ?? 'Något gick fel', code: result.code },
+            { status: entry?.httpStatus ?? 400 },
           )
         }
         return NextResponse.json({ error: getUserErrorMessage(result.details) }, { status: 400 })
@@ -128,6 +148,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
           employment_degree: result.data.employment_degree,
           salary_type: result.data.salary_type,
           monthly_salary: result.data.monthly_salary,
+          hours_worked: result.data.hours_worked,
         },
       })
     }

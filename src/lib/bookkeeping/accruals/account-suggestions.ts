@@ -87,8 +87,8 @@ function isIsoDate(value: string | null | undefined): value is string {
  * The interim account a supplier-invoice line's periodisering suggests: a
  * period wholly before the invoice month is an upplupen kostnad (2960 for
  * räntekostnader 84xx, else 2990), anything else a förutbetald kostnad on the
- * 17xx account suggestBalanceAccount picks. Only the forms suggest this way;
- * an API caller that omits the account keeps the 17xx default.
+ * 17xx account suggestBalanceAccount picks. The forms suggest it and the
+ * write paths apply it when a caller omits the account (accounted#113).
  */
 export function suggestExpenseBalanceAccount(
   targetAccount: string,
@@ -104,8 +104,8 @@ export function suggestExpenseBalanceAccount(
 /**
  * The interim account a customer-invoice line's periodisering suggests: a
  * period wholly before the invoice month is an upplupen intäkt on 1790,
- * anything else a förutbetald intäkt on 2970. Only the forms suggest this
- * way; an API caller that omits the account keeps the 2970 default.
+ * anything else a förutbetald intäkt on 2970. The form suggests it and the
+ * write path applies it when a caller omits the account (accounted#113).
  */
 export function suggestRevenueBalanceAccount(
   periodEnd: string | null | undefined,
@@ -115,6 +115,31 @@ export function suggestRevenueBalanceAccount(
     return DEFAULT_ACCRUED_REVENUE_ACCOUNT
   }
   return DEFAULT_DEFERRED_REVENUE_ACCOUNT
+}
+
+/**
+ * The account a periodisering line should use instead, when it defers
+ * (förutbetald: a cost on 17xx, revenue on 29xx) a period that ends before
+ * the invoice month; null when the line is fine. Those months are over when
+ * the invoice arrives: their cost is an upplupen kostnad and their revenue
+ * an upplupen intäkt, each booked in its own month. A deferral would instead
+ * release every one of them on the invoice date (accounted#113). A missing
+ * account counts as the deferral the booking falls back to
+ * (resolveBookingAccount). A period that reaches the invoice month is a
+ * deferral of that month on and stays as it is.
+ */
+export function pastPeriodDeferralSuggestion(
+  line: { direction: AccrualDirection; targetAccount?: string | null },
+  balanceAccount: string | null | undefined,
+  periodEnd: string | null | undefined,
+  invoiceDate: string | null | undefined,
+): string | null {
+  if (!isIsoDate(periodEnd) || !isIsoDate(invoiceDate)) return null
+  if (!periodEndsBeforeInvoiceMonth(periodEnd, invoiceDate)) return null
+  if (isAccruedBalanceAccount(line.direction, balanceAccount)) return null
+  return line.direction === 'revenue'
+    ? suggestRevenueBalanceAccount(periodEnd, invoiceDate)
+    : suggestExpenseBalanceAccount(line.targetAccount ?? '', periodEnd, invoiceDate)
 }
 
 /** A periodisering panel's period and interim account, as the form holds them. */

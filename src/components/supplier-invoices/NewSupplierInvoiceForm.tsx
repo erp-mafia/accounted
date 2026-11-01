@@ -83,7 +83,8 @@ import {
   TrashIcon,
 } from '@/components/icons'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { isIsoDateShaped } from '@/lib/invariants/iso-date'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
 // next to the payload builder they feed, pinned there by parity tests.
@@ -755,12 +756,6 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
 
-  function computeDueDate(invoiceDate: string, days: number): string {
-    const due = new Date(invoiceDate)
-    due.setDate(due.getDate() + days)
-    return due.toISOString().split('T')[0]
-  }
-
   // Terms-based förfallodatum (change 4). Auto-set from the supplier's
   // default_payment_terms with an honest caption; stops updating the moment
   // the user (or the AI extraction) supplies an explicit date.
@@ -774,8 +769,11 @@ export default function NewSupplierInvoiceForm({
     if (currentDue && currentDue !== lastAutoDueRef.current) return
     const days = supplier.default_payment_terms
     if (days && days > 0) {
-      if (invoiceDate) {
-        const due = computeDueDate(invoiceDate, days)
+      // Pure calendar-date arithmetic: parsing as UTC, shifting with local
+      // setDate and reading back as UTC lost a day across the March DST
+      // change (accounted#58).
+      if (isIsoDateShaped(invoiceDate)) {
+        const due = addDaysIso(invoiceDate, days)
         setValue('due_date', due)
         lastAutoDueRef.current = due
       }
@@ -799,8 +797,8 @@ export default function NewSupplierInvoiceForm({
     const currentDue = getValues('due_date')
     if (currentDue && currentDue !== lastAutoDueRef.current) return
     const days = supplier.default_payment_terms
-    if (days && days > 0 && watchedInvoiceDate) {
-      const due = computeDueDate(watchedInvoiceDate, days)
+    if (days && days > 0 && isIsoDateShaped(watchedInvoiceDate)) {
+      const due = addDaysIso(watchedInvoiceDate, days)
       setValue('due_date', due)
       lastAutoDueRef.current = due
       setDueDateCaption({ type: 'terms', days })

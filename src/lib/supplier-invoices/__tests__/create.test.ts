@@ -412,6 +412,59 @@ describe('createSupplierInvoice with an upplupen kostnad', () => {
   })
 })
 
+// accounted#113: an omitted periodisering account takes the form's suggestion,
+// so months before the invoice month book as an upplupen kostnad.
+describe('createSupplierInvoice: an omitted periodisering account', () => {
+  const omitted = (accountNumber: string, start: string, end: string) =>
+    body({
+      invoice_date: '2026-10-05',
+      due_date: '2026-11-04',
+      items: [
+        {
+          description: 'Period',
+          amount: 3000,
+          account_number: accountNumber,
+          vat_rate: 0.25,
+          accrual_period_start: start,
+          accrual_period_end: end,
+        },
+      ],
+    })
+
+  beforeEach(() => {
+    setTable('fiscal_periods', openPeriod('fp-2026'))
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+  })
+
+  it('stores 2990 for months before the invoice month, and 2960 for a räntekostnad', async () => {
+    const cost = await createSupplierInvoice(ctx(), omitted('5020', '2026-07-01', '2026-09-30'), { dryRun: true })
+    if (!cost.ok || !cost.dryRun) throw new Error('expected a dry-run preview')
+    expect(cost.preview.items[0]).toMatchObject({ accrual_balance_account: '2990' })
+
+    const interest = await createSupplierInvoice(ctx(), omitted('8410', '2026-07-01', '2026-09-30'), { dryRun: true })
+    if (!interest.ok || !interest.dryRun) throw new Error('expected a dry-run preview')
+    expect(interest.preview.items[0]).toMatchObject({ accrual_balance_account: '2960' })
+  })
+
+  it('keeps the 17xx convention for months from the invoice month on', async () => {
+    const result = await createSupplierInvoice(ctx(), omitted('5010', '2026-10-01', '2027-09-30'), { dryRun: true })
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.items[0]).toMatchObject({ accrual_balance_account: '1710' })
+  })
+
+  it('refuses an explicit 17xx account for past months before anything is written', async () => {
+    const explicit = omitted('5020', '2026-07-01', '2026-09-30')
+    explicit.items[0].accrual_balance_account = '1790'
+    const result = await createSupplierInvoice(ctx(), explicit, { dryRun: true })
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SI_CREATE_FAILED',
+      error: { code: 'SI_PREPAID_COST_PERIOD_PAST', suggestedAccount: '2990' },
+    })
+    expectNothingWritten()
+  })
+})
+
 // accounted#144: a supplier's default dimension bag is the invoice's when the
 // request sends none; a bag sent, {} included, overrides it.
 describe('createSupplierInvoice: the supplier default dimensions', () => {

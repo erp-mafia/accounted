@@ -218,7 +218,7 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
 
     expect(body).toMatchObject({ processed: 1, unavailable: 1, errors: 0 })
     expect(body.results[0]).toMatchObject({ companyId, status: 'unavailable', error: 'no_account' })
-    expect(errorSpy).not.toHaveBeenCalled()
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('a real failure is still an error', async () => {
@@ -231,7 +231,7 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     const body = await (await GET(makeRequest())).json()
 
     expect(body).toMatchObject({ processed: 1, unavailable: 0, errors: 1 })
-    expect(errorSpy).toHaveBeenCalledWith('[skattekonto-sync-cron] Sync failed', expect.anything())
+    expect(log.error).toHaveBeenCalledWith('Sync failed', expect.anything())
   })
 
   it('a system credential that cannot be minted is an error once per run: every company on the grant stops syncing', async () => {

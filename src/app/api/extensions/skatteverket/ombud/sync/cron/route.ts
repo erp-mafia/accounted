@@ -77,7 +77,7 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * or partial-response problem surfaces in the logs instead of in every
  * company's settings.
  */
-export const GET = withCronContext('cron.skatteverket_ombud_sync', async () => {
+export const GET = withCronContext('cron.skatteverket_ombud_sync', async (_request, ctx) => {
   if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
@@ -95,7 +95,7 @@ export const GET = withCronContext('cron.skatteverket_ombud_sync', async () => {
     // it against (logged by the transport instead).
     grants = summarizeGrants(await listOmbudGrants({}, 'ombud_register', { emptyOn404: true }), today)
   } catch (error) {
-    console.error('[ombud-sync-cron] ombudsregister lookup failed', {
+    ctx.log.error('ombudsregister lookup failed', {
       message: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json({ error: 'Ombudsregister lookup failed' }, { status: 502 })
@@ -112,7 +112,7 @@ export const GET = withCronContext('cron.skatteverket_ombud_sync', async () => {
     fullDowngrades >= MASS_DOWNGRADE_MIN_ROWS && fullDowngrades > grantedNow * MASS_DOWNGRADE_MAX_SHARE
   const guardTripped = emptyRegisterGuard || massDowngradeGuard
   if (guardTripped) {
-    console.warn('[ombud-sync-cron] downgrade guard tripped; no row is downgraded this run', {
+    ctx.log.warn('downgrade guard tripped; no row is downgraded this run', {
       environment,
       registryHuvudman: grants.size,
       rows: rows.length,

@@ -15,16 +15,23 @@ vi.mock('@/lib/auth/cron', () => ({
 
 // The route and the reconcile helper log through '@/lib/logger'. The real
 // logger suppresses info/warn under NODE_ENV=test, so warn/error output is
-// observed via these recorders instead of console spies. Console spies stay
-// for the route's remaining console.* lines (summary, skip).
-const { warnRecorder, errorRecorder } = vi.hoisted(() => ({
+// observed via these recorders instead of console spies, the run summary
+// included (infoRecorder). Console spies only assert nothing else leaks.
+const { infoRecorder, warnRecorder, errorRecorder } = vi.hoisted(() => ({
+  infoRecorder: vi.fn(),
   warnRecorder: vi.fn(),
   errorRecorder: vi.fn(),
 }))
 
+/** The structured run summary the route logs at the end of every run. */
+function runSummary(): Record<string, unknown> | undefined {
+  const call = infoRecorder.mock.calls.find((c: unknown[]) => c[0] === 'agi kvittens reconciliation run')
+  return call?.[1] as Record<string, unknown> | undefined
+}
+
 vi.mock('@/lib/logger', () => {
   const logger = {
-    info: vi.fn(),
+    info: infoRecorder,
     warn: warnRecorder,
     error: errorRecorder,
     child: (): unknown => logger,
@@ -275,11 +282,12 @@ describe('AGI kvittenser cron', () => {
       referenceId: 'decl-1',
     })
 
-    // The failure is a warning (via the structured logger), not an error.
+    // The row stays signed, but nothing retries the deadline once the
+    // declaration is submitted: the failure reaches error tracking through
+    // the structured logger (accounted#115), never raw console output.
     expect(errorSpy).not.toHaveBeenCalled()
-    expect(errorRecorder).not.toHaveBeenCalled()
-    const warnMessages = warnRecorder.mock.calls.map(c => String(c[0]))
-    expect(warnMessages.some(m => m.includes('completeTaxDeadline failed'))).toBe(true)
+    const errorMessages = errorRecorder.mock.calls.map(c => String(c[0]))
+    expect(errorMessages.some(m => m.includes('completeTaxDeadline failed'))).toBe(true)
   })
 
   it('still reports signed when sendKvittensNotification throws', async () => {
@@ -411,10 +419,7 @@ describe('AGI kvittenser cron', () => {
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
     expect(mockRecordGrantRefusal).not.toHaveBeenCalled()
 
-    const summaryLine = logSpy.mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .find((m: string) => m.includes('Processed'))
-    expect(summaryLine).toContain('gateway refused the APIGW client')
+    expect(runSummary()).toMatchObject({ gatewayRefused: true })
   })
 
   it('a refusal of this installation\'s client does not starve a company that goes through the connector', async () => {
@@ -520,9 +525,8 @@ describe('AGI kvittenser cron', () => {
     expect(warnRecorder).not.toHaveBeenCalled()
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
 
-    const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
-    expect(summaryLine).toContain('1 errors')
-    expect(summaryLine).not.toContain('apigw')
+    expect(runSummary()).toMatchObject({ errors: 1 })
+    expect(JSON.stringify(runSummary())).not.toContain('apigw')
   })
 
   it('still flags reconsent codes as expired_token and marks the connection', async () => {

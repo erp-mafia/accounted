@@ -23,6 +23,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { ArrowDownRightIcon, ArrowUpRightIcon, SpinnerIcon } from '@/components/icons'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import { addDaysIso } from '@/lib/dates/iso'
 
 interface MatchVoucherDialogProps {
   open: boolean
@@ -38,13 +39,6 @@ interface MatchVoucherDialogProps {
 // supplier voucher booked a few days off the bank value date, narrow enough to
 // keep the candidate list short. "Visa alla" drops the window entirely.
 const WINDOW_DAYS = 30
-
-function shiftDate(isoDate: string, deltaDays: number): string {
-  const d = new Date(isoDate)
-  if (Number.isNaN(d.getTime())) return isoDate
-  d.setDate(d.getDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
-}
 
 export function MatchVoucherDialog({
   open,
@@ -95,8 +89,8 @@ export function MatchVoucherDialog({
         params.set('transaction_id', tx.id)
         if (matched) params.set('include_matched', 'true')
         if (!wide) {
-          params.set('date_from', shiftDate(tx.date, -WINDOW_DAYS))
-          params.set('date_to', shiftDate(tx.date, WINDOW_DAYS))
+          params.set('date_from', addDaysIso(tx.date, -WINDOW_DAYS))
+          params.set('date_to', addDaysIso(tx.date, WINDOW_DAYS))
         }
 
         const res = await fetch(`/api/reconciliation/bank/unmatched-entries?${params}`)

@@ -52,7 +52,7 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
 import { allocateDocumentVat } from '@/lib/vat/document-vat'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { roundOre } from '@/lib/money'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { booksInvoicesOnIssue, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
@@ -257,12 +257,13 @@ export async function convertInboxItemToSupplierInvoice(
       vat_amount: vatAmount,
       // Self-assessed RC rate or null: the engine defaults to 25 % huvudregeln.
       reverse_charge_rate: reverseCharge ? (line.reverse_charge_rate ?? null) : null,
-      // Periodisering frozen onto the line; the balance account defaults
-      // from the cost account's BAS convention.
+      // Periodisering frozen onto the line; an omitted balance account takes
+      // the form's suggestion (suggestExpenseBalanceAccount, accounted#113).
       accrual_period_start: accrues ? (line.accrual_period_start ?? null) : null,
       accrual_period_end: accrues ? (line.accrual_period_end ?? null) : null,
       accrual_balance_account: accrues
-        ? (line.accrual_balance_account ?? suggestBalanceAccount('expense', line.account_number))
+        ? (line.accrual_balance_account ??
+          suggestExpenseBalanceAccount(line.account_number, line.accrual_period_end, body.invoice_date))
         : null,
       dimensions: coerceDimensionsBag(line.dimensions) ?? {},
       apply_slp: line.apply_slp === true,

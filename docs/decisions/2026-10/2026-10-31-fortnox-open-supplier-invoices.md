@@ -1,0 +1,1 @@
+[2026-10-31] Fortnox supplier invoices: the import lists the whole register and keeps open ones itself (booked, not cancelled, balance left), not Fortnox's ?filter=unpaid, which returned none of a company's open booked invoices (PH 230). Paid stay opt-in (crm#1114).
