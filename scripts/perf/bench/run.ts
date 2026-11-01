@@ -162,6 +162,10 @@ interface PreparedCall {
  * renamed or retyped argument fails here instead of timing the wrong call.
  */
 async function prepareCall(admin: Client, c: RpcCase): Promise<PreparedCall> {
+  if (c.read) {
+    const sql = `SELECT coalesce(json_agg(_t), '[]'::json)::text FROM (${c.read.sql}) _t`
+    return { case: c, sql, values: c.read.values, path: `/${c.rpc}` }
+  }
   const { rows } = await admin.query<{ args: string; retset: boolean; rettype: string }>(
     `SELECT pg_get_function_identity_arguments(p.oid) AS args, p.proretset AS retset,
             format_type(p.prorettype, NULL) AS rettype

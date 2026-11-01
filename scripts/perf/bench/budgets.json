@@ -207,6 +207,36 @@
       "warm": 100,
       "mixed": 210
     },
+    "bank.open_rows.month_count": {
+      "warm": 30,
+      "mixed": 60
+    },
+    "bank.open_rows.count": {
+      "warm": 40,
+      "mixed": 80
+    },
+    "bank.open_rows.page": {
+      "warm": 50,
+      "mixed": 100
+    },
+    "bank.open_rows.oldest": {
+      "warm": 40,
+      "mixed": 80
+    },
+    "bank.is_booked.page": {
+      "warm": 60,
+      "mixed": 120
+    },
+    "bank.is_booked.booked_page": {
+      "warm": 390,
+      "mixed": 780,
+      "note": "Over the 100 ms target: is_booked is per row and a booked page walks 501 rows. A list of open rows reads open_bank_rows instead."
+    },
+    "bank.balance_facts": {
+      "warm": 200,
+      "mixed": 400,
+      "note": "Over the 100 ms DB target: every bank row of the account up to the day; was 41 ms on main with a per-row anchor read."
+    },
     "yearend.bank_facts": {
       "warm": 350,
       "mixed": 810,
