@@ -878,9 +878,10 @@ describe('a run the server kept, after a reload (crm#1581)', () => {
     const resumeFrom = await fetchResumableDocumentImport('consent-1', fetcher)
     const final = await runArcimDocumentImportToCompletion('consent-1', { fetcher, resumeFrom })
 
+    // With the kept run's id, so the server continues that run from its saved point.
     expect(importBodies(fetcher)).toEqual([
-      { consentId: 'consent-1', dryRun: false, cursor: 'file-02740' },
-      { consentId: 'consent-1', dryRun: false, cursor: 'file-09740' },
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-02740', run: kept.startedAt },
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-09740', run: kept.startedAt },
     ])
     expect(final).toMatchObject({ scanned: 17219, linked: 17201, unmatched: 18, total: 17219, partial: false })
   })

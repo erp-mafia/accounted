@@ -120,6 +120,7 @@ import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { recordDocumentArrival } from '@/lib/intake/arrivals'
+import { continuationCursor, type DocumentImportRunSummary } from './document-import-run'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
 
@@ -160,6 +161,12 @@ export interface ImportDocumentsOptions {
   dryRun?: boolean
   /** Resume after this provider attachment id (sorted order); omit to start from the top. */
   cursor?: string | null
+  /**
+   * The unfinished run the server keeps for this company. A continuation
+   * starts no earlier than the point that run reached (continuationCursor),
+   * so a slice the tab retries after losing its answer is not run twice.
+   */
+  savedRun?: Pick<DocumentImportRunSummary, 'provider' | 'complete' | 'nextCursor'> | null
   /**
    * Wall-clock budget for the attachment sweep of this call, counted after
    * the listing. Once spent, the sweep stops after the attachment in flight
@@ -514,6 +521,7 @@ export async function importProviderDocuments(
     consentId,
     dryRun = false,
     cursor = null,
+    savedRun = null,
     timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
     now = Date.now,
   } = opts
@@ -521,6 +529,7 @@ export async function importProviderDocuments(
 
   let resolved = await resolveConsent(companyId, consentId)
   const provider = resolved.consent.provider as string
+  const startCursor = continuationCursor(savedRun, provider, cursor)
 
   const result: ImportDocumentsResult = {
     provider,
@@ -645,7 +654,7 @@ export async function importProviderDocuments(
   )
   result.total = attachments.length
   result.unreachableSources = [...listing.unreachable]
-  const firstAfterCursor = cursor ? attachments.findIndex((a) => a.id > cursor) : 0
+  const firstAfterCursor = startCursor ? attachments.findIndex((a) => a.id > startCursor) : 0
   const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
   // Index gnubok verifikat by (period, series, number) for in-memory
@@ -937,6 +946,7 @@ export async function importProviderDocuments(
     companyId,
     dryRun,
     cursor,
+    startCursor,
     total: result.total,
     scanned: result.scanned,
     linked: result.linked,

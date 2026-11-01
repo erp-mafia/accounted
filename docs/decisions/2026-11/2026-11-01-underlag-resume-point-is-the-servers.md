@@ -1,0 +1,1 @@
+[2026-11-01] The server owns an underlag run's resume point for the run's own tab: answers carry the run id, the tab sends it back, and that run's slices start at the saved point, so a lost answer no longer freezes the counter. Other runs join only at the exact point (crm#1581).
