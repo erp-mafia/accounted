@@ -145,7 +145,7 @@ describe('what is not a call of the posting surface', () => {
   it("leaves the engine's helpers alone", () => {
     expect(
       uses(
-        `import { findFiscalPeriod, getSwedishLocalDate, validateBalance, peekNextVoucherNumber, assertLinesWellFormed } from '@/lib/bookkeeping/engine'\n` +
+        `import { findFiscalPeriod, validateBalance, peekNextVoucherNumber, assertLinesWellFormed } from '@/lib/bookkeeping/engine'\n` +
           `import { updateDraftEntry, cancelDraftEntry, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'\n`,
       ),
     ).toEqual([])
@@ -185,7 +185,7 @@ describe('end to end over a tree', () => {
       'src/lib/invoices/door.test.ts': ENGINE,
       'src/lib/invoices/helpers-only.ts': `import { findFiscalPeriod } from '@/lib/bookkeeping/engine'\n`,
       'scripts/repair.ts': `import { reverseEntry } from '../src/lib/bookkeeping/engine'\n`,
-      'scripts/read-only.ts': `import { getSwedishLocalDate } from '../src/lib/bookkeeping/engine'\n`,
+      'scripts/read-only.ts': `import { validateBalance } from '../src/lib/bookkeeping/engine'\n`,
       'tests/pg/flow.ts': ENGINE,
     })
     expect(findPostingPortBypasses(root)).toEqual({

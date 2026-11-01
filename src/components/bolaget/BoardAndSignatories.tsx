@@ -20,6 +20,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { COMPANY_ROLE_KINDS } from '@/lib/bolaget/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface RoleRow {
   company_role_id: string
@@ -64,10 +65,6 @@ type FormState = Record<string, string>
 
 const ADDABLE_ROLES = COMPANY_ROLE_KINDS.filter((r) => r !== 'verklig_huvudman')
 const NEW_PARTY = '__new'
-
-function today(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-}
 
 /**
  * Styrelse och firmateckning: who holds which role and since when (ABL 8
@@ -191,7 +188,7 @@ export function BoardAndSignatories() {
     const ok = await post(
       '/api/bolaget/beneficial-owners/assessments',
       {
-        assessed_on: today(),
+        assessed_on: todayIsoStockholm(),
         conclusion: owners.length > 0 ? 'owners_identified' : 'no_beneficial_owner',
         owners: owners.map((party_id) => ({ party_id })),
         family_aggregation_checked: boForm.family,
@@ -222,7 +219,7 @@ export function BoardAndSignatories() {
     <div className="space-y-8">
       <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
           canWrite ? (
-            <Button size="sm" onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: today(), registered_at: '' })}>
+            <Button size="sm" onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: todayIsoStockholm(), registered_at: '' })}>
               {t('add_role')}
             </Button>
           ) : undefined
@@ -272,7 +269,7 @@ export function BoardAndSignatories() {
                         <td className={cn(TD_CLASS, 'text-xs text-muted-foreground')}>{t(`source_${r.source}`)}</td>
                         <td className={cn(TD_CLASS, 'text-right')}>
                           {canWrite && r.valid_to === null && (
-                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setEnding({ ...r, valid_to: today() })}>
+                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setEnding({ ...r, valid_to: todayIsoStockholm() })}>
                               {t('end_role')}
                             </button>
                           )}
@@ -289,7 +286,7 @@ export function BoardAndSignatories() {
             <div className="flex items-center justify-between gap-4">
               <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('signatory_heading')}</h2>
               {canWrite && (
-                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRuleForm({ rule_text: roles.signatory_rule ?? '', valid_from: today() })}>
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRuleForm({ rule_text: roles.signatory_rule ?? '', valid_from: todayIsoStockholm() })}>
                   {t('change_rule')}
                 </button>
               )}

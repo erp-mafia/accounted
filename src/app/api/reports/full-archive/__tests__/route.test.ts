@@ -182,6 +182,19 @@ describe('GET /api/reports/full-archive', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
+  it("stamps the file with the Swedish day, also on New Year's night", async () => {
+    mockStream.mockReturnValue(chunks('PK'))
+    mockGenerate.mockResolvedValue(new TextEncoder().encode('PK').buffer)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      const response = await GET(createMockRequest('/api/reports/full-archive', { searchParams: { scope: 'all' } }))
+      expect(response.headers.get('Content-Disposition')).toContain('arkiv_full_company-1_20270101.zip')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // #142: five years of underlag is gigabytes, and the 80 MB cap answered 413
   // to the one export meant to hold everything.
   it('streams the archive of a company with gigabytes of underlag instead of refusing it', async () => {

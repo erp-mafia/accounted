@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { privateNoStore } from '@/lib/api/private-no-store'
-import { utcDateStamp } from '@/lib/utils'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   estimateArchiveSize,
@@ -9,6 +8,7 @@ import {
 } from '@/lib/reports/full-archive-export'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fileResponse, streamedBody } from '@/lib/api/file-response'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const runtime = 'nodejs'
 // Streamed like /api/reports/full-archive: bounded by time, not memory.
@@ -140,7 +140,7 @@ export const GET = withRouteContext<Params>(
       }
     }
 
-    const filename = `migration_reset_archive_${utcDateStamp(new Date())}.zip`
+    const filename = `migration_reset_archive_${todayIsoStockholm().replace(/-/g, '')}.zip`
     const logContext = {
       userId: user.id,
       companyId,

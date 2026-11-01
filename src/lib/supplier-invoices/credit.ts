@@ -43,7 +43,6 @@ import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib
 import type { CoreEvent } from '@/lib/events/types'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { eventBus } from '@/lib/events'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { postingPort } from '@/lib/posting/port'
@@ -399,7 +398,7 @@ export async function creditSupplierInvoice(
 
   // Date: given, else the credit note's own, else today (Stockholm).
   const documentDate = reading?.creditNoteDate ?? null
-  const creditDate = input.credit_date ?? documentDate ?? getSwedishLocalDate()
+  const creditDate = input.credit_date ?? documentDate ?? todayIsoStockholm()
   const dateSource: 'input' | 'document' | 'today' = input.credit_date ? 'input' : documentDate ? 'document' : 'today'
   if (!ISO_DATE_RE.test(creditDate)) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'credit_date', message: 'Expected YYYY-MM-DD.' } }

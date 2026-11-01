@@ -69,6 +69,7 @@ import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface ExpenseClaim {
   id: string
@@ -115,12 +116,6 @@ const OWNER_VALUE = 'owner'
 const NO_RECEIPT_VALUE = 'none'
 type SellerCountry = 'se' | 'abroad' | 'eu' | 'noneu'
 
-/** Today in the viewer's own timezone: toISOString() converts to UTC first,
- *  which picks yesterday's date for anyone east of Greenwich before 02:00. */
-function todayLocal(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
 interface BookingRow {
   key: number
   account: string
@@ -189,7 +184,7 @@ export default function ExpenseClaimsPage() {
 
   // Create form
   const [description, setDescription] = useState('')
-  const [expenseDate, setExpenseDate] = useState(todayLocal)
+  const [expenseDate, setExpenseDate] = useState(todayIsoStockholm)
   const [amount, setAmount] = useState('')
   const [vatAmount, setVatAmount] = useState('')
   const [currency, setCurrency] = useState('SEK')
@@ -224,7 +219,7 @@ export default function ExpenseClaimsPage() {
   const pollAbort = useRef<{ cancelled: boolean }>({ cancelled: false })
 
   // Payout form
-  const [payoutDate, setPayoutDate] = useState(todayLocal)
+  const [payoutDate, setPayoutDate] = useState(todayIsoStockholm)
   const [cashAccount, setCashAccount] = useState('')
 
   const load = useCallback(async () => {
@@ -668,7 +663,7 @@ export default function ExpenseClaimsPage() {
     setInboxChoice(NO_RECEIPT_VALUE)
     setUpload({ phase: 'idle' })
     setShowReceipt(true)
-    setExpenseDate(todayLocal())
+    setExpenseDate(todayIsoStockholm())
     setSellerCountry('se')
     setReverseCharge(false)
     setBookingMode('choose')
@@ -711,7 +706,7 @@ export default function ExpenseClaimsPage() {
       setVatAmount((prev) => (vat == null ? prev : force || !prev ? String(vat) : prev))
       if (date) {
         setExpenseDate((prev) =>
-          force || prev === todayLocal() ? date : prev,
+          force || prev === todayIsoStockholm() ? date : prev,
         )
       }
       if (curr && (CURRENCIES as readonly string[]).includes(curr)) {

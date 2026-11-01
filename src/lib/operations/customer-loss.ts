@@ -10,7 +10,6 @@
  * document already in the archive.
  */
 import { z } from 'zod'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { recordConfirmedLoss } from '@/lib/customer-loss/confirmed'
 import { recordDoubtfulLoss } from '@/lib/customer-loss/doubtful'
@@ -21,6 +20,7 @@ import { loadCustomerLossState } from '@/lib/customer-loss/state'
 import { buildCustomerLossView } from '@/lib/customer-loss/view'
 import { accountNumberSchema } from '@/lib/invariants/zod'
 import { defineOperation } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -105,12 +105,12 @@ export const invoicesRecordCustomerLoss = defineOperation({
     if (dryRun) {
       const loaded = await loadCustomerLossState(ctx.supabase, ctx.companyId, input.invoice_id)
       if (!loaded.ok) return { ok: false, code: loaded.code }
-      const view = buildCustomerLossView(loaded.state, { enabled: true, today: getSwedishLocalDate() })
+      const view = buildCustomerLossView(loaded.state, { enabled: true, today: todayIsoStockholm() })
       return { ok: true, dryRun: true, preview: { kind: input.kind, ...view } as unknown as Record<string, unknown> }
     }
     const common = {
       invoiceId: input.invoice_id,
-      entryDate: input.entry_date ?? getSwedishLocalDate(),
+      entryDate: input.entry_date ?? todayIsoStockholm(),
       reason: input.reason,
       decidedBy: ctx.userId,
     }

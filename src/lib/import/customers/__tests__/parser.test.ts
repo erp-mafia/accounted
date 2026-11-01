@@ -86,7 +86,7 @@ describe('parseCustomersFile', () => {
 
     const result = await parseCustomersFile(buffer, 'terms.xlsx')
     expect(result.rows[0].default_payment_terms).toBe(45)
-    expect(result.rows[1].default_payment_terms).toBe(30) // default fallback
+    expect(result.rows[1].default_payment_terms).toBeNull() // not in the file: the card or the company decides
   })
 
   it('returns warning when zero rows match', async () => {

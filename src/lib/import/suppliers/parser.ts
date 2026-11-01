@@ -214,7 +214,7 @@ export async function parseSuppliersFile(
       bank_account: bankAccount,
       iban,
       bic,
-      default_payment_terms: parsePaymentTerms(paymentTermsRaw, 30),
+      default_payment_terms: parsePaymentTerms(paymentTermsRaw),
       default_currency: normalizeCurrency(currencyRaw),
       notes,
       is_valid: validationErrors.length === 0,

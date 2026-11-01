@@ -28,6 +28,7 @@ import type { ArkivFoldersResponse } from '@/app/api/arkiv/documents/folders/rou
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { openByDefault, type FolderKey } from '@/lib/arkiv/folders'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * The archive as folders (2026-09-24, after the Oasis Wiki): one shelf per
@@ -123,7 +124,7 @@ export function ArkivTree({ refreshKey = 0 }: { refreshKey?: number }) {
   }, [folders, isOpen, pages, loadPage])
 
   const years = useMemo(() => {
-    const now = new Date().getFullYear()
+    const now = stockholmYearMonth().year
     return Array.from({ length: 6 }, (_, i) => String(now - i))
   }, [])
   const untyped = folders.find((f) => f.key === 'untyped')?.count ?? 0

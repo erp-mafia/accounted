@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { seedCompany, withSwedishToday } from '@/tests/pg/fixtures'
 
 // 20261015030100_delivery_note_number_no_truncate.sql (GitLab accounted #33):
 // generate_delivery_note_number padded with LPAD(n, 3, '0'), and LPAD cuts a
@@ -30,7 +30,7 @@ async function generate(companyId: string): Promise<string> {
 
 async function currentYear(): Promise<string> {
   const { rows } = await getPool().query<{ y: string }>(
-    'SELECT EXTRACT(YEAR FROM CURRENT_DATE)::text AS y',
+    'SELECT EXTRACT(YEAR FROM public.stockholm_today())::text AS y',
   )
   return rows[0]!.y
 }
@@ -53,6 +53,15 @@ async function insertDeliveryNote(userId: string, companyId: string, invoiceNumb
     [userId, companyId, customerId, invoiceNumber],
   )
 }
+
+describe('generate_delivery_note_number: the Swedish year', () => {
+  it("numbers a note of New Year's night with the new year", async () => {
+    const { companyId } = await companyAtCounter(1)
+    await withSwedishToday('2031-01-01', async () => {
+      expect(await generate(companyId)).toBe('FS-2031001')
+    })
+  })
+})
 
 describe('generate_delivery_note_number: never truncates (#33).pg', () => {
   it('gives counters 999, 1000 and 1001 all their digits', async () => {

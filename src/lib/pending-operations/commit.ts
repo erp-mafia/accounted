@@ -57,7 +57,7 @@ import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
 import { postingPort } from '@/lib/posting/port'
 import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoices/attest-service'
 import type { AttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
@@ -3877,7 +3877,7 @@ async function commitPostKontantmetodCutoff(
   if (period.is_closed || period.locked_at) {
     return { error: 'Räkenskapsperioden är stängd eller låst', status: 409 }
   }
-  if (period.period_end >= getSwedishLocalDate()) {
+  if (period.period_end >= todayIsoStockholm()) {
     return { error: 'Bokslutsavgränsningen kan bokföras först efter periodens slut', status: 409 }
   }
   if (period.period_end !== stagedPeriodEnd || settings?.entity_type !== stagedEntityType) {

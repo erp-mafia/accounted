@@ -18,14 +18,7 @@ import type {
   TaxAssessmentDecisionType,
   TaxAssessmentNotice,
 } from '@/types'
-
-function todayLocalIso(): string {
-  const today = new Date()
-  const year = today.getFullYear()
-  const month = String(today.getMonth() + 1).padStart(2, '0')
-  const day = String(today.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export function TaxAssessmentNoticesPanel() {
   const t = useTranslations('tax_assessment_notices')
@@ -34,7 +27,7 @@ export function TaxAssessmentNoticesPanel() {
   const [notices, setNotices] = useState<TaxAssessmentNotice[]>([])
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null)
   const [decisionType, setDecisionType] = useState<TaxAssessmentDecisionType>('final')
-  const [decisionDate, setDecisionDate] = useState(todayLocalIso)
+  const [decisionDate, setDecisionDate] = useState(todayIsoStockholm)
   const [paymentDueDate, setPaymentDueDate] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -68,7 +61,7 @@ export function TaxAssessmentNoticesPanel() {
   const resetForm = () => {
     setEditingId(null)
     setDecisionType('final')
-    setDecisionDate(todayLocalIso())
+    setDecisionDate(todayIsoStockholm())
     setPaymentDueDate('')
   }
 

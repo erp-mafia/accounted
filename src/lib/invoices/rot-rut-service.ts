@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DeductionType, Invoice } from '@/types'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   buildRotRutFile,
@@ -14,6 +13,7 @@ import {
 import { evaluateGronTeknikClaim, type GronTeknikInstallation } from './gron-teknik-claim'
 import { DEDUCTION_TYPE_LABELS, deductionKindsOf, type HusDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Shared service behind the rot/rut payout-file API routes and the MCP tool
@@ -256,7 +256,7 @@ export async function listRotRutCandidates(
   type: HusDeductionType,
   // Europe/Stockholm, not UTC: this date gates FUTURE_PAYMENT_DATE and the
   // 31 January begäran deadline, both defined by Swedish calendar days.
-  today = getSwedishLocalDate(),
+  today = todayIsoStockholm(),
 ): Promise<
   | {
       ok: true
@@ -343,7 +343,7 @@ export async function listRotRutCandidates(
 export async function listGronTeknikCandidates(
   supabase: SupabaseClient,
   companyId: string,
-  today = getSwedishLocalDate(),
+  today = todayIsoStockholm(),
 ): Promise<
   | {
       ok: true
@@ -444,7 +444,7 @@ export async function createRotRutPayoutRequest(
     today?: string
   },
 ): Promise<CreateRotRutRequestResult> {
-  const today = params.today ?? getSwedishLocalDate()
+  const today = params.today ?? todayIsoStockholm()
   const name = (params.name ?? `${DEDUCTION_TYPE_LABELS[params.type].short} ${today}`).slice(0, 16)
 
   const { data: invoices, error: invoicesError } = await supabase

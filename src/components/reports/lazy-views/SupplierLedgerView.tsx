@@ -13,9 +13,9 @@ import {
 } from '@/components/reports/report-view-shared'
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
-import { formatDateISO } from '@/lib/calendar/utils'
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface SupplierLedgerData {
   ledger: {
@@ -45,7 +45,7 @@ interface SupplierLedgerData {
 }
 
 export default function SupplierLedgerView({ periodId }: { periodId: string }) {
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [asOfDate, setAsOfDate] = useState(() => todayIsoStockholm())
   const { data, loading, error } = useReportData<SupplierLedgerData>(
     periodId ? `/api/reports/supplier-ledger?period_id=${periodId}&as_of_date=${asOfDate}` : null,
     'Kunde inte hämta leverantörsreskontra',

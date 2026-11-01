@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { recordConfirmedLoss } from '@/lib/customer-loss/confirmed'
 import { recordDoubtfulLoss } from '@/lib/customer-loss/doubtful'
 import type { CustomerLossOutcome } from '@/lib/customer-loss/errors'
@@ -12,6 +11,7 @@ import { loadCustomerLossState } from '@/lib/customer-loss/state'
 import { buildCustomerLossView } from '@/lib/customer-loss/view'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { accountNumberSchema, isoDateSchema } from '@/lib/invariants/zod'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const ParamsSchema = z.object({ id: z.uuid() })
 
@@ -52,7 +52,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!parsed.success) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId })
     const loaded = await loadCustomerLossState(ctx.supabase, ctx.companyId, parsed.data.id)
     if (!loaded.ok) return errorResponseFromCode('INVOICE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    const view = buildCustomerLossView(loaded.state, { enabled: customerLossEnabled(), today: getSwedishLocalDate() })
+    const view = buildCustomerLossView(loaded.state, { enabled: customerLossEnabled(), today: todayIsoStockholm() })
     return NextResponse.json({ data: view }, { headers: { 'Cache-Control': 'no-store' } })
   },
 )
@@ -74,7 +74,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!body.success) return body.response
 
     const invoiceId = parsed.data.id
-    const entryDate = body.data.entry_date ?? getSwedishLocalDate()
+    const entryDate = body.data.entry_date ?? todayIsoStockholm()
     const common = { invoiceId, entryDate, reason: body.data.reason, decidedBy: ctx.user.id }
     let outcome: CustomerLossOutcome
     switch (body.data.kind) {

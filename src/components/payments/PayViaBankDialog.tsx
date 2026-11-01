@@ -32,6 +32,7 @@ import {
   type PreparedPreview,
   remainingBankPayments,
 } from './payments-client'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Betala via banken, from the supplier invoice list or one invoice:
@@ -300,7 +301,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                       <Input
                         type="date"
                         aria-label={t('date_label')}
-                        min={earliestExecutionDateIso(new Date().toLocaleDateString('sv-SE'))}
+                        min={earliestExecutionDateIso(todayIsoStockholm())}
                         value={executionDate}
                         onChange={(e) => setExecutionDate(e.target.value)}
                         className="h-8 w-[160px] tabular-nums"

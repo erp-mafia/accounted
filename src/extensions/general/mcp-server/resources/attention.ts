@@ -17,7 +17,7 @@ import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/li
 import { createLogger } from '@/lib/logger'
 import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 import { formatActorAttribution } from '@/lib/attribution/format-actor'
 import { resolvePersonNames } from '@/lib/attribution/person-names'
 
@@ -396,7 +396,7 @@ export const attentionResource: McpResource = {
     // ── Deadlines upcoming (within 14 days) ─────────────────────────
     const deadlines = deadlineRows.data ?? []
     if (deadlines.length > 0) {
-      const anyOverdue = deadlines.some((d) => d.due_date && d.due_date < today)
+      const anyOverdue = deadlines.some((d) => d.due_date && isPastDue(d.due_date, today))
       categories.push({
         key: 'deadlines_upcoming',
         label_sv: 'Deadlines inom 14 dagar',

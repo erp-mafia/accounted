@@ -14,7 +14,8 @@ import {
   type QuoteSourceLine,
 } from '@/lib/invoices/quote-partial-invoice'
 import type { Invoice } from '@/types'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 
 /**
  * Convert a proforma or a quote (offert) into a real invoice.
@@ -82,7 +83,6 @@ type SourceRow = Invoice & {
   } | null
 }
 
-const DEFAULT_PAYMENT_TERMS_DAYS = 30
 
 export async function convertToInvoice(params: {
   supabase: SupabaseClient
@@ -178,23 +178,11 @@ export async function convertToInvoice(params: {
       return { ok: false, code: 'INVOICE_QUOTE_ALREADY_ORDERED' }
     }
 
-    // 0 days is a real term (due on receipt); only a missing value falls
-    // through to the company default and then to 30.
-    let termsDays: number | null = source.customer?.default_payment_terms ?? null
-    if (termsDays == null) {
-      const { data: settings, error: settingsError } = await supabase
-        .from('company_settings')
-        .select('invoice_default_days')
-        .eq('company_id', companyId)
-        .maybeSingle()
-      // A failed read must not silently become "30 days": that would date
-      // the receivable wrong. Only a successful empty result falls back.
-      if (settingsError) {
-        return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: settingsError }
-      }
-      termsDays = (settings as { invoice_default_days?: number | null } | null)?.invoice_default_days ?? null
+    try {
+      dueDate = invoiceDueDate(today, await loadInvoiceTerms(supabase, companyId, source.customer?.default_payment_terms))
+    } catch (cause) {
+      return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: cause as Error }
     }
-    dueDate = addDaysIso(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
   }
 
   // What the invoice bills: the source line for line, or a part of the

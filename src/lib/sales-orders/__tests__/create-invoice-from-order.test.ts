@@ -385,6 +385,45 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(result).toMatchObject({ ok: false, code: 'CUSTOMER_NOT_FOUND', details: { customerId: IDS.customer } })
   })
 
+  // The due date of a draft the caller leaves it off: calendar days from the
+  // invoice date, whatever the process zone, on the customer's terms.
+  describe('due date from the terms', () => {
+    const buildInputDue = () =>
+      (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { due_date: string } }).input.due_date
+
+    function queueDraft(customer: Record<string, unknown>) {
+      enqueue({ data: orderWith([makeSalesOrderItem({ id: IDS.item1, quantity: 1 })]) })
+      enqueue({ data: [] })
+      enqueue({ data: makeOrderCustomer(customer) })
+    }
+    function queueCommit() {
+      enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+      enqueue({ data: null })
+      enqueue({ data: orderWith() })
+      enqueue({ data: [] })
+    }
+
+    it('counts calendar days across the spring clock change in a Swedish process', async () => {
+      vi.stubEnv('TZ', 'Europe/Stockholm')
+      try {
+        queueDraft({ default_payment_terms: 30 })
+        queueCommit()
+        await createInvoiceFromSalesOrder(sb, { ...params, input: { invoice_date: '2026-02-28' } })
+        expect(buildInputDue()).toBe('2026-03-30')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('a customer without terms takes the company default', async () => {
+      queueDraft({ default_payment_terms: null })
+      enqueue({ data: { invoice_default_days: 10 } })
+      queueCommit()
+      await createInvoiceFromSalesOrder(sb, { ...params, input: { invoice_date: '2026-09-02' } })
+      expect(buildInputDue()).toBe('2026-09-12')
+    })
+  })
+
   it('creates an unnumbered draft linked to the order, each line carrying its sales_order_item_id', async () => {
     enqueue({
       data: orderWith(

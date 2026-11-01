@@ -84,7 +84,7 @@ import {
   TrashIcon,
 } from '@/components/icons'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { isIsoDateShaped } from '@/lib/invariants/iso-date'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
@@ -774,7 +774,7 @@ export default function NewSupplierInvoiceForm({
       // setDate and reading back as UTC lost a day across the March DST
       // change (accounted#58).
       if (isIsoDateShaped(invoiceDate)) {
-        const due = addDaysIso(invoiceDate, days)
+        const due = invoiceDueDate(invoiceDate, days)
         setValue('due_date', due)
         lastAutoDueRef.current = due
       }
@@ -799,7 +799,7 @@ export default function NewSupplierInvoiceForm({
     if (currentDue && currentDue !== lastAutoDueRef.current) return
     const days = supplier.default_payment_terms
     if (days && days > 0 && isIsoDateShaped(watchedInvoiceDate)) {
-      const due = addDaysIso(watchedInvoiceDate, days)
+      const due = invoiceDueDate(watchedInvoiceDate, days)
       setValue('due_date', due)
       lastAutoDueRef.current = due
       setDueDateCaption({ type: 'terms', days })

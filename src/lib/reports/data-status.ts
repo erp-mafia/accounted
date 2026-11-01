@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { UNBOOKED_BANK_LINES } from '@/lib/composition/unbooked-bank-lines'
 import { RECONCILIATION_SIGNOFFS } from '@/lib/composition/reconciliation-signoffs'
+import { previousMonthEndIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('report-data-status')
 
@@ -213,7 +214,8 @@ async function build(
   // expected sign-off date is capped at the last month end before today, so a
   // current-year report is not measured against a period end in the future.
   if (recon.adopted && recon.hasBankAccounts) {
-    const expectedThrough = to < lastMonthEnd(now) ? to : lastMonthEnd(now)
+    const lastMonthEnd = previousMonthEndIso(todayIsoStockholm(now))
+    const expectedThrough = to < lastMonthEnd ? to : lastMonthEnd
     if (recon.reconciledThrough === null) {
       caveats.push('At least one bank account has no reconciliation sign-off.')
     } else if (recon.reconciledThrough < expectedThrough) {
@@ -284,11 +286,6 @@ function isFeedStale(
 /** YYYY-MM-DD from a date or a timestamp (the UTC date of a timestamptz string). */
 function isoDate(value: string | null): string | null {
   return value ? value.slice(0, 10) : null
-}
-
-/** The last day of the month before `now`, YYYY-MM-DD (UTC). */
-function lastMonthEnd(now: Date): string {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).toISOString().slice(0, 10)
 }
 
 /**

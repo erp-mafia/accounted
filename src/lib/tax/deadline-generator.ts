@@ -7,6 +7,7 @@ import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isEntityType } from '@/lib/company/entity-type'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('deadline-generator')
 import {
@@ -17,7 +18,7 @@ import {
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
-import { formatDateISO } from '@/lib/calendar/utils'
+import { formatDateISO, parseDate } from '@/lib/calendar/utils'
 
 /**
  * Rolling generation horizons. Recurring skattekonto obligations (monthly
@@ -333,7 +334,7 @@ export async function generateTaxDeadlinesForUser(
   // also include their own due-date years so a newly entered overdue notice is
   // represented instead of disappearing only because its exact date has passed.
   if (years.length === 0) {
-    const currentYear = new Date().getFullYear()
+    const currentYear = stockholmYearMonth().year
     const noticeYears = (settings.tax_assessment_notices ?? [])
       .map((notice) => Number(notice.paymentDueDate.slice(0, 4)))
       .filter(Number.isInteger)
@@ -374,9 +375,8 @@ export async function generateTaxDeadlinesForUser(
   // Get applicable deadline configs based on settings
   const applicableConfigs = getApplicableDeadlineConfigs(settings)
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const todayIso = formatDateISO(today)
+  const todayIso = todayIsoStockholm()
+  const today = parseDate(todayIso)
   const endDate = `${Math.max(...years) + 1}-12-31`
 
   // Completed deadlines represent real filing progress and dismissed
@@ -652,7 +652,7 @@ export async function regenerateTaxDeadlinesForUser(
   companyId: string,
   newSettings: CompanySettingsForDeadlines
 ): Promise<{ created: number; deleted: number }> {
-  const currentYear = new Date().getFullYear()
+  const currentYear = stockholmYearMonth().year
   return generateTaxDeadlinesForUser(supabase, companyId, newSettings, [currentYear, currentYear + 1])
 }
 
@@ -696,12 +696,11 @@ export function getExpectedUpcomingDeadlineKeys(
   fromDate: Date = new Date(),
 ): Set<string> {
   if (years.length === 0) {
-    const currentYear = fromDate.getFullYear()
+    const currentYear = stockholmYearMonth(fromDate).year
     years = [currentYear, currentYear + 1]
   }
 
-  const today = new Date(fromDate)
-  today.setHours(0, 0, 0, 0)
+  const today = parseDate(todayIsoStockholm(fromDate))
   // Keyed by type:period, last one wins, exactly like the generator's own
   // de-duplication: two räkenskapsår ending in the same calendar year (a
   // re-laid year) can share a label, and expecting both dates while the
@@ -801,12 +800,9 @@ export function findSettingsWithStaleUpcomingDeadlines(
   years: number[] = [],
   fromDate: Date = new Date(),
 ): DeadlineSettingsRow[] {
-  const windowYears = years.length > 0
-    ? years
-    : [fromDate.getFullYear(), fromDate.getFullYear() + 1]
-  const today = new Date(fromDate)
-  today.setHours(0, 0, 0, 0)
-  const todayIso = formatDateISO(today)
+  const currentYear = stockholmYearMonth(fromDate).year
+  const windowYears = years.length > 0 ? years : [currentYear, currentYear + 1]
+  const todayIso = todayIsoStockholm(fromDate)
   // The generator's delete window (generateTaxDeadlinesForUser's endDate).
   const windowEnd = `${Math.max(...windowYears) + 1}-12-31`
 
@@ -857,7 +853,7 @@ async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<Deadl
 export async function generateNewYearDeadlines(
   supabase: SupabaseClient
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
-  const newYear = new Date().getFullYear()
+  const newYear = stockholmYearMonth().year
   const allSettings = await hydrateFiscalYears(
     supabase,
     await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
@@ -896,7 +892,7 @@ export async function backfillMissingTaxDeadlines(
   // repair loop flags the company forever while the generator (correctly)
   // refuses to recreate a filed obligation. Matches the generator's own
   // completed-row floor.
-  const pastFloor = `${new Date().getFullYear() - 1}-01-01`
+  const pastFloor = `${stockholmYearMonth().year - 1}-01-01`
   const [rawSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>

@@ -6,10 +6,10 @@ import {
 } from '@/lib/reports/full-archive-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { PRIVATE_NO_STORE_HEADERS, privateNoStore } from '@/lib/api/private-no-store'
-import { utcDateStamp } from '@/lib/utils'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fileResponse, streamedBody } from '@/lib/api/file-response'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const runtime = 'nodejs'
 // The ZIP streams as it is written, so its size is bounded by time, not
@@ -110,7 +110,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
   const filename =
     scope === 'period'
       ? `arkiv_${periodId}.zip`
-      : `arkiv_full_${companyId}_${utcDateStamp(new Date())}.zip`
+      : `arkiv_full_${companyId}_${todayIsoStockholm().replace(/-/g, '')}.zip`
   const logContext = { userId: user.id, companyId, scope, includeDocuments, filename }
 
   // The headers go out at once and the ZIP follows as it is written, so the

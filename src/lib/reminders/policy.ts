@@ -1,6 +1,6 @@
 import type { InvoiceDeliveryProviderStatus } from '@/types'
 import type { DeliveryEvidence } from '@/lib/collections/eligibility'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 
 /**
  * Whether one invoice gets a reminder today, and at which level (accounted#104).
@@ -173,7 +173,7 @@ export function decideReminder(input: ReminderDecisionInput): ReminderDecision {
   if (invoice.credited) return skip('credited')
   if (!OWED_STATUSES.has(invoice.status)) return skip(invoice.status === 'paid' ? 'paid' : 'not_sent')
   if (invoice.remaining <= 0) return skip('paid')
-  if (today <= invoice.dueDate) return skip('not_overdue')
+  if (!isPastDue(invoice.dueDate, today)) return skip('not_overdue')
 
   // Someone else reminds, or nobody may.
   if (invoice.withCollections) return skip('collections')

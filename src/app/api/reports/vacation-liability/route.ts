@@ -16,7 +16,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import { fileResponse } from '@/lib/api/file-response'
 import { roundOre } from '@/lib/money'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * GET /api/reports/vacation-liability
@@ -40,7 +40,7 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
   if (!query.success) return query.response
   const { period_id: periodId, year, as_of: asOf, format } = query.data
 
-  let asOfDate = asOf ?? `${year ?? new Date().getFullYear()}-12-31`
+  let asOfDate = asOf ?? `${year ?? stockholmYearMonth().year}-12-31`
   if (periodId && !asOf) {
     const { data: period } = await supabase
       .from('fiscal_periods')

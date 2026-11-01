@@ -4,6 +4,7 @@ import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { ADULT_AGE, type DebtorPersonalNumber } from './personal-number'
+import { daysPastDue } from '@/lib/dates/iso'
 
 /**
  * Whether an invoice may be handed over to the collections provider, and
@@ -158,11 +159,6 @@ export const TIME_BAR_YEARS = { private: 3, business: 10 } as const
 /** v1 when the catalogue cannot be read: SEK and Swedish customers only. */
 const DEFAULT_FEATURES = { currencies: ['SEK'], debtorCountries: ['SE'], privateDebtors: true, minimumAmount: 0 }
 
-export function isoDayNumber(date: string): number {
-  const [y, m, d] = date.split('-').map(Number)
-  return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000)
-}
-
 function yearsBefore(date: string, years: number): string {
   const [y, m, d] = date.split('-').map(Number)
   const shifted = new Date(Date.UTC(y - years, m - 1, d))
@@ -238,7 +234,7 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
   }
 
   // 3. Overdue from the due date, never from status.
-  const overdueDays = Math.max(0, isoDayNumber(today) - isoDayNumber(invoice.due_date))
+  const overdueDays = daysPastDue(invoice.due_date, today)
   if (overdueDays === 0) block('elig_not_overdue')
 
   // 4. Currency and the customer's country, per the provider's features.

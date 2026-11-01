@@ -4,9 +4,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Invoice, InvoiceItem } from '@/types'
 import { createTableMockSupabase } from '@/tests/helpers'
 
+vi.mock('@/lib/dates/iso', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dates/iso')>()),
+  todayIsoStockholm: () => '2026-10-22',
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('period-2026'),
-  getSwedishLocalDate: vi.fn().mockReturnValue('2026-10-22'),
   createJournalEntry: vi.fn().mockImplementation(
     async (_supabase: unknown, _companyId: string, _userId: string, input: CreateJournalEntryInput) => ({
       id: 'je-payout',

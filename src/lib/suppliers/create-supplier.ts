@@ -19,6 +19,7 @@ import { SUPPLIER_COLUMNS, type SupplierRecord } from '@/lib/suppliers/update-su
 import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { refuseUnknownSupplierDimensions, tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import type { Supplier } from '@/types'
+import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 
 export type SupplierCreateInput = z.output<typeof CreateSupplierSchema>
 
@@ -54,7 +55,7 @@ function supplierRow(input: SupplierCreateInput) {
     clearing_number: setOrNull(input.clearing_number),
     account_number: setOrNull(input.account_number),
     default_expense_account: setOrNull(input.default_expense_account),
-    default_payment_terms: input.default_payment_terms ?? 30,
+    default_payment_terms: supplierPaymentTermsDays(input.default_payment_terms),
     default_currency: input.default_currency || 'SEK',
     self_billing_agreement_ref: setOrNull(input.self_billing_agreement_ref),
     auto_debit: input.auto_debit ?? false,

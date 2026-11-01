@@ -33,7 +33,7 @@ import {
 } from '@/lib/providers/with-provider-call'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
 
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
 
@@ -75,7 +75,7 @@ export function classifySieFetchFailure(
  * automatically at new year without a code change.
  */
 export function getAllowedFiscalYears(now: Date = new Date()): Set<number> {
-  const currentYear = now.getFullYear()
+  const currentYear = stockholmYearMonth(now).year
   return new Set([currentYear - 2, currentYear - 1, currentYear])
 }
 

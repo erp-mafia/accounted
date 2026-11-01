@@ -27,7 +27,6 @@ import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
@@ -362,7 +361,7 @@ export async function previewSupplierPaymentBatch(
   // Swedish calendar date, not UTC: between 00:00 and 01:59 Swedish summer
   // time a UTC slice is still yesterday, and "pay today" would produce an
   // execution date the bank rejects as passed.
-  const today = getSwedishLocalDate()
+  const today = todayIsoStockholm()
 
   const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution, inBankPayment, attestBlocked] = await Promise.all([
     supabase
@@ -534,7 +533,7 @@ export async function planSupplierPaymentBatch(
   companyId: string,
   input: CreateBatchInput,
 ): Promise<PlanBatchResult> {
-  const today = getSwedishLocalDate()
+  const today = todayIsoStockholm()
   const ids = input.items.map((item) => item.supplier_invoice_id)
 
   const debtorResolution = await resolveFileDebtor(supabase, companyId)

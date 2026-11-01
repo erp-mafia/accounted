@@ -20,6 +20,7 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn, formatCurrency } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { SalaryJournalReport, SalaryJournalRow } from '@/lib/reports/salary-journal'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Lönejournal on screen: booked salary runs per employee and month for a
@@ -38,7 +39,7 @@ function categoryKey(row: Pick<SalaryJournalRow, 'employmentType' | 'personnelCa
 export function LonejournalView() {
   const t = useTranslations('lonejournal')
   const locale = useLocale()
-  const currentYear = new Date().getFullYear()
+  const currentYear = stockholmYearMonth().year
   const [year, setYear] = useState(currentYear)
   const [monthFrom, setMonthFrom] = useState(1)
   const [monthTo, setMonthTo] = useState(12)

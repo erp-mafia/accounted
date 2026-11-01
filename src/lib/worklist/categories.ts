@@ -30,7 +30,7 @@ import {
 } from '@/lib/bookkeeping/matchable-statuses'
 import { matchRowsToInvoiceCombinations, type CombinationInvoice } from '@/lib/transactions/invoice-combination'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, previousMonthEndIso } from '@/lib/dates/iso'
 import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { summarizeOverdueInvoices } from './overdue-summary'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
@@ -1394,11 +1394,7 @@ export async function countReconciliationDue(
   companyId: string,
   today: Date = new Date(),
 ): Promise<number> {
-  // Last day of the previous month, as ISO date (UTC: the day boundary only
-  // needs to be stable, not local).
-  const prevMonthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0))
-    .toISOString()
-    .slice(0, 10)
+  const prevMonthEnd = previousMonthEndIso(todayIsoStockholm(today))
 
   const { data: signoffRows, error: signoffError } = await supabase
     .from('account_reconciliations')

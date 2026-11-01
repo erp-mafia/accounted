@@ -1,3 +1,4 @@
+import { stockholmYearMonth } from '@/lib/dates/iso'
 /**
  * Which pay month a salary run gets when the caller names none.
  *
@@ -45,15 +46,20 @@ function monthIndex(period: RunPeriod): number {
   return period.period_year * 12 + period.period_month - 1
 }
 
+/** The month `now` falls in, on the Swedish calendar. */
+function periodOf(now: Date): RunPeriod {
+  const { year, month } = stockholmYearMonth(now)
+  return { period_year: year, period_month: month }
+}
+
 function periodAt(index: number): RunPeriod {
   return { period_year: Math.floor(index / 12), period_month: (index % 12) + 1 }
 }
 
 /**
- * `now` is read with the local getters. On the server that is the server's
- * time zone, in the browser the user's, and the two can differ for a few hours
- * around a month boundary. The Löner page therefore sends the period it shows,
- * so a click always creates the month the button named.
+ * `now` is read on the Swedish calendar, so the server and the browser agree
+ * around a month boundary. The Löner page still sends the period it shows, so
+ * a click always creates the month the button named.
  */
 export function nextRunPeriod(runs: readonly RunPeriodSource[], now: Date): RunPeriod {
   let latest: RunPeriod | null = null
@@ -61,9 +67,7 @@ export function nextRunPeriod(runs: readonly RunPeriodSource[], now: Date): RunP
     const period = livePeriodOf(run)
     if (period && (!latest || monthIndex(period) > monthIndex(latest))) latest = period
   }
-  if (!latest) {
-    return { period_year: now.getFullYear(), period_month: now.getMonth() + 1 }
-  }
+  if (!latest) return periodOf(now)
   return periodAt(monthIndex(latest) + 1)
 }
 
@@ -114,7 +118,7 @@ export function runPeriodChoices(
   months: number = RUN_PERIOD_CHOICE_MONTHS,
 ): RunPeriodChoice[] {
   const defaultIndex = monthIndex(nextRunPeriod(runs, now))
-  const currentIndex = monthIndex({ period_year: now.getFullYear(), period_month: now.getMonth() + 1 })
+  const currentIndex = monthIndex(periodOf(now))
   const endIndex = Math.max(defaultIndex, currentIndex)
 
   const taken = new Set<number>()

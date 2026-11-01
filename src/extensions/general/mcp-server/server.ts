@@ -95,7 +95,7 @@ import {
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
   assertNoDeviationOverlap,
@@ -583,7 +583,7 @@ import {
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
-import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
 import { countUnbookedInPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
@@ -768,6 +768,7 @@ import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
+import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -10194,9 +10195,7 @@ export const tools: McpTool[] = [
       if (isQuote) {
         dueDate = validUntil
       } else if (!dueDate) {
-        const d = new Date(invoiceDate)
-        d.setDate(d.getDate() + (customer.default_payment_terms ?? 30))
-        dueDate = d.toISOString().split('T')[0]
+        dueDate = invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms))
       }
 
       const stagedParams = {
@@ -10916,12 +10915,7 @@ export const tools: McpTool[] = [
 
       const customer = order.customer as (Customer | null | undefined)
       const invoiceDate = input.invoice_date ?? todayIsoStockholm()
-      let dueDate = input.due_date
-      if (!dueDate) {
-        const due = new Date(invoiceDate)
-        due.setDate(due.getDate() + (customer?.default_payment_terms ?? 30))
-        dueDate = due.toISOString().split('T')[0]
-      }
+      const dueDate = input.due_date || invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer?.default_payment_terms))
       const anyDelivered = picked.some((p) => p.item.delivered_qty > 0)
 
       return stage({
@@ -17460,7 +17454,7 @@ export const tools: McpTool[] = [
             { code: 'SI_CREATE_INVALID_INPUT', reason: 'due_date_underivable' },
           )
         }
-        dueDate = addDaysIso(invoiceDate, paymentTermsDays)
+        dueDate = invoiceDueDate(invoiceDate, paymentTermsDays)
         dueDateSource = 'defaulted'
       }
 
@@ -23070,7 +23064,7 @@ export const tools: McpTool[] = [
       if (period.is_closed || period.locked_at) {
         throw new Error('Räkenskapsperioden är stängd eller låst')
       }
-      if (period.period_end >= getSwedishLocalDate()) {
+      if (period.period_end >= todayIsoStockholm()) {
         throw new Error('Kontantmetodens bokslutsavgränsning kan bokföras först efter periodens slut')
       }
       if (settings?.accounting_method !== 'cash') {

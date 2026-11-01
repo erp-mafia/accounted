@@ -1,3 +1,4 @@
+import { stockholmYearMonth } from '@/lib/dates/iso'
 /**
  * The balance date of the AR and AP ledgers (kundreskontra and
  * leverantörsreskontra), checked once for every door: v1 /reports/ar-ledger
@@ -32,7 +33,7 @@ export function parseLedgerAsOfDate(value: unknown, now: Date = new Date()): Led
     return { ok: false, message: 'Not a valid calendar date.', messageSv: 'Datumet finns inte i kalendern.' }
   }
   const year = probe.getUTCFullYear()
-  const maxYear = now.getUTCFullYear() + 1
+  const maxYear = stockholmYearMonth(now).year + 1
   if (year < 2000 || year > maxYear) {
     return {
       ok: false,

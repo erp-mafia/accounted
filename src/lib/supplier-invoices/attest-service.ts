@@ -25,7 +25,6 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { roundOre } from '@/lib/money'
@@ -54,6 +53,7 @@ import { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy } from 
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { notifyAttestDecisionSafely, type AttestDecisionBatch, type AttestDecisionNotice } from './attest-decision-notify'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy }
 
@@ -324,7 +324,7 @@ export async function approveSupplierInvoice(
       dryRun: true,
       preview: {
         supplier_invoice_id: invoice.id,
-        status: setsMarker ? resolveUnsettledStatus({ ...invoice, approved_at: 'now' }, getSwedishLocalDate()) : invoice.status,
+        status: setsMarker ? resolveUnsettledStatus({ ...invoice, approved_at: 'now' }, todayIsoStockholm()) : invoice.status,
         attest_required: ruling.kind === 'record',
         completes_attest: setsMarker,
         attest_remaining_user_ids: ruling.kind === 'record' ? ruling.remainingAfter : [],
@@ -483,7 +483,7 @@ export async function rejectSupplierInvoice(
       dryRun: true,
       preview: {
         supplier_invoice_id: invoice.id,
-        status: resolveUnsettledStatus({ ...invoice, approved_at: null }, getSwedishLocalDate()),
+        status: resolveUnsettledStatus({ ...invoice, approved_at: null }, todayIsoStockholm()),
         comment: normalizeComment(input.comment),
         restarts_attest_round: ruling.kind === 'record',
       },
@@ -510,7 +510,7 @@ export async function rejectSupplierInvoice(
     data: {
       supplier_invoice_id: invoice.id,
       attestation_id: attestationId,
-      status: resolveUnsettledStatus({ ...invoice, approved_at: null }, getSwedishLocalDate()),
+      status: resolveUnsettledStatus({ ...invoice, approved_at: null }, todayIsoStockholm()),
     },
   }
 }

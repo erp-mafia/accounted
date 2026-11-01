@@ -93,12 +93,12 @@ import {
   type SellerRegion,
   type SupplierTypeForRegion,
 } from '@/lib/vat/seller-country'
-import { addDaysIso } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { netVat } from '@/lib/bookkeeping/gross-split'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { askedForReview, DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 import { factsFromLines, matchBookingReviewRules, type BookingReviewRule } from '@/lib/booking-review/match'
+import { resolveSupplierInvoiceDueDate } from '@/lib/supplier-invoices/due-date'
 
 /** Whether a booking review rule matches the plan's lines and its bank row (or supplier). */
 function planBlocked(lines: readonly OneClickLine[], review: OneClickInput['bookingReview']): boolean {
@@ -562,7 +562,7 @@ function invoiceOf(
     // Paid already, it is moot: the supplier's terms, as every inbox door
     // defaults it (the MCP door's rule).
     if (form === 'register') return { ok: false, reason: 'missing_due_date' }
-    dueDate = addDaysIso(invoiceDate, input.supplier?.paymentTermsDays ?? 30)
+    dueDate = resolveSupplierInvoiceDueDate(null, invoiceDate, input.supplier?.paymentTermsDays)
   }
   const currency = (reading.invoice?.currency || '').trim().toUpperCase() || 'SEK'
   const foreign = !isKronorCurrency(currency)

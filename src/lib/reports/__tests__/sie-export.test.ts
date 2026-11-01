@@ -113,6 +113,26 @@ describe('generateSIEExport', () => {
     expect(lines[7]).toBe('#RAR 0 20240101 20241231')
   })
 
+  it("stamps #GEN with the Swedish day, also on New Year's night", async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      { data: [], error: null }, // opening balances RPC
+    ]
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+      expect(output.split('\r\n')[4]).toBe('#GEN 20270101')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('hyphenates a bare 10-digit org_number in #ORGNR', async () => {
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },

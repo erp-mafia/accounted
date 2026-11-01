@@ -10,7 +10,7 @@
  * apart instead of being projected on a day nobody knows.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { daysBetweenIso } from '@/lib/dates/iso'
+import { daysBetweenIso, isPastDue } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import { generateARLedger, type ARLedgerReport } from '@/lib/reports/ar-ledger'
 import { generateSupplierLedger, type SupplierLedgerReport } from '@/lib/reports/supplier-ledger'
@@ -35,7 +35,7 @@ export function receivableFlows(report: ARLedgerReport, window: ForecastWindow):
       const amount = roundOre(inv.outstanding_sek)
       // A credit note owed back to a customer is settled against another invoice or refunded: not projected.
       if (amount <= 0) continue
-      if (inv.due_date < window.today) {
+      if (isPastDue(inv.due_date, window.today)) {
         overdue.push({
           invoice_id: inv.invoice_id,
           invoice_number: inv.invoice_number,
@@ -93,7 +93,7 @@ export function payableFlows(
     for (const inv of entry.invoices ?? []) {
       const amount = roundOre(inv.outstanding_sek - (covered.get(inv.supplier_invoice_id) ?? 0))
       if (amount <= 0) continue
-      if (inv.due_date < window.today) {
+      if (isPastDue(inv.due_date, window.today)) {
         overdue.push({
           supplier_invoice_id: inv.supplier_invoice_id,
           supplier_invoice_number: inv.supplier_invoice_number,

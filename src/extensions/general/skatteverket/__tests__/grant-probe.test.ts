@@ -8,7 +8,7 @@
  * rule lives in connection-store's recordProbeResult and is asserted through
  * the recorded input here.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockSkvRequestWithAuth = vi.fn()
 vi.mock('../lib/api-client', async (importOriginal) => {
@@ -191,6 +191,49 @@ async function probeViaOmbudsregisterWith(posts: unknown[], optInDay = '2024-12-
   registryAnswers(posts)
   return probeViaOmbudsregister(ORG, optInDay, { companyId: 'company-1', userId: null }, TODAY)
 }
+
+describe('the Swedish day and month', () => {
+  // 00:30 on 1 January in Sweden, still 31 December in UTC.
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const newYearNight = () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+  }
+
+  it("a first Verifiera on New Year's night opts in on the new year's first day", async () => {
+    newYearNight()
+    mockGetConnection.mockResolvedValueOnce(null)
+    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2027-01-01' }])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud.status).toBe('granted')
+  })
+
+  it("an opt-in made on New Year's night is dated on the Swedish day", async () => {
+    newYearNight()
+    mockGetConnection.mockResolvedValueOnce({ id: 'conn-1', org_number: ORG, created_at: '2026-12-31T23:30:00Z' })
+    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-12-31' }])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+  })
+
+  it('the service probe asks for the Swedish moms period', async () => {
+    newYearNight()
+    registryUnavailable()
+    mockSkvRequestWithAuth
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // saldo
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // utkast
+
+    await probeCompanyGrants('company-1', ORG)
+
+    expect(mockSkvRequestWithAuth.mock.calls.some((call) => String(call[2]).endsWith('/202701'))).toBe(true)
+  })
+})
 
 describe('org-number proof: only grants signed on or after the opt-in count', () => {
   it('a grant signed before the opt-in is denied with reason predates_opt_in', async () => {

@@ -40,6 +40,7 @@ import {
 import type { ImportPreview, AccountMapping } from '@/lib/import/types'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import { voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 const SERIES_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -241,7 +242,7 @@ export default function ImportReviewStep({
   const isHistoricalImport = (() => {
     if (!preview.fiscalYearEnd) return false
     const end = new Date(preview.fiscalYearEnd)
-    const startOfThisYear = new Date(new Date().getFullYear(), 0, 1)
+    const startOfThisYear = new Date(stockholmYearMonth().year, 0, 1)
     return !isNaN(end.getTime()) && end < startOfThisYear
   })()
   // Identity-mapped accounts whose #KONTO name differs from the BAS default:

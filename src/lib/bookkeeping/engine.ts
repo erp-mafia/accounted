@@ -2384,15 +2384,6 @@ export async function commitCounterpartySetoff(
 }
 
 /**
- * Get the current date in Swedish timezone (Europe/Stockholm).
- * Avoids UTC date shift when server runs in a different timezone.
- * Pass `now` to format a specific instant instead of the current time.
- */
-export function getSwedishLocalDate(now: Date = new Date()): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(now)
-}
-
-/**
  * Cancel the verifikat a failed multi-step workflow created moments ago in
  * this same request (compensation, never a user-facing undo: that is a storno).
  *

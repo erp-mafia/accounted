@@ -1,4 +1,5 @@
 import { truncateToWholeKronor } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Field formatters shared by the SRU generators (INK2 and NE-bilaga). SRU is a
@@ -6,20 +7,16 @@ import { truncateToWholeKronor } from '@/lib/money'
  * kronor with the öre truncated and no separators.
  */
 
-/** Format a Date as YYYYMMDD (local time, as the files are stamped on the user's clock). */
+/** Format a Date as YYYYMMDD, the Swedish calendar day: the files are stamped on the user's clock. */
 export function sruDate(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
+  return todayIsoStockholm(date).replace(/-/g, '')
 }
 
-/** Format a Date as HHMMSS. */
+const SWEDISH_TIME = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+/** Format a Date as HHMMSS, on the same clock as sruDate. */
 export function sruTime(date: Date): string {
-  const h = String(date.getHours()).padStart(2, '0')
-  const m = String(date.getMinutes()).padStart(2, '0')
-  const s = String(date.getSeconds()).padStart(2, '0')
-  return `${h}${m}${s}`
+  return SWEDISH_TIME.format(date).replace(/:/g, '')
 }
 
 /** Format an integer amount: hela kronor, no decimals/thousands separators, öre truncated. */

@@ -13,9 +13,13 @@ import type { CreateJournalEntryInput, Invoice, InvoiceItem } from '@/types'
  * 15 000, credit 3001 81 000, credit 2611 20 250.
  */
 
+vi.mock('@/lib/dates/iso', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dates/iso')>()),
+  todayIsoStockholm: () => '2026-09-30',
+}))
+
 vi.mock('../engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('period-1'),
-  getSwedishLocalDate: vi.fn().mockReturnValue('2026-09-30'),
   createJournalEntry: vi.fn().mockImplementation(
     async (_supabase: unknown, _companyId: string, _userId: string, input: CreateJournalEntryInput) => ({
       id: 'entry-1',

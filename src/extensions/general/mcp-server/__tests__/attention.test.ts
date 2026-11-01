@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // The unbooked count is the shared lib predicate (lib/transactions/unbooked.ts,
@@ -534,7 +535,7 @@ describe('Accounted://attention', () => {
 
   it('combines multiple categories into a coherent summary', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     setUnbooked(1)
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
@@ -558,6 +559,8 @@ describe('Accounted://attention', () => {
       new Set(['unbooked_transactions', 'pending_supplier_invoices', 'deadlines_upcoming'])
     )
     expect(result.summary.total_items).toBe(3)
+    // Due today is on time: a warning, not overdue.
+    expect(result.categories.find((c) => c.key === 'deadlines_upcoming')?.severity).toBe('warning')
   })
 })
 

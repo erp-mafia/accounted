@@ -16,10 +16,10 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
 vi.mock('@/lib/bookkeeping/accruals/service', () => ({
   cancelSchedulesForSource: vi.fn().mockResolvedValue({ cancelledSchedules: 0, reversedEntries: 0, failedReversals: 0 }),
 }))
-vi.mock('@/lib/bookkeeping/engine', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>('@/lib/bookkeeping/engine')
-  return { ...actual, getSwedishLocalDate: () => '2026-10-21' }
-})
+vi.mock('@/lib/dates/iso', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dates/iso')>()),
+  todayIsoStockholm: () => '2026-10-21',
+}))
 const mockArchive = vi.fn()
 vi.mock('@/lib/supplier-invoices/self-billing/archive', async () => {
   const actual = await vi.importActual<typeof import('@/lib/supplier-invoices/self-billing/archive')>(

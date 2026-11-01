@@ -4,10 +4,11 @@
  * Every arithmetic helper here is deliberately UTC: accounting dates are
  * calendar dates with no wall-clock component, and doing the arithmetic at
  * `T00:00:00Z` means no DST edge can shift a day. "Today" is the exception:
- * it is the Swedish calendar day, todayIsoStockholm(). The UTC date lags it
- * by one between midnight and 01:00/02:00 Stockholm time, so there is no
- * UTC "today" here, and check:guards (utc-today) refuses the inline
- * toISOString-and-slice form of one.
+ * it is the Swedish calendar day, todayIsoStockholm(), and this month and
+ * year are stockholmYearMonth(). The UTC date lags it by one between midnight
+ * and 01:00/02:00 Stockholm time, and a Date's getters read the process zone,
+ * so there is no other "today" here, and check:guards (utc-today) refuses the
+ * hand-written forms of one. In SQL the same day is public.stockholm_today().
  */
 
 /** Add `days` to a `YYYY-MM-DD` string in pure UTC and return `YYYY-MM-DD`. */
@@ -15,6 +16,16 @@ export function addDaysIso(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z')
   d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
+}
+
+/**
+ * A due date left out of an invoice: the invoice date plus the terms in
+ * calendar days, for customer and supplier invoices alike. The terms come from
+ * invoiceTermsFor (lib/invoices/due-date) on the customer side and
+ * supplierPaymentTermsDays on the supplier side.
+ */
+export function invoiceDueDate(invoiceDate: string, terms: number): string {
+  return addDaysIso(invoiceDate, terms)
 }
 
 /**
@@ -43,20 +54,33 @@ export function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+const STOCKHOLM_DATE = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Stockholm',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 /**
  * Today's calendar date in Europe/Stockholm as YYYY-MM-DD. Business dates
  * (order date, delivery date, invoice date) belong to the Swedish calendar
  * day, not UTC: near midnight the UTC date is still yesterday, and a
  * delivery date is also the Riksbanken rate anchor for foreign-currency
- * invoices.
+ * invoices. Given a stored instant, the Swedish calendar day it fell on.
  */
 export function todayIsoStockholm(now: Date = new Date()): string {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
+  return STOCKHOLM_DATE.format(now)
+}
+
+/** This year and month (1-12) on the Swedish calendar. */
+export function stockholmYearMonth(now: Date = new Date()): { year: number; month: number } {
+  const today = todayIsoStockholm(now)
+  return { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) }
+}
+
+/** The last day of the month before `iso`'s (`YYYY-MM-DD`). */
+export function previousMonthEndIso(iso: string): string {
+  return addDaysIso(`${iso.slice(0, 7)}-01`, -1)
 }
 
 /** Minutes Europe/Stockholm is ahead of UTC at `at` (60 in winter, 120 in summer). */
@@ -111,10 +135,17 @@ export function endOfDayIsoStockholm(isoDate: string): string {
 /**
  * Whether a due date has passed: it lies before `today` (both YYYY-MM-DD,
  * today as todayIsoStockholm gives it). The due date itself is still on
- * time. The one date rule behind every "Förfallen": a registered supplier
- * invoice's nightly flip (isOverduePayable) and the Inkorg's unregistered
- * invoices both read it.
+ * time. The one date rule behind every "Förfallen": customer invoices
+ * (isInvoiceOverdue), a registered supplier invoice's nightly flip
+ * (isOverduePayable), the status a reversal writes, the reskontra's ageing
+ * and the Inkorg's unregistered invoices all read it. A query filters the same
+ * rule with `.lt('due_date', today)`, and SQL with public.stockholm_today().
  */
 export function isPastDue(dueDate: string, today: string): boolean {
   return dueDate < today
+}
+
+/** Whole days past the due date; 0 until it has passed. */
+export function daysPastDue(dueDate: string, today: string): number {
+  return isPastDue(dueDate, today) ? daysBetweenIso(dueDate, today) : 0
 }

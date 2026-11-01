@@ -96,6 +96,18 @@ describe('GET /api/reports/salary-journal/xlsx', () => {
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
+  it("takes the Swedish year when none is given, also on New Year's night", async () => {
+    mockGenerate.mockResolvedValue(report([]))
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      await GET(createMockRequest('/api/reports/salary-journal/xlsx'), noParams)
+      expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 2027, undefined, undefined)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('puts the personnel category after Anställning: the category for employees, empty for owners', async () => {
     enqueue({ data: { company_name: 'Testbolaget AB' } })
     mockGenerate.mockResolvedValue(

@@ -113,7 +113,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 
 const RotRutPayoutDialog = dynamic(
   () => import('@/components/invoices/RotRutPayoutDialog'),
@@ -381,7 +381,7 @@ export default function InvoicesPage() {
         !invoice.credited_invoice_id &&
         invoice.status !== 'draft' &&
         invoice.status !== 'cancelled' &&
-        invoice.due_date < today,
+        isPastDue(invoice.due_date, today),
     )
   // An installer who only invoices grön teknik lands on its list, not an
   // empty ROT one.

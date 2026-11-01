@@ -22,6 +22,7 @@ import {
   UTF8_BOM,
   type SheetSpec,
 } from '@/lib/reports/xlsx-export'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Behandlingshistorik (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16).
@@ -2526,13 +2527,6 @@ export function appReleaseEvent(row: AppReleaseRow): RawBehandlingshistorikEvent
   }
 }
 
-const STOCKHOLM_DAY = new Intl.DateTimeFormat('sv-SE', {
-  timeZone: 'Europe/Stockholm',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
-
 /**
  * Program versions, rolled up per calendar day.
  *
@@ -2551,7 +2545,7 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
   for (const row of rows) {
     const iso = toIso(row.first_seen_at)
     if (!iso) continue
-    const day = STOCKHOLM_DAY.format(new Date(iso))
+    const day = todayIsoStockholm(new Date(iso))
     const bucket = byDay.get(day)
     if (bucket) bucket.push(row)
     else byDay.set(day, [row])

@@ -11,6 +11,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 
 interface ExistingSupplier {
   id: string
@@ -83,7 +84,7 @@ export const POST = withRouteContext(
           if (row.bank_account) merged.bank_account = row.bank_account
           if (row.iban) merged.iban = row.iban
           if (row.bic) merged.bic = row.bic
-          if (row.default_payment_terms) merged.default_payment_terms = row.default_payment_terms
+          if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.default_currency) merged.default_currency = row.default_currency
           if (row.notes) merged.notes = row.notes
 
@@ -133,7 +134,7 @@ export const POST = withRouteContext(
             bank_account: row.bank_account,
             iban: row.iban,
             bic: row.bic,
-            default_payment_terms: row.default_payment_terms || 30,
+            default_payment_terms: supplierPaymentTermsDays(row.default_payment_terms),
             default_currency: row.default_currency || 'SEK',
             notes: row.notes,
           })

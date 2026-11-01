@@ -118,6 +118,7 @@ import {
   mentionsPeriodPlaceholder,
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
 } from '@/lib/invoices/recurring-placeholders'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -4397,7 +4398,7 @@ export const AccountBalancesQuerySchema = z.object({
   // bookkeeper working in the 00:00-02:00 CET window (after midnight UTC has
   // not yet passed) isn't rejected for entering their local today's date.
   as_of: isoDate.refine(
-    (d) => d <= new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm' }),
+    (d) => d <= todayIsoStockholm(),
     { message: 'as_of cannot be in the future' },
   ),
 })
@@ -4653,7 +4654,7 @@ const ImportedCustomerRowSchema = z.object({
   city: z.string().nullable(),
   country: countryCode,
   vat_number: z.string().nullable(),
-  default_payment_terms: z.number().int().min(0).max(365),
+  default_payment_terms: z.number().int().min(0).max(365).nullable(),
   notes: z.string().nullable(),
   // The existing customer the user said this row is (same name, nothing else
   // matched). Defaulted like customer_number for an older wizard.
@@ -4713,7 +4714,7 @@ const ImportedSupplierRowSchema = z.object({
   bank_account: z.string().nullable(),
   iban: z.string().nullable(),
   bic: z.string().nullable(),
-  default_payment_terms: z.number().int().min(0).max(365),
+  default_payment_terms: z.number().int().min(0).max(365).nullable(),
   default_currency: z.string(),
   notes: z.string().nullable(),
   // The existing supplier the user said this row is (same name, nothing else
@@ -5729,7 +5730,7 @@ const openingBalancesRefine = (
       })
     }
     const cutoverYear = Number(data.cutover_date.slice(0, 4))
-    const currentYear = new Date().getFullYear()
+    const currentYear = stockholmYearMonth().year
     if (cutoverYear < currentYear - 1 || cutoverYear > currentYear) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

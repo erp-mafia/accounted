@@ -37,6 +37,7 @@ import {
 } from '@/lib/expenses/expense-claim-vat'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { InvoiceExtractionResult } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Who paid for the underlag out of their own pocket. The account rule (2893
 // AB owner / 2018 EF owner / 2820 employee) lives in lib/expenses/payer.ts,
@@ -56,15 +57,6 @@ interface Props {
   payer: ExpensePayer
   /** Re-read the item after the claim posted its verifikat. */
   onSuccess: () => void | Promise<void>
-}
-
-function todayIso(): string {
-  // Local calendar date: toISOString() is UTC and would date a receipt booked
-  // after midnight CEST to the previous day (wrong period, wrong FX rate).
-  const now = new Date()
-  const mm = String(now.getMonth() + 1).padStart(2, '0')
-  const dd = String(now.getDate()).padStart(2, '0')
-  return `${now.getFullYear()}-${mm}-${dd}`
 }
 
 /** What the cost is booked on: an account number in classes 4-8 (CreateExpenseClaimSchema refuses anything else). */
@@ -94,7 +86,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
 
   const data = item.extracted_data
   const [description, setDescription] = useState('')
-  const [expenseDate, setExpenseDate] = useState(todayIso())
+  const [expenseDate, setExpenseDate] = useState(todayIsoStockholm())
   const [amountInput, setAmountInput] = useState('')
   const [vatInput, setVatInput] = useState('')
   // Where the seller is and what the receipt shows (lib/expenses/
@@ -124,7 +116,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   useEffect(() => {
     if (!open) return
     setDescription(data?.supplier?.name?.trim() || '')
-    setExpenseDate(data?.invoice?.invoiceDate || todayIso())
+    setExpenseDate(data?.invoice?.invoiceDate || todayIsoStockholm())
     const total = data?.totals?.total
     const vat = data?.totals?.vatAmount
     setAmountInput(total != null && total > 0 ? formatAmountInput(total) : '')

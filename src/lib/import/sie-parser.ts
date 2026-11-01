@@ -35,6 +35,7 @@ import type {
   ParseIssueSeverity,
   ValidationResult,
 } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // CP437 to UTF-8 mapping: full 0x80-0x9F range
 // CP437 was the standard encoding for DOS/early Windows (used by SIE #FORMAT PC8)
@@ -1491,7 +1492,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // every subsequent year. SIE amounts are debit-positive, so the class 3-8
   // sum is the un-transferred result with flipped sign.
   const currentFiscalYear = parsed.header.fiscalYears.find((fy) => fy.yearIndex === 0)
-  if (currentFiscalYear?.end && currentFiscalYear.end < formatLocalDate(new Date())) {
+  if (currentFiscalYear?.end && currentFiscalYear.end < todayIsoStockholm()) {
     const plResidual = parsed.vouchers.reduce(
       (sum, voucher) =>
         sum +

@@ -109,7 +109,6 @@ export const ENGINE_HELPERS = {
     assertLinesWellFormed: 'a pure check of line sides and amounts, no I/O',
     peekNextVoucherNumber: 'reads voucher_sequences without advancing it',
     findFiscalPeriod: 'reads the fiscal period of a date',
-    getSwedishLocalDate: 'a pure date helper',
     updateDraftEntry:
       'edits a draft in place: no number is drawn and nothing is posted; the draft was made through ' +
       'draftJournalEntry, which linked its event, and its commit goes through commitJournalEntry',

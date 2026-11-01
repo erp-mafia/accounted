@@ -15,6 +15,8 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/invariants/personal-number-shape'
+import { invoiceTermsFor } from '@/lib/invoices/due-date'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
 interface ExistingCustomer {
   id: string
@@ -84,6 +86,10 @@ export const POST = withRouteContext(
       const existing = existingRaw as unknown as ExistingCustomer[]
 
       const matcher = createRegisterMatcher(existing)
+      // A row without terms puts a new card on the company default: read once.
+      const companyDefaultTerms = rows.some((row) => row.default_payment_terms === null)
+        ? await resolveDefaultPaymentTerms(supabase, companyId, undefined)
+        : null
 
       const created: Customer[] = []
       const updated: Customer[] = []
@@ -126,7 +132,7 @@ export const POST = withRouteContext(
           if (row.city) merged.city = row.city
           if (row.country) merged.country = row.country
           if (row.vat_number) merged.vat_number = row.vat_number
-          if (row.default_payment_terms) merged.default_payment_terms = row.default_payment_terms
+          if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.notes) merged.notes = row.notes
 
           if (Object.keys(merged).length === 0) {
@@ -173,7 +179,7 @@ export const POST = withRouteContext(
             // Stored as ciphertext (customers_personal_number_check).
             personal_number: encryptCustomerPersonalNumber(row.personal_number),
             vat_number: row.vat_number,
-            default_payment_terms: row.default_payment_terms ?? 30,
+            default_payment_terms: invoiceTermsFor(row.default_payment_terms, companyDefaultTerms),
             notes: row.notes,
           })
           .select()

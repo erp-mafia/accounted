@@ -3,6 +3,7 @@
  * source projects, and what it leaves to another source.
  */
 import { describe, expect, it } from 'vitest'
+import { addDaysIso } from '@/lib/dates/iso'
 import type { ARLedgerReport } from '@/lib/reports/ar-ledger'
 import type { SupplierLedgerReport } from '@/lib/reports/supplier-ledger'
 import { createTableMockSupabase } from '@/tests/helpers'
@@ -179,6 +180,29 @@ describe('payment queue and supplier invoices', () => {
     )
     expect(ap.flows).toEqual([])
     expect(ap.overdue).toEqual([expect.objectContaining({ supplier_invoice_id: 'si-2', amount: 300, days_overdue: 27 })])
+  })
+
+  it('counts an invoice due today as on time, on both ledgers, and the day before it as overdue', () => {
+    const receivables = receivableFlows(
+      arReport([
+        { id: 'today', due: WINDOW.today, outstanding: 100 },
+        { id: 'yesterday', due: addDaysIso(WINDOW.today, -1), outstanding: 200 },
+      ]),
+      WINDOW,
+    )
+    expect(receivables.flows.map((flow) => flow.ref)).toEqual([{ type: 'invoice', id: 'today' }])
+    expect(receivables.overdue).toEqual([expect.objectContaining({ invoice_id: 'yesterday', days_overdue: 1 })])
+
+    const payables = payableFlows(
+      apReport([
+        { id: 'today', due: WINDOW.today, outstanding: 100 },
+        { id: 'yesterday', due: addDaysIso(WINDOW.today, -1), outstanding: 200 },
+      ]),
+      new Map(),
+      WINDOW,
+    )
+    expect(payables.flows).toHaveLength(1)
+    expect(payables.overdue).toEqual([expect.objectContaining({ supplier_invoice_id: 'yesterday', days_overdue: 1 })])
   })
 
   it('moves an order whose date passed to today, and leaves out cancelled, settled and foreign ones', () => {

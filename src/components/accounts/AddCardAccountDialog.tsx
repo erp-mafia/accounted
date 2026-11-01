@@ -33,6 +33,7 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { formatCurrency } from '@/lib/utils'
 import { CARD_ISSUERS, CURRENCIES, type CardIssuer, type CashAccount } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Lägg till företagskort (accounts_v2 > Lägg till konto > Företagskort): a
@@ -111,10 +112,6 @@ function parseLast4(value: string): string[] | null {
   return parts.every((part) => part.length === 4 && /^\d+$/.test(part)) ? [...new Set(parts)] : null
 }
 
-function todayInStockholm(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-}
-
 /** What the company already books on each card ledger candidate, with the saldo of the used ones. */
 async function loadLedgerUsage(): Promise<LedgerUsage> {
   const usageRes = await fetch('/api/bookkeeping/accounts/usage')
@@ -128,7 +125,7 @@ async function loadLedgerUsage(): Promise<LedgerUsage> {
   const used = Object.keys(usage)
   if (used.length > 0) {
     const balancesRes = await fetch(
-      `/api/bookkeeping/account-balances?accounts=${used.join(',')}&as_of=${todayInStockholm()}`,
+      `/api/bookkeeping/account-balances?accounts=${used.join(',')}&as_of=${todayIsoStockholm()}`,
     )
     if (balancesRes.ok) {
       const rows = ((await balancesRes.json()).data ?? []) as { account_number: string; balance: number }[]

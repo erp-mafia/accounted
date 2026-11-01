@@ -4,6 +4,7 @@ import { roundOre } from '@/lib/money'
 import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import type { JournalEntry } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('payment-sync')
 
@@ -201,7 +202,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       let newStatus: string
       if (newPaidAmount > 0) {
         newStatus = 'partially_paid'
-      } else if (supplierInvoice.due_date && new Date(supplierInvoice.due_date) < new Date()) {
+      } else if (supplierInvoice.due_date && isPastDue(supplierInvoice.due_date, todayIsoStockholm())) {
         newStatus = 'overdue'
       } else {
         newStatus = 'approved'
@@ -326,7 +327,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       )
       const revertStatus = newPaidAmount > 0
         ? 'partially_paid'
-        : customerInvoice.due_date && new Date(customerInvoice.due_date) < new Date()
+        : customerInvoice.due_date && isPastDue(customerInvoice.due_date, todayIsoStockholm())
           ? 'overdue'
           : 'sent'
 

@@ -40,6 +40,7 @@ import type {
   PsWarning,
 } from '@/lib/reports/periodisk-sammanstallning'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 function typeBadge(row: { services: number; goods: number; triangulation: number }) {
   const types: string[] = []
@@ -62,8 +63,7 @@ function deadlineLabel(end: string): string {
 
 export function PeriodiskSammanstallningView() {
   const errorLocale = useLocale() as ErrorLocale
-  const currentYear = new Date().getFullYear()
-  const currentMonth = new Date().getMonth() + 1
+  const { year: currentYear, month: currentMonth } = stockholmYearMonth()
   const currentQuarter = Math.ceil(currentMonth / 3)
 
   const [periodType, setPeriodType] = useState<PsPeriodType>('quarterly')

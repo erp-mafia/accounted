@@ -4,7 +4,6 @@ import { useEffect, useMemo } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { format } from 'date-fns'
 import { isSaneDateString } from '@/lib/utils'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -13,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { CURRENCIES, type CreateTransactionInput, type Currency } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface TransactionFormProps {
   onSubmit: (data: CreateTransactionInput) => Promise<void>
@@ -61,7 +61,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
 
   // Set date default on client only to avoid hydration mismatch
   useEffect(() => {
-    setValue('date', format(new Date(), 'yyyy-MM-dd'))
+    setValue('date', todayIsoStockholm())
   }, [])
 
   const onFormSubmit = (data: FormData) => {

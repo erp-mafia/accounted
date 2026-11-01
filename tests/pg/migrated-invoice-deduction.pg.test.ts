@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertAuthUser, insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertAuthUser, insertPostedJournalEntry, seedCompany, withSwedishToday } from './fixtures'
 
 /**
  * Migration 20261015001000_migrated_invoice_deduction:
@@ -417,6 +417,22 @@ describe('apply_migrated_invoice_deduction', () => {
     ).toEqual({ ok: false, code: 'PAYMENT_DATE_MISSING' })
   })
 
+  it('takes a payment dated the Swedish today and refuses the day after it', async () => {
+    const c = await seedCase({ paid: 6250 })
+    const dryRun = (paidOn: string) =>
+      asService((client) =>
+        apply(client, c, {
+          expected: expected(c, { paid_amount: 6250 }),
+          deduction: deduction(c, { paid_on: paidOn }),
+          dryRun: true,
+        }),
+      )
+    await withSwedishToday('2031-06-15', async () => {
+      expect(await dryRun('2031-06-15')).toMatchObject({ ok: true, status: 'paid' })
+      expect(await dryRun('2031-06-16')).toEqual({ ok: false, code: 'PAYMENT_DATE_MISSING' })
+    })
+  })
+
   it('answers FORBIDDEN to a user outside the company and runs for a member', async () => {
     const c = await seedCase()
     const outsider = await insertAuthUser()
@@ -465,6 +481,20 @@ describe('revert_migrated_invoice_deduction', () => {
       return rows[0].r
     })
   }
+
+  it.each([
+    ['the due date itself', '2026-09-27', 'sent'],
+    ['the day after it', '2026-09-28', 'overdue'],
+  ])('with nothing paid, on %s the invoice goes back %s', async (_when, today, status) => {
+    const c = await seedCase()
+    const voucherId = await insertVoucher(c)
+    await asService((client) => apply(client, c, { journalEntryId: voucherId }))
+    await storno(c, voucherId, 2)
+
+    await withSwedishToday(today, async () => {
+      expect(await revert(c, voucherId)).toMatchObject({ ok: true, reverted: true, status })
+    })
+  })
 
   it('refuses while a begäran holds the invoice, then reverts once the voucher is reversed', async () => {
     const c = await seedCase({ paid: 6250 })

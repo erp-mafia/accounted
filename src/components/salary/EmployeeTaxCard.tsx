@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import MunicipalityCombobox from './MunicipalityCombobox'
 import { TAX_COLUMN_OPTIONS, deriveTaxColumn } from '@/lib/salary/tax-column'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 export interface EmployeeTaxValue {
   f_skatt_status: string
@@ -79,7 +80,7 @@ export default function EmployeeTaxCard({
   onChange,
 }: EmployeeTaxCardProps) {
   const t = useTranslations('salary_employee')
-  const incomeYear = year ?? new Date().getFullYear()
+  const incomeYear = year ?? stockholmYearMonth().year
 
   const [fSkatt, setFSkatt] = useState(initial?.f_skatt_status ?? 'a_skatt')
   const [sido, setSido] = useState(initial?.is_sidoinkomst ?? false)

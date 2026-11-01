@@ -16,6 +16,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fileResponse } from '@/lib/api/file-response'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /** Personalkategori column: the category for employees, empty for owners and board. */
 const CATEGORY_LABELS: Record<string, string> = { arbetare: 'Arbetare', tjansteman: 'Tjänsteman' }
@@ -30,7 +31,7 @@ const GROUP_LABELS: Record<SalaryJournalGroup, string> = {
 
 export const GET = withRouteContext('report.salary_journal.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
-  const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
+  const year = parseInt(searchParams.get('year') || String(stockholmYearMonth().year))
   const monthFrom = searchParams.get('month_from') ? parseInt(searchParams.get('month_from')!) : undefined
   const monthTo = searchParams.get('month_to') ? parseInt(searchParams.get('month_to')!) : undefined
 

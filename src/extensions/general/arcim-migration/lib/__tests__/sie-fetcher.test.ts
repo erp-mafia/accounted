@@ -62,6 +62,11 @@ describe('getAllowedFiscalYears (the default selection)', () => {
     expect([...years].sort((a, b) => a - b)).toEqual([2029, 2030, 2031])
   })
 
+  it("rolls with the Swedish year, also on New Year's night", () => {
+    const years = getAllowedFiscalYears(new Date('2026-12-31T23:30:00Z'))
+    expect([...years].sort((a, b) => a - b)).toEqual([2025, 2026, 2027])
+  })
+
   it('defaults to the real current year', () => {
     const years = getAllowedFiscalYears()
     expect(years.has(CY)).toBe(true)

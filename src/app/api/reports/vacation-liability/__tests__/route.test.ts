@@ -150,6 +150,17 @@ describe('GET /api/reports/vacation-liability', () => {
     })
   })
 
+  it("takes the Swedish year when no date is given, also on New Year's night", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      expect((await call('/api/reports/vacation-liability')).status).toBe(200)
+      expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', '2027-12-31')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the legacy year parameter as December 31', async () => {
     const res = await call('/api/reports/vacation-liability?year=2025')
     expect(res.status).toBe(200)

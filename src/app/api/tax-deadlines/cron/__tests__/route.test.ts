@@ -79,6 +79,17 @@ describe('GET /api/tax-deadlines/cron', () => {
     expect(mocks.backfill).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['the Swedish 2 January, still the 1st in UTC', '2027-01-01T23:30:00.000Z', true],
+    ['the Swedish 3 January, still the 2nd in UTC', '2027-01-02T23:30:00.000Z', false],
+  ])('on %s the annual run follows the Swedish day', async (_when, instant, isAnnualRun) => {
+    vi.setSystemTime(new Date(instant))
+
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
+
+    await expect(response.json()).resolves.toMatchObject({ isAnnualRun })
+  })
+
   it('returns 401 without creating a database client when cron auth fails', async () => {
     vi.mocked(verifyCronSecret).mockReturnValueOnce(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),

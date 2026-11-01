@@ -69,7 +69,7 @@ import {
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import {
   firstRunDateOnOrAfter,
   getStockholmDateHour,
@@ -188,7 +188,7 @@ export function rollNextRunDateForward(
   if (month0 < 0 || month0 > 11 || anchorDay < 1 || anchorDay > lastDayOfMonth(year, month0)) {
     throw new Error(`invalid anchor date: ${anchorDate}`)
   }
-  const todayIso = isoFromParts(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  const todayIso = todayIsoStockholm(today)
   let candidate = isoFromParts(year, month0, Math.min(dayOfMonth, lastDayOfMonth(year, month0)))
   while (allowToday ? candidate < todayIso : candidate <= todayIso) {
     const m = month0 + intervalMonths
@@ -355,7 +355,7 @@ export async function executeRecurringSchedule(
   //    it until 01:00/02:00, so a run at 00:30 on the 1st would date the
   //    invoice, its verifikat and {månad} in the previous month (#58).
   const invoiceDate = todayIsoStockholm(today)
-  const dueDate = addDaysIso(invoiceDate, schedule.payment_terms_days)
+  const dueDate = invoiceDueDate(invoiceDate, schedule.payment_terms_days)
 
   // Placeholders ({månad}, {år}, {periodstart} ...) resolve against the
   // invoice date and the schedule's current period; month names follow the

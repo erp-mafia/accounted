@@ -14,7 +14,6 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   fetchPaymentsAsOf,
   outstandingAsOf,
-  todayIsoDate,
   type PaymentsAsOf,
 } from '@/lib/reports/reskontra-payments'
 import {
@@ -1379,7 +1378,7 @@ async function countOpenFxItemsAtBalansdagen(
   companyId: string,
   balansdagen: string
 ): Promise<OpenFxAtBalansdagen> {
-  const isHistorical = balansdagen < todayIsoDate()
+  const isHistorical = balansdagen < todayIsoStockholm()
   const columns =
     'id, status, currency, exchange_rate, total, paid_amount, remaining_amount, paid_at'
 

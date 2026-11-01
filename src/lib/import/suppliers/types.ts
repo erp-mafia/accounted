@@ -46,7 +46,8 @@ export interface ParsedSupplierRow {
   bank_account: string | null
   iban: string | null
   bic: string | null
-  default_payment_terms: number
+  /** Null when the file gives none. */
+  default_payment_terms: number | null
   default_currency: string
   notes: string | null
   is_valid: boolean

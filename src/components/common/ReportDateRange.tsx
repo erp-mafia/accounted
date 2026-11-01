@@ -19,6 +19,7 @@ import {
   type RangePreset,
   type StoredRangeChoice,
 } from '@/lib/reports/report-range-preset'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export type DateRangeValue = {
   /** Inclusive lower bound. ISO YYYY-MM-DD. `undefined` = period start. */
@@ -67,17 +68,6 @@ interface Props {
 const STORAGE_KEY_PREFIX = 'Accounted:report-range-preset:'
 const MENU_PRESETS: Exclude<Preset, 'custom'>[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'last_quarter']
 
-function todayIso(): string {
-  // Local calendar date: using toISOString() returns UTC, which falls a day
-  // behind for Swedish users between midnight and 01:00/02:00 local time and
-  // would silently truncate "today" from YTD / this-month / this-quarter.
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 /**
  * Period picker for the resultat-/balansrapport family and the reconciliation
  * workspace: one pill that names the range in force and opens a menu with the
@@ -121,7 +111,7 @@ export function ReportDateRange({
     const initialWindow = pendingInitialRef.current
     pendingInitialRef.current = undefined
     if (initialWindow && windowFitsPeriod(initialWindow, periodStart, periodEnd)) {
-      const today = todayIso()
+      const today = todayIsoStockholm()
       const match = MENU_PRESETS.find((p) =>
         sameWindow(resolvePreset(p, periodStart, periodEnd, today), initialWindow, periodStart, periodEnd),
       )
@@ -135,7 +125,7 @@ export function ReportDateRange({
     } catch {
       // Storage blocked (private mode, site data disabled): open on the default.
     }
-    const restored = restoreRangeChoice(stored, { periodStart, periodEnd, defaultPreset, today: todayIso() })
+    const restored = restoreRangeChoice(stored, { periodStart, periodEnd, defaultPreset, today: todayIsoStockholm() })
     setPreset(restored.preset)
     onChange(restored.value)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,7 +147,7 @@ export function ReportDateRange({
     (next: Exclude<Preset, 'custom'>) => {
       setPreset(next)
       remember({ preset: next })
-      onChange(resolvePreset(next, periodStart, periodEnd, todayIso()))
+      onChange(resolvePreset(next, periodStart, periodEnd, todayIsoStockholm()))
       setOpen(false)
     },
     [onChange, periodEnd, periodStart, remember],
@@ -186,7 +176,7 @@ export function ReportDateRange({
 
   useEffect(() => {
     if (!open) return
-    setDraft({ from: value.fromDate ?? periodStart, to: value.toDate ?? clampToPeriod(todayIso(), periodStart, periodEnd) })
+    setDraft({ from: value.fromDate ?? periodStart, to: value.toDate ?? clampToPeriod(todayIsoStockholm(), periodStart, periodEnd) })
     const raf = requestAnimationFrame(() => updatePosition())
     return () => cancelAnimationFrame(raf)
   // eslint-disable-next-line react-hooks/exhaustive-deps

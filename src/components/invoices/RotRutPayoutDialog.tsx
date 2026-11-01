@@ -36,6 +36,7 @@ import {
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { DEDUCTION_TYPE_LABEL_KEYS, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 type RequestStatus =
   | 'generated'
@@ -242,7 +243,7 @@ export default function RotRutPayoutDialog({
   // it, making the whole dialog look dead even though the type picker worked
   // (#1884). With no eligible years the current year stands in as the only,
   // inert, choice.
-  const fallbackYear = String(new Date().getFullYear())
+  const fallbackYear = String(stockholmYearMonth().year)
   const yearItems = (years.length > 0 ? years : [fallbackYear]).map((year) => ({
     id: year,
     label: year,

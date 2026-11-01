@@ -277,6 +277,16 @@ describe('buildReportDataStatus', () => {
       expect(status.caveats).toContain('Bank reconciliation is signed off only through 2026-07-31.')
     })
 
+    it('reads the last month end on the Swedish calendar, on the first night of a month', async () => {
+      latestSignoffs.mockResolvedValue(new Map([['bank:ca-1', { through_date: '2026-07-31' }]]))
+      const double = makeSupabase({ cashAccounts: [BANK_ACCOUNT] })
+      const status = (await buildReportDataStatus(double.supabase, 'co-1', {
+        periodId: 'fp-1',
+        now: new Date('2026-08-31T22:30:00Z'), // 00:30 on 1 September in Sweden
+      })) as ReportDataStatus
+      expect(status.caveats).toContain('Bank reconciliation is signed off only through 2026-07-31.')
+    })
+
     it('measures a current-year report against the last month end, not the future period end', async () => {
       // Period end 2026-12-31 is in the future; signed through 2026-08-31 is current.
       latestSignoffs.mockResolvedValue(new Map([['bank:ca-1', { through_date: '2026-08-31' }]]))

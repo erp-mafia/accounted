@@ -1,0 +1,1 @@
+[2026-11-01] Today in SQL is public.stockholm_today(), the twin of todayIsoStockholm: the database runs in UTC, so CURRENT_DATE refused a payment dated the Swedish today at night. Functions that keep the session date are named with their reason in tests/pg/stockholm-today.pg.test.ts.

@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { addDaysIso, addMonthsIso, daysBetweenIso, endOfDayIsoStockholm, stockholmWallTimeToUtc, todayIsoStockholm, toIsoDate } from '../iso'
+import {
+  addDaysIso,
+  addMonthsIso,
+  daysBetweenIso,
+  endOfDayIsoStockholm,
+  stockholmWallTimeToUtc,
+  todayIsoStockholm,
+  toIsoDate,
+  daysPastDue,
+  isPastDue,
+  previousMonthEndIso,
+  stockholmYearMonth,
+} from '../iso'
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {
@@ -76,5 +88,33 @@ describe('stockholmWallTimeToUtc', () => {
     // Summer time starts 2027-03-28 at 02:00 local, ends 2027-10-31 at 03:00 local.
     expect(stockholmWallTimeToUtc('2027-03-28', '09:00').toISOString()).toBe('2027-03-28T07:00:00.000Z')
     expect(stockholmWallTimeToUtc('2027-10-31', '09:00').toISOString()).toBe('2027-10-31T08:00:00.000Z')
+  })
+})
+
+describe('stockholmYearMonth', () => {
+  it('is the Swedish year and month, not the UTC ones', () => {
+    expect(stockholmYearMonth(new Date('2026-12-31T23:30:00Z'))).toEqual({ year: 2027, month: 1 })
+    expect(stockholmYearMonth(new Date('2026-06-30T22:30:00Z'))).toEqual({ year: 2026, month: 7 })
+    expect(stockholmYearMonth(new Date('2026-06-30T21:30:00Z'))).toEqual({ year: 2026, month: 6 })
+  })
+})
+
+describe('previousMonthEndIso', () => {
+  it('is the last day of the month before, across a year and a leap day', () => {
+    expect(previousMonthEndIso('2027-01-01')).toBe('2026-12-31')
+    expect(previousMonthEndIso('2028-03-15')).toBe('2028-02-29')
+    expect(previousMonthEndIso('2026-11-30')).toBe('2026-10-31')
+  })
+})
+
+describe('isPastDue and daysPastDue', () => {
+  it('the due date itself is on time, the day after is day one', () => {
+    expect(isPastDue('2026-11-02', '2026-11-01')).toBe(false)
+    expect(isPastDue('2026-11-02', '2026-11-02')).toBe(false)
+    expect(isPastDue('2026-11-02', '2026-11-03')).toBe(true)
+    expect(daysPastDue('2026-11-02', '2026-11-01')).toBe(0)
+    expect(daysPastDue('2026-11-02', '2026-11-02')).toBe(0)
+    expect(daysPastDue('2026-11-02', '2026-11-03')).toBe(1)
+    expect(daysPastDue('2026-11-02', '2026-12-03')).toBe(31)
   })
 })

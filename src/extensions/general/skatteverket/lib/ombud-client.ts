@@ -389,11 +389,6 @@ export async function createUtseOmbudDeepLink(
 
 // ── Pure helpers over behörighetsposter ──────────────────────────────
 
-/** yyyy-mm-dd for the given instant, in UTC (Skatteverket dates are date-only). */
-export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
 /**
  * A grant counts today when giltigFrom is today or earlier and giltigTom is
  * empty (tillsvidare) or today or later. Date-only strings compare

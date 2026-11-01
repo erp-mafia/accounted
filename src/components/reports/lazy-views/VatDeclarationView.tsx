@@ -51,7 +51,6 @@ import {
 } from '@/lib/vat/filing-record'
 import type { VatFilingRecordWithChange } from '@/lib/vat/filed-period-changes'
 import { cn, formatAmount, formatDate } from '@/lib/utils'
-import { formatDateISO } from '@/lib/calendar/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -77,6 +76,7 @@ import type {
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
 import type { VatDeclaration, VatPeriodType } from '@/types'
 import { formatAmountInput } from '@/lib/money'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 // The full journal entry editor is heavy (BAS catalogue, comboboxes, review
 // dialogs): defer it until the user opens the momsverifikat dialog.
@@ -571,8 +571,7 @@ function MomsPeriodInlineSetup({
 }
 
 export default function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
-  const currentYear = new Date().getFullYear()
-  const currentMonth = new Date().getMonth() + 1
+  const { year: currentYear, month: currentMonth } = stockholmYearMonth()
   const currentQuarter = Math.ceil(currentMonth / 3)
 
   // periodType stays null until the company's VAT settings have settled, so
@@ -730,7 +729,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const isYearly = periodType === 'yearly'
   const yearlyFiscalPeriod = isYearly
     ? (fiscalPeriods.find((p) => p.id === pickedFiscalPeriodId) ??
-      fiscalPeriodForVatYear(fiscalPeriods, year, formatDateISO(new Date())))
+      fiscalPeriodForVatYear(fiscalPeriods, year, todayIsoStockholm()))
     : null
   const fiscalPeriodId = yearlyFiscalPeriod?.id ?? ''
   const fiscalPeriodEnd = yearlyFiscalPeriod?.period_end ?? null

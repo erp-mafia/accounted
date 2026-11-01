@@ -1,5 +1,6 @@
 import type { CompanySettings } from '@/types'
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Return the ISO date (YYYY-MM-DD) for the start of the fiscal year that
@@ -17,7 +18,8 @@ export function getCurrentFiscalYearStart(
   let startMonth = settings?.fiscal_year_start_month || 1
   if (isEntityType(settings?.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)) startMonth = 1
 
-  const year = today.getMonth() + 1 >= startMonth ? today.getFullYear() : today.getFullYear() - 1
+  const { year: currentYear, month } = stockholmYearMonth(today)
+  const year = month >= startMonth ? currentYear : currentYear - 1
   return `${year}-${String(startMonth).padStart(2, '0')}-01`
 }
 
@@ -32,9 +34,8 @@ export function getPreviousFiscalYearStart(
   let startMonth = settings?.fiscal_year_start_month || 1
   if (isEntityType(settings?.entity_type) && fiscalYearLockedToCalendar(settings.entity_type)) startMonth = 1
 
-  const currentYearStart = today.getMonth() + 1 >= startMonth
-    ? today.getFullYear()
-    : today.getFullYear() - 1
+  const { year, month } = stockholmYearMonth(today)
+  const currentYearStart = month >= startMonth ? year : year - 1
   return `${currentYearStart - 1}-${String(startMonth).padStart(2, '0')}-01`
 }
 

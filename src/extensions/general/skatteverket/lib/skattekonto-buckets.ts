@@ -1,4 +1,5 @@
 import type { StoredSkattekontoTransaction } from '../types'
+import { isPastDue } from '@/lib/dates/iso'
 
 export interface SkattekontoBuckets<T extends StoredSkattekontoTransaction> {
   booked: T[]
@@ -43,7 +44,7 @@ export function splitTransactions<T extends StoredSkattekontoTransaction>(
       continue
     }
     const dueDate = row.forfallodatum ?? row.transaktionsdatum
-    if (dueDate < today) {
+    if (isPastDue(dueDate, today)) {
       overdue.push(row)
     } else {
       upcoming.push(row)

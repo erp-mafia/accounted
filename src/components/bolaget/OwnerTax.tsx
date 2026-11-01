@@ -24,6 +24,7 @@ import type { K10OwnerView, K10YearView } from '@/lib/bolaget/owner-tax/k10'
 import type { OwnerLoanView, OwnerLoansView, SpecialListRow } from '@/lib/bolaget/owner-tax/loans-view'
 import type { Ku20Status } from '@/lib/bolaget/owner-tax/ku20'
 import type { BoardLoansNote } from '@/lib/bolaget/owner-tax/arl-note'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type FormState = Record<string, string>
 type Preview = Record<string, unknown>
@@ -45,10 +46,6 @@ interface Person {
 }
 
 const NEW_PARTY = '__new'
-
-function today(): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date())
-}
 
 /** An amount field: '' is null (cleared), anything else must parse. */
 function amountOrNull(value: string): number | null | undefined {
@@ -95,7 +92,7 @@ export function OwnerTax() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
-  const [year, setYear] = useState<number>(() => Number(today().slice(0, 4)))
+  const [year, setYear] = useState<number>(() => Number(todayIsoStockholm().slice(0, 4)))
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
   const [people, setPeople] = useState<Person[]>([])
@@ -132,7 +129,7 @@ export function OwnerTax() {
   }, [load])
 
   const years = useMemo(() => {
-    const now = Number(today().slice(0, 4))
+    const now = Number(todayIsoStockholm().slice(0, 4))
     return [...new Set([now + 1, now, now - 1, now - 2, ...(data?.k10.supported_years ?? []), year])].sort((a, b) => b - a)
   }, [data, year])
 
@@ -254,7 +251,7 @@ export function OwnerTax() {
       account: DEFAULT_LOAN_ACCOUNTS[direction].short,
       principal: '',
       interest_rate: '',
-      start_date: today(),
+      start_date: todayIsoStockholm(),
       maturity_date: '',
       terms: '',
       exception: 'none',
