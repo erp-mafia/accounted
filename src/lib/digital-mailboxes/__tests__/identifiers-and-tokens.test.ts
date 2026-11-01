@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DigitalMailboxApiError, createTokenCache, withToken } from '../http'
 import {
-  isLegalPersonOrgNumber,
   orgNumberFromVatNumber,
   payslipEmployerContact,
   personnummer12,
@@ -17,13 +16,6 @@ describe('identifiers', () => {
     expect(orgNumberFromVatNumber('SE442005920801')).toBe('4420059208')
     expect(orgNumberFromVatNumber('se 442005920801')).toBe('4420059208')
     expect(orgNumberFromVatNumber('DE123')).toBeNull()
-  })
-
-  it('tells a legal person from a sole trader by the third digit', () => {
-    expect(isLegalPersonOrgNumber('4420059208')).toBe(true)
-    // A personnummer (an enskild firma's organisationsnummer).
-    expect(isLegalPersonOrgNumber('5001182046')).toBe(false)
-    expect(isLegalPersonOrgNumber(null)).toBe(false)
   })
 
   it('expands and validates a personnummer to twelve digits', () => {

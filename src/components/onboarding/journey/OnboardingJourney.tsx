@@ -21,7 +21,7 @@ import {
   type CompanySuggestion,
 } from '@/lib/company-lookup/types'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
 import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
@@ -661,7 +661,7 @@ export default function OnboardingJourney({
     const mapped = mapEntityType(legalEntityType)
     return mapped && usesPersonnummerAsOrgNumber(mapped)
       ? t(FORM_LABEL_KEY[mapped])
-      : formatOrgNumber(orgNumber)
+      : formatOrgNumberDisplay(orgNumber)
   }
 
   function renderStep() {

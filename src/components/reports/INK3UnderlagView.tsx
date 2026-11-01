@@ -24,7 +24,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatWholeKronor } from '@/components/reports/DeclarationRutaRow'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { ink3Sections, ink3SignMark } from '@/lib/reports/ink3/presentation'
 import type {
   Ink3Field,
@@ -261,7 +261,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
               year: data.fiscalYear.name,
               period: data.beskattningsperiod,
             })}
-            {data.companyInfo.orgNumber && ` · ${t('org_number', { orgNumber: formatOrgNumber(data.companyInfo.orgNumber) })}`}
+            {data.companyInfo.orgNumber && ` · ${t('org_number', { orgNumber: formatOrgNumberDisplay(data.companyInfo.orgNumber) })}`}
           </p>
           <HelpPopover>{t('help')}</HelpPopover>
         </div>

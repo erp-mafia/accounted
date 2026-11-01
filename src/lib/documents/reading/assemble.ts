@@ -15,7 +15,8 @@
  */
 import type { InvoiceExtractionResult } from '@/types'
 import { isInboxDocumentKind } from '@/lib/documents/inbox-kind'
-import { normalizeDate, normalizeOrgNumber } from '@/lib/documents/extract/fields'
+import { normalizeDate } from '@/lib/documents/extract/fields'
+import { orgNumberKey, sameOrgNumber } from '@/lib/invariants/org-number'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 import type { PeppolInboundDocument } from '@/lib/invoices/peppol-inbound-ubl'
@@ -357,7 +358,7 @@ function arkivSays(field: ReadingFieldName, value: unknown, stored: ArkivRecordF
       // A credit note's Arkiv record prints the credited amount positive; the inbox books it below zero.
       return typeof value === 'number' && typeof theirs === 'number' && equalOre(Math.abs(value), Math.abs(theirs))
     case 'seller_legal_registration_identifier':
-      return (normalizeOrgNumber(String(value)) ?? alnum(value)) === (normalizeOrgNumber(String(theirs)) ?? alnum(theirs))
+      return sameOrgNumber(String(value), String(theirs))
     case 'invoice_issue_date':
     case 'payment_due_date':
       return normalizeDate(String(value)) !== null && normalizeDate(String(value)) === normalizeDate(String(theirs))
@@ -438,7 +439,7 @@ function registerSays(field: ReadingFieldName, value: unknown, card: SupplierCar
 
 /** A Swedish VAT number is SE, the ten-digit organisationsnummer and 01. */
 function vatIdentifierAgrees(values: ReadingValueMap): boolean {
-  const org = values.seller_legal_registration_identifier ? normalizeOrgNumber(values.seller_legal_registration_identifier) : null
+  const org = orgNumberKey(values.seller_legal_registration_identifier)
   const vat = values.seller_vat_identifier ? alnum(values.seller_vat_identifier) : null
   return org !== null && vat !== null && vat === `SE${org}01`
 }

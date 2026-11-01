@@ -28,16 +28,20 @@ const HANDELSBANKEN_BANKID: AuthMethod = {
 }
 
 describe('companyIdDigits', () => {
+  it('reads the 12-digit form as the same number', () => {
+    expect(companyIdDigits({ org_number: '165544556672', entity_type: 'aktiebolag' })).toBe('5544556672')
+  })
+
   it('strips the hyphen from an organisationsnummer', () => {
     expect(companyIdDigits({ org_number: '554455-6672', entity_type: 'aktiebolag' })).toBe('5544556672')
     expect(companyIdDigits({ org_number: '5544556672', entity_type: 'aktiebolag' })).toBe('5544556672')
   })
 
-  it('returns null when the number is missing or not 10 digits', () => {
+  it('returns null when the number is missing or reads as none', () => {
     expect(companyIdDigits({ org_number: null, entity_type: 'aktiebolag' })).toBeNull()
     expect(companyIdDigits({ org_number: '', entity_type: 'aktiebolag' })).toBeNull()
     expect(companyIdDigits({ org_number: '12345', entity_type: 'aktiebolag' })).toBeNull()
-    expect(companyIdDigits({ org_number: '165544556672', entity_type: 'aktiebolag' })).toBeNull()
+    expect(companyIdDigits({ org_number: '835544556672', entity_type: 'aktiebolag' })).toBeNull()
   })
 })
 

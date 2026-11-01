@@ -8,6 +8,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { isLegalPersonOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
 import { getErrorEntry, hasErrorEntry } from '@/lib/errors/structured-errors'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
@@ -88,17 +89,10 @@ export function preparePeppolParticipant(settings: ParticipantSettings): PeppolP
   if (isEntityType(settings.entity_type) && usesPersonnummerAsOrgNumber(settings.entity_type)) {
     return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
   }
-  const digits = (settings.org_number ?? '').replace(/\D/g, '')
-  // Twelve digits: an organisation number carries the 16 prefix, a
-  // personnummer its century (19/20) followed by the birth month.
-  if (digits.length === 12 && /^(19|20)/.test(digits) && Number(digits[4]) < 2) {
-    return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
-  }
-  const orgNumber = digits.length === 12 && digits.startsWith('16') ? digits.slice(2) : digits
-  if (orgNumber.length !== 10) return { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
-  // Same rule as the BIS Billing generator: an organisation number has its
-  // third digit >= 2; a personnummer has a month (01-12) there.
-  if (Number(orgNumber[2]) < 2) return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
+  const orgNumber = orgNumberKey(settings.org_number)
+  if (orgNumber === null) return { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
+  // Same rule as the BIS Billing generator.
+  if (!isLegalPersonOrgNumber(settings.org_number)) return { ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' }
   const companyName = settings.company_name?.trim()
   if (!companyName) return { ok: false, code: 'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED' }
 

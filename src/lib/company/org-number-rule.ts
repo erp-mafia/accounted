@@ -1,5 +1,4 @@
-import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
+import { normalizeOrgNumber, orgNumberKey, swedishNumberKind } from '@/lib/invariants/org-number'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 
 /**
@@ -11,13 +10,12 @@ import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-
  * ## The rule
  *
  * The number is writable while the company has no valid one stored, and
- * never again once it has. "Valid" is read the way the bank party reader
- * (lib/company/org-number.ts) reads a stored value, plus the check digit:
- * Swedish org-number shape (10 digits, or 12 with a 16/18/19/20 century in
- * front, orgNumberKey) and a correct Luhn check digit (normalizeOrgNumber;
- * the modulus-10 rule, SE-R-013 in the swedish-e-invoicing skill and #ORGNR
- * in the swedish-accounting-compliance skill's SIE4 reference). Either stored
- * copy counts: company_settings.org_number or companies.org_number.
+ * never again once it has. "Valid" is normalizeOrgNumber: Swedish org-number
+ * shape (10 digits, or 12 with a 16/18/19/20 century in front) and a correct
+ * Luhn check digit (the modulus-10 rule, SE-R-013 in the swedish-e-invoicing
+ * skill and #ORGNR in the swedish-accounting-compliance skill's SIE4
+ * reference). Either stored copy counts: company_settings.org_number or
+ * companies.org_number.
  *
  * A new number must be valid in that sense and fit the legal form
  * (SFS 1974:174 2 §, see lib/invariants/personal-number-shape.ts): an enskild
@@ -52,21 +50,12 @@ export type OrgNumberChange =
   | { kind: 'fill'; value: string }
   | { kind: 'refused'; code: OrgNumberRefusalCode }
 
-/**
- * The stored value as the 10-digit number when it is a valid organisationsnummer,
- * else null (empty, not org-number shaped, or a wrong check digit).
- */
-export function validStoredOrgNumber(raw: string | null | undefined): string | null {
-  const key = orgNumberKey(raw)
-  return key !== null && normalizeOrgNumber(key) === key ? key : null
-}
-
 /** The valid number the company already has, from either stored copy, or null. */
 export function lockedOrgNumber(
   storedSettings: string | null | undefined,
   storedCompany: string | null | undefined,
 ): string | null {
-  return validStoredOrgNumber(storedSettings) ?? validStoredOrgNumber(storedCompany)
+  return normalizeOrgNumber(storedSettings) ?? normalizeOrgNumber(storedCompany)
 }
 
 /**
@@ -77,17 +66,14 @@ export function checkNewOrgNumber(
   raw: string | null | undefined,
   entityType: unknown,
 ): { ok: true; value: string } | { ok: false; code: OrgNumberRefusalCode } {
-  const value = validStoredOrgNumber(raw)
+  const value = normalizeOrgNumber(raw)
   if (value === null) return { ok: false, code: 'SETTINGS_ORG_NUMBER_INVALID' }
   if (!isEntityType(entityType)) return { ok: true, value }
-  const isPersonnummer = looksLikeSwedishPersonalNumber(value)
+  const kind = swedishNumberKind(value)
   if (usesPersonnummerAsOrgNumber(entityType)) {
-    return isPersonnummer ? { ok: true, value } : { ok: false, code: 'SETTINGS_ORG_NUMBER_PERSONNUMMER_REQUIRED' }
+    return kind === 'person' ? { ok: true, value } : { ok: false, code: 'SETTINGS_ORG_NUMBER_PERSONNUMMER_REQUIRED' }
   }
-  // A legal person's number has 20 or more where a birth date has its month.
-  return !isPersonnummer && Number(value[2]) >= 2
-    ? { ok: true, value }
-    : { ok: false, code: 'SETTINGS_ORG_NUMBER_LEGAL_ENTITY_REQUIRED' }
+  return kind === 'legal_person' ? { ok: true, value } : { ok: false, code: 'SETTINGS_ORG_NUMBER_LEGAL_ENTITY_REQUIRED' }
 }
 
 /**

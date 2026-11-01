@@ -28,6 +28,7 @@ import {
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
 import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { companyIdentityFrom } from '@/lib/company/org-number'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -248,17 +249,7 @@ export async function generateINK2Declaration(
     .eq('company_id', companyId)
     .single()
 
-  // Resolve entity_type: prefer company_settings, fall back to companies table (NOT NULL, always reliable)
-  let entityType = settings?.entity_type
-  if (!entityType) {
-    const { data: company, error: companyError } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    if (companyError) throw new Error(`Failed to resolve entity type: ${companyError.message}`)
-    entityType = company?.entity_type
-  }
+  const { orgNumber, entityType } = await companyIdentityFrom(supabase, companyId, settings)
 
   if (!isEntityType(entityType) || !usesInk2(entityType)) {
     throw new Error(
@@ -584,7 +575,8 @@ export async function generateINK2Declaration(
     },
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
-      orgNumber: settings?.org_number || null,
+      orgNumber,
+      entityType,
       addressLine1: settings?.address_line1 || null,
       postalCode: settings?.postal_code || null,
       city: settings?.city || null,

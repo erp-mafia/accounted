@@ -190,6 +190,37 @@ beforeEach(() => {
   stubTrialBalances(CLOSED_ROWS, PRE_CLOSING_ROWS)
 })
 
+describe('generateINK2Declaration: the number it files under', () => {
+  it('reads a number held only on the company row', async () => {
+    const stub = makeSupabase()
+    const companyRowOnly = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { company_name: 'Testbolaget AB', org_number: null, entity_type: 'aktiebolag' }, error: null }),
+              }),
+            }),
+          }
+        }
+        if (table === 'companies') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' }, error: null }),
+              }),
+            }),
+          }
+        }
+        return stub.from(table)
+      },
+    } as unknown as SupabaseStub
+    const result = await generateINK2Declaration(anySupabase(companyRowOnly), COMPANY_ID, PERIOD_ID)
+    expect(result.companyInfo.orgNumber).toBe('556677-8899')
+  })
+})
+
 describe('generateINK2Declaration: closed fiscal year', () => {
   it('reads the income statement from the pre-closing books', async () => {
     const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
@@ -573,7 +604,7 @@ describe('generateINK2Declaration: guards', () => {
             select: () => ({
               eq: () => ({
                 single: async () => ({
-                  data: { entity_type: 'enskild_firma' },
+                  data: { entity_type: 'enskild_firma', org_number: '5566778899' },
                   error: null,
                 }),
               }),
@@ -689,7 +720,7 @@ describe('generateINK2Declaration: guards', () => {
             select: () => ({
               eq: () => ({
                 single: async () => ({
-                  data: { entity_type: 'ideell_forening' },
+                  data: { entity_type: 'ideell_forening', org_number: '5566778899' },
                   error: null,
                 }),
               }),

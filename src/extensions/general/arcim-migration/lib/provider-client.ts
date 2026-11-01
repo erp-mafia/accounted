@@ -33,7 +33,8 @@ import {
 } from '@/lib/providers/bokio/client'
 import { WintClient, WintApiError } from '@/lib/providers/wint/client'
 import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
-import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent as resolveConsentForIdentity } from '@/lib/providers/resolve-consent'
 import { saveConsentTokens } from '@/lib/providers/consent-tokens'
@@ -562,7 +563,7 @@ async function assertProviderCompanyMatchesConsent(
     return null
   }
 
-  if (!normalizeOrgNumber(info?.organizationNumber)) return null
+  if (!orgNumberKey(info?.organizationNumber)) return null
 
   const { data: consent } = await supabase
     .from('provider_consents')
@@ -584,24 +585,28 @@ async function providerOrgNumberMatchingCompany(
   companyId: string,
   info: CompanyInformationDto | null,
 ): Promise<string | null> {
-  const providerOrgNumber = normalizeOrgNumber(info?.organizationNumber)
-  if (!providerOrgNumber) return null
+  await refuseProviderOfOtherCompany(supabase, companyId, info?.organizationNumber, info?.companyName?.trim() || null)
+  return normalizeOrgNumber(info?.organizationNumber)
+}
 
-  const { data: targetCompany } = await supabase
-    .from('companies')
-    .select('org_number')
-    .eq('id', companyId)
-    .maybeSingle()
-  const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
-  if (targetOrgNumber && providerOrgNumber !== targetOrgNumber) {
-    throw new ProviderCompanyMismatchError(
-      targetOrgNumber,
-      providerOrgNumber,
-      info?.companyName?.trim() || null,
-    )
-  }
-  return providerOrgNumber
+/**
+ * Only a confident mismatch blocks: the comparison every wrong-company check
+ * uses (lib/company/org-number.ts), so a number held only in settings counts
+ * and a number whose check digit fails is still compared. A missing number on
+ * either side is not evidence of anything (Accounted allows companies without
+ * one, and a provider response could omit it).
+ */
+async function refuseProviderOfOtherCompany(
+  supabase: ReturnType<typeof createServiceClient>,
+  companyId: string,
+  providerNumber: string | null | undefined,
+  providerCompanyName: string | null,
+): Promise<void> {
+  const providerKey = orgNumberKey(providerNumber)
+  if (!providerKey) return
+  const check = await checkSourceOrgNumber(supabase, companyId, providerNumber)
+  const companyKey = orgNumberKey(check.companyOrgNumber)
+  if (check.mismatch && companyKey) throw new ProviderCompanyMismatchError(companyKey, providerKey, providerCompanyName)
 }
 
 /** Mirrors the RPC's account key: separators do not make an identity. */
@@ -908,25 +913,15 @@ export async function submitProviderToken(
       bokioCompany['organizationNumber'] as string | undefined,
     )
 
-    const { data: targetCompany } = await supabase
-      .from('companies')
-      .select('org_number')
-      .eq('id', ownerCompanyId)
-      .maybeSingle()
-    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
-    // Only a confident mismatch blocks. A missing org number on either side is
-    // not evidence of anything (Accounted allows companies without one, and a
-    // Bokio response could omit it), so those fall through to the labelling
+    // A missing org number on either side falls through to the labelling
     // below: the wizard still shows WHICH Bokio company was linked, which is
     // what lets the user catch it themselves.
-    if (bokioOrgNumber && targetOrgNumber && bokioOrgNumber !== targetOrgNumber) {
-      throw new ProviderCompanyMismatchError(
-        targetOrgNumber,
-        bokioOrgNumber,
-        bokioName || null,
-      )
-    }
+    await refuseProviderOfOtherCompany(
+      supabase,
+      ownerCompanyId,
+      bokioCompany['organizationNumber'] as string | undefined,
+      bokioName || null,
+    )
 
     // Label the consent with what the credentials actually opened. Written as
     // an object literal (not a conditional spread) so the phantom-column guard
@@ -978,18 +973,9 @@ export async function submitProviderToken(
     const wintCompanyName = typeof wintCompany['Name'] === 'string' ? (wintCompany['Name'] as string).trim() : ''
     const wintOrgNumber = normalizeOrgNumber(wintCompany['Org'] as string | undefined)
 
-    const { data: targetCompany } = await supabase
-      .from('companies')
-      .select('org_number')
-      .eq('id', ownerCompanyId)
-      .maybeSingle()
-    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
     // Same confident-mismatch-only rule as Bokio: a missing org number on
     // either side falls through to labelling, a definite mismatch blocks.
-    if (wintOrgNumber && targetOrgNumber && wintOrgNumber !== targetOrgNumber) {
-      throw new ProviderCompanyMismatchError(targetOrgNumber, wintOrgNumber, wintCompanyName || null)
-    }
+    await refuseProviderOfOtherCompany(supabase, ownerCompanyId, wintCompany['Org'] as string | undefined, wintCompanyName || null)
 
     // The WINT-internal company id is what later calls may need (CompanyAuth
     // company switching); the login mail is deliberately NOT persisted.

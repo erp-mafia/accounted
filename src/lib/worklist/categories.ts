@@ -38,6 +38,8 @@ import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type Batc
 import { DAILY_BATCH_TYPES_FILTER } from '@/lib/pending-operations/daily-batches'
 import { readPendingReminderBatch } from '@/lib/reminders/pending-batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { parseEntityType } from '@/lib/company/entity-type'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
 import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
@@ -1803,30 +1805,21 @@ export async function listSkattekontoPaymentDue(
 
   const { data: company, error: companyError } = await supabase
     .from('companies')
-    .select('org_number, entity_type')
+    .select('entity_type')
     .eq('id', companyId)
     .maybeSingle()
   if (companyError) logAndZero('skattekonto_payment_due', companyId, companyError)
-  // Same collapse as the tax-payment file route: companies.entity_type is
-  // NOT NULL with a CHECK, and only enskild firma builds its redovisare from
-  // a personnummer. Without an org number there is no reference to derive;
-  // the row still shows, the user reads the OCR off Skatteverket instead.
+  // Without an org number there is no reference to derive; the row still
+  // shows, the user reads the OCR off Skatteverket instead.
   let ocr: string | null = null
-  const orgNumber = (company as { org_number?: string | null; entity_type?: string | null } | null)?.org_number
-  if (orgNumber) {
-    try {
-      ocr = await resolveSkattekontoOcr(
-        supabase,
-        companyId,
-        orgNumber,
-        company?.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
-      )
-    } catch (err) {
-      log.warn('worklist skattekonto_payment_due: OCR could not be derived', {
-        companyId,
-        reason: (err as { message?: string })?.message,
-      })
-    }
+  try {
+    const orgNumber = await readCompanyOrgNumber(supabase, companyId)
+    if (orgNumber) ocr = await resolveSkattekontoOcr(supabase, companyId, orgNumber, parseEntityType(company?.entity_type))
+  } catch (err) {
+    log.warn('worklist skattekonto_payment_due: OCR could not be derived', {
+      companyId,
+      reason: (err as { message?: string })?.message,
+    })
   }
 
   return { due, charge, balance, amount, count: rows.length, ocr, bankgiro: SKATTEKONTO_BANKGIRO }

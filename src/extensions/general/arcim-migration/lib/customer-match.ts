@@ -22,7 +22,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import type { CustomerDto, PartyDto, SalesInvoiceDto } from '@/lib/providers/dto'
-import { orgNumberKey } from '@/lib/invariants/org-number'
+import { partyOrgKey } from '@/lib/invariants/org-number'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -32,7 +32,7 @@ const log = createLogger('extensions/arcim-migration/customer-match')
 
 /** What the source says about one customer, each value already normalised. */
 export interface PartyFacts {
-  /** Org number or personnummer, see identityKey. */
+  /** Org number or personnummer, see partyOrgKey. */
   identity?: string
   vat?: string
   /** The provider's own customer number (kundnummer), see sourceCustomerNumber. */
@@ -57,20 +57,6 @@ export interface PartyCandidate {
   facts: PartyFacts
 }
 
-/**
- * One key for an org number or a personnummer in any of its written forms:
- * separators dropped, a 12-digit form cut to its 10 digits (orgNumberKey).
- * Anything else (a foreign registration number) keys by its letters and
- * digits.
- */
-export function identityKey(raw: string | null | undefined): string | undefined {
-  if (!raw) return undefined
-  const key = orgNumberKey(raw)
-  if (key) return key
-  const alnum = raw.replace(/[^0-9a-z]/gi, '').toUpperCase()
-  return alnum || undefined
-}
-
 /** Case, surrounding and repeated whitespace and Unicode form do not tell two names apart. */
 export function customerNameKey(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined
@@ -90,9 +76,7 @@ function numberKey(raw: unknown): string | undefined {
 }
 
 function partyIdentity(party: PartyDto): string | undefined {
-  return identityKey(
-    party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id || party.legalEntity?.companyId,
-  )
+  return partyOrgKey(party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id || party.legalEntity?.companyId) ?? undefined
 }
 
 function partyVat(party: PartyDto): string | undefined {
@@ -250,11 +234,11 @@ export function buildCustomerCards(rows: CustomerRow[]): CustomerCard[] {
   let unreadable = 0
   const cards = rows.map((row) => {
     const identities = new Set<string>()
-    const org = identityKey(row.org_number)
+    const org = partyOrgKey(row.org_number)
     if (org) identities.add(org)
     if (row.personal_number) {
       try {
-        const personal = identityKey(revealStoredCustomerPersonalNumber(row.personal_number))
+        const personal = partyOrgKey(revealStoredCustomerPersonalNumber(row.personal_number))
         if (personal) identities.add(personal)
       } catch {
         unreadable++

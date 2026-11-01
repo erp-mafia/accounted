@@ -4,7 +4,7 @@ import {
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
-import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
+import { isLegalPersonOrgNumber, isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { isEntityType, legalFormProfile, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
@@ -245,7 +245,7 @@ function prepareParty(
       `${prefixEn} must have a valid Swedish organization number.`,
     ))
   }
-  if (orgNumber && Number(orgNumber[2]) < 2) {
+  if (orgNumber && !isLegalPersonOrgNumber(orgNumber)) {
     issues.push(validationIssue(
       `${role.toUpperCase()}_PARTICIPANT_IDENTIFIER_UNSUPPORTED`, `${fieldPrefix}.org_number`,
       `${prefixSv} måste använda ett organisationsnummer för 0007. Personnummerbaserade identifierare kräver GLN-stöd.`,
@@ -267,7 +267,7 @@ function prepareParty(
     ))
   }
 
-  if (!orgNumber || Number(orgNumber[2]) < 2 || !hasText(source.name) || !hasText(source.addressLine1) ||
+  if (!orgNumber || !isLegalPersonOrgNumber(orgNumber) || !hasText(source.name) || !hasText(source.addressLine1) ||
       !hasText(source.postalCode) || !hasText(source.city) || source.country?.toUpperCase() !== 'SE') {
     return null
   }

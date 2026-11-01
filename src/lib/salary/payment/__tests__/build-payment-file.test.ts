@@ -690,6 +690,34 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
   })
 })
 
+describe('the sender a pain.001 names', () => {
+  const pain001 = async (companyRow: Record<string, unknown>, settingsRow: Record<string, unknown>) => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([{ data: run }, { data: companyRow }, { data: settingsRow }, ...ONLY_1930, { data: [anna] }, { data: null }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result.ok).toBe(true)
+    return result as Extract<typeof result, { ok: true }>
+  }
+
+  it('reads a number held in settings alone, as ten digits, into the file, its ids and the bank list', async () => {
+    const result = await pain001({ ...company, org_number: null }, { ...settings, org_number: '165566778899' })
+    expect(result.content).toContain('<Id>5566778899</Id>')
+    expect(result.content).toContain('-5566778899-2026-04</MsgId>')
+    expect(result.payer.orgNumber).toBe('556677-8899')
+  })
+
+  it('keeps the id a 12-digit company row has always given, so a re-download stays one message', async () => {
+    const result = await pain001({ ...company, org_number: '165566778899' }, { ...settings, org_number: '5566778899' })
+    expect(result.content).toContain('-165566778899-2026-04</MsgId>')
+    expect(result.content).toContain('<Id>5566778899</Id>')
+  })
+
+  it('never writes the word undefined into the message id', async () => {
+    const result = await pain001({ ...company, org_number: null }, settings)
+    expect(result.content).not.toContain('undefined')
+  })
+})
+
 // crm#1219: a corrected file for a run whose first file already reached the
 // bank needs new ids, or the bank refuses it as a duplicate. Only with the
 // person's confirmation that the earlier file was not approved.

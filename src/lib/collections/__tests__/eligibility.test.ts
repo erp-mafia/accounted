@@ -4,7 +4,6 @@ import {
   debtorCountryCode,
   evaluateEligibility,
   missingAddressFields,
-  normalizeOrgNumberDigits,
   type EligibilityFacts,
 } from '../eligibility'
 
@@ -57,6 +56,23 @@ function facts(overrides: Partial<EligibilityFacts> = {}): EligibilityFacts {
 const codes = (f: EligibilityFacts) => evaluateEligibility(f).blocks.map((b) => b.code)
 
 describe('evaluateEligibility', () => {
+  const debtor = (org_number: string) => {
+    const base = facts()
+    return facts({ customer: { ...base.customer!, org_number } })
+  }
+
+  it('reads the debtor\'s number in every form the register holds it', () => {
+    for (const org of ['556012-5790', '165560125790', '198003740118', '19800374-0118', '800374-0118']) {
+      expect(codes(debtor(org))).not.toContain('debtor_invalid_org_number')
+    }
+  })
+
+  it('refuses a wrong check digit, and a 12-digit value that is no Swedish number', () => {
+    expect(codes(debtor('556012-5791'))).toContain('debtor_invalid_org_number')
+    expect(codes(debtor('835560125790'))).toContain('debtor_invalid_org_number')
+    expect(codes(debtor('BE5560125790'))).toContain('debtor_invalid_org_number')
+  })
+
   it('passes a delivered, overdue business invoice with complete data', () => {
     const result = evaluateEligibility(facts())
     expect(result.eligible).toBe(true)
@@ -246,10 +262,4 @@ describe('debtor helpers', () => {
     expect(missingAddressFields({ address_line1: 'Gatan 1', postal_code: '12', city: 'Ort', country: null })).toEqual(['postal_code', 'country'])
   })
 
-  it('normalizes an org number to ten digits with a valid check digit', () => {
-    expect(normalizeOrgNumberDigits('556012-5790')).toBe('5560125790')
-    expect(normalizeOrgNumberDigits('165560125790')).toBe('5560125790')
-    expect(normalizeOrgNumberDigits('556012-5791')).toBeNull()
-    expect(normalizeOrgNumberDigits(null)).toBeNull()
-  })
 })

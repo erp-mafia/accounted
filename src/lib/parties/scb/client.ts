@@ -1,6 +1,7 @@
 import type { ScbConfig } from './config'
 import { factsFromScbCompany, type ScbCompanyRow, type ScbFact } from './map'
-import { isLegalPersonOrgNumber, toPeOrgNr } from './org-number'
+import { isLegalPersonOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { toPeOrgNr } from './org-number'
 import { scbJson } from './transport'
 
 /**
@@ -132,7 +133,7 @@ export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson
       if (!isLegalPersonOrgNumber(orgNumber)) {
         throw new Error('SCB-uppslag görs bara på organisationsnummer för juridiska personer.')
       }
-      const org10 = orgNumber.replace(/[^0-9]/g, '')
+      const org10 = orgNumberKey(orgNumber) as string
       const peOrgNr = toPeOrgNr(org10)
       const fetchedAt = new Date().toISOString()
       const rows = await json<ScbCompanyRow[]>(config, 'POST', '/api/Je/HamtaForetag', identityLookupBody(org10))

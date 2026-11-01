@@ -215,15 +215,6 @@ export function swedishToday(now: Date = new Date()): string {
   return `${date} (${weekday})`
 }
 
-export function formatOrgNumber(orgNumber: string): string {
-  // Format Swedish org number: XXXXXX-XXXX
-  const cleaned = orgNumber.replace(/\D/g, '')
-  if (cleaned.length === 10) {
-    return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
-  }
-  return orgNumber
-}
-
 /** UTC YYYYMMDD stamp (e.g. for archive download filenames). */
 export function utcDateStamp(date: Date): string {
   const year = date.getUTCFullYear()

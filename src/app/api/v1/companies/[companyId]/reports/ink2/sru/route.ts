@@ -21,7 +21,7 @@ export const GET = v1ReportFileHandler({
     'Refused while an SIE import is unfinished: complete or undo it first.',
   ],
   contentType: 'application/zip',
-  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_INK2_WRONG_LEGAL_FORM', 'TAX_DECL_GENERATION_FAILED'],
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_INK2_WRONG_LEGAL_FORM', 'FILING_IDENTITY_REFUSED', 'TAX_DECL_GENERATION_FAILED'],
   query: z.object({ period_id: z.string().uuid().describe('The fiscal period (räkenskapsår) id.') }),
   build: (ctx, { period_id }) => getInk2SruFile(ctx, period_id),
 })

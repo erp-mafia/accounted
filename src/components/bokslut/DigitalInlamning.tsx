@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
+import { expandPersonnummerTo12 } from '@/lib/invariants/personal-number-shape'
 import {
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
@@ -115,27 +116,6 @@ type SubmitOutcome =
   | { outcome: 'kontrollera_stopped'; submissionId: string; utfall: KontrolleraUtfall[] }
   | { outcome: 'uploaded'; submissionId: string; url: string; utfall: KontrolleraUtfall[] }
   | { outcome: 'state_unknown'; submissionId: string; url: string | null; message: string }
-
-/**
- * Normalize a Swedish personnummer to the 12-digit ÅÅÅÅMMDDNNNN form the
- * Bolagsverket token API requires. 10-digit input gets its century inferred:
- * a 2-digit year greater than the current year's last two digits → 19xx,
- * otherwise 20xx; the '+' separator (person 100+ years) shifts one more
- * century back. Returns null when the input is neither 10 nor 12 digits.
- */
-function normalizePnr(raw: string): string | null {
-  const trimmed = raw.trim()
-  const digits = trimmed.replace(/\D/g, '')
-  if (digits.length === 12) return digits
-  if (digits.length !== 10) return null
-  const now = new Date()
-  const currentCentury = Math.floor(now.getFullYear() / 100)
-  const currentYy = now.getFullYear() % 100
-  const yy = Number(digits.slice(0, 2))
-  let century = yy > currentYy ? currentCentury - 1 : currentCentury
-  if (trimmed.includes('+')) century -= 1
-  return `${century}${digits}`
-}
 
 const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'warning' | 'destructive' | 'outline' | null }> = {
   draft: { label: 'Utkast', variant: 'outline' },
@@ -326,8 +306,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const handleSubmit = async (opts: { ignoreWarnings?: boolean } = {}) => {
     // The Bolagsverket token API needs 12 digits (ÅÅÅÅMMDDNNNN); 10-digit
     // input is normalized client-side with a century pivot.
-    const normalizedAvsandare = normalizePnr(avsandarePnr)
-    const normalizedPnr = normalizePnr(pnr)
+    const normalizedAvsandare = expandPersonnummerTo12(avsandarePnr)
+    const normalizedPnr = expandPersonnummerTo12(pnr)
     if (!normalizedAvsandare || !normalizedPnr) {
       toast({ title: 'Ange personnummer med 10 eller 12 siffror', variant: 'destructive' })
       return
@@ -416,8 +396,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   }
 
   const handleSubmitRevisionsberattelse = async (opts: { ignoreWarnings?: boolean } = {}) => {
-    const normalizedAvsandare = normalizePnr(avsandarePnr)
-    const normalizedRevisor = normalizePnr(rbPnr)
+    const normalizedAvsandare = expandPersonnummerTo12(avsandarePnr)
+    const normalizedRevisor = expandPersonnummerTo12(rbPnr)
     if (!normalizedAvsandare || !normalizedRevisor) {
       toast({ title: tStudio('revisor_filing.pnr_invalid'), variant: 'destructive' })
       return

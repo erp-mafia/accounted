@@ -116,6 +116,7 @@ function makeSupabase(opts: {
               : null,
           error: null,
         }))
+        if (table === 'company_settings') chain.maybeSingle = chain.single
         chain.then = (resolve: (v: unknown) => void) => {
           if (op === 'mutate') mutatedTables.push(table)
           if (table === 'agi_declarations' && op === 'mutate') {

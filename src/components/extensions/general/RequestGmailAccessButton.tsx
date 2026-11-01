@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { GMAIL_ACCESS_EMAIL, gmailAccessMailto } from './mail-connections'
 
 /**
@@ -15,7 +15,7 @@ export function RequestGmailAccessButton({ variant = 'default' }: { variant?: 'd
   const t = useTranslations('mail')
   const company = useCompanyOptional()?.company ?? null
   const name = company?.name ?? ''
-  const named = company?.org_number ? `${name} (${formatOrgNumber(company.org_number)})` : name
+  const named = company?.org_number ? `${name} (${formatOrgNumberDisplay(company.org_number)})` : name
   const href = gmailAccessMailto(
     GMAIL_ACCESS_EMAIL,
     t('request_access_subject', { company: name }),

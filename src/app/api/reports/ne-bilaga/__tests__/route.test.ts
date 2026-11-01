@@ -67,6 +67,23 @@ describe('GET /api/reports/ne-bilaga', () => {
     expect(body.error.details?.reason).toContain('Konto 8470')
   })
 
+  it('422s an SRU download on a number that is not a person, with the way out', async () => {
+    const declaration = blockedDeclaration()
+    generateMock.mockResolvedValue({
+      ...declaration,
+      sruBlockers: [],
+      companyInfo: { ...declaration.companyInfo, orgNumber: '5566778899', entityType: 'enskild_firma' },
+    })
+    const res = await GET(
+      createMockRequest(`http://localhost/api/reports/ne-bilaga?period_id=${PERIOD_ID}&format=sru`),
+      routeCtx,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('FILING_IDENTITY_REFUSED')
+    expect(body.error.message).toMatch(/kontakta supporten/)
+  })
+
   it('still returns the blocked declaration as JSON, so the reason can be shown', async () => {
     const res = await GET(createMockRequest(`http://localhost/api/reports/ne-bilaga?period_id=${PERIOD_ID}`), routeCtx)
     const { status, body } = await parseJsonResponse<{ data: { sruBlockers: string[] } }>(res)

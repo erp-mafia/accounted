@@ -7,6 +7,7 @@ import {
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { buildSruZip } from '@/lib/reports/filing-report-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fileResponse } from '@/lib/api/file-response'
@@ -57,6 +58,7 @@ export const GET = withRouteContext(
           details: { reason: getUserErrorMessage(err) },
         })
       }
+      if (err instanceof FilingIdentityError) return errorResponseFromCode(err.code, opLog, { requestId })
       opLog.error('ne-bilaga declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {
         requestId,

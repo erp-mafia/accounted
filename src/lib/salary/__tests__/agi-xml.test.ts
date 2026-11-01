@@ -19,6 +19,7 @@ vi.mock('../personnummer', () => ({
 
 const company: AGICompanyData = {
   orgNumber: '556123-4567',
+  entityType: 'aktiebolag',
   companyName: 'Test AB',
   periodYear: 2026,
   periodMonth: 4,

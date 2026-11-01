@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { beslutFileIsForCompany, type RotRutBeslutFile } from './rot-rut-beslut-file'
 
@@ -81,14 +82,12 @@ export async function importRotRutBeslutFile(
 ): Promise<RotRutBeslutImportResult> {
   // Hard company check: a beslutsfil for another utförare must never touch
   // this company's requests.
-  const { data: settings, error: settingsError } = await supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (settingsError) return { ok: false, code: 'ROT_RUT_FILE_CREATE_FAILED' }
-
-  const orgNumber = (settings?.org_number as string | null) ?? null
+  let orgNumber: string | null
+  try {
+    orgNumber = await readCompanyOrgNumber(supabase, companyId)
+  } catch {
+    return { ok: false, code: 'ROT_RUT_FILE_CREATE_FAILED' }
+  }
   if (!beslutFileIsForCompany(file, orgNumber)) {
     return { ok: false, code: 'ROT_RUT_BESLUT_WRONG_COMPANY' }
   }

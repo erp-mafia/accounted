@@ -339,7 +339,7 @@ describe('gnubok_generate_agi', () => {
   it('answers AGI_INCOMPLETE_DATA at staging when the company lacks a phone, naming where to fill it in', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
-    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567' } }) // companies
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: null, email: 'info@bolaget.example', tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
     enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
 
@@ -359,7 +359,7 @@ describe('gnubok_generate_agi', () => {
   it('stages when the company data is complete', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
-    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567' } }) // companies
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: '08-123 45 67', email: null, tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
     enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings

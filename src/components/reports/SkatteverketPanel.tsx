@@ -32,6 +32,7 @@ import {
 } from '@/components/icons'
 import type { VatPeriodType } from '@/types'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -128,8 +129,10 @@ const ORG_NUMBER_MISSING_NOTICE: Notice = {
   text: 'Organisationsnummer saknas. Ange det under Inställningar innan du använder Skatteverket-kopplingen.',
 }
 
-function isOrgNumberMissing(err: unknown): boolean {
-  return err instanceof Error && err.message === 'Organisationsnummer saknas'
+/** What the panel says when getRedovisare refused, or null for any other failure. */
+function redovisareNotice(err: unknown): Notice | null {
+  if (err instanceof FilingIdentityError) return { kind: 'error', text: err.message }
+  return err instanceof Error && err.message === 'Organisationsnummer saknas' ? ORG_NUMBER_MISSING_NOTICE : null
 }
 
 /**
@@ -440,9 +443,7 @@ function SkatteverketPanelInner({
       }
     } catch (err) {
       setNotice(
-        isOrgNumberMissing(err)
-          ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte låsa utkastet' },
+        redovisareNotice(err) ?? { kind: 'error', text: 'Kunde inte låsa utkastet' },
       )
     } finally {
       setActionLoading(null)
@@ -546,9 +547,7 @@ function SkatteverketPanelInner({
       }
     } catch (err) {
       setNotice(
-        isOrgNumberMissing(err)
-          ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte låsa upp utkastet' },
+        redovisareNotice(err) ?? { kind: 'error', text: 'Kunde inte låsa upp utkastet' },
       )
     } finally {
       setActionLoading(null)
@@ -582,8 +581,9 @@ function SkatteverketPanelInner({
         setNotice({ kind: 'info', text: 'Ingen inlämnad deklaration hittades för denna period' })
       }
     } catch (err) {
-      if (isOrgNumberMissing(err)) {
-        setNotice(ORG_NUMBER_MISSING_NOTICE)
+      const notice = redovisareNotice(err)
+      if (notice) {
+        setNotice(notice)
       } else if (!silent) {
         setNotice({ kind: 'error', text: 'Kunde inte kontrollera inlämningsstatus' })
       }
@@ -650,9 +650,7 @@ function SkatteverketPanelInner({
       }
     } catch (err) {
       setNotice(
-        isOrgNumberMissing(err)
-          ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte radera utkast' },
+        redovisareNotice(err) ?? { kind: 'error', text: 'Kunde inte radera utkast' },
       )
     } finally {
       setActionLoading(null)
@@ -681,9 +679,7 @@ function SkatteverketPanelInner({
       }
     } catch (err) {
       setNotice(
-        isOrgNumberMissing(err)
-          ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte hämta utkast' },
+        redovisareNotice(err) ?? { kind: 'error', text: 'Kunde inte hämta utkast' },
       )
     } finally {
       setActionLoading(null)
@@ -712,9 +708,7 @@ function SkatteverketPanelInner({
       }
     } catch (err) {
       setNotice(
-        isOrgNumberMissing(err)
-          ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte hämta beslutade uppgifter' },
+        redovisareNotice(err) ?? { kind: 'error', text: 'Kunde inte hämta beslutade uppgifter' },
       )
     } finally {
       setActionLoading(null)

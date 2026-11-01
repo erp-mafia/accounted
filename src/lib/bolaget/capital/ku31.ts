@@ -24,6 +24,7 @@
  */
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre, sumOre, truncateToWholeKronor } from '@/lib/money'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
@@ -100,10 +101,10 @@ export async function loadKu31Settings(ctx: OperationContext, year: number): Pro
 }
 
 export async function companyIdentity(ctx: OperationContext): Promise<{ name: string; org_number: string | null }> {
-  const { data, error } = await ctx.supabase.from('companies').select('name, org_number').eq('id', ctx.companyId).maybeSingle()
+  const { data, error } = await ctx.supabase.from('companies').select('name').eq('id', ctx.companyId).maybeSingle()
   if (error) throw new Error(`companies read failed: ${error.message}`)
-  const row = (data ?? {}) as { name?: string | null; org_number?: string | null }
-  return { name: row.name?.trim() || '', org_number: row.org_number ? normalizeOrgNumber(row.org_number) : null }
+  const row = (data ?? {}) as { name?: string | null }
+  return { name: row.name?.trim() || '', org_number: normalizeOrgNumber(await readCompanyOrgNumber(ctx.supabase, ctx.companyId)) }
 }
 
 export async function famansDerivationFor(ctx: OperationContext, year: number): Promise<FamansDerivation> {

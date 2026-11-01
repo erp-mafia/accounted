@@ -93,6 +93,18 @@ describe('POST /api/import/customers/parse', () => {
     expect(body.data.duplicate_count).toBe(1)
   })
 
+  it('finds a stored number from its 12-digit form, and keeps two countries apart', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'swedish', name: 'Acme AB', customer_number: null, org_number: '5566778899', email: null },
+      { id: 'belgian', name: 'Gamma SA', customer_number: null, org_number: 'BE0123456789', email: null },
+    ])
+    const { body } = await parseJsonResponse<ParseBody>(await post(xlsxFile([
+      ['Namn', 'Orgnr'],
+      ['Annan Stavning AB', '165566778899'],
+    ])))
+    expect(body.data.rows[0]!.duplicate_match).toMatchObject({ customer_id: 'swedish', matched_by: 'org_number' })
+  })
+
   it('never matches an individual on its personnummer, only on customer number, e-mail or name', async () => {
     // Synthetic personnummer, never real ones.
     mockFetchAllRows.mockResolvedValue([

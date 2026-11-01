@@ -1,5 +1,6 @@
 import { buildInfoSru, sruBlankettType, sruFile, sruIncomeYear, sruText } from '@/lib/reports/sru/envelope'
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
+import { FilingIdentityError, swedishNumberKind, toRedovisare12 } from '@/lib/invariants/org-number'
 import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
 
 /**
@@ -10,8 +11,9 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  *   - BLANKETTER.SRU: a single NE blankett block with the räkenskapsschema rutor
  *
  * The NE-bilaga is an appendix to Inkomstdeklaration 1 (INK1) filed by a physical
- * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN):
- * NOT a juridisk-person org number with the "16" century prefix used by INK2.
+ * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN,
+ * toRedovisare12): NOT a juridisk-person org number with the "16" century prefix
+ * used by INK2. A number that is not a person's has no such identity: refused.
  *
  * The envelope (line endings, sanitising, blankett type, INFO.SRU) is shared
  * with INK2: lib/reports/sru/envelope.ts.
@@ -42,32 +44,6 @@ const NE_SRU_FIELD_CODES: Record<keyof NEDeclarationRutor, string> = {
   R9: '7504', // Avskrivningar och nedskrivningar byggnader och markanläggningar
   R10: '7505', // Avskrivningar och nedskrivningar maskiner/inventarier/immateriella tillgångar
   R11: '7440', // Bokfört resultat
-}
-
-/**
- * Normalize an enskild firma identity (personnummer) to 12 digits YYYYMMDDNNNN.
- * Unlike INK2's juridisk-person formatter, this does NOT prepend "16": for a
- * physical person the century is the birth century.
- *
- * For a 10-digit number (YYMMDDNNNN) the century is inferred from age: a NE-bilaga
- * filer is an adult, so we pick the century that yields a plausible adult age
- * (≥18, <110) at the income year, preferring 1900s. This avoids mapping e.g. a
- * 1924-born filer for income year 2024 (yy=24) to 2024. (Skatteverket's '-'/'+'
- * century separator is lost once non-digits are stripped, so age is used instead.)
- *
- * Returns the all-zero placeholder for missing/unexpected input; callers validate
- * the result and surface a generation error rather than shipping an invalid file.
- */
-function formatIdentityNumber12(raw: string | null, incomeYear: number): string {
-  const digits = (raw || '').replace(/\D/g, '')
-  if (digits.length === 12) return digits
-  if (digits.length === 10) {
-    const yy = parseInt(digits.substring(0, 2), 10)
-    const ageIf2000s = incomeYear - (2000 + yy)
-    const century = ageIf2000s >= 18 && ageIf2000s < 110 ? '20' : '19'
-    return `${century}${digits}`
-  }
-  return '000000000000'
 }
 
 /** Convert a YYYY-MM-DD string to SRU date format YYYYMMDD. */
@@ -126,18 +102,14 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
   }
 
   const now = new Date()
-  const incomeYear = parseInt(sruIncomeYear(declaration.fiscalYear.end), 10)
-  const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
+  const { orgNumber, entityType } = declaration.companyInfo
 
   // A valid NE filing requires the owner's personnummer. Refuse rather than ship a
   // structurally well-formed file with a placeholder #IDENTITET that Skatteverket
-  // would reject at upload: surface it as a generation error the route can show.
-  if (!/^\d{12}$/.test(identity12) || identity12 === '000000000000') {
-    throw new Error(
-      'NE-bilagan kräver ett giltigt personnummer (ÅÅÅÅMMDDNNNN) för den enskilda näringsidkaren. ' +
-        'Komplettera personnumret i företagsinställningarna innan du laddar ner SRU-filen.',
-    )
-  }
+  // would reject at upload. toRedovisare12 passes a legal person's number, and an
+  // NE has no such filer, so this door asks for a person itself.
+  if (!orgNumber || swedishNumberKind(orgNumber) !== 'person') throw new FilingIdentityError()
+  const identity12 = toRedovisare12(orgNumber, entityType)
 
   return {
     infoSru: buildInfoSru(

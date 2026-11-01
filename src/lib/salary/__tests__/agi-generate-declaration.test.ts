@@ -47,7 +47,7 @@ const RUN = {
   calculation_params: {},
 }
 
-const COMPANY = { name: 'Test AB', org_number: '556123-4567' }
+const COMPANY = { name: 'Test AB', org_number: '556123-4567', entity_type: 'aktiebolag' }
 const SETTINGS = {
   company_name: 'Test AB',
   org_number: '556123-4567',
@@ -199,6 +199,46 @@ describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', ()
     if (result.ok) return
     expect(result.code).toBe('AGI_INCOMPLETE_DATA')
     expect((result.details as { missing_fields: string[] }).missing_fields).toContain('telefon')
+  })
+})
+
+describe('generateAgiDeclaration: the identity it files under', () => {
+  const OWNER = '8003740118' // a fabricated samordningsnummer
+  const FIRM = { ...COMPANY, name: 'Testfirman', entity_type: 'enskild_firma' }
+
+  async function generate(company: Record<string, unknown>, settings: Record<string, unknown>) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: RUN },
+      { data: company },
+      { data: settings },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      { data: null }, // agi_declarations maybeSingle
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+    return generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+  }
+
+  it.each([
+    ['in both copies', OWNER, OWNER],
+    ['in settings alone', null, OWNER],
+    ['on the company row alone', OWNER, null],
+  ])('a sole trader with the number %s files under the birth century', async (_where, onCompany, inSettings) => {
+    const result = await generate({ ...FIRM, org_number: onCompany }, { ...SETTINGS, org_number: inSettings })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain(`<gem:Organisationsnummer>19${OWNER}</gem:Organisationsnummer>`)
+  })
+
+  it('an aktiebolag holding a personal number is refused, with the way out', async () => {
+    const stored = `19${OWNER}`
+    const result = await generate({ ...COMPANY, org_number: stored }, { ...SETTINGS, org_number: stored })
+    expect(result).toMatchObject({ ok: false })
+    expect(JSON.stringify(result)).toMatch(/kontakta supporten/)
+    expect(JSON.stringify(result)).not.toContain(stored)
   })
 })
 

@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import {
   Document,
   Page,
@@ -338,7 +338,7 @@ function HeaderBlock({ title, company, period, filterNote, budgetNote, latestVou
         )}
         {company.org_number && (
           <Text style={styles.companyMeta}>
-            Org.nr: {formatOrgNumber(company.org_number)}
+            Org.nr: {formatOrgNumberDisplay(company.org_number)}
           </Text>
         )}
         {company.vat_number && (
@@ -355,7 +355,7 @@ function FooterBlock({ company, generatedAt }: { company: CompanySettings; gener
     <View style={styles.footer} fixed>
       <Text style={styles.footerText}>
         {companyDisplayName}
-        {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+        {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
       </Text>
       <Text
         style={styles.footerText}

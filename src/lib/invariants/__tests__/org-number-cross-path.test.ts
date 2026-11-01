@@ -28,6 +28,7 @@ const EQUIVALENT_FORMS = ['5560125790', '556012-5790', '556012 5790', '165560125
 function agiCompanyFixture(orgNumber: string) {
   return {
     orgNumber,
+    entityType: 'aktiebolag' as const,
     companyName: 'Testbolaget AB',
     periodYear: 2025,
     periodMonth: 3,

@@ -142,7 +142,7 @@ describe('submitProviderToken', () => {
     expect(result).toEqual({ success: true, consentId: 'consent-1' })
     expect(tablesTouched()).toEqual([
       'provider_consents',
-      'companies',
+      'company_settings',
       'provider_consents',
       'provider_consent_tokens',
     ])
@@ -180,7 +180,18 @@ describe('submitProviderToken', () => {
     // Nothing was stored and the consent was NOT labelled: the connection must
     // not exist in any form, or the next step would import from it.
     expect(tablesTouched()).not.toContain('provider_consent_tokens')
-    expect(tablesTouched()).toEqual(['provider_consents', 'companies'])
+    expect(tablesTouched()).toEqual(['provider_consents', 'company_settings'])
+  })
+
+  it('checks against a number held in settings alone, and one whose check digit fails', async () => {
+    for (const stored of ['5560125790', '5560125791']) {
+      mock.reset()
+      mock.enqueue({ data: [{ id: 'consent-1' }] })
+      mock.enqueue({ data: { org_number: stored } })
+      mockBokioGetCompany.mockResolvedValueOnce({ name: 'Någon Annans Bolag AB', organizationNumber: '5566778899' })
+      const err: unknown = await submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
+    }
   })
 
   it('compares org numbers canonically, so formatting differences are not a mismatch', async () => {
@@ -623,7 +634,7 @@ describe('submitProviderToken', () => {
       expect(mockLoginWint).toHaveBeenCalledWith('user@bolag.se', 'hemligt')
       expect(tablesTouched()).toEqual([
         'provider_consents',
-        'companies',
+        'company_settings',
         'provider_consents',
         'provider_consent_tokens',
       ])
@@ -675,7 +686,7 @@ describe('submitProviderToken', () => {
       expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
       expect((err as ProviderCompanyMismatchError).actualOrgNumber).toBe('5560125790')
       // No token upsert, no consent label write
-      expect(tablesTouched()).toEqual(['provider_consents', 'companies'])
+      expect(tablesTouched()).toEqual(['provider_consents', 'company_settings'])
     })
 
     it('rethrows transient login failures (5xx) as generic errors, not invalid credentials', async () => {

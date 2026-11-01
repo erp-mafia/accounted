@@ -20,6 +20,7 @@
  * marked-up worker every month (appendix 3.1).
  */
 import { roundToWholeKronor } from '@/lib/money'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 
 /** Fora's `source` (max 40): the system the file comes from. */
 export const FORA_FILE_SOURCE = 'Accounted'
@@ -157,14 +158,6 @@ function monthBounds(year: number, month: number): { first: string; last: string
   return { first: `${year}-${mm}-01`, last: `${year}-${mm}-${String(lastDay).padStart(2, '0')}` }
 }
 
-/** Ten digits: a 12-digit form (an enskild firma's personnummer) drops the century. */
-export function foraOrganizationNumber(raw: string | null | undefined): string | null {
-  const digits = (raw ?? '').replace(/\D/g, '')
-  if (digits.length === 10) return digits
-  if (digits.length === 12) return digits.slice(2)
-  return null
-}
-
 /** Samordningsnummer carry the birth day plus 60 (61-91). */
 export function isSamordningsnummer(personnummer: string): boolean {
   const day = Number(personnummer.slice(6, 8))
@@ -182,7 +175,7 @@ function clip(value: string, max: number): string {
 export function buildForaFile(input: BuildForaFileInput): BuildForaFileResult {
   const issues: ForaIssue[] = []
   const warnings: ForaWarning[] = []
-  const organizationNumber = foraOrganizationNumber(input.orgNumber)
+  const organizationNumber = orgNumberKey(input.orgNumber)
   if (!organizationNumber) {
     issues.push({
       code: 'FORA_ORG_NUMBER_MISSING',

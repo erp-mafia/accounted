@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import { parseEntityType } from '@/lib/company/entity-type'
+import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
@@ -206,20 +206,10 @@ export async function reconcileAgiDeclaration(
     return { status: 'no_token' }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
+  const arbetsgivare = await companyRedovisare(supabase, companyId)
+  if (!arbetsgivare) {
     return { status: 'no_company_settings' }
   }
-
-  const arbetsgivare = formatRedovisare(
-    settings.org_number as string,
-    parseEntityType(settings.entity_type),
-  )
 
   // Decided here, from the credential that was actually resolved, so the
   // caller's breaker can never disagree with the request about the route.

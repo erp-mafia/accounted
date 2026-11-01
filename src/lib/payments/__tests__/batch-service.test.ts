@@ -476,7 +476,7 @@ describe('createSupplierPaymentBatch', () => {
       p_confirm_already_batched: false,
       p_debtor_snapshot: {
         name: 'Testbolaget AB',
-        org_number: '556677-8899',
+        org_number: '5566778899',
         iban: 'SE3550000000054910000003',
         bic: 'ESSESESS',
         bankgiro: '9912346',
@@ -1003,6 +1003,46 @@ describe('createSupplierPaymentBatch', () => {
       p_debtor_snapshot: { bankgiro: string | null }
     }
     expect(args.p_debtor_snapshot.bankgiro).toBeNull()
+  })
+
+  it('snapshots the 10-digit number from either stored copy, so the file names one sender', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: { ...companyRow, org_number: '' } },
+      { data: { ...settingsRow, org_number: '165566778899' } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] },
+      { data: null },
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    const [, args] = mock.supabase.rpc.mock.calls[0] as [string, { p_debtor_snapshot: { org_number: string } }]
+    expect(args.p_debtor_snapshot.org_number).toBe('5566778899')
+  })
+
+  it('takes the company copy when the settings copy is an empty string', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: { ...companyRow, org_number: '556677-8899' } },
+      { data: { ...settingsRow, org_number: '' } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] },
+      { data: null },
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    const [, args] = mock.supabase.rpc.mock.calls[0] as [string, { p_debtor_snapshot: { org_number: string } }]
+    expect(args.p_debtor_snapshot.org_number).toBe('5566778899')
   })
 
   it('requires an organisation number for the InitgPty OrgId', async () => {

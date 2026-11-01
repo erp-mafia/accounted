@@ -158,6 +158,14 @@ describe('prepareSkattekontoPaymentOrder', () => {
     expect(rpcArgs().p_amount).toBe(5000)
   })
 
+  it('derives a sole trader\'s OCR under the legal form when no charge has given one', async () => {
+    db.setTable('skattekonto_transactions', { data: [] })
+    db.setTable('companies', { data: { org_number: '800374-0118', entity_type: 'enskild_firma' } })
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', amount: 500, today: TODAY })
+    expect(result.ok).toBe(true)
+    expect(rpcArgs().p_reference).toBe('1980037401181')
+  })
+
   it('refuses without an OCR number, and uses the one Skatteverket reported when the company has no org number', async () => {
     db.setTable('companies', { data: { org_number: null, entity_type: 'aktiebolag' } })
     expect(await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })).toEqual({

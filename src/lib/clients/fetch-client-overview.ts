@@ -23,6 +23,7 @@
  */
 
 import { chunk as chunked } from '@/lib/utils'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
@@ -331,7 +332,7 @@ export async function fetchOverviewRowsForCompanies(
     const row: ClientOverviewRow = {
       companyId: company.id,
       name: settings?.company_name || company.name,
-      orgNumber: company.org_number ?? settings?.org_number ?? null,
+      orgNumber: effectiveOrgNumber(settings?.org_number, company.org_number),
       clientNumber: clientNumberByCompany.get(company.id) ?? null,
       unbookedCount: unbookedByCompany.get(company.id) ?? 0,
       inboxCount: inboxByCompany.get(company.id) ?? 0,

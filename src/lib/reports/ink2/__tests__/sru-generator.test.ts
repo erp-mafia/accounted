@@ -66,6 +66,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
     },
     companyInfo: {
       companyName: 'Test AB',
+      entityType: 'aktiebolag',
       orgNumber: '556677-8899',
       addressLine1: 'Testgatan 1',
       postalCode: '11122',
@@ -109,6 +110,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test AB',
+          entityType: 'aktiebolag',
           orgNumber: '165566778899',
           addressLine1: null,
           postalCode: '11122',
@@ -321,6 +323,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test #1 AB',
+          entityType: 'aktiebolag',
           orgNumber: '556677-8899',
           addressLine1: null,
           postalCode: '11122',
@@ -372,6 +375,7 @@ describe('INK2 SRU Generator', () => {
       const declaration = makeDeclaration({
         companyInfo: {
           companyName: 'Test AB',
+          entityType: 'aktiebolag',
           orgNumber: null,
           addressLine1: null,
           postalCode: null,

@@ -20,7 +20,7 @@
 import { Document, Image, Link, Page, Path, StyleSheet, Svg, Text, View } from '@react-pdf/renderer'
 import { registerBundledFont } from '@/lib/pdf/bundled-fonts'
 import { createLogger } from '@/lib/logger'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { BANKID_SYMBOL_PATHS, BANKID_SYMBOL_VIEWBOX, BANKID_VIEWBOX, BANKID_WORDMARK_PATHS } from './bankid-mark'
 import { formatSigningMoment, formatSigningShortMoment } from './format'
 import { companyInitials, fitLogo, type SigningLogo } from './logo'
@@ -251,7 +251,7 @@ export function SigningCertificatePDF(data: SigningCertificateData) {
               <Text hyphenationCallback={noHyphens} style={styles.companyName}>
                 {data.companyName}
               </Text>
-              {data.orgNumber ? <Text style={styles.companyMeta}>Org.nr {formatOrgNumber(data.orgNumber)}</Text> : null}
+              {data.orgNumber ? <Text style={styles.companyMeta}>Org.nr {formatOrgNumberDisplay(data.orgNumber)}</Text> : null}
             </View>
           </View>
           <View>

@@ -203,15 +203,6 @@ export function parsePaymentTerms(value: unknown, fallback: number): number {
 }
 
 /**
- * Normalize an org/personal number to its dedup key (digits only).
- * Returns null for empty input or strings that contain no digits.
- */
-export function normalizeOrgNumber(value: string | null): string | null {
-  if (!value) return null
-  return value.replace(/\D/g, '') || null
-}
-
-/**
  * Normalize an email to its dedup key (trimmed + lowercased).
  * Returns null for empty/whitespace-only input.
  */

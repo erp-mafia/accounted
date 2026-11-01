@@ -1,3 +1,4 @@
+import { swedishNumberKind } from '@/lib/invariants/org-number'
 import type { CustomerType, SupplierType } from '@/types'
 
 /**
@@ -9,32 +10,6 @@ export const EU_VAT_PREFIXES = new Set([
   'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV',
   'MT', 'NL', 'PL', 'PT', 'RO', 'SI', 'SK', 'XI', // XI = Northern Ireland
 ])
-
-/**
- * Strip whitespace, dashes, and dots from an org/personnummer for length checks.
- */
-function digits(value: string | null): string {
-  if (!value) return ''
-  return value.replace(/\D/g, '')
-}
-
-/**
- * Check the third digit of a Swedish org/personnummer.
- *
- * Personnummer: month digit (00-12): third digit ≤ 1.
- * Företag: third digit ≥ 2 (per Skatteverket's allocation rules).
- */
-function looksLikePersonnummer(orgNumber: string | null): boolean {
-  const d = digits(orgNumber)
-  // 12 digits = full personnummer (YYYYMMDDXXXX)
-  if (d.length === 12) return true
-  // 10 digits: disambiguate by month (positions 3-4 are month, 01-12)
-  if (d.length === 10) {
-    const month = parseInt(d.substring(2, 4), 10)
-    if (month >= 1 && month <= 12 && d[2] <= '1') return true
-  }
-  return false
-}
 
 function vatPrefix(vatNumber: string | null): string | null {
   if (!vatNumber) return null
@@ -75,7 +50,7 @@ export function classifyCustomer(args: {
     }
   }
 
-  if (looksLikePersonnummer(args.org_number)) return 'individual'
+  if (swedishNumberKind(args.org_number) === 'person') return 'individual'
   return 'swedish_business'
 }
 

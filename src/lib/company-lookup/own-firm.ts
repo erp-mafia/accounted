@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { hashPersonalNumber } from '@/lib/auth/bankid'
 import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
 import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
-import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import { mapEntityType } from './entity-type-map'
 
 /**

@@ -1,6 +1,6 @@
 import type { LedgerStats, RegisterRow } from '@/lib/parties/register'
 import type { SuggestionReason } from '@/lib/parties/suggest'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 /** next-intl translator shape the register components accept. */
 export type Translate = (key: string, values?: Record<string, string | number>) => string
@@ -24,8 +24,8 @@ export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm
   // An org number the person picked from the register (no document carries
   // it) is stated as such; the stored reason predates the pick.
   const picked = Boolean(orgNumber) && !reason.org_number
-  if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumber(reason.org_number), docs }))
-  else if (picked) parts.push(t('reason_org_picked', { org: formatOrgNumber(orgNumber!) }))
+  if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumberDisplay(reason.org_number), docs }))
+  else if (picked) parts.push(t('reason_org_picked', { org: formatOrgNumberDisplay(orgNumber!) }))
   else if (reason.ambiguous_orgs?.length) parts.push(t('reason_ambiguous'))
   else if (docs > 0) parts.push(t('reason_docs', { docs }))
   parts.push(t('reason_vouchers', { count: reason.occurrences ?? 0 }))

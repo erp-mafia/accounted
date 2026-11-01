@@ -47,6 +47,7 @@ function sampleDeclaration(overrides: Partial<INK2SRutor>): INK2Declaration {
     totals: { totalAssets: 0, totalEquityLiabilities: 0, operatingResult: 0, aretsResultat: 0 },
     companyInfo: {
       companyName: 'Testbolaget AB',
+      entityType: 'aktiebolag',
       orgNumber: '556000-0100',
       addressLine1: 'Testgatan 1',
       postalCode: '11122',

@@ -1,7 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
   CERTIFICATE_SIGNER,
@@ -200,7 +200,7 @@ function PageChrome({
     <>
       <View style={styles.pageHeader} fixed>
         <Text>
-          {data.company.name} · {formatOrgNumber(data.company.org_number)}
+          {data.company.name} · {formatOrgNumberDisplay(data.company.org_number)}
         </Text>
         <Text>
           Årsredovisning {data.fiscal_period.name}
@@ -253,7 +253,7 @@ export function ArsredovisningPDF({
             för räkenskapsåret {data.fiscal_period.period_start} till {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
-          <Text style={styles.paragraph}>Organisationsnummer: {formatOrgNumber(data.company.org_number)}</Text>
+          <Text style={styles.paragraph}>Organisationsnummer: {formatOrgNumberDisplay(data.company.org_number)}</Text>
           {data.company.registered_office && (
             <Text style={styles.paragraph}>Säte: {data.company.registered_office}</Text>
           )}

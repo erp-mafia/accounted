@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
-import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
 import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -84,7 +83,7 @@ export const POST = withRouteContext(
       )
       const existing = existingRaw as unknown as ExistingCustomer[]
 
-      const matcher = createRegisterMatcher(existing, { orgKey: normalizeOrgNumber })
+      const matcher = createRegisterMatcher(existing)
 
       const created: Customer[] = []
       const updated: Customer[] = []

@@ -21,7 +21,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signerPersonalNumberFromBankIdLogin } from '@/lib/auth/bankid-signer'
-import { normalizeOrgNumber } from '@/lib/invariants/org-number'
+import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import type { Logger } from '@/lib/logger'
 import { BILLO_ALREADY_ENROLLED, type BilloProvider } from './billo'
 import { isDigitalMailboxApiError } from './http'
@@ -33,7 +33,7 @@ import {
   upsertConnection,
   type DigitalMailboxConnection,
 } from './connections'
-import { isLegalPersonOrgNumber, orgNumberFromVatNumber } from './identifiers'
+import { orgNumberFromVatNumber } from './identifiers'
 import type { KivraProvider } from './kivra'
 import { getDigitalMailboxProviders, isDigitalMailboxEnabled } from './providers'
 import type { DigitalMailboxProviderId } from './types'
@@ -95,6 +95,7 @@ function receivingGate(identity: CompanyIdentity | null): ConnectRefusal | null 
   // The demo company never reaches a provider: it would open a real mailbox.
   if (identity.isSandbox) return 'DIGITAL_MAILBOX_SANDBOX'
   if (!identity.orgNumber || !identity.name) return 'DIGITAL_MAILBOX_ORG_NUMBER_MISSING'
+  // Neither Kivra Företag nor Billo's business mailbox takes an enskild firma's personnummer.
   if (!isLegalPersonOrgNumber(identity.orgNumber)) return 'DIGITAL_MAILBOX_SOLE_TRADER_UNSUPPORTED'
   return null
 }

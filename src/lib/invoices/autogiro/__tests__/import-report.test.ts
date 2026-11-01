@@ -195,6 +195,15 @@ describe('importAutogiroReport: Medgivanden via Internetbanken', () => {
     expect(result.answer_file).toBeNull()
   })
 
+  it('finds the customer by the identity the payer gave, in whichever form the card holds it', async () => {
+    // A fabricated samordningsnummer in place of the fixture's number.
+    const file = INTERNET_BANK.replace('198001011234', '198001611234')
+    const card = [{ id: 'cust-org', name: 'Eva Ek', customer_number: null, org_number: '800161-1234' }]
+    const result = await run(setup({ customers: card }), file, { apply: false })
+    if (!result.ok) throw new Error('expected ok')
+    expect(result.mandates[0]).toEqual(expect.objectContaining({ payer_number: '7001', customer_id: 'cust-org' }))
+  })
+
   it('writes the answer file (blank approves, AV rejects) and never stores it', async () => {
     const mock = setup({ customers })
     const result = await run(mock, INTERNET_BANK, { decisions: { '7001': 'approve', '7002': 'reject' } })

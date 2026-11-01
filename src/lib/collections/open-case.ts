@@ -19,7 +19,8 @@ import { isCollectionsError, type CollectionsError } from './errors'
 import { bankCheckSnapshot, type BankCheckResult } from './bank-check'
 import { resolveStartStep, startStepRefusalCode, startStepsFor } from './start-step'
 import type { Eligibility } from './eligibility'
-import { debtorCountryCode, normalizeOrgNumberDigits } from './eligibility'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
+import { debtorCountryCode } from './eligibility'
 import {
   HandoverNotFoundError,
   loadHandoverContext,
@@ -176,7 +177,7 @@ function debtorFor(customer: HandoverCustomer, eligibility: Eligibility, persona
   return {
     kind: eligibility.debtorKind,
     name: customer.name.trim().slice(0, 200),
-    orgNumber: eligibility.debtorKind === 'business' ? normalizeOrgNumberDigits(customer.org_number) : null,
+    orgNumber: eligibility.debtorKind === 'business' ? normalizeOrgNumber(customer.org_number) : null,
     personalNumber,
     vatNumber: trim(customer.vat_number, 20),
     customerNumber: trim(customer.customer_number, 50),

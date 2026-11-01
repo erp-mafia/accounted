@@ -1,7 +1,8 @@
 import { decryptPersonnummer } from '../personnummer'
-import { isOrgNumberShaped } from '@/lib/invariants/org-number'
+import { FilingIdentityError, isOrgNumberShaped, toRedovisare12 } from '@/lib/invariants/org-number'
 import { truncateToWholeKronor } from '@/lib/money'
 import { escapeXml } from '@/lib/xml/escape'
+import type { EntityType } from '@/types'
 
 /**
  * AGI XML generator: Arbetsgivardeklaration på individnivå.
@@ -209,7 +210,8 @@ export interface AGIEmployeeData {
 }
 
 export interface AGICompanyData {
-  orgNumber: string          // 10 digits after stripping dashes
+  orgNumber: string          // as stored: a 12-digit form keeps its exact century
+  entityType: EntityType     // decides 16 or the owner's birth century (toRedovisare12)
   companyName: string
   periodYear: number
   periodMonth: number
@@ -267,13 +269,9 @@ const COMPANY_FIELD_PLACES: Readonly<Record<string, string>> = {
  * to approve a generation that would fail (crm#1435).
  */
 export function findMissingCompanyData(
-  company: Pick<AGICompanyData, 'orgNumber' | 'contactName' | 'contactPhone' | 'contactEmail'>,
+  company: Pick<AGICompanyData, 'orgNumber' | 'entityType' | 'contactName' | 'contactPhone' | 'contactEmail'>,
 ): AGIIncompleteDataError | null {
   const missing: string[] = []
-  // Skatteverket's IDENTITET type requires either 10 digits (AB orgnr, we prefix
-  // with "16") or 12 digits (personnummer for enskild firma). Any other shape is
-  // a data-entry error that we cannot silently fix.
-  //
   // Shared rule (lib/invariants/org-number.ts), not a local digit-strip: the
   // previous `replace(/\D/g, '')` also swallowed letters, so a field holding
   // stray text still measured 10 digits and passed.
@@ -282,7 +280,7 @@ export function findMissingCompanyData(
   if (!company.contactPhone.trim()) missing.push('telefon')
   if (!company.contactEmail.trim()) missing.push('e-post')
 
-  if (missing.length === 0) return null
+  if (missing.length === 0) return identitetRefusal(company.orgNumber, company.entityType)
   return new AGIIncompleteDataError(
     `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
       `Fyll i ${missing.map((field) => COMPANY_FIELD_PLACES[field]).join('; ')}.`,
@@ -293,6 +291,17 @@ export function findMissingCompanyData(
 function assertRequiredCompanyData(company: AGICompanyData): void {
   const missing = findMissingCompanyData(company)
   if (missing) throw missing
+}
+
+/** What toIdentitet would refuse this number with, or null when it passes. */
+function identitetRefusal(orgNumber: string, entityType: EntityType): AGIIncompleteDataError | null {
+  try {
+    toIdentitet(orgNumber, entityType)
+    return null
+  } catch (err) {
+    if (err instanceof AGIIncompleteDataError) return err
+    throw err
+  }
 }
 
 /**
@@ -391,40 +400,26 @@ function assertPayloadSize(xml: string): void {
 const IDENTITET_PATTERN = /^(((19|20)[0-9][0-9])((((01|03|05|07|08|10|12)(6[1-9]|7[0-9]|8[0-9]|9[0-1]))|((04|06|09|11)(6[1-9]|7[0-9]|8[0-9]|90))|((02)(6[1-9]|7[0-9]|8[0-8])))|00[6-9][0-9]|[0-9][0-9]60)|(((19|20)(04|08|12|16|20|24|28|32|36|40|44|48|52|56|60|64|68|72|76|80|84|88|92|96)(0289))|(20000289)))(00[1-9]|0[1-9][0-9]|[1-9][0-9][0-9])[0-9]|16(1[0-9]|2[0-9]|3[0-9]|5[0-9]|6[0-4]|66|68|7[0-9]|8[0-9]|9[0-9])[2-9]\d{7}|((((19|20)[0-9][0-9])(((01|03|05|07|08|10|12)(0[1-9]|1[0-9]|2[0-9]|3[0-1]))|((04|06|09|11)(0[1-9]|1[0-9]|2[0-9]|30))|((02)(0[1-9]|1[0-9]|2[0-8]))))|(((19|20)(04|08|12|16|20|24|28|32|36|40|44|48|52|56|60|64|68|72|76|80|84|88|92|96)(0229))|(20000229)))(00[1-9]|0[1-9][0-9]|[1-9][0-9][0-9])[0-9]$/
 
 /**
- * Normalize an org number or personnummer to Skatteverket's 12-character
- * IDENTITET format, required by the AGI schema for Avsandare/Organisationsnummer,
- * AgRegistreradId, and Arendeagare.
+ * The company's identity in Skatteverket's 12-character IDENTITET format,
+ * required by the AGI schema for Avsandare/Organisationsnummer, AgRegistreradId
+ * and Arendeagare: toRedovisare12, the conversion every filing shares, so an
+ * enskild firma stored in 10-digit form takes the owner's birth century here as
+ * it does on the VAT return.
  *
- *   - 10-digit orgnr (AB e.g. 5561234567) → prefixed with "16" → 165561234567
- *   - 12-digit personnummer (EF e.g. 196904206942) → used as-is
- *
- * Throws AGIIncompleteDataError if the resulting value cannot match the
- * IDENTITET pattern: this catches bogus test data (e.g. "420694-2069") before
- * the file reaches Skatteverket.
+ * Throws AGIIncompleteDataError when the conversion refuses the number or the
+ * result cannot match the IDENTITET pattern: this catches bogus test data (e.g.
+ * "420694-2069") before the file reaches Skatteverket. The refusal's text is the
+ * shared one, with its way out: a valid number is locked at the settings door.
  */
-function toIdentitet(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  let candidate: string
-  if (digits.length === 12) candidate = digits
-  else if (digits.length === 10) candidate = `16${digits}`
-  else {
-    throw new AGIIncompleteDataError(
-      `Ogiltigt organisations-/personnummer (${digits.length} siffror). ` +
-        'Ange ett giltigt svenskt organisationsnummer (10 siffror, t.ex. 556123-4567) ' +
-        'eller fullständigt personnummer (12 siffror, YYYYMMDD-XXXX) under Inställningar → Företag.',
-      ['organisationsnummer']
-    )
+function toIdentitet(raw: string, entityType: EntityType): string {
+  try {
+    const candidate = toRedovisare12(raw, entityType)
+    if (IDENTITET_PATTERN.test(candidate)) return candidate
+    throw new FilingIdentityError()
+  } catch (err) {
+    if (!(err instanceof FilingIdentityError)) throw err
+    throw new AGIIncompleteDataError(err.message, ['organisationsnummer'])
   }
-
-  if (!IDENTITET_PATTERN.test(candidate)) {
-    throw new AGIIncompleteDataError(
-      `Ogiltigt organisationsnummer "${raw}": värdet är inte ett svenskt organisationsnummer eller personnummer enligt Skatteverkets format. ` +
-        'Kontrollera värdet under Inställningar → Företag. För AB ska det vara 10 siffror (t.ex. 556123-4567). ' +
-        'För enskild firma ska det vara ett fullständigt 12-siffrigt personnummer (YYYYMMDD-XXXX).',
-      ['organisationsnummer']
-    )
-  }
-  return candidate
 }
 
 /** [faltkod, XML element] of one IU field. */
@@ -482,7 +477,7 @@ export function generateAGIXml(
   assertRequiredCompanyData(company)
   assertRequiredPeriod(company.periodYear, company.periodMonth)
 
-  const orgIdentitet = toIdentitet(company.orgNumber)
+  const orgIdentitet = toIdentitet(company.orgNumber, company.entityType)
   const period = `${company.periodYear}${String(company.periodMonth).padStart(2, '0')}`
   const createdAt = new Date().toISOString().replace(/\.\d+Z$/, '')
 

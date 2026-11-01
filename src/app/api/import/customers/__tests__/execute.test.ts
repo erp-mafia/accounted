@@ -184,6 +184,36 @@ describe('POST /api/import/customers/execute', () => {
     expect(findCall('register_import_runs', 'insert')).toBeUndefined()
   })
 
+  it('writes a 12-digit row onto the card holding the number in 10 digits', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'stored', name: 'Acme AB', org_number: '5566778899', email: null, customer_number: null },
+    ])
+    enqueue({ data: { id: 'stored', name: 'Acme AB' } })
+
+    const res = await post({ rows: [row({ org_number: '165566778899' })], update_duplicates: true })
+    const { status, body } = await parseJsonResponse<ExecuteBody>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.updated).toBe(1)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+  })
+
+  it('never writes a row onto a card of another country with the same digits', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'belgian', name: 'Gamma SA', org_number: 'BE0123456789', email: null, customer_number: null },
+    ])
+    enqueue({ data: { id: 'french', name: 'Gamma SAS' } })
+
+    const res = await post({
+      rows: [row({ name: 'Gamma SAS', customer_type: 'eu_business', org_number: 'FR0123456789', country: 'FR', vat_number: 'FR12345678901' })],
+      update_duplicates: true,
+    })
+    const { body } = await parseJsonResponse<ExecuteBody>(res)
+
+    expect(body.data.updated).toBe(0)
+    expect(findCall('customers', 'insert')).toBeDefined()
+  })
+
   it('matches on the customer number before the org number', async () => {
     mockFetchAllRows.mockResolvedValue([
       { id: 'by-org', name: 'Acme AB', org_number: '5560217780', email: null, customer_number: null },

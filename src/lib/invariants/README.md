@@ -32,7 +32,7 @@ names are the only thing keeping a call site honest, so they carry the weight.
 
 | File | Owns |
 |---|---|
-| `org-number.ts` | Swedish organisationsnummer / personnummer: canonical 10-digit form, Luhn, Skatteverket 12-digit conversion |
+| `org-number.ts` | Swedish organisationsnummer / personnummer: the one 10-digit key, Luhn, whose number it is (legal or natural person), when two numbers are one, Skatteverket 12-digit conversion |
 | `personal-number-shape.ts` | A personnummer or samordningsnummer where an organisationsnummer belongs: where it may be stored, where it is masked |
 | `account-number.ts` | BAS account number format (4 digits, always a string) |
 | `iso-date.ts` | `YYYY-MM-DD` shape, plus a real-calendar-date check |

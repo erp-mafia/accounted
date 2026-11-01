@@ -60,6 +60,8 @@ vi.mock('@/lib/bankgiro/luhn', () => ({
 }))
 
 import { GET } from '../route'
+import { resolveSkattekontoOcr } from '@/lib/skatteverket/skattekonto-ocr'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 
 describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -114,6 +116,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
   it('generates the LB file (happy path)', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -129,6 +132,35 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 1500 })
   })
 
+  it('reads a number held in settings alone, where the company row is empty', async () => {
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+  })
+
+  it('answers 400 when neither stored copy holds a number', async () => {
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: null, entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: null } }) // company_settings
+    enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } }) // companies: the number's reader
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+  })
+
   it('pays the declared whole-krona totals as-is for new-era declarations', async () => {
     // Declarations generated since the whole-krona change store the declared
     // integers (what Skatteverket computes from the underlag and draws), and
@@ -136,6 +168,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     // payment must be exactly their sum.
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -155,6 +188,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     // equilibrium). Truncating here would strand the öre on 2731 instead.
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073.84 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -167,9 +201,60 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 28341.84 })
   })
 
+  it('asks for the OCR under the legal form: a sole trader is not 16 + the number', async () => {
+    const soleTrader = { name: 'Testfirman', org_number: '8003740118', entity_type: 'enskild_firma' }
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: soleTrader }) // companies
+    enqueue({ data: { org_number: '8003740118' } }) // company_settings: the number's reader
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(vi.mocked(resolveSkattekontoOcr)).toHaveBeenCalledWith(mockSupabase, 'company-1', '8003740118', 'enskild_firma')
+  })
+
+  it('answers a number that fits no filing with the way out, not a file', async () => {
+    vi.mocked(resolveSkattekontoOcr).mockRejectedValueOnce(new FilingIdentityError())
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '198003740118', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '198003740118' } }) // company_settings: the number's reader
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toMatch(/kontakta supporten/)
+    expect(mockGenerateBgLb).not.toHaveBeenCalled()
+  })
+
+  it('keeps the message id a 12-digit company row has always given: a re-download stays one message', async () => {
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '165566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGeneratePain001.mock.calls[0][2]).toMatchObject({ messageId: 'SKATT-2026-04-165566778899' })
+  })
+
   it('generates a pain.001 file when format=pain001', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -207,6 +292,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     )
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -285,6 +371,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     mockResolveBatchDebtor.mockResolvedValue(resolution)
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -305,6 +392,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'nordea_signer_id' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -335,6 +423,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -359,6 +448,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     for (const period of ['2026-04', '2026-05']) {
       enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
       enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+      enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
       enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
       const response = await GET(
         createMockRequest(`/api/skatteverket/tax-payments/${period}/payment-file`, {
@@ -379,6 +469,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'iban' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -401,6 +492,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {

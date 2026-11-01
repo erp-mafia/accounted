@@ -62,6 +62,7 @@ import {
 import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { createUtseOmbudDeepLink, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
@@ -1008,15 +1009,15 @@ export const skatteverketExtension: Extension = {
             { status: 400 }
           )
         }
-        const orgNumber = formatRedovisare(
-          settings.org_number as string,
-          parseEntityType(settings.entity_type)
-        )
-
-        const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
-        if (contestedForVerify) return contestedForVerify
-
         try {
+          const orgNumber = formatRedovisare(
+            settings.org_number as string,
+            parseEntityType(settings.entity_type)
+          )
+
+          const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
+          if (contestedForVerify) return contestedForVerify
+
           // Each probe call is audited by the transport.
           const result = await probeCompanyGrants(ctx.companyId, orgNumber, ctx.userId)
           return NextResponse.json({
@@ -1067,15 +1068,15 @@ export const skatteverketExtension: Extension = {
             { status: 400 }
           )
         }
-        const orgNumber = formatRedovisare(
-          settings.org_number as string,
-          parseEntityType(settings.entity_type)
-        )
-
-        const contestedForLink = await contestedOrgNumberResponse(orgNumber)
-        if (contestedForLink) return contestedForLink
-
         try {
+          const orgNumber = formatRedovisare(
+            settings.org_number as string,
+            parseEntityType(settings.entity_type)
+          )
+
+          const contestedForLink = await contestedOrgNumberResponse(orgNumber)
+          if (contestedForLink) return contestedForLink
+
           const link = await createUtseOmbudDeepLink(
             orgNumber,
             { companyId: ctx.companyId, userId: ctx.userId },
@@ -2691,6 +2692,10 @@ function handleSkvError(err: unknown): NextResponse {
       { error: err.message, code: err.code },
       { status }
     )
+  }
+
+  if (err instanceof FilingIdentityError) {
+    return NextResponse.json({ error: err.message, code: err.code }, { status: 422 })
   }
 
   log.error('API error', err)

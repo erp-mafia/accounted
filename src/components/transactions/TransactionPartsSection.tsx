@@ -3,7 +3,8 @@
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { formatCurrency, formatOrgNumber } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import type { BatchAllocationPrefill, TransactionPartView, TransactionPartsResponse } from '@/lib/transactions/parts-read'
 
 async function fetchParts(url: string): Promise<TransactionPartsResponse> {
@@ -53,7 +54,7 @@ export function TransactionPartsSection({ transactionId, onMatch, processing }: 
       </p>
       <ul className="divide-y divide-border text-[12.5px]">
         {parts.map((part) => {
-          const orgNumber = part.counterparty_org_number ? formatOrgNumber(part.counterparty_org_number) : null
+          const orgNumber = part.counterparty_org_number ? formatOrgNumberDisplay(part.counterparty_org_number) : null
           const suggested = part.suggested_invoice
           return (
             <li key={part.part_id} className="flex items-start justify-between gap-3 py-1.5">

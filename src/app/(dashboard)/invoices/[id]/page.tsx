@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
@@ -2061,7 +2062,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canSendPeppol = peppolTransportAvailable && peppolSendGranted && peppolSendsLeft
     && PEPPOL_SENDABLE_STATUSES.has(invoice.status)
   const peppolRecipientLabel = invoice.customer?.org_number
-    ? `0007:${invoice.customer.org_number.replace(/\D/g, '')}`
+    ? `0007:${normalizeOrgNumber(invoice.customer.org_number) ?? invoice.customer.org_number}`
     : '0007'
   // Text rows never reach the buyer over Peppol: say so before the send.
   const peppolTextRowsLeftOut = countTextRowsLeftOutOfPeppol(invoice.items)

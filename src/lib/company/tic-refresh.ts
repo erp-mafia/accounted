@@ -7,9 +7,9 @@ import { writeCompanySettings } from '@/lib/company/settings-writer'
 import { createLogger } from '@/lib/logger'
 import {
   decideOrgNumberChange,
-  validStoredOrgNumber,
   type OrgNumberRefusalCode,
 } from '@/lib/company/org-number-rule'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 
 export interface RefreshCompanyProfileResult {
   ok?: true
@@ -75,14 +75,14 @@ export async function refreshCompanyProfileAction(
   if (change.kind === 'refused') return { error: REFUSAL_ERRORS[change.code] }
   // Unchanged: the typed number is the stored one, which must itself be
   // valid to fetch with.
-  const orgNumber = change.kind === 'fill' ? change.value : validStoredOrgNumber(orgNumberRaw)
+  const orgNumber = change.kind === 'fill' ? change.value : normalizeOrgNumber(orgNumberRaw)
   if (!orgNumber) return { error: 'org_number_invalid' }
 
   // Force staleness so ensureTicSnapshot re-fetches instead of returning the
   // poisoned cache. The TIC fetch reads the company row, so it gets the
   // number too unless it already holds a valid one (never replaced).
   // Two literal payloads (no spread), so the column guard checks both shapes.
-  const keepStoredNumber = validStoredOrgNumber(company?.org_number) !== null
+  const keepStoredNumber = normalizeOrgNumber(company?.org_number) !== null
   const { error: updateError } = keepStoredNumber
     ? await supabase.from('companies').update({ tic_snapshot_fetched_at: null }).eq('id', companyId)
     : await supabase

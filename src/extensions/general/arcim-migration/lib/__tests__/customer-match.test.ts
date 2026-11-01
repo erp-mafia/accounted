@@ -8,11 +8,11 @@ import {
   buildCustomerCards,
   customerNameKey,
   customerRegisterFacts,
-  identityKey,
   matchExistingCustomer,
   salesInvoicePartyFacts,
   type CustomerCard,
 } from '../customer-match'
+import { partyOrgKey } from '@/lib/invariants/org-number'
 
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }))
 
@@ -30,12 +30,12 @@ afterEach(() => { vi.unstubAllEnvs() })
 
 describe('keys', () => {
   it('reads an org number or personnummer the same in every written form', () => {
-    expect(identityKey('556677-8899')).toBe('5566778899')
-    expect(identityKey('16556677-8899')).toBe('5566778899')
-    expect(identityKey('19500118-2046')).toBe('5001182046')
-    expect(identityKey('500118-2046')).toBe('5001182046')
-    expect(identityKey('DE 123 456 789')).toBe('DE123456789')
-    expect(identityKey('  ')).toBeUndefined()
+    expect(partyOrgKey('556677-8899')).toBe('5566778899')
+    expect(partyOrgKey('16556677-8899')).toBe('5566778899')
+    expect(partyOrgKey('19500118-2046')).toBe('5001182046')
+    expect(partyOrgKey('500118-2046')).toBe('5001182046')
+    expect(partyOrgKey('DE 123 456 789')).toBe('DE123456789')
+    expect(partyOrgKey('  ')).toBeNull()
   })
 
   it('folds case and whitespace out of a name, nothing else', () => {
@@ -73,8 +73,8 @@ describe('matchExistingCustomer', () => {
   })
 
   it('keeps two customers apart that share a name but not a personnummer', () => {
-    const cards = [card('first', { identities: [identityKey(PERSON)!], name: 'anna exempel' })]
-    expect(matchExistingCustomer({ identity: identityKey(OTHER_PERSON), name: 'anna exempel' }, cards)).toBeNull()
+    const cards = [card('first', { identities: [partyOrgKey(PERSON)!], name: 'anna exempel' })]
+    expect(matchExistingCustomer({ identity: partyOrgKey(OTHER_PERSON)!, name: 'anna exempel' }, cards)).toBeNull()
   })
 
   it('keeps two customers apart that share a name but not a customer number', () => {
@@ -227,7 +227,7 @@ describe('adoptExistingCustomers', () => {
   it('maps an unmapped source customer onto the hand-made card before the commit (crm#1294)', async () => {
     const db = database([handMade()])
     const adopted = await adoptExistingCustomers(db.supabase, job,
-      [{ sourceId: '2329', facts: { identity: identityKey(PERSON), number: '2329', name: 'anna exempel' } }], within)
+      [{ sourceId: '2329', facts: { identity: partyOrgKey(PERSON)!, number: '2329', name: 'anna exempel' } }], within)
     expect(adopted).toBe(1)
     expect(db.rpc).toHaveBeenCalledWith('adopt_provider_migration_invoice_party',
       { p_job_id: 'job', p_source_id: '2329', p_customer: 'hand-made' })
@@ -282,7 +282,7 @@ describe('adoptExistingCustomers', () => {
   it('puts a customer entered twice at the source on the one card its personnummer names', async () => {
     const db = database([handMade()], [{ source_id: '2329', target_id: 'hand-made' }])
     const adopted = await adoptExistingCustomers(db.supabase, job,
-      [{ sourceId: '9001', facts: { identity: identityKey(PERSON), number: '9001', name: 'anna exempel' } }], within)
+      [{ sourceId: '9001', facts: { identity: partyOrgKey(PERSON)!, number: '9001', name: 'anna exempel' } }], within)
     expect(adopted).toBe(1)
     expect(db.mappings).toContainEqual({ source_id: '9001', target_id: 'hand-made' })
   })
@@ -315,7 +315,7 @@ describe('adoptExistingCustomers', () => {
   it('creates nothing and calls nothing when no card matches', async () => {
     const db = database([handMade()])
     const adopted = await adoptExistingCustomers(db.supabase, job,
-      [{ sourceId: '9', facts: { identity: identityKey(OTHER_PERSON), number: '9', name: 'bo prov' } }], within)
+      [{ sourceId: '9', facts: { identity: partyOrgKey(OTHER_PERSON)!, number: '9', name: 'bo prov' } }], within)
     expect(adopted).toBe(0)
     expect(db.rpc).not.toHaveBeenCalled()
   })

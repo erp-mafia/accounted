@@ -16,7 +16,7 @@ import {
   BolagsverketSubmissionError,
   handleWebhook,
   MAX_HANDLING_BYTES,
-  normalizeOrgnr,
+  getOrgnr,
   submitArsredovisning,
   submitRevisionsberattelse,
 } from './lib/submission-service'
@@ -126,18 +126,6 @@ async function resolveEnvironment(ctx: ExtensionContext): Promise<BolagsverketEn
 async function clientFor(ctx: ExtensionContext): Promise<BolagsverketClient> {
   const environment = await resolveEnvironment(ctx)
   return new BolagsverketClient(configFromEnv({ environment }))
-}
-
-async function companyOrgnr(ctx: ExtensionContext): Promise<string> {
-  const { data, error } = await ctx.supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (error) throw new Error(`Kunde inte läsa organisationsnummer: ${error.message}`)
-  const orgNumber = (data as { org_number?: string } | null)?.org_number
-  if (!orgNumber) throw new Error('Organisationsnummer saknas i företagsinställningarna.')
-  return normalizeOrgnr(orgNumber)
 }
 
 /**
@@ -311,7 +299,7 @@ export const bolagsverketExtension: Extension = {
       handler: async (_request, ctx) => {
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const data = await client.getGrunduppgifter(orgnr)
           return NextResponse.json({ data })
         } catch (err) {
@@ -325,7 +313,7 @@ export const bolagsverketExtension: Extension = {
       handler: async (_request, ctx) => {
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const data = await client.getArendestatus(orgnr)
           return NextResponse.json({ data })
         } catch (err) {
@@ -517,7 +505,7 @@ export const bolagsverketExtension: Extension = {
         }
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const { data: sub } = await ctx.supabase
             .from('bolagsverket_subscriptions')
             .select('url')

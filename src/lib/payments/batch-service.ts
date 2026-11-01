@@ -30,6 +30,8 @@ import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { SVEA_BANK_BICS } from '@/lib/payments/bank-account'
 import { payingAccountSummary, resolvePayingAccount, type PayingAccountSummary } from './paying-account'
 import {
@@ -211,10 +213,8 @@ export async function resolveBatchDebtor(
   if (!paying.ok) return { ok: false, missing: paying.missing, account: payingAccountSummary(paying.account) }
   const { iban, bic } = paying.account
 
-  // Settings first: it is the maintained value; companies.org_number is the
-  // write-once onboarding snapshot and may be empty.
-  const orgNumber = settings?.org_number?.trim() || company?.org_number?.trim() || ''
-  if (!orgNumber.replace(/\D/g, '')) return { ok: false, missing: 'org_number' }
+  const orgNumber = orgNumberKey(effectiveOrgNumber(settings?.org_number, company?.org_number))
+  if (!orgNumber) return { ok: false, missing: 'org_number' }
 
   const fileIds = resolveBankFileIds(bic, settings)
   if (!fileIds.ok) return { ok: false, missing: fileIds.missing }

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
 import type { RegistryCandidatesResult } from '@/lib/parties/registry-search'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 function regionName(code: string, locale: string): string {
   try {
@@ -145,7 +145,7 @@ export function ScbPickerDialog({
                           {!c.active ? <Badge variant="warning">{c.status ?? t('picker_inactive')}</Badge> : null}
                         </div>
                         <div className="truncate text-xs text-muted-foreground tabular-nums">
-                          {[formatOrgNumber(c.orgNumber), c.city, c.industry].filter(Boolean).join(' · ')}
+                          {[formatOrgNumberDisplay(c.orgNumber), c.city, c.industry].filter(Boolean).join(' · ')}
                         </div>
                       </div>
                     </button>

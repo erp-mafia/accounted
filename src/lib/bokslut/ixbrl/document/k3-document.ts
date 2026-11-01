@@ -21,7 +21,7 @@
  * forms fails generation instead of reaching Bolagsverket.
  */
 
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { getEntryPoint } from '../taxonomy/entry-points'
 import { getConcept, getRegistry, type TaxonomyRegistry } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput, K3CashFlowInput, K3EquityInput } from '../types'
@@ -321,7 +321,7 @@ export function generateK3IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   if (!input.k3) throw new Error('generateK3IxbrlDocument: the input carries no K3 part (k3)')
   const k3 = input.k3
   const registry = getRegistry(entryPoint.registryId)
-  const orgNumber = formatOrgNumber(input.company.orgNumber)
+  const orgNumber = formatOrgNumberDisplay(input.company.orgNumber)
   const writer = new FactWriter(entryPoint, registry, orgNumber)
   const warnings: string[] = [...input.warnings]
 

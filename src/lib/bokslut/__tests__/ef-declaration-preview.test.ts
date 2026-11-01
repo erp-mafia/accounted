@@ -57,7 +57,7 @@ function makeSupabase(entityType: string | null, settingsEntityType: string | nu
   const rows: Record<string, unknown> = {
     companies: entityType ? { entity_type: entityType } : null,
     fiscal_periods: { ...PERIOD, is_closed: false },
-    company_settings: settingsEntityType ? { entity_type: settingsEntityType } : null,
+    company_settings: settingsEntityType ? { entity_type: settingsEntityType, org_number: '800374-0118' } : null,
   }
   const from = vi.fn((table: string) => {
     reads.push(table)

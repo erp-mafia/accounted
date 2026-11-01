@@ -25,7 +25,7 @@ import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
-import { checkSIEOrgNumber } from '@/lib/import/sie-org-number'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { diagnoseOpeningBalanceContinuity } from '@/lib/import/sie-continuity'
 import { isVoucherOnlySIE } from '@/lib/import/sie-voucher-only'
 
@@ -152,7 +152,7 @@ export const POST = withRouteContext(
 
       // Another organisation's file: the review step asks for the
       // confirmation the submit gate (submitSIEJob) requires.
-      const orgCheck = await checkSIEOrgNumber(supabase, companyId!, parsed.header.orgNumber)
+      const orgCheck = await checkSourceOrgNumber(supabase, companyId!, parsed.header.orgNumber)
       preview.orgNumberMismatch = orgCheck.mismatch
       preview.companyOrgNumber = orgCheck.companyOrgNumber
 

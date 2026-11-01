@@ -104,6 +104,7 @@ const FiscalYear = z.object({
 const CompanyInfo = z.object({
   companyName: z.string(),
   orgNumber: z.string().nullable(),
+  entityType: z.string().describe('The legal form: what decides the 12-digit identity on the SRU files.'),
   addressLine1: z.string().nullable(),
   postalCode: z.string().nullable(),
   city: z.string().nullable(),
@@ -242,7 +243,7 @@ export const reportsNeBilaga = defineOperation({
         data: {
           fiscalYear: { fiscal_period_id: '7c2b…', name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
           rutor: { R1: 480000, R2: 0, R3: 0, R4: 0, R5: 120000, R6: 95000, R7: 0, R8: 0, R9: 0, R10: 12000, R11: 253000 },
-          companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: '19800101-XXXX', addressLine1: null, postalCode: null, city: null, email: null },
+          companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: '19800101-XXXX', entityType: 'enskild_firma', addressLine1: null, postalCode: null, city: null, email: null },
           warnings: [],
           sru_file: { download: '/api/v1/companies/…/reports/ne-bilaga/sru?period_id=7c2b…', content_type: 'application/zip', files: ['INFO.SRU', 'BLANKETTER.SRU'] },
         },

@@ -1,6 +1,6 @@
 import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { roundOre } from '@/lib/money'
-import { luhnValidate } from '@/lib/bankgiro/luhn'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { ADULT_AGE, type DebtorPersonalNumber } from './personal-number'
@@ -265,7 +265,7 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
     if (missing.length > 0) block('debtor_missing_address', { fields: missing.join(',') })
     if (debtorKind === 'business' && country === 'SE') {
       if (!customer.org_number?.trim()) block('debtor_missing_org_number')
-      else if (!normalizeOrgNumberDigits(customer.org_number)) block('debtor_invalid_org_number')
+      else if (!normalizeOrgNumber(customer.org_number)) block('debtor_invalid_org_number')
     }
     if (debtorKind === 'private') {
       if (customer.personalNumber.status === 'none') hints.push('debtor_missing_personal_number')
@@ -310,14 +310,3 @@ export function evaluateEligibility(facts: EligibilityFacts): Eligibility {
   }
 }
 
-/**
- * Ten digits of a Swedish org number with a valid Luhn check digit, or null.
- * An enskild firma's org number is its owner's personnummer (ten digits),
- * which passes the same check.
- */
-export function normalizeOrgNumberDigits(value: string | null | undefined): string | null {
-  const digits = (value ?? '').replace(/\D/g, '')
-  // A twelve-digit form carries the 16 century prefix (Skatteverket's convention).
-  const ten = digits.length === 10 ? digits : digits.length === 12 && digits.startsWith('16') ? digits.slice(2) : null
-  return ten && luhnValidate(ten) ? ten : null
-}

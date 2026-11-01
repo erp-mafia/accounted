@@ -43,7 +43,7 @@
  * account a machine would read wrong: a giro goes in only when its check
  * digit is valid.
  */
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import {
   formatBankgiroNumber,
@@ -184,7 +184,7 @@ export function buildBankPaymentQrPayload({ company, invoice, amountDue, lang }:
     uqr: USINGQR_VERSION,
     tp: 1,
     nme: name,
-    cid: formatOrgNumber(orgNumber),
+    cid: formatOrgNumberDisplay(orgNumber),
     iref: reference,
     ...(invoiceDate ? { idt: invoiceDate } : {}),
     ddt: dueDate,

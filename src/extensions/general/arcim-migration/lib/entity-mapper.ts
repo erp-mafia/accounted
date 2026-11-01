@@ -13,7 +13,14 @@ import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { cleanSupplierPaymentDetails } from '@/lib/payments/payment-details'
 import { FREE_TEXT_BANK_ACCOUNT } from '@/lib/payments/supplier-payee'
-import { orgNumberKey } from '@/lib/invariants/org-number'
+import {
+  isLegalPersonOrgNumber,
+  isOrgNumberShaped,
+  isValidOrgNumber,
+  orgNumberKey,
+  stripOrgNumberFormatting,
+  swedishNumberKind,
+} from '@/lib/invariants/org-number'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
@@ -91,32 +98,15 @@ function canonicalSupplierOrgNumber(value: string | null): string | null {
 const EU_COUNTRIES = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SI', 'SK']
 
 /**
- * Check if a string looks like a Swedish org number (XXXXXX-XXXX or 10 digits).
- * Swedish org numbers are 10 digits where the third digit is >= 2 (to distinguish
- * from personal numbers where month 01-12 appears in positions 3-4).
+ * A Swedish VAT number in the org number field, written with its SE or without:
+ * the ten digits of a real number and 01. Foreign by shape alone, and a party
+ * typed non_eu_business is invoiced as an export.
  */
-function looksLikeSwedishOrgNumber(orgNumber: string | null | undefined): boolean {
-  if (!orgNumber) return false
-  const digits = orgNumber.replace(/[-\s]/g, '')
-  if (digits.length !== 10 || !/^\d+$/.test(digits)) return false
-  // Third digit >= 2 distinguishes org numbers from personal numbers
-  const thirdDigit = parseInt(digits[2], 10)
-  return thirdDigit >= 2
-}
-
-/**
- * Check if a string looks like a Swedish identity number: an organisation
- * number or personnummer in 10-digit form, or a personnummer in the 12-digit
- * century-prefixed form (19xx / 20xx). Used to avoid misclassifying a domestic
- * party as foreign just because its number isn't exactly 10 digits: a 12-digit
- * personnummer like 19700616-7113 is Swedish, not an unknown foreign org number.
- */
-function looksLikeSwedishIdNumber(orgNumber: string | null | undefined): boolean {
-  if (!orgNumber) return false
-  const digits = orgNumber.replace(/[-+\s]/g, '')
-  if (!/^\d+$/.test(digits)) return false
-  if (digits.length === 10) return true
-  return digits.length === 12 && /^(19|20)/.test(digits)
+function isSwedishVatDigits(orgNumber: string | null | undefined): boolean {
+  const digits = stripOrgNumberFormatting(orgNumber ?? '').replace(/^SE/i, '')
+  if (!/^\d{10}01$/.test(digits)) return false
+  const ten = digits.slice(0, 10)
+  return isValidOrgNumber(ten) && swedishNumberKind(ten) !== 'none'
 }
 
 /**
@@ -198,14 +188,14 @@ function inferTypeFromVatOrCountry(
   if (country) return 'non_eu_business'
 
   // 3. Swedish-format org number is strong evidence of domestic entity
-  if (looksLikeSwedishOrgNumber(orgNumber)) return 'swedish_business'
+  if (isLegalPersonOrgNumber(orgNumber) || isSwedishVatDigits(orgNumber)) return 'swedish_business'
 
   // 4. A number that isn't a Swedish-format identity number → foreign entity.
-  //    Accepts both 10-digit and 12-digit (century-prefixed) Swedish numbers so
-  //    a domestic personnummer like 19700616-7113 isn't treated as foreign.
+  //    Any form orgNumberKey reads is Swedish, so a domestic personnummer like
+  //    19700616-7113 isn't treated as foreign.
   if (orgNumber) {
     const digits = orgNumber.replace(/[-+\s]/g, '')
-    if (digits.length > 0 && !looksLikeSwedishIdNumber(orgNumber)) {
+    if (digits.length > 0 && !isOrgNumberShaped(orgNumber)) {
       // Not a Swedish number: use name heuristic or default to non_eu
       const nameRegion = inferRegionFromName(companyName)
       if (nameRegion === 'eu') return 'eu_business'

@@ -1,5 +1,5 @@
 import { parseSuppliersFile } from '@/lib/import/suppliers/parser'
-import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
+import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { registerParseRoute } from '@/lib/import/shared/register-parse-route'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { AnnotatedSupplierRow, DetectedSupplierColumns, ParsedSupplierRow } from '@/lib/import/suppliers/types'
@@ -25,7 +25,7 @@ export const POST = registerParseRoute<DetectedSupplierColumns, ParsedSupplierRo
 
     // The same matcher execute uses, so the preview cannot promise a match
     // the import then misses.
-    const matcher = createRegisterMatcher(existing, { orgKey: supplierOrgKey })
+    const matcher = createRegisterMatcher(existing)
 
     let duplicateCount = 0
     const annotated: AnnotatedSupplierRow[] = rows.map((r) => {

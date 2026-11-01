@@ -24,17 +24,6 @@ export function orgNumberFromVatNumber(vatNumber: string | null | undefined): st
   return match ? match[1]! : null
 }
 
-/**
- * Whether the organisationsnummer belongs to a legal person (aktiebolag,
- * handelsbolag, förening): its third digit is 2 or higher. An enskild firma
- * is its owner's personnummer, whose third digit is a month's first digit
- * (0 or 1); neither Kivra Företag nor Billo's business mailbox takes one.
- */
-export function isLegalPersonOrgNumber(orgNumber: string | null | undefined): boolean {
-  const ten = normalizeOrgNumber(orgNumber)
-  return !!ten && Number(ten[2]) >= 2
-}
-
 /** The twelve-digit personnummer, or null when the value is not a valid one. */
 export function personnummer12(value: string | null | undefined): string | null {
   if (!value) return null

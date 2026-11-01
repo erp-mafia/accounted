@@ -3,7 +3,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { formatRedovisare } from '@/lib/skatteverket/format'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -221,17 +221,9 @@ async function resolveOmfragad(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string> {
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
-    throw new Error('Organisationsnummer saknas i företagsinställningar')
-  }
-
-  return formatRedovisare(settings.org_number, settings.entity_type)
+  const redovisare = await companyRedovisare(supabase, companyId)
+  if (!redovisare) throw new Error('Organisationsnummer saknas i företagsinställningar')
+  return redovisare
 }
 
 /**

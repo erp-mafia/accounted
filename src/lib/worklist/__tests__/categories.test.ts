@@ -1080,6 +1080,7 @@ describe('listSkattekontoPaymentDue', () => {
     enqueue(snapshot(4000.25))
     enqueue({ data: [] })
     enqueue({ data: company })
+    enqueue({ data: company }) // company_settings: the number's reader
     // OCR resolver: no reported OCR in the snapshot, so it is derived.
     enqueue({ data: null })
     await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toEqual({
@@ -1091,6 +1092,20 @@ describe('listSkattekontoPaymentDue', () => {
       ocr: '1655446688087',
       bankgiro: '5050-1055',
     })
+  })
+
+  it('derives a sole trader\'s OCR under the legal form, not as 16 + the number', async () => {
+    const soleTrader = { org_number: '800374-0118', entity_type: 'enskild_firma' }
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -2500 }],
+    })
+    enqueue(snapshot(0))
+    enqueue({ data: [] })
+    enqueue({ data: soleTrader })
+    enqueue({ data: soleTrader }) // company_settings: the number's reader
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ ocr: '1980037401181' })
   })
 
   it('shows the full charge when no balance snapshot exists', async () => {

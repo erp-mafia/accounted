@@ -4,7 +4,7 @@
  * appendix v2.0. Personnummer and org numbers are Fora's own examples.
  */
 import { describe, it, expect } from 'vitest'
-import { buildForaFile, foraOrganizationNumber, isSamordningsnummer, type ForaEmployeeInput } from '../file'
+import { buildForaFile, isSamordningsnummer, type ForaEmployeeInput } from '../file'
 
 function employee(overrides: Partial<ForaEmployeeInput> = {}): ForaEmployeeInput {
   return {
@@ -174,15 +174,6 @@ describe('buildForaFile', () => {
     if (!result.ok) throw new Error('expected a file')
     expect(result.file.reports[0].payrolls[0].firstName).toHaveLength(40)
     expect(result.file.reports[0].employments[0].firstName).toHaveLength(40)
-  })
-})
-
-describe('foraOrganizationNumber', () => {
-  it('is ten digits, from a dashed number or an enskild firma personnummer', () => {
-    expect(foraOrganizationNumber('556560-1712')).toBe('5565601712')
-    expect(foraOrganizationNumber('19540801-2230')).toBe('5408012230')
-    expect(foraOrganizationNumber('123')).toBeNull()
-    expect(foraOrganizationNumber(null)).toBeNull()
   })
 })
 

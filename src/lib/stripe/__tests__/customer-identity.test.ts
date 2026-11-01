@@ -73,9 +73,14 @@ describe('companyBillingIdentity', () => {
     expect(identity.orgNumber).toBeNull()
   })
 
+  it('reads the number through the one reader: an empty company copy hides nothing', () => {
+    expect(companyBillingIdentity({ ...AB_COMPANY, org_number: '' }, settings()).orgNumber).toBe('556677-8899')
+    expect(companyBillingIdentity({ ...AB_COMPANY, org_number: '556677-8899' }, settings({ org_number: '' })).orgNumber).toBe('556677-8899')
+  })
+
   it('gives no org number for an unknown legal form or an invalid number', () => {
     expect(companyBillingIdentity({ ...AB_COMPANY, entity_type: null }, settings({ entity_type: null })).orgNumber).toBeNull()
-    expect(companyBillingIdentity({ ...AB_COMPANY, org_number: '5566778898' }, settings()).orgNumber).toBeNull()
+    expect(companyBillingIdentity({ ...AB_COMPANY, org_number: '5566778898' }, settings({ org_number: '5566778898' })).orgNumber).toBeNull()
   })
 
   it('drops an incomplete address and defaults a missing country to SE', () => {

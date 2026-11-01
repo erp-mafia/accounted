@@ -229,4 +229,33 @@ describe('parseCustomersFile', () => {
     expect(result.rows[0].is_valid).toBe(false)
     expect(result.rows[0].validation_errors).toContain('Kundnumret i kolumnen "Kundnummer" får vara högst 32 tecken')
   })
+
+  it('reads a 16-prefixed company as a company, not a private person', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr'],
+      ['Acme AB', '165566778899'],
+      ['Acme Två AB', '16556677-8899'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows.map((r) => r.customer_type)).toEqual(['swedish_business', 'swedish_business'])
+    expect(result.rows.every((r) => r.is_valid)).toBe(true)
+  })
+
+  it('refuses a number that reads as neither a company nor a person, and names it', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr'],
+      ['Momsnummer AB', '556677889901'],
+      ['Dag 32', '8001321234'],
+      ['Foreign digits', '12345678'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0]).toMatchObject({ customer_type: 'swedish_business', is_valid: false })
+    expect(result.rows[0].validation_errors).toContain('Ogiltigt org-/personnummer "556677889901" i kolumnen "Orgnr"')
+    expect(result.rows[1]).toMatchObject({ customer_type: 'swedish_business', is_valid: false })
+    expect(result.rows[2].is_valid).toBe(true)
+  })
 })

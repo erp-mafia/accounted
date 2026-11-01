@@ -12,6 +12,8 @@
  * the company's, a stable code for the wrong legal form, and the refusals
  * the dashboard answers before it builds a file.
  */
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
+import { FilingIdentityError, orgNumberKey } from '@/lib/invariants/org-number'
 import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission as generateInk2SruSubmission,
@@ -115,6 +117,7 @@ export async function companyUsesPersonnummer(ctx: OperationContext): Promise<bo
 }
 
 function declarationFailure(ctx: OperationContext, err: unknown, report: string): Failure {
+  if (err instanceof FilingIdentityError) return { ok: false, code: err.code }
   ctx.log.error(`${report} declaration generation failed`, err as Error)
   return {
     ok: false,
@@ -346,17 +349,17 @@ export async function getVatEskdFile(
   ctx: OperationContext,
   input: VatPeriodInput,
 ): Promise<OperationOutcome<ReportFile>> {
-  const { data: companyRow } = await ctx.supabase
+  const { data: settingsRow } = await ctx.supabase
     .from('company_settings')
-    .select('org_number')
+    .select('company_id')
     .eq('company_id', ctx.companyId)
     .single()
-  if (!companyRow) return { ok: false, code: 'VAT_ESKD_SETTINGS_MISSING' }
+  if (!settingsRow) return { ok: false, code: 'VAT_ESKD_SETTINGS_MISSING' }
 
-  // 12-digit century-prefixed values are fine: the builder strips the prefix
-  // (settings rows predating org-number normalization hold them).
-  const orgDigits = (companyRow.org_number ?? '').replace(/\D/g, '')
-  if (orgDigits.length !== 10 && orgDigits.length !== 12) return { ok: false, code: 'VAT_ESKD_ORG_NUMBER_INVALID' }
+  // The same reading the builder writes the header with, so this door refuses
+  // exactly what the builder would throw on.
+  const orgNumber = await readCompanyOrgNumber(ctx.supabase, ctx.companyId)
+  if (!orgNumber || !orgNumberKey(orgNumber)) return { ok: false, code: 'VAT_ESKD_ORG_NUMBER_INVALID' }
 
   if (input.fiscal_period_id) {
     const period = await loadReportPeriod(ctx, input.fiscal_period_id)
@@ -369,7 +372,7 @@ export async function getVatEskdFile(
       { fiscalPeriodId: input.fiscal_period_id },
     )
     const xml = buildESkdFile(declaration.rutor, {
-      orgNumber: companyRow.org_number,
+      orgNumber,
       periodEnd: declaration.period.end,
     })
     return {

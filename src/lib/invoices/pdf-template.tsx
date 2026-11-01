@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import {
   Document,
@@ -465,7 +465,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     company.address_line1,
     company.address_line2,
     postalLine(company.postal_code, company.city),
-    company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumber(company.org_number)}` : null,
+    company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumberDisplay(company.org_number)}` : null,
     // Momsreg.nr only for a VAT-registered seller (ML 17 kap 24 § p.3);
     // F-skatt only when the company holds it.
     company.vat_registered !== false && company.vat_number ? `${bareLabel(L.vatRegNo)} ${company.vat_number}` : null,

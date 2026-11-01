@@ -3763,7 +3763,7 @@ interface SieTargetCompany {
  * file was compared with.
  */
 async function readSieTargetCompany(supabase: SupabaseClient, companyId: string): Promise<SieTargetCompany> {
-  const { readCompanyOrgNumber } = await import('@/lib/import/sie-org-number')
+  const { readCompanyOrgNumber } = await import('@/lib/company/org-number')
   const [orgNumber, company, settings] = await Promise.all([
     readCompanyOrgNumber(supabase, companyId),
     supabase.from('companies').select('name').eq('id', companyId).maybeSingle(),
@@ -3791,9 +3791,11 @@ async function findCompaniesWithSieOrgNumber(
   fileOrgNumber: string | null,
   currentCompanyId: string,
 ): Promise<Array<{ company_id: string; name: string }>> {
-  const { orgNumberKey } = await import('@/lib/invariants/org-number')
-  const wanted = orgNumberKey(fileOrgNumber)
-  if (!wanted) return []
+  const [{ orgNumberKey, sameOrgNumber }, { effectiveOrgNumber }] = await Promise.all([
+    import('@/lib/invariants/org-number'),
+    import('@/lib/company/org-number'),
+  ])
+  if (!orgNumberKey(fileOrgNumber)) return []
   try {
     const reachable = (await listAccessibleCompanies(supabase, userId, effectiveCompanyRestriction(actor)))
       .filter((company) => company.company_id !== currentCompanyId)
@@ -3803,15 +3805,17 @@ async function findCompaniesWithSieOrgNumber(
       supabase.from('companies').select('id, org_number').in('id', ids),
       supabase.from('company_settings').select('company_id, org_number').in('company_id', ids),
     ])
-    const numbers = new Map<string, string>()
-    for (const row of (Array.isArray(settings.data) ? settings.data : []) as Array<{ company_id: string; org_number: string | null }>) {
-      if (row.org_number?.trim()) numbers.set(row.company_id, row.org_number)
-    }
-    // companies.org_number outranks settings, as in readCompanyOrgNumber.
-    for (const row of (Array.isArray(companies.data) ? companies.data : []) as Array<{ id: string; org_number: string | null }>) {
-      if (row.org_number?.trim()) numbers.set(row.id, row.org_number)
-    }
-    return reachable.filter((company) => orgNumberKey(numbers.get(company.company_id)) === wanted).slice(0, 3)
+    const settingsByCompany = new Map(
+      ((Array.isArray(settings.data) ? settings.data : []) as Array<{ company_id: string; org_number: string | null }>)
+        .map((row) => [row.company_id, row.org_number]),
+    )
+    const companyById = new Map(
+      ((Array.isArray(companies.data) ? companies.data : []) as Array<{ id: string; org_number: string | null }>)
+        .map((row) => [row.id, row.org_number]),
+    )
+    return reachable
+      .filter((company) => sameOrgNumber(fileOrgNumber, effectiveOrgNumber(settingsByCompany.get(company.company_id), companyById.get(company.company_id))))
+      .slice(0, 3)
   } catch {
     return []
   }
@@ -24759,9 +24763,9 @@ export const tools: McpTool[] = [
       // The company read once: its org number is what the file is compared
       // with, and the whole record goes back as target_company so the card
       // (and the agent) can show where the file will land.
-      const { compareSIEOrgNumber } = await import('@/lib/import/sie-org-number')
+      const { compareSourceOrgNumber } = await import('@/lib/company/org-number')
       const targetCompany = await readSieTargetCompany(supabase, companyId)
-      const orgCheck = compareSIEOrgNumber(parsed.header.orgNumber, targetCompany.org_number)
+      const orgCheck = compareSourceOrgNumber(parsed.header.orgNumber, targetCompany.org_number)
       // Where the file most likely belongs instead (crm#1201): another
       // company this connection reaches under the file's #ORGNR. Looked up
       // only on a mismatch.
@@ -25119,8 +25123,8 @@ export const tools: McpTool[] = [
       // Another organisation's file is refused before the approver sees it,
       // unless the user confirmed it belongs here. submitSIEJob checks again
       // at approval, by the same comparison.
-      const { checkSIEOrgNumber } = await import('@/lib/import/sie-org-number')
-      const orgCheck = await checkSIEOrgNumber(supabase, companyId, parsed.header.orgNumber)
+      const { checkSourceOrgNumber } = await import('@/lib/company/org-number')
+      const orgCheck = await checkSourceOrgNumber(supabase, companyId, parsed.header.orgNumber)
       if (orgCheck.mismatch && args.confirm_org_number_mismatch !== true) {
         const fileCompanies = await findCompaniesWithSieOrgNumber(supabase, userId, actor, orgCheck.fileOrgNumber, companyId)
         throw codedRefusal(

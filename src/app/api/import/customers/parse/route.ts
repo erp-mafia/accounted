@@ -1,5 +1,4 @@
 import { parseCustomersFile } from '@/lib/import/customers/parser'
-import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
 import { createRegisterMatcher, customerMatchRow } from '@/lib/import/shared/register-match'
 import { registerParseRoute } from '@/lib/import/shared/register-parse-route'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -26,7 +25,7 @@ export const POST = registerParseRoute<DetectedCustomerColumns, ParsedCustomerRo
 
     // The same matcher execute uses, so the preview cannot promise a match
     // the import then misses.
-    const matcher = createRegisterMatcher(existing, { orgKey: normalizeOrgNumber })
+    const matcher = createRegisterMatcher(existing)
 
     let duplicateCount = 0
     const annotated: AnnotatedCustomerRow[] = rows.map((r) => {
