@@ -57,10 +57,12 @@ import {
   documentImportProgress,
   documentImportRunNote,
   documentOAuthProblemFromReason,
+  fetchResumableDocumentImport,
   parseArcimDocumentResumeMarker,
   PROVIDER_CONNECTION_REFUSED_CODES,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
+  resumableDocumentImport,
   runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
@@ -3909,10 +3911,15 @@ export default function ArcimMigrationWorkspace({
   ) => {
     dispatchDocumentImport({ type: 'import-started', resumeFrom })
     try {
+      // A run this tab did not see stop (a reload, a closed laptop, a tab
+      // that gave up) is kept on the server: continue it after its last
+      // file instead of downloading every linked one again (crm#1581).
+      const kept = resumableDocumentImport(resumeFrom) ? null : await fetchResumableDocumentImport(currentConsentId)
+      if (kept) dispatchDocumentImport({ type: 'import-progress', result: kept })
       // One route call per time-budgeted slice; the helper loops until the
       // server reports the end and feeds running totals back for the UI.
       const result = await runArcimDocumentImportToCompletion(currentConsentId, {
-        resumeFrom,
+        resumeFrom: kept ?? resumeFrom,
         onProgress: (progress) =>
           dispatchDocumentImport({ type: 'import-progress', result: progress }),
       })
@@ -4712,8 +4719,9 @@ export default function ArcimMigrationWorkspace({
           }}
           onImportDocuments={() => {
             // "Försök igen" after a run that stopped continues where it
-            // stopped; anywhere else (an offer, failed files in a finished
-            // run) the import runs from the top.
+            // stopped. An offer continues the run the server kept when one
+            // stopped part-way (crm#1581); otherwise (no such run, failed
+            // files in a finished run) the import runs from the top.
             if (consentId) {
               void runDocumentImport(
                 consentId,

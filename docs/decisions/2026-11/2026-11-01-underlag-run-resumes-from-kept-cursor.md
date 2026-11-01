@@ -1,0 +1,1 @@
+[2026-11-01] A stopped underlag run continues from the cursor the server kept, also one stopped on a refused connection, unless it started before this connection was made or the latest ledger import: the sweep skips every file below the cursor (crm#1581).
