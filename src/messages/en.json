@@ -9268,6 +9268,8 @@
     "load_failed": "Could not load the brand. Try reloading the page."
   },
   "transactions": {
+    "bank_file_decimal_mark_placeholder": "Read from the file",
+    "bank_file_decimal_mark_undecided": "The amount {cell} can mean {dot} or {comma}, and no other amount in the file settles which. Choose the decimal separator so the file is read correctly.",
     "th_category": "Category",
     "th_account": "Account",
     "columns_button": "Columns",

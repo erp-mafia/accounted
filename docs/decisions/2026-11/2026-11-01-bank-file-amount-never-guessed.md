@@ -1,0 +1,1 @@
+[2026-11-01] A bank file amount two decimal marks read a thousand apart is never guessed: generic CSV has no default mark, the wizard asks and v1 refuses. A row v1 cannot read is named on the operation with import_complete: false; it stays succeeded because the other rows landed.

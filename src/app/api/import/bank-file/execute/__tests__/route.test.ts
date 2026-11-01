@@ -680,6 +680,9 @@ describe('POST /api/import/bank-file/execute (arrival)', () => {
       body: makeBody({ file_hash: FILE_HASH }),
     }), emptyParams)
     expect(response.status).toBe(200)
+    expect(findCall('bank_file_imports', 'update')?.[0]).toMatchObject({
+      status: 'failed', imported_count: 0, error_message: '2 transactions failed to import',
+    })
     expect(supabase.from).not.toHaveBeenCalledWith('arrivals')
     expect(bucket.download).not.toHaveBeenCalled()
   })

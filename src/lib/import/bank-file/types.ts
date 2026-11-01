@@ -123,7 +123,8 @@ export interface GenericCSVColumnMapping {
   counterparty?: number
   balance?: number
   delimiter: string
-  decimal_separator: ',' | '.'
+  /** The mark a person chose. Null: nobody did, and the file itself must settle it. */
+  decimal_separator: ',' | '.' | null
   skip_rows: number
   date_format: string // e.g. 'YYYY-MM-DD'
 }

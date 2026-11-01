@@ -6,9 +6,9 @@
  * file hashing, stats calculation, date range extraction, and edge cases.
  */
 
-import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats, toRawTransaction } from '../parser'
+import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats, toRawTransaction, unreadRows } from '../parser'
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
-import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
+import { genericDecimalMark, parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
 import { CAMT053_PRETTY_WITH_REFS, CAMT053_V08_PREFIXED_MULTI_STMT, camt053ManyEntries } from '@/tests/fixtures/camt053'
 
@@ -2562,6 +2562,152 @@ describe('parseGenericCSV: column bounds checking', () => {
     expect(result.transactions[0].amount).toBe(-99)
     expect(result.transactions[1].amount).toBe(25000)
     expect(result.issues).toHaveLength(0)
+  })
+})
+
+// Every format reads a cell with parseSwedishAmount, given the file's decimal
+// mark: the file decides it, and the layout's or the mapping's mark applies
+// only when no cell can decide. parseFloat read to the first character it did
+// not know, so a cell lost its öre or its kronor without a word.
+describe('a file amount never loses kronor or öre silently', () => {
+  const swedbank = (...cells: string[]) => parseBankFile([
+    '* Transaktionsrapport Period 2026-01-01 - 2026-01-31',
+    'Radnr,Clnr,Kontonr,Produkt,Valuta,Bokfdag,Transdag,Valutadag,Referens,Text,Belopp,Saldo',
+    ...cells.map((cell, i) => `${i + 1},8327,1234567,Konto,SEK,2026-01-05,2026-01-05,2026-01-05,Ref,Text,"${cell}","${cell}"`),
+  ].join('\n'), 'swedbank.csv', 'swedbank')
+
+  it.each([
+    ['-1 234.56', -1234.56],
+    ['1,234.56', 1234.56],
+    ['\u22121500.00', -1500],
+    ['349.000', 349],
+    ['1422.190', 1422.19],
+    ['100.00', 100],
+  ])('Swedbank reads %s under its documented dot', (cell, amount) => {
+    const [row] = swedbank(cell).transactions
+    expect(row.amount).toBe(amount)
+    expect(row.balance).toBe(amount)
+  })
+
+  it('Swedbank goes by the file when its cells prove a comma', () => {
+    expect(swedbank('-1 234,56', '-1.234,56').transactions.map((t) => t.amount)).toEqual([-1234.56, -1234.56])
+  })
+
+  const generic = (decimal: ',' | '.', ...cells: string[]) => parseGenericCSV(
+    ['Datum;Text;Belopp;Saldo', ...cells.map((cell) => `2026-01-05;Text;${cell};${cell}`)].join('\n'),
+    { date: 0, description: 1, amount: 2, balance: 3, delimiter: ';', decimal_separator: decimal, skip_rows: 1, date_format: 'YYYY-MM-DD' } as never,
+  )
+
+  it.each([
+    [',', '-1 234,56', -1234.56],
+    [',', '-1.234,56', -1234.56],
+    [',', '1.234.567,89', 1234567.89],
+    ['.', '1,234.56', 1234.56],
+    ['.', '\u2212139.00', -139],
+    ['.', '349.000', 349],
+    [',', '349.000', 349000],
+    [',', '\u2014250,50', -250.5],
+    [',', '1 500,50 kr', 1500.5],
+  ] as const)('generic CSV with a %s mapping reads %s', (decimal, cell, amount) => {
+    const { transactions, issues } = generic(decimal, cell)
+    expect(transactions[0]?.amount).toBe(amount)
+    expect(transactions[0]?.balance).toBe(amount)
+    expect(issues).toEqual([])
+  })
+
+  // "349.000" is 349 kr or 349 000 kr. Nothing in such a file says which, and a
+  // wrong guess moves every amount a thousand times: nobody's default decides.
+  describe('an amount two decimal marks read differently', () => {
+    const undecided = ['Datum,Text,Belopp', '2026-01-02,Kaffe,-45.000', '2026-01-03,Lunch,-129.000', '2026-01-04,Swish,250.000'].join('\n')
+
+    it('refuses the file where nobody can choose: no row is read, and the cell is named', () => {
+      const { transactions, issues } = parseBankFile(undecided, 'fil.csv', 'generic_csv')
+      expect(transactions).toEqual([])
+      expect(issues).toHaveLength(1)
+      expect(issues[0]).toMatchObject({ row: 2, severity: 'error' })
+      expect(issues[0].message).toContain('-45.000')
+      expect(issues[0].message).toContain('-45')
+      expect(issues[0].message).toContain('-45000')
+      expect(issues[0].message).toContain('Inget importerades')
+    })
+
+    it('reads under the mark a person chose', () => {
+      const mapping = { date: 0, description: 1, amount: 2, delimiter: ',', skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      expect(parseGenericCSV(undecided, { ...mapping, decimal_separator: '.' }).transactions.map((t) => t.amount)).toEqual([-45, -129, 250])
+      expect(parseGenericCSV(undecided, { ...mapping, decimal_separator: ',' }).transactions.map((t) => t.amount)).toEqual([-45000, -129000, 250000])
+    })
+
+    it('needs no answer when one cell of the file settles the mark, in the amounts or in the balance', () => {
+      const withAmount = `${undecided}\n2026-01-05,Hyra,-1500.50`
+      expect(parseBankFile(withAmount, 'fil.csv', 'generic_csv').transactions.map((t) => t.amount)).toEqual([-45, -129, 250, -1500.5])
+
+      const mapping = { date: 0, description: 1, amount: 2, balance: 3, delimiter: ',', decimal_separator: null, skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      const withBalance = 'Datum,Text,Belopp,Saldo\n2026-01-02,Kaffe,-45.000,1000.50\n'
+      expect(parseGenericCSV(withBalance, mapping).transactions.map((t) => t.amount)).toEqual([-45])
+    })
+
+    it('needs no answer when no cell can be read two ways', () => {
+      const plain = 'Datum,Text,Belopp\n2026-01-02,Hyra,-1500\n2026-01-03,Swish,250\n'
+      expect(parseBankFile(plain, 'fil.csv', 'generic_csv').transactions.map((t) => t.amount)).toEqual([-1500, 250])
+    })
+
+    it('is any cell the two marks read as two amounts, whatever its sign or unit', () => {
+      const mapping = { amount: 0, delimiter: ';', decimal_separator: null, skip_rows: 0 }
+      for (const cell of ['349.000', '-45.000', '1.234', '1,234', '\u2212349.000', '349.000 kr']) {
+        expect(genericDecimalMark(cell, mapping).undecided, cell).toEqual({ row: 1, cell })
+      }
+    })
+
+    it('is no cell both marks read alike: 0.000 is no kronor either way', () => {
+      const mapping = { amount: 0, delimiter: ';', decimal_separator: null, skip_rows: 0 }
+      for (const cell of ['349', '1 234', '0.000', '0,000', '100,00 SEK']) {
+        expect(genericDecimalMark(cell, mapping).undecided, cell).toBeNull()
+      }
+    })
+
+    it('holds for a comma grouping too', () => {
+      const comma = 'Datum;Text;Belopp\n2026-01-02;Kaffe;1,234\n'
+      const mapping = { date: 0, description: 1, amount: 2, delimiter: ';', decimal_separator: null, skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      expect(parseGenericCSV(comma, mapping).issues[0]?.severity).toBe('error')
+    })
+
+    it('tells the wizard what the import will read, over the whole file', () => {
+      const mapping = { amount: 2, delimiter: ',', decimal_separator: null, skip_rows: 1 }
+      expect(genericDecimalMark(undecided, mapping)).toEqual({ mark: null, undecided: { row: 2, cell: '-45.000' } })
+      expect(genericDecimalMark(undecided, { ...mapping, decimal_separator: '.' })).toEqual({ mark: '.', undecided: null })
+      const late = `Datum,Text,Belopp\n${Array.from({ length: 40 }, () => '2026-01-02,Kaffe,-349.000').join('\n')}\n2026-01-03,Hyra,-1422.190`
+      expect(genericDecimalMark(late, mapping)).toEqual({ mark: '.', undecided: null })
+    })
+  })
+
+  it('generic CSV goes by the file when its cells prove the other mark, and says so at three rows', () => {
+    const { transactions, issues } = generic(',', '12.50', '13.50', '14.50')
+    expect(transactions.map((t) => t.amount)).toEqual([12.5, 13.5, 14.5])
+    expect(issues[0]?.message).toContain('Decimalavgränsare')
+  })
+
+  it('generic CSV skips, loudly, a cell that is not one amount rather than read a part of it', () => {
+    const { transactions, issues, stats } = generic(',', '100,00-', '100,00 EUR', '200,00')
+    expect(transactions.map((t) => t.amount)).toEqual([200])
+    expect(stats.skipped_rows).toBe(2)
+    expect(issues.map((issue) => issue.message).join(' ')).toContain('100,00 EUR')
+  })
+
+  it('camt.053 reads its decimal dot through the same parser and rounds to the öre', () => {
+    const xml = CAMT053_PRETTY_WITH_REFS.replace(/(<Amt[^>]*>)[^<]+(<\/Amt>)/, '$11234.565$2')
+    const [row] = parseBankFile(xml, 'statement.xml').transactions
+    expect(Math.abs(row.amount)).toBe(1234.57)
+  })
+})
+
+describe('unreadRows', () => {
+  it('names the rows a parser could not read, and no row left out on purpose', () => {
+    const generic = parseGenericCSV('Datum;Text;Belopp\n2024-01-15;Hyra;-1500,00\n2024-01-16;Swish;100,00 SEK\n',
+      { date: 0, description: 1, amount: 2, delimiter: ';', decimal_separator: ',', skip_rows: 1, date_format: 'YYYY-MM-DD' })
+    expect(unreadRows(generic)).toEqual([{ row: 3, message: 'Invalid amount: 100,00 SEK', severity: 'warning' }])
+    const pending = { ...generic, issues: [{ row: 2, message: 'Post 2 är inte bokförd (PDNG) och hoppas över.', severity: 'info' as const }, { row: 0, message: 'Decimalavgränsare', severity: 'warning' as const }] }
+    expect(unreadRows(pending)).toEqual([])
+    expect(unreadRows(parseBankFile(NORDEA_CSV_WITH_RESERVED, 'nordea.csv'))).toEqual([])
   })
 })
 

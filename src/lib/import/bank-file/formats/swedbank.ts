@@ -21,6 +21,7 @@ import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 import { accountIdentity, sharedAccountIdentity } from '../account-identity'
+import { inferDecimalMark, parseSwedishAmount } from '@/lib/money'
 
 /**
  * Check if a header value matches any of the given patterns (case-insensitive)
@@ -130,12 +131,20 @@ export const swedbankFormat: BankFileFormat = {
       }
     }
 
+    const rowFields = lines.map((line, i) => i <= headerLineIdx
+      ? []
+      : parseCSVLine(line.trim(), ',').map((f) => f.trim().replace(/^"|"$/g, '')))
+    // Swedbank documents a dot, the exception among Swedish banks, and a cell
+    // reads under it unless the file's own cells prove otherwise.
+    const amountColumns = [amountIdx, balanceIdx].filter((idx) => idx >= 0)
+    const decimalMark = inferDecimalMark(rowFields.flatMap((f) => amountColumns.map((idx) => f[idx]))) ?? '.'
+
     // Data starts after header
     for (let i = headerLineIdx + 1; i < lines.length; i++) {
       const line = lines[i].trim()
       if (!line) continue
 
-      const fields = parseCSVLine(line, ',').map((f) => f.trim().replace(/^"|"$/g, ''))
+      const fields = rowFields[i]
 
       const date = fields[dateIdx]
       const reference = referenceIdx >= 0 ? fields[referenceIdx]?.trim() : null
@@ -152,9 +161,8 @@ export const swedbankFormat: BankFileFormat = {
         continue
       }
 
-      // Swedbank uses PERIOD decimal separator
-      const amount = parseFloat(amountStr.replace(/\s/g, ''))
-      if (isNaN(amount)) {
+      const amount = parseSwedishAmount(amountStr, decimalMark)
+      if (amount === null) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
         continue
@@ -167,7 +175,7 @@ export const swedbankFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseFloat(balanceStr.replace(/\s/g, '')) : null
+      const balance = balanceStr ? parseSwedishAmount(balanceStr, decimalMark) : null
 
       // Build description: use reference (counterparty) as primary, text as secondary
       const description = reference && textDesc
@@ -186,7 +194,7 @@ export const swedbankFormat: BankFileFormat = {
         description,
         amount,
         currency: 'SEK',
-        balance: isNaN(balance as number) ? null : balance,
+        balance,
         reference: null,
         counterparty: reference || null,
         raw_line: line,

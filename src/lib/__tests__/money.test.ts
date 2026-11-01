@@ -483,6 +483,11 @@ describe('parseSwedishAmount with a known decimal mark (crm#1528)', () => {
     expect(parseSwedishAmount('12,50', '.')).toBeNull()
   })
 
+  it('reads an em dash as a minus, and a dash alone as no amount', () => {
+    expect(parseSwedishAmount('\u2014250,50', ',')).toBe(-250.5)
+    expect(parseSwedishAmount('\u2014', ',')).toBeNull()
+  })
+
   it('with a comma mark reads the dot only as grouping', () => {
     expect(parseSwedishAmount('1.234', ',')).toBe(1234)
     expect(parseSwedishAmount('1.234,56', ',')).toBe(1234.56)

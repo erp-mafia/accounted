@@ -9268,6 +9268,8 @@
     "load_failed": "Kunde inte hämta varumärket. Prova att ladda om sidan."
   },
   "transactions": {
+    "bank_file_decimal_mark_placeholder": "Väljs ur filen",
+    "bank_file_decimal_mark_undecided": "Beloppet {cell} kan betyda {dot} eller {comma}, och inget annat belopp i filen avgör vilket. Välj decimalavgränsare så läser vi filen rätt.",
     "th_category": "Kategori",
     "th_account": "Konto",
     "columns_button": "Kolumner",

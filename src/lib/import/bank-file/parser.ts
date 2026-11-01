@@ -7,7 +7,7 @@
 
 import * as crypto from 'crypto'
 import type { RawTransaction } from '@/types'
-import type { BankFileFormat, BankFileFormatId, BankFileParseResult, ParsedBankTransaction } from './types'
+import type { BankFileFormat, BankFileFormatId, BankFileParseIssue, BankFileParseResult, ParsedBankTransaction } from './types'
 
 // The format registry and detection live in ./formats (no Node imports) so
 // client components (BankFileImportHistory) can name a format without
@@ -105,6 +105,16 @@ export function parseBankFile(
   }
 
   return format.parse(content)
+}
+
+/**
+ * The rows of a file its parser could not read, each a warning on its own row.
+ * A lost bank row is a hole in the books, so a door that imports the rest says
+ * which. A row left out on purpose (pending, preliminary) is no warning: the
+ * booked version arrives in a later statement.
+ */
+export function unreadRows(result: BankFileParseResult): BankFileParseIssue[] {
+  return result.issues.filter((issue) => issue.severity === 'warning' && issue.row > 0)
 }
 
 /**
