@@ -44,13 +44,21 @@ describe('netVat', () => {
     expect(netVat(10000, 0.08875)).toBe(887.5)
   })
 
+  // The sweeps compare in plain code and assert once: an expect() per amount
+  // took about a second here and timed out at 5 s on a loaded CI runner.
   it('agrees with whole öre times basis points on every amount, both signs', () => {
+    const differ: string[] = []
     for (let ore = 1; ore <= 300000; ore += 7) {
       for (const bp of [2500, 1200, 600]) {
-        expect(netVat(ore / 100, bp / 10000)).toBe(Math.floor((ore * bp + 5000) / 10000) / 100)
-        expect(netVat(-ore / 100, bp / 10000)).toBe(Math.floor((-ore * bp + 5000) / 10000) / 100 + 0)
+        if (!Object.is(netVat(ore / 100, bp / 10000), Math.floor((ore * bp + 5000) / 10000) / 100)) {
+          differ.push(`${ore} öre at ${bp} bp`)
+        }
+        if (!Object.is(netVat(-ore / 100, bp / 10000), Math.floor((-ore * bp + 5000) / 10000) / 100 + 0)) {
+          differ.push(`-${ore} öre at ${bp} bp`)
+        }
       }
     }
+    expect(differ).toEqual([])
   })
 })
 
@@ -82,9 +90,11 @@ describe('netVat: parity with the copies it replaced', () => {
   const naiveForm = (net: number, rate: number) => Math.round(net * rate * 100) / 100
 
   it.each([0.25, 0.12, 0.06])('the invoice line form never moves at %s', (rate) => {
+    const moved: number[] = []
     for (let ore = 1; ore <= 300000; ore++) {
-      expect(lineForm(ore / 100, rate)).toBe(netVat(ore / 100, rate))
+      if (!Object.is(lineForm(ore / 100, rate), netVat(ore / 100, rate))) moved.push(ore)
     }
+    expect(moved).toEqual([])
   })
 
   it.each([['roundOre', roundOreForm], ['Math.round', naiveForm]] as const)('the %s form moves one öre up on exact halves, never at 12 %%', (_name, old) => {
