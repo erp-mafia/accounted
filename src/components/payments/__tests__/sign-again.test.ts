@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { signAgainOrders } from '../payment-order-status'
+import { signAgainOrders, signsAnew } from '../payment-order-status'
 
 const row = (id: string, batch_id: string | null, sign_again?: boolean) => ({ id, batch_id, sign_again })
 
@@ -12,5 +12,17 @@ describe('Signera igen on a Betalningar row (crm#1282)', () => {
   it('offers nothing for a row the server does not mark, or one from a server before the flag', () => {
     const orders = [row('a', 'batch-1', false), row('b', 'batch-1'), row('c', null, true)]
     for (const order of orders) expect(signAgainOrders(order, orders)).toEqual([])
+  })
+})
+
+describe('a BankID that ended unsigned offers a new signing over the orders the server let go (crm#1470)', () => {
+  it('when the server names orders to sign anew', () => {
+    expect(signsAnew({ status: 'failed', sign_anew: ['o1'] })).toBe(true)
+  })
+
+  it('never when it names none (a failure signing cannot fix, a payment the bank kept), for a signing still waiting at the bank, or from a server before the field', () => {
+    expect(signsAnew({ status: 'failed', sign_anew: [] })).toBe(false)
+    expect(signsAnew({ status: 'created', sign_anew: ['o1'] })).toBe(false)
+    expect(signsAnew({ status: 'failed' })).toBe(false)
   })
 })

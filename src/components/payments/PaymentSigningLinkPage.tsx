@@ -76,7 +76,8 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
   const account = [data.account.name, data.account.iban].filter(Boolean).join(' ')
 
   // A signing of this link waits at the bank: poll it (BankID may be open, or
-  // the bank's page just answered), or sign it again after an abandoned try.
+  // the bank's page just answered), or sign it again while its payments wait
+  // there unsigned.
   // A link for the second signature signs its signing as the other signatory.
   const signing = data.signing
   const waitingSigning = data.state === 'in_signing' && signing?.status === 'awaiting_signature'

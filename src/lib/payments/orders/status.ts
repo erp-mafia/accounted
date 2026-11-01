@@ -100,11 +100,14 @@ export const SIGNING_FINISHED_BATCH_STATUSES: ReadonlySet<string> = new Set(['si
 
 /**
  * The order's payment waits at the bank unsigned in a signing nobody is in
- * any more: its BankID was abandoned or expired (the signing poll or the
- * status sync put the signing back to 'created'), or never started. Signing
- * it again is restartPaymentSigning on that signing, which reads each
- * payment at the bank first; a signing stopped for good ('failed') asked
- * the bank to cancel its payments and is not offered again.
+ * ('created'): its BankID never started (the bank refused the start), or it
+ * ended before its payments were cancelled at the bank (as every BankID that
+ * ended unsigned did until crm#1470; now endFailedSigning cancels them and
+ * fails the signing), or the bank never said how its BankID ended (the
+ * status sync, UNANSWERED_SIGNING_MINUTES). Signing it again is
+ * restartPaymentSigning on that signing, which reads each payment at the
+ * bank first; a stopped signing
+ * ('failed') is not offered again.
  */
 export function isSignableAgain(
   order: { status: PaymentOrderStatus | string; provider_payment_id?: string | null; outcome_unknown_at?: string | null; batch_id?: string | null },

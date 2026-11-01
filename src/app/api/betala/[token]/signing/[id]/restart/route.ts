@@ -19,8 +19,8 @@ const RestartSchema = z.object({
 })
 
 /**
- * POST /api/betala/:token/signing/:id/restart: BankID again after an
- * abandoned or timed-out signing of the link, through the same
+ * POST /api/betala/:token/signing/:id/restart: BankID again on a signing of
+ * the link whose payments wait unsigned at the bank, through the same
  * restartPaymentSigning as the session restart (which re-reads each payment
  * at the bank and re-checks every invoice under lock). Only the link's own
  * signing; the typed personnummer is required. The signing may move to a new

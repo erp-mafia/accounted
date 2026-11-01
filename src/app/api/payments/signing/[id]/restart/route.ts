@@ -20,7 +20,7 @@ const RestartSchema = z.object({
   psu_authoriser_id: z.string().max(100).nullish(),
 })
 
-/** POST /api/payments/signing/:id/restart: start BankID again after an abandoned or timed-out signing. */
+/** POST /api/payments/signing/:id/restart: start BankID again on a signing whose payments wait unsigned at the bank. */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'payment_signing.restart',
   async (request, { supabase, companyId, user, log, requestId }, { params }) => {

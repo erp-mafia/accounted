@@ -108,7 +108,7 @@ export interface PaymentOrder {
   updated_at: string
   /** Signed, and the bank has not confirmed the payment yet: nothing is left to sign (isBankConfirming). Absent from servers before it. */
   bank_confirming?: boolean
-  /** Unsigned at the bank in a signing nobody is in (an abandoned or expired BankID): Signera igen restarts it (isSignableAgain). Absent from servers before it. */
+  /** Unsigned at the bank in a signing nobody is in, its payments not cancelled: Signera igen restarts it (isSignableAgain). Absent from servers before it. */
   sign_again?: boolean
   /** The bank waits for another signatory and takes that signature through the API: Kontrasignera signs it here (lib/payments/orders/second-signature). Absent from servers before it. */
   sign_second?: boolean
@@ -197,6 +197,8 @@ export interface SigningView {
   follow_up?: boolean
   /** The bank waits for another signatory (awaiting_second_signer) who signs here with BankID, not in its online bank. Absent from servers before it. */
   second_signature_here?: boolean
+  /** A BankID that ended unsigned: the orders whose payments the bank cancelled, approved again, to sign anew in a new signing (signsAnew). Absent from servers before it. */
+  sign_anew?: string[]
   /** bank_confirming: signed, the bank has not confirmed it yet; nothing is left to sign. Absent from servers before it. */
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean; bank_confirming?: boolean }>
 }

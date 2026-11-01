@@ -248,9 +248,9 @@ export function PaymentOrdersPage() {
     }
   }
 
-  // An abandoned or expired BankID left the payments waiting unsigned at the
-  // bank: the same signing is started again (restartPaymentSigning), over
-  // every order of it that still waits.
+  // A signing nobody is in left the payments waiting unsigned at the bank
+  // (isSignableAgain): the same signing is started again
+  // (restartPaymentSigning), over every order of it that still waits.
   function signAgain(order: PaymentOrder) {
     const again = signAgainOrders(order, orders ?? [])
     if (again.length === 0 || !order.batch_id) return

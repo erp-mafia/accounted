@@ -25,9 +25,9 @@ const mockStoredBatchSigner = vi.fn()
 vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchSigner: (...args: unknown[]) => mockStoredBatchSigner(...args) }))
 const NO_SIGNER = { psuId: null, ipAddress: null }
 
-import { syncPaymentOrderStatuses } from '../sync'
+import { syncPaymentOrderStatuses, UNANSWERED_SIGNING_MINUTES } from '../sync'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
-import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
+import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, fakeProvider, holdSigning, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
 
 const COMPANY = 'company-1'
 
@@ -188,25 +188,124 @@ describe('syncPaymentOrderStatuses', () => {
     expect(events().some((e) => (e.detail as { code?: string }).code === 'SIGNING_ABANDONED')).toBe(false)
   })
 
-  it('sends a signing that is still unsigned at the bank back to be signed again', async () => {
-    registerPaymentInitiationProvider(provider(vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] })))
-    db.setTable('payment_order_batches', [{ data: [SIGNING] }, { data: [{ id: 'batch-1' }] }])
-    db.setTable('payment_orders', [
-      { data: [order('o1'), order('o2')] },
-      { data: [{ id: 'o1' }] },
-      { data: [{ id: 'o2' }] },
-      { data: [] }, // orders back to submitted
-      { data: [] },
-    ])
+  describe('a signing whose payments still read unsigned 15 minutes on (crm#1470)', () => {
+    // The customer's case: BankID on the same device backed out of and the
+    // dialog closed, so no poll saw it end; the sync finds it 15 minutes on.
+    const bankId = (state: 'failed' | 'finalised' | 'pending', failureCode: string | null = null) =>
+      vi.fn().mockResolvedValue({ state, challenge: null, failureCode, step: null })
 
-    const result = await run()
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
-    expect(result).toMatchObject({ abandoned: 1, signedLate: 0, moved: 0 })
-    expect(patches('payment_order_batches')).toEqual([{ status: 'created' }])
-    // Only the attempt that was read: a restart since then has another id.
-    expect(db.findCalls('payment_order_batches', 'eq')).toContainEqual(['provider_authorisation_id', 'auth-1'])
-    expect(patches('payment_orders').at(-1)).toEqual({ status: 'submitted' })
-    expect(events()).toContainEqual(expect.objectContaining({ batch_id: 'batch-1', event_type: 'error', detail: { code: 'SIGNING_ABANDONED' } }))
+    function held(orders: PaymentOrderRow[], signingStartedAt = SIGNING.signing_started_at) {
+      const signing = { ...SIGNING, provider_batch_id: 'basket-at-bank', signing_method: 'same_device', signing_started_at: signingStartedAt } as PaymentOrderBatchRow
+      holdSigning(db, signing, orders)
+      // Their invoices still need paying: no cancel for a closed invoice.
+      db.setTable('supplier_invoices', { data: orders.map((o) => ({ id: o.supplier_invoice_id, ...UNPAID })) })
+      return signing
+    }
+
+    it('asks the BankID, and when it failed cancels the payments at the bank with the PSU-ID and IP address they were created with and sends the orders back to approved', async () => {
+      mockStoredBatchSigner.mockResolvedValue({ psuId: '198001019879', ipAddress: '203.0.113.10' })
+      const provider = fakeProvider({ pollSigning: bankId('failed', 'SIGNING_SESSION_EXPIRED') })
+      registerPaymentInitiationProvider(provider)
+      const orders = [order('o1'), order('o2')]
+      const signing = held(orders)
+
+      const result = await run()
+
+      expect(result).toMatchObject({ abandoned: 1, signedLate: 0, moved: 0 })
+      const kept = expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: '203.0.113.10' })
+      expect(provider.pollSigning).toHaveBeenCalledWith(kept, { kind: 'basket', providerBasketId: 'basket-at-bank' }, 'auth-1', 'same_device')
+      expect(provider.cancelPayment).toHaveBeenCalledWith(kept, 'pay-o1', 'swedish-giro')
+      expect(provider.cancelPayment).toHaveBeenCalledWith(kept, 'pay-o2', 'swedish-giro')
+      // Att betala again, no payment at the bank: nothing reads as in payment or counts as sent.
+      expect(orders.map((o) => [o.status, o.batch_id, o.provider_payment_id])).toEqual([
+        ['approved', null, null],
+        ['approved', null, null],
+      ])
+      expect(signing.status).toBe('failed')
+      // Only the attempt that was read: a restart since then has another id.
+      expect(db.findCalls('payment_order_batches', 'eq')).toContainEqual(['provider_authorisation_id', 'auth-1'])
+      expect(db.findCalls('rpc:release_payment_order', 'rpc').map(([a]) => (a as { p_reason: string }).p_reason)).toEqual(['SIGNING_ABANDONED', 'SIGNING_ABANDONED'])
+      expect(events()).toContainEqual(
+        expect.objectContaining({ batch_id: 'batch-1', event_type: 'error', detail: { code: 'SIGNING_ABANDONED', provider_code: 'SIGNING_SESSION_EXPIRED' } }),
+      )
+    })
+
+    it('keeps an order whose cancel the bank does not confirm submitted with its payment, for a person', async () => {
+      const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'too_late', providerStatus: 'RCVD', unsigned: true })
+      registerPaymentInitiationProvider(fakeProvider({ pollSigning: bankId('failed', 'USER_CANCEL'), cancelPayment }))
+      const orders = [order('o1')]
+      const signing = held(orders)
+
+      const result = await run()
+
+      expect(result).toMatchObject({ abandoned: 1 })
+      expect(orders[0]).toMatchObject({ status: 'submitted', batch_id: 'batch-1', provider_payment_id: 'pay-o1' })
+      expect(signing.status).toBe('failed')
+      expect(events()).toContainEqual(expect.objectContaining({ payment_order_id: 'o1', event_type: 'error', detail: expect.objectContaining({ code: 'BANK_CANCEL_NOT_CONFIRMED' }) }))
+    })
+
+    it('never cancels a signing whose BankID finalised while the bank still answers RCVD: it is signed, and the bank is confirming it', async () => {
+      const provider = fakeProvider({ pollSigning: bankId('finalised') })
+      registerPaymentInitiationProvider(provider)
+      const orders = [order('o1'), order('o2')]
+      const signing = held(orders)
+
+      const result = await run()
+
+      expect(result).toMatchObject({ signedLate: 1, abandoned: 0 })
+      expect(provider.cancelPayment).not.toHaveBeenCalled()
+      expect(signing.status).toBe('signed')
+      expect(orders.map((o) => o.status)).toEqual(['awaiting_signature', 'awaiting_signature'])
+    })
+
+    it.each([
+      ['still open by the bank\'s word', () => bankId('pending'), 0],
+      ['unreadable', () => vi.fn().mockRejectedValue(new PaymentProviderError('down', 'SERVICE_UNAVAILABLE', true, 503)), 1],
+    ])('cancels nothing on a guess when the BankID is %s: the signing is left for the next run', async (_, pollSigning, errors) => {
+      const provider = fakeProvider({ pollSigning: pollSigning() })
+      registerPaymentInitiationProvider(provider)
+      const orders = [order('o1'), order('o2')]
+      const signing = held(orders, minutesAgo(UNANSWERED_SIGNING_MINUTES - 5))
+
+      const result = await run()
+
+      expect(result).toMatchObject({ abandoned: 0, signedLate: 0, errors })
+      expect(provider.cancelPayment).not.toHaveBeenCalled()
+      expect(signing.status).toBe('awaiting_signature')
+      expect(orders.map((o) => [o.status, o.provider_payment_id])).toEqual([
+        ['awaiting_signature', 'pay-o1'],
+        ['awaiting_signature', 'pay-o2'],
+      ])
+      expect(events()).toEqual([])
+    })
+
+    it.each([
+      ['still open by the bank\'s word', () => bankId('pending'), 'pending'],
+      ['unreadable', () => vi.fn().mockRejectedValue(new PaymentProviderError('down', 'SERVICE_UNAVAILABLE', true, 503)), 'unreadable'],
+    ])('stops asking about a BankID %s past the cutoff: the orders go back to submitted with their payments, nothing cancelled', async (_, pollSigning, bankIdState) => {
+      const provider = fakeProvider({ pollSigning: pollSigning() })
+      registerPaymentInitiationProvider(provider)
+      const orders = [order('o1'), order('o2')]
+      const signing = held(orders, minutesAgo(UNANSWERED_SIGNING_MINUTES + 5))
+
+      const result = await run()
+
+      expect(result).toMatchObject({ abandoned: 1, signedLate: 0 })
+      expect(provider.cancelPayment).not.toHaveBeenCalled()
+      expect(db.findCalls('rpc:release_payment_order', 'rpc')).toEqual([])
+      // Signera igen on the row, as every unfinished signing was before crm#1470.
+      expect(signing.status).toBe('created')
+      expect(orders.map((o) => [o.status, o.batch_id, o.provider_payment_id])).toEqual([
+        ['submitted', 'batch-1', 'pay-o1'],
+        ['submitted', 'batch-1', 'pay-o2'],
+      ])
+      expect(db.findCalls('payment_order_batches', 'eq')).toContainEqual(['provider_authorisation_id', 'auth-1'])
+      expect(events()).toContainEqual(
+        expect.objectContaining({ batch_id: 'batch-1', event_type: 'error', detail: { code: 'SIGNING_ABANDONED', bank_id: bankIdState } }),
+      )
+    })
   })
 
   it('leaves the signing alone when nobody can ask the bank (no provider, or no organisation number)', async () => {
