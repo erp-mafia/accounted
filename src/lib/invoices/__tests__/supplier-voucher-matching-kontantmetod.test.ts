@@ -11,6 +11,13 @@
  * 244x-debit side stays in supplier-voucher-matching.test.ts, unchanged.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The signed bank payment read: mocked so it takes no slot in the queued
+// Supabase mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: vi.fn(async () => null),
+}))
 import {
   validateVoucherForSupplierInvoiceLink,
   findMatchingVouchersForSupplierInvoice,

@@ -11,6 +11,11 @@
  * will most likely get, and whether approval posts a verifikat.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
 import { createTableMockSupabase } from '@/tests/helpers'
 import { formatAmount } from '@/lib/utils'
 
@@ -124,7 +129,20 @@ describe('gnubok_mark_invoice_as_paid: the preview shows the entry the method bo
         { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
         'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
       ),
-    ).rejects.toThrow(/sent, overdue or partially paid/)
+    ).rejects.toMatchObject({ code: 'INVOICE_PAID_NOT_PAYABLE' })
+  })
+
+  it('refuses at staging what approval would refuse: a credit note draft, a följesedel, a date ahead of today', async () => {
+    const stage = (invoice: Record<string, unknown>, paymentDate = '2026-09-15') =>
+      markPaid.execute(
+        { invoice_id: INVOICE_ID, payment_date: paymentDate },
+        'company-1', 'user-1', setup({ accounting_method: 'accrual' }, invoice).supabase as never, { type: 'api_key' } as never,
+      )
+
+    mockHasActiveCreditNote.mockResolvedValueOnce(true)
+    await expect(stage(sentInvoice())).rejects.toMatchObject({ code: 'INVOICE_PAID_NOT_PAYABLE' })
+    await expect(stage(sentInvoice({ document_type: 'delivery_note' }))).rejects.toMatchObject({ code: 'INVOICE_PAID_NOT_PAYABLE' })
+    await expect(stage(sentInvoice(), '2099-01-01')).rejects.toMatchObject({ code: 'PAYMENT_DATE_IN_FUTURE' })
   })
 
   it('kontantmetoden, unbooked SEK invoice: bank debit, revenue and output VAT credit, no 1510', async () => {
@@ -366,6 +384,7 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
     ['not_invoice', { document_type: 'proforma' }, [ITEM]],
     ['self_billed', { is_self_billed: true }, [ITEM]],
     ['periodisering', {}, [{ ...ITEM, accrual_period_start: '2026-11-01', accrual_period_end: '2027-10-31' }]],
+    ['dated_ahead', { invoice_date: '2099-01-01' }, [ITEM]],
   ])('refuses %s at staging with INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', async (reason, overrides, items) => {
     const { supabase, setTable, findCall } = setup({ accounting_method: 'accrual' }, draft(overrides))
     setTable('invoice_items', { data: items })

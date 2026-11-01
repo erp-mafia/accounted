@@ -186,7 +186,7 @@
       ]
     },
     {
-      "flow": "mark-paid (v1): the invoice flip fails, so the payment is reversed on the payment date",
+      "flow": "mark-paid (v1): the invoice flip fails, so the payment is cancelled",
       "entries": [
         {
           "voucher_series": "E",
@@ -194,7 +194,7 @@
           "entry_date": "2026-04-03",
           "description": "Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
           "source_type": "supplier_invoice_paid",
-          "status": "reversed",
+          "status": "cancelled",
           "notes": null,
           "lines": [
             {
@@ -217,39 +217,6 @@
               "exchange_rate": null,
               "account_number": "2440",
               "line_description": "Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
-              "amount_in_currency": null
-            }
-          ]
-        },
-        {
-          "voucher_series": "E",
-          "voucher_number": 6,
-          "entry_date": "2026-04-03",
-          "description": "Makulering: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
-          "source_type": "storno",
-          "status": "posted",
-          "notes": null,
-          "lines": [
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "1500",
-              "credit_amount": "0",
-              "exchange_rate": null,
-              "account_number": "1930",
-              "line_description": "Reversal: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
-              "amount_in_currency": null
-            },
-            {
-              "currency": "SEK",
-              "tax_code": null,
-              "dimensions": {},
-              "debit_amount": "0",
-              "credit_amount": "1500",
-              "exchange_rate": null,
-              "account_number": "2440",
-              "line_description": "Reversal: Utbetalning leverantörsfaktura F-2005, Kontorsbolaget AB (ankomstnr 5)",
               "amount_in_currency": null
             }
           ]
@@ -261,7 +228,7 @@
       "entries": [
         {
           "voucher_series": "E",
-          "voucher_number": 7,
+          "voucher_number": 6,
           "entry_date": "2026-04-15",
           "description": "Utbetalning leverantörsfaktura F-2006, Kontorsbolaget AB (ankomstnr 6)",
           "source_type": "supplier_invoice_paid",
@@ -310,7 +277,7 @@
       "entries": [
         {
           "voucher_series": "E",
-          "voucher_number": 8,
+          "voucher_number": 7,
           "entry_date": "2026-04-16",
           "description": "Utbetalning leverantörsfaktura F-2007, Kontorsbolaget AB (ankomstnr 7)",
           "source_type": "supplier_invoice_paid",
@@ -392,7 +359,7 @@
         },
         {
           "voucher_series": "E",
-          "voucher_number": 9,
+          "voucher_number": 8,
           "entry_date": "2026-06-22",
           "description": "Utbetalning leverantörsfaktura F-2008, Kontorsbolaget AB (ankomstnr 8)",
           "source_type": "supplier_invoice_paid",
@@ -430,7 +397,7 @@
       "entries": [
         {
           "voucher_series": "E",
-          "voucher_number": 10,
+          "voucher_number": 9,
           "entry_date": "2026-04-21",
           "description": "Kontantbetalning leverantörsfaktura F-2009",
           "source_type": "supplier_invoice_cash_payment",
@@ -966,7 +933,7 @@
       },
       {
         "supplier_invoice_number": "F-2005",
-        "status": "approved",
+        "status": "registered",
         "currency": "SEK",
         "paid_amount": "0",
         "remaining_amount": "1500",
@@ -981,7 +948,7 @@
         "paid_amount": "1500",
         "remaining_amount": "0",
         "paid_at": "2026-04-15 12:00:00+00",
-        "payment_voucher": "E7:posted",
+        "payment_voucher": "E6:posted",
         "transaction": "Kontorsbolaget F-2006"
       },
       {
@@ -991,7 +958,7 @@
         "paid_amount": "1500",
         "remaining_amount": "0",
         "paid_at": "2026-04-16 12:00:00+00",
-        "payment_voucher": "E8:posted",
+        "payment_voucher": "E7:posted",
         "transaction": "Betalning F-2007"
       },
       {
@@ -1001,7 +968,7 @@
         "paid_amount": "1500",
         "remaining_amount": "0",
         "paid_at": "2026-06-22 12:00:00+00",
-        "payment_voucher": "E9:posted",
+        "payment_voucher": "E8:posted",
         "transaction": "Kontorsbolaget F-2008"
       },
       {
@@ -1011,7 +978,7 @@
         "paid_amount": "1500",
         "remaining_amount": "0",
         "paid_at": "2026-04-21 12:00:00+00",
-        "payment_voucher": "E10:posted",
+        "payment_voucher": "E9:posted",
         "transaction": "Kontorsbolaget F-2009"
       }
     ],
@@ -1073,7 +1040,7 @@
         "notes": null,
         "link_basis": "user_confirmed",
         "link_evidence": null,
-        "voucher": "E7:posted",
+        "voucher": "E6:posted",
         "transaction": "Kontorsbolaget F-2006"
       },
       {
@@ -1088,7 +1055,7 @@
           "score": 1,
           "rule_id": "payment_order:end_to_end_id"
         },
-        "voucher": "E8:posted",
+        "voucher": "E7:posted",
         "transaction": "Betalning F-2007"
       },
       {
@@ -1100,7 +1067,7 @@
         "notes": null,
         "link_basis": "client_asserted",
         "link_evidence": null,
-        "voucher": "E9:posted",
+        "voucher": "E8:posted",
         "transaction": "Kontorsbolaget F-2008"
       },
       {
@@ -1112,7 +1079,7 @@
         "notes": null,
         "link_basis": "client_asserted",
         "link_evidence": null,
-        "voucher": "E10:posted",
+        "voucher": "E9:posted",
         "transaction": "Kontorsbolaget F-2009"
       }
     ],
@@ -1125,7 +1092,7 @@
         "category": "uncategorized",
         "is_business": true,
         "link_basis": "user_confirmed",
-        "voucher": "E7:posted",
+        "voucher": "E6:posted",
         "supplier_invoice": "F-2006"
       },
       {
@@ -1136,7 +1103,7 @@
         "category": "uncategorized",
         "is_business": true,
         "link_basis": "rule_ocr_reference",
-        "voucher": "E8:posted",
+        "voucher": "E7:posted",
         "supplier_invoice": "F-2007"
       },
       {
@@ -1147,7 +1114,7 @@
         "category": "uncategorized",
         "is_business": true,
         "link_basis": "client_asserted",
-        "voucher": "E10:posted",
+        "voucher": "E9:posted",
         "supplier_invoice": "F-2009"
       },
       {
@@ -1224,7 +1191,7 @@
         "category": null,
         "is_business": true,
         "link_basis": "client_asserted",
-        "voucher": "E9:posted",
+        "voucher": "E8:posted",
         "supplier_invoice": "F-2008"
       }
     ],

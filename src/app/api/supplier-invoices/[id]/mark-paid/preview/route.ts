@@ -9,18 +9,16 @@
  * its dry run builds it, and `lines` the payment that clears it
  * (lib/supplier-invoices/registration-first.ts). `amount` is in the
  * invoice's currency; the lines are SEK, and `clearing_sek` / `paid_sek` say
- * what leaves 2440 and the payment account. `payment_date`, when given, is
- * checked for an open period the way the POST checks it.
+ * what leaves 2440 and the payment account.
+ *
+ * Every refusal is the POST's own: both run planSupplierSettlement
+ * (lib/invoices/settle-supplier-payment.ts), so the dialog says why before
+ * anything is typed. Only the rows are this route's.
  */
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
-import {
-  resolveSupplierPaymentSek,
-  supplierPaymentSekInputIssue,
-} from '@/lib/bookkeeping/supplier-payment-amounts'
 import {
   buildSupplierInvoiceCashLines,
   buildSupplierInvoicePaymentLines,
@@ -28,13 +26,11 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
+import { planSupplierSettlement, type SettleableSupplierInvoice } from '@/lib/invoices/settle-supplier-payment'
 import { roundOre } from '@/lib/money'
-import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ISO_DATE_RE } from '@/lib/invariants'
-import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
-import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import type { CreateJournalEntryLineInput } from '@/types'
 
 type PreviewLine = {
   account_number: string
@@ -62,8 +58,7 @@ const QuerySchema = z.object({
   payment_account: z.string().min(1).optional(),
   // The SEK that left the payment account, as the POST body's amount_sek.
   amount_sek: z.coerce.number().positive().optional(),
-  // The POST body's payment_date: checked for an open period when the
-  // invoice's registration is booked first.
+  // The POST body's payment_date; omitted, today, as in the POST.
   payment_date: z.string().regex(ISO_DATE_RE).optional(),
 })
 
@@ -97,67 +92,18 @@ export const GET = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_NOT_FOUND', log, { requestId })
     }
 
-    // The POST refuses a payment beside a signed bank payment (crm#1243); the
-    // dialog shows that refusal from the preview, before anything is typed.
-    const signedBankPayment = await findSignedBankPayment(supabase, companyId, id)
-    if (signedBankPayment) {
-      return errorResponseFromCode('SI_BANK_PAYMENT_UNDER_WAY', log, {
-        requestId,
-        details: signedBankPaymentDetails(signedBankPayment),
-      })
-    }
-
-    const sekInputIssue = supplierPaymentSekInputIssue({ currency: invoice.currency, amountSek: amount_sek })
-    if (sekInputIssue) {
-      return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: sekInputIssue })
-    }
-
-    const settingsRead = await supabase
-      .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
-      .eq('company_id', companyId)
-      .single()
-    const settings = settingsRead.data
-
-    // The preview shows the verifikat the payment will post: an unreadable
-    // method refuses rather than show a shape it may not book (accounted#58).
-    const accountingMethod = requireAccountingMethod(settingsRead)
-    const creditAccount =
-      payment_account ||
-      (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account ||
-      DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
-
-    const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
-    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
-
-    // The POST handler rejects cash-method partials and part-paid completions
-    // for never-booked invoices (the cash builder books the full invoice), so
-    // refuse to preview lines it will never book.
-    const remainingForGuard =
-      (invoice as { remaining_amount?: number | null }).remaining_amount ?? invoice.total
-    const cashBlock = cashPartialBlockReason({
-      invoiceAlreadyBooked: siAlreadyBooked,
-      accountingMethod,
-      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
-      paysRemainingInFull: amount >= remainingForGuard - 0.005,
-    })
-    if (cashBlock) {
-      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', log, {
-        requestId,
-        details: { reason: cashBlock },
-      })
-    }
-
-    // The POST books a deferring company's unbooked invoice first, through
-    // the Bokför step: its dry run is every check that booking runs, and the
-    // verifikat the dialog shows above the payment. A refusal there is the
-    // POST's refusal too.
-    const registrationPlan = await planRegistrationBeforeSettlement(
+    // The duplicate warning is the POST's alone: it has a dialog of its own, and
+    // the rows stay worth showing beside a bank row that may be this payment.
+    // Force past it here books nothing.
+    const planned = await planSupplierSettlement(
       { supabase, companyId: companyId!, userId: user.id, log },
-      invoice as SupplierInvoice,
-      { settlementDate: payment_date ?? null },
+      invoice as SettleableSupplierInvoice,
+      { amount, amountSek: amount_sek, paymentDate: payment_date, paymentAccount: payment_account, force: true },
     )
-    if (!registrationPlan.ok) return sessionFailureResponse(registrationPlan, log, requestId)
+    if (!planned.ok) return sessionFailureResponse(planned, log, requestId)
+    const { plan } = planned
+
+    const creditAccount = payment_account || plan.lastPaymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
@@ -165,7 +111,7 @@ export const GET = withRouteContext(
     let clearingSek: number | null = null
     let paidSek: number
 
-    if (useCashEntry) {
+    if (plan.useCashEntry) {
       entryType = 'cash'
       // The lines come from buildSupplierInvoiceCashLines, the same pure
       // builder the POST handler's createSupplierInvoiceCashEntry books from,
@@ -175,10 +121,7 @@ export const GET = withRouteContext(
       // from an ex-VAT line_total, no reverse-charge or SLP lines, no 3740).
       // A SEK invoice with display-only öresavrundning now previews the
       // whole-krona payment and the 3740 residual the POST will book (#2852).
-      const si = invoice as SupplierInvoice & {
-        items?: SupplierInvoiceItem[]
-        supplier?: { supplier_type?: string | null; name?: string | null } | null
-      }
+      const si = plan.invoice
       try {
         const built = buildSupplierInvoiceCashLines(
           si,
@@ -208,37 +151,28 @@ export const GET = withRouteContext(
     } else {
       // Clearing: the lines createSupplierInvoicePaymentEntry books for the
       // POST's arguments (Dr 2440 / Cr the payment account, the invoice's
-      // dimensions on both legs), in SEK resolved the way the POST resolves
-      // it: the invoice-currency amount was once previewed (and booked) as
-      // if it were kronor (#2955).
-      const si = invoice as SupplierInvoice & { supplier?: { name?: string | null } | null }
-      const sek = await resolveSupplierPaymentSek(supabase, companyId!, si, {
-        amount,
-        amountSek: amount_sek,
-        ...(registrationPlan.required ? { pendingRegistrationPayableSek: registrationPlan.payableSek } : {}),
-      })
-      if (!sek.ok) {
-        return errorResponseFromCode(sek.code, log, { requestId, details: sek.details })
-      }
-      const built = buildSupplierInvoicePaymentLines(si, {
-        paymentAmount: sek.clearingSek,
-        exchangeRateDifference: sek.exchangeRateDifference,
-        supplierName: si.supplier?.name ?? undefined,
+      // dimensions on both legs), in the SEK the plan resolved: the
+      // invoice-currency amount was once previewed (and booked) as if it were
+      // kronor (#2955).
+      const built = buildSupplierInvoicePaymentLines(plan.invoice, {
+        paymentAmount: plan.clearingSek,
+        exchangeRateDifference: plan.exchangeRateDifference,
+        supplierName: plan.invoice.supplier?.name ?? undefined,
         paymentAccount: creditAccount,
       })
       lines.push(...built.lines.map(toPreviewLine))
-      clearingSek = sek.clearingSek
-      paidSek = roundOre(sek.clearingSek - (sek.exchangeRateDifference ?? 0))
+      clearingSek = plan.clearingSek
+      paidSek = roundOre(plan.clearingSek - (plan.exchangeRateDifference ?? 0))
     }
 
     return NextResponse.json({
       entry_type: entryType,
       lines,
-      invoice_already_booked: siAlreadyBooked,
-      accounting_method: accountingMethod,
+      invoice_already_booked: plan.invoiceAlreadyBooked,
+      accounting_method: plan.accountingMethod,
       // The registration verifikat the POST books before the payment, or null.
-      books_registration_first: registrationPlan.required,
-      registration_entry: registrationPlan.required ? registrationPlan.entry : null,
+      books_registration_first: plan.registration.required,
+      registration_entry: plan.registration.required ? plan.registration.entry : null,
       // The amount is in the invoice's currency; every line is SEK.
       currency: invoice.currency,
       clearing_sek: clearingSek,

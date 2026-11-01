@@ -29,6 +29,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events/bus'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
@@ -87,6 +88,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_INVOICE_CURRENCY_MISMATCH'
   | 'LINK_TX_INVOICE_SETTLEMENT_SIDE'
   | 'LINK_TX_INVOICE_RACE'
+  | 'MATCH_AMOUNT_EXCEEDS_REMAINING'
   | 'MATCH_INVOICE_RECORD_PAYMENT_FAILED'
   | 'BANK_BOOKING_CURRENCY_MISMATCH'
   | 'LINK_TX_DB_ERROR'
@@ -353,13 +355,11 @@ export async function linkTransactionToJournalEntry(
       }
     }
 
-    const paidAmount = transaction.amount as number
-    newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-    const currentRemaining =
-      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-    newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
-    isFullyPaid = newRemaining <= 0
-    newStatus = isFullyPaid ? 'paid' : 'partially_paid'
+    // The one payment plan, strict: no öre absorption, and a bank row larger
+    // than the invoice's remainder is refused before anything is written.
+    const payment = planInvoicePayment(invoice, transaction.amount)
+    if (!payment.ok) return { ok: false, code: payment.code, details: payment.details }
+    ;({ newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan)
   }
 
   // Faktureringsmetoden with defer_invoice_booking: an invoice sent without

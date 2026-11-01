@@ -174,7 +174,7 @@ function books(state: Books = {}, withArrivalLookup = false) {
       ...(state.laterInvoices ?? [{ data: { id: 'new-supplier-invoice', arrival_number: 501 } }]),
     ],
     supplier_invoice_items: state.items ?? { data: null },
-    supplier_invoice_payments: state.payments ?? { data: null },
+    supplier_invoice_payments: state.payments ?? { data: { id: 'pay-1' } },
     'rpc:get_next_arrival_number': { data: 501 },
   })
 }
@@ -741,6 +741,7 @@ describe('registerBookedSupplierInvoice', () => {
       currency: 'SEK',
       exchange_rate_difference: 0,
       journal_entry_id: null,
+      transaction_id: null,
       notes: 'Betalt före registreringen enligt leverantörsreskontran per 2026-03-31',
       link_basis: 'import_carried_over',
       link_evidence: null,

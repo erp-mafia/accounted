@@ -15,6 +15,7 @@ import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { futurePaymentDateRefusal, type FuturePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import {
   planCreditNoteRefund,
   REFUNDABLE_CREDIT_NOTE_STATUSES,
@@ -124,6 +125,7 @@ export type RefundCreditNoteResult =
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: { total_debit: number; total_credit: number } }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: { payment_date: string } }
   | { ok: false; code: 'PERIOD_LOCKED'; details: { payment_date: string; reason?: string } }
+  | ({ ok: false } & FuturePaymentDateRefusal)
   | { ok: false; code: 'INVOICE_PAID_BOOK_FAILED'; details: Record<string, unknown> }
   | { ok: false; code: 'CREDIT_NOTE_REFUND_RACE' }
   | { ok: false; code: 'BOOKKEEPING_ERROR'; error: unknown }
@@ -320,6 +322,9 @@ export async function refundCreditNote(
   params: RefundCreditNoteParams,
 ): Promise<RefundCreditNoteResult> {
   const { creditNote, refundDate, settlementAccountNumber, customLines, force, dryRun } = params
+
+  const futureDate = futurePaymentDateRefusal(refundDate)
+  if (futureDate) return { ok: false, ...futureDate }
 
   let original: { total: number; paid_amount: number | null } | null = null
   if (creditNote.credited_invoice_id) {

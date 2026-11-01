@@ -146,6 +146,7 @@ import {
   linkSupplierInvoiceToVoucher,
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
+import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { describeRefundFailure, refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
 import type { SaleFirstRefusal } from '@/lib/invoices/sale-first'
@@ -221,7 +222,6 @@ import {
 } from '@/lib/invoices/invoice-deliveries'
 import { linkInvoiceAttachments, loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { createLogger } from '@/lib/logger'
-import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { createArticle, updateArticle } from '@/lib/articles/article-commands'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -2579,16 +2579,16 @@ async function commitMarkInvoicePaid(
   if (invoice.credited_invoice_id) {
     return commitCreditNoteRefund(supabase, userId, companyId, invoice as Invoice, paymentDate, params.allow_duplicate === true)
   }
-  // Parity with the dashboard mark-paid route: a quote is an offer, not a
-  // claim. Proformas keep working (a prepayment record with no verifikat).
-  if (invoice.document_type === 'quote') {
-    const entry = getErrorEntry('INVOICE_QUOTE_NOT_PAYABLE')
-    // 409 like the credit-note guard above: the dispatcher records it as
-    // rejected (a state refusal), not failed (an execution error).
-    return { error: entry?.message_sv ?? 'Only invoices can be paid.', errorCode: 'INVOICE_QUOTE_NOT_PAYABLE', status: 409 }
-  }
-  if (!isMatchableInvoiceStatus(invoice.status)) {
-    return { error: 'Invoice can only be marked as paid when status is sent, overdue or partially paid', status: 409 }
+  // The one answer of every door. 409 like the credit-note guard above: the
+  // dispatcher records it as rejected (a state refusal), not failed (an
+  // execution error).
+  const notPayable = await invoicePayableRefusal(supabase, companyId, invoice as Invoice, paymentDate)
+  if (notPayable) {
+    return {
+      error: getErrorEntry(notPayable.code)?.message_sv ?? 'Invoice is not payable.',
+      errorCode: notPayable.code,
+      status: 409,
+    }
   }
 
   // Duplicate-payment guard: parity with the web mark-paid route, which the
@@ -2641,53 +2641,6 @@ async function commitMarkInvoicePaid(
         }
       }
     }
-  } else {
-    // allow_duplicate=true bypassed the duplicate-payment guard. The decision
-    // to book a payment over a possible existing one must leave a durable
-    // behandlingshistorik record (BFNAR 2013:2 p. 9.16) so an auditor can see why
-    // the duplicate was allowed. Re-detect to capture the dismissed candidate;
-    // best-effort, never blocks the payment. Payload stays PII-safe
-    // (ids/amounts/dates only: no customer or merchant name).
-    const customerName = (invoice as { customer?: { name?: string } }).customer?.name
-    if (customerName) {
-      try {
-        const remainingAmount =
-          (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
-        const dismissed = await findDuplicatePaymentCandidatesForInvoice(supabase, {
-          companyId,
-          invoice: {
-            invoice_number: invoice.invoice_number,
-            customer_name: customerName,
-            currency: invoice.currency ?? null,
-            total: invoice.total ?? null,
-            total_sek: invoice.total_sek ?? null,
-            exchange_rate: invoice.exchange_rate ?? null,
-          },
-          paymentAmount: remainingAmount,
-          paymentDate,
-        })
-        if (dismissed.length > 0) {
-          await appendProcessingHistory({
-            companyId,
-            correlationId: invoiceId,
-            aggregateType: 'System',
-            aggregateId: invoiceId,
-            eventType: 'InvoiceDuplicatePaymentDismissed',
-            payload: {
-              invoice_id: invoiceId,
-              payment_date: paymentDate,
-              dismissed_transaction_ids: dismissed.map((c) => c.id),
-              candidate_count: dismissed.length,
-              via: 'allow_duplicate',
-            },
-            actor: { type: 'user', id: userId },
-            occurredAt: new Date(),
-          })
-        }
-      } catch (logErr) {
-        log.warn('failed to record duplicate-payment-dismissal behandlingshistorik', logErr)
-      }
-    }
   }
 
   const bookingContext = await loadBookingContext(supabase, companyId)
@@ -2716,6 +2669,8 @@ async function commitMarkInvoicePaid(
     entityType,
     settlementAccountNumber,
     paymentSource: 'manual',
+    // The override goes in the behandlingshistorik with the voucher it produced.
+    ...(params.allow_duplicate === true ? { duplicateGuardBypass: { user_id: userId, actor_type: 'user' as const } } : {}),
   })
   // A befarad kundförlust reserve the payment made unnecessary comes back
   // (Dr 1519 / Cr 6352), as on every payment path. Never throws.

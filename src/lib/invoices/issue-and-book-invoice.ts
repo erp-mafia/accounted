@@ -210,7 +210,9 @@ export type PaidAtIssueSettleFailureCode =
   | 'INVOICE_PAID_NO_FISCAL_PERIOD'
   | 'INVOICE_PAID_BOOK_FAILED'
   | 'INVOICE_PAID_NOT_PAYABLE'
+  | 'INVOICE_QUOTE_NOT_PAYABLE'
   | 'INVOICE_PAID_RACE'
+  | 'PAYMENT_DATE_IN_FUTURE'
 
 /**
  * The issue step every path runs BEFORE an invoice reaches anyone: compare-

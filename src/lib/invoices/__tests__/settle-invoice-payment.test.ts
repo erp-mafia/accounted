@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
+
 // The sale-first rule (defer_invoice_booking) has its own suites
 // (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
 // here no invoice needs its sale booked first.
@@ -31,6 +36,10 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: vi.fn(),
 }))
+// The override's own record is pinned by ./duplicate-guard-history.test.ts.
+vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
+  recordInvoiceDuplicateGuardBypass: vi.fn(),
+}))
 
 import {
   checkPriorCashRecognition,
@@ -41,6 +50,7 @@ import {
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { eventBus } from '@/lib/events'
 import { ORE_TOLERANCE } from '@/lib/money'
@@ -92,6 +102,80 @@ describe('settleInvoicePayment', () => {
     expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
     expect(vi.mocked(createInvoiceCashEntry)).not.toHaveBeenCalled()
     expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  // The doors are thin on purpose: a door that forgets to ask still gets the answer.
+  describe('what a door did not ask', () => {
+    it.each([
+      ['a quote', { document_type: 'quote' }, '2026-03-30', 'INVOICE_QUOTE_NOT_PAYABLE'],
+      ['a följesedel', { document_type: 'delivery_note' }, '2026-03-30', 'INVOICE_PAID_NOT_PAYABLE'],
+      ['a paid invoice', { status: 'paid' }, '2026-03-30', 'INVOICE_PAID_NOT_PAYABLE'],
+      ['a payment date ahead of today', {}, '2099-01-01', 'PAYMENT_DATE_IN_FUTURE'],
+    ] as const)('refuses %s before anything is written', async (_label, overrides, paymentDate, code) => {
+      const { supabase } = createQueuedMockSupabase()
+      const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        invoice: makeInvoice({ status: 'sent', total: 1000, remaining_amount: 1000, ...overrides }) as Invoice,
+        paymentAmountInInvoiceCurrency: 1000,
+        paymentDate,
+        accountingMethod: 'accrual',
+        entityType: 'aktiebolag',
+      })
+      expect(result).toMatchObject({ ok: false, code })
+      expect(createInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('refuses an invoice with an active credit note, whichever door came', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      mockHasActiveCreditNote.mockResolvedValueOnce(true)
+      const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        invoice: makeInvoice({ status: 'sent', total: 1000, remaining_amount: 1000 }) as Invoice,
+        paymentAmountInInvoiceCurrency: 1000,
+        paymentDate: '2026-03-30',
+        accountingMethod: 'accrual',
+        entityType: 'aktiebolag',
+        paymentSource: 'collections',
+      })
+      expect(result).toEqual({ ok: false, code: 'INVOICE_PAID_NOT_PAYABLE', details: { reason: 'active_credit_note' } })
+      expect(createInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    })
+  })
+
+  it('records an overridden duplicate guard with the voucher it produced, on every door', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(createInvoicePaymentJournalEntry).mockResolvedValue({ id: 'je-1' } as never)
+    enqueue({ data: { id: 'pay-1' } })
+    enqueue({ data: [{ id: 'inv-1' }] })
+    const actor = { user_id: 'user-1', actor_type: 'user' as const }
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      invoice: makeInvoice({
+        id: 'inv-1',
+        invoice_number: 'F-1',
+        status: 'sent',
+        total: 1000,
+        remaining_amount: 1000,
+        customer: { name: 'Kund AB' },
+      } as never) as never,
+      paymentAmountInInvoiceCurrency: 1000,
+      paymentDate: '2026-03-30',
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      settlementAccountNumber: '1931',
+      duplicateGuardBypass: actor,
+    })
+
+    expect(result).toMatchObject({ ok: true, journalEntryId: 'je-1' })
+    expect(vi.mocked(recordInvoiceDuplicateGuardBypass)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(recordInvoiceDuplicateGuardBypass).mock.calls[0][1]).toMatchObject({
+      companyId: 'company-1',
+      invoice: { id: 'inv-1', invoice_number: 'F-1', customer_name: 'Kund AB' },
+      paymentAmount: 1000,
+      paymentDate: '2026-03-30',
+      paymentAccount: '1931',
+      journalEntryId: 'je-1',
+      actor,
+    })
   })
 
   it('books via the payment entry and forwards the settlement account', async () => {

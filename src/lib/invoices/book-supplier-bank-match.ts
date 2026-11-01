@@ -71,6 +71,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { recordSupplierInvoicePaymentRow } from '@/lib/invoices/supplier-invoice-payment-row'
 import { linkBasisColumns, linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import {
   bookRegistrationBeforeSettlement,
@@ -516,32 +517,28 @@ export async function bookSupplierBankMatch(
     return { ok: false, code: 'MATCH_SI_NOT_OPEN' }
   }
 
-  const { error: paymentInsertError } = await supabase
-    .from('supplier_invoice_payments')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      supplier_invoice_id: supplierInvoiceId,
-      payment_date: transaction.date,
-      // Payment rows reconstruct and reverse paid_amount, so store the debt
-      // settled, including any 3740 adjustment. Actual cash stays on the
-      // linked bank transaction and the payment account's journal line.
-      amount: settledAmount,
-      currency: invoice.currency,
-      journal_entry_id: paymentEntryId,
-      transaction_id: transactionId,
-      ...linkBasisColumnsFor(args.linkBasis),
-    })
+  // The row stores the debt settled, including any 3740 adjustment: actual cash
+  // stays on the linked bank transaction and the payment account's journal line.
+  const recorded = await recordSupplierInvoicePaymentRow(supabase, {
+    userId,
+    companyId,
+    invoice,
+    paymentDate: transaction.date,
+    newPaidAmount,
+    journalEntryId: paymentEntryId,
+    transactionId,
+    linkBasis: args.linkBasis,
+  })
 
-  if (paymentInsertError) {
+  if (!recorded.ok) {
     // 23505: this row already pays this invoice. Either way the payment is
     // not recorded, so nothing this call wrote may stay: it used to leave
     // the payment verifikat posted and the invoice settled by it.
     await unwind('Automatiskt makulerad: betalningen kunde inte registreras på leverantörsfakturan', { invoice: true })
-    if (paymentInsertError.code === '23505') {
+    if (recorded.code === '23505') {
       return { ok: false, code: 'MATCH_SI_DUPLICATE_PAYMENT' }
     }
-    log.error('failed to record supplier invoice payment', paymentInsertError)
+    log.error('failed to record supplier invoice payment', new Error(recorded.error))
     return { ok: false, code: 'MATCH_SI_RECORD_PAYMENT_FAILED' }
   }
 

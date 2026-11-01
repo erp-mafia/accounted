@@ -16,6 +16,8 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordInvoiceDuplicateGuardBypass, type DuplicateGuardBypassActor } from '@/lib/invoices/duplicate-guard-history'
+import { invoicePayableRefusal, type InvoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import {
   recordInvoicePaymentRow,
   removeInvoicePaymentRow,
@@ -74,11 +76,13 @@ const log = createLogger('settle-invoice-payment')
  * for PSP-balance settlements (Stripe) where the money reaches the bank only
  * with the later payout.
  *
- * The function performs the write path only. Caller-owned concerns stay in
- * the callers: fetching the invoice, payable-status guards, request parsing,
- * the duplicate-payment guard (a UX advisory: the Stripe sync skips it
- * because the payment event IS the authoritative payment), and mapping the
- * result to a transport-specific response.
+ * Whether the document can be paid at all is invoicePayableRefusal's answer,
+ * asked first here so no door can skip it. Caller-owned concerns stay in the
+ * callers: fetching the invoice, request parsing, the duplicate-payment guard
+ * (a UX advisory: the Stripe sync skips it because the payment event IS the
+ * authoritative payment), and mapping the result to a transport-specific
+ * response. A door that overrode that guard says so (duplicateGuardBypass),
+ * and the override is recorded here, naming the voucher it produced.
  */
 
 export interface SettleCustomLine {
@@ -121,6 +125,12 @@ export interface SettleInvoicePaymentParams {
   /** The payment's reference in the system it came from (invoice_payments.external_ref). */
   externalRef?: string | null
   /**
+   * Who overrode the duplicate-payment guard on this full settlement: it goes
+   * in the behandlingshistorik with the voucher (BFNAR 2013:2 p. 9.16).
+   * Omitted when the guard ran, or never applied.
+   */
+  duplicateGuardBypass?: DuplicateGuardBypassActor
+  /**
    * The kontantfaktura (crm#1281): the invoice is paid at the moment it is
    * issued, so the sale and the payment are one affärshändelse and one
    * verifikat (19xx debit, 30xx and 26xx credit), whatever the accounting
@@ -149,7 +159,7 @@ export type SettleInvoicePaymentResult =
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_BOOK_FAILED'; details: Record<string, unknown> }
-  | { ok: false; code: 'INVOICE_PAID_NOT_PAYABLE'; details: Record<string, unknown> }
+  | ({ ok: false } & InvoicePayableRefusal)
   | { ok: false; code: 'INVOICE_PAID_RACE' }
   | { ok: false; code: 'BOOKKEEPING_ERROR'; error: unknown }
   | { ok: false; code: 'UPDATE_FAILED'; error: unknown }
@@ -192,15 +202,11 @@ export async function settleInvoicePayment(
     paymentSource,
     externalRef,
     recognizeSaleAtPayment,
+    duplicateGuardBypass,
   } = params
 
-  if (invoice.credited_invoice_id) {
-    return {
-      ok: false,
-      code: 'INVOICE_PAID_NOT_PAYABLE',
-      details: { reason: 'credit_note' },
-    }
-  }
+  const notPayable = await invoicePayableRefusal(supabase, companyId, invoice, paymentDate)
+  if (notPayable) return { ok: false, ...notPayable }
 
   // Drive the JE shape from the invoice's actual booking state, not from
   // the current accounting_method setting. If the invoice was booked at
@@ -603,6 +609,28 @@ export async function settleInvoicePayment(
     }
     await removeInvoicePaymentRow(supabase, companyId, paymentRowId)
     return { ok: false, code: 'INVOICE_PAID_RACE' }
+  }
+
+  // Warned about a possible double payment and booked anyway: the books record
+  // it. After the voucher exists, and never throws: the payment stands.
+  if (duplicateGuardBypass && journalEntryId) {
+    await recordInvoiceDuplicateGuardBypass(supabase, {
+      companyId,
+      invoice: {
+        id: invoice.id,
+        invoice_number: invoice.invoice_number,
+        customer_name: invoice.customer?.name,
+        currency: invoice.currency ?? null,
+        total: invoice.total ?? null,
+        total_sek: invoice.total_sek ?? null,
+        exchange_rate: invoice.exchange_rate ?? null,
+      },
+      paymentAmount: paymentAmountInInvoiceCurrency,
+      paymentDate,
+      paymentAccount: customLines ? null : (settlementAccountNumber ?? null),
+      journalEntryId,
+      actor: duplicateGuardBypass,
+    })
   }
 
   // Fully settled: retire every transaction's suggestion pointer at this

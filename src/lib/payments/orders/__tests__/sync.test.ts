@@ -389,7 +389,7 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
       { data: [{ id: ARCIM.transactionId }] }, // the row claim (compare-and-set)
     ])
     db.setTable('supplier_invoices', [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }])
-    db.setTable('supplier_invoice_payments', { data: null })
+    db.setTable('supplier_invoice_payments', { data: { id: 'sip-1' } })
     db.setTable('payment_match_log', { data: null })
   }
 

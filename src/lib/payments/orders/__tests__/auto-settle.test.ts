@@ -79,7 +79,7 @@ function seed(options: { order?: Record<string, unknown>; linkedAfter?: boolean 
     supplier_invoices: [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }],
     company_settings: { data: { accounting_method: 'accrual' } },
     cash_accounts: { data: { ledger_account: '1930' } },
-    supplier_invoice_payments: [{ data: null }, { data: { id: 'sip-9' } }],
+    supplier_invoice_payments: [{ data: { id: 'sip-9' } }],
     payment_match_log: { data: null },
     payment_order_events: { data: null },
   })

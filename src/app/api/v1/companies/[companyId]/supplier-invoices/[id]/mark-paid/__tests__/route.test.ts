@@ -192,7 +192,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
           },
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       })
     mockServiceClient.mockReturnValue(
       supabase,
@@ -238,7 +238,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
           },
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       }).supabase,
     )
 
@@ -314,7 +314,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         transactions: { data: [hi3gRow], error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       })
     mockServiceClient.mockReturnValue(
       supabase,
@@ -362,7 +362,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
           { data: { ...hi3gSI, status: 'partially_paid', paid_amount: 400, remaining_amount: 600 }, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       }).supabase,
     )
 
@@ -384,7 +384,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         transactions: { data: [hi3gRow], error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       })
     mockServiceClient.mockReturnValue(
       supabase,
@@ -430,7 +430,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
           },
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       })
     }
 
@@ -456,7 +456,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
             { data: { ...CASH_SI, status: 'paid', paid_amount: 1000, remaining_amount: 0 }, error: null },
           ],
           company_settings: { data: { accounting_method: 'cash' }, error: null },
-          supplier_invoice_payments: { data: null, error: null },
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         }).supabase,
       )
 
@@ -557,7 +557,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
       ],
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
       journal_entries: { data: { id: 'je-reg', status: 'posted' }, error: null },
-      supplier_invoice_payments: [{ data: [], error: null }, { data: null, error: null }],
+      supplier_invoice_payments: [{ data: [], error: null }, { data: { id: 'pay-1' }, error: null }],
       journal_entry_lines: {
         data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
         error: null,
@@ -658,10 +658,18 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: si, error: null },
+          ...(si.currency === 'SEK' ? [] : [{ data: [], error: null }]),
           { data: { ...si, status: 'paid', paid_amount: si.total, remaining_amount: 0 }, error: null },
         ],
         company_settings: { data: { accounting_method: 'cash' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        journal_entries: { data: { id: 'je-reg', status: 'posted' }, error: null },
+        supplier_invoice_payments: si.currency === 'SEK'
+          ? { data: { id: 'pay-1' }, error: null }
+          : [{ data: [], error: null }, { data: { id: 'pay-1' }, error: null }],
+        journal_entry_lines: {
+          data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
+          error: null,
+        },
       })
     }
 
@@ -715,6 +723,42 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   })
 })
 
+describe('POST .../supplier-invoices/:id/mark-paid: one payment path with the dashboard', () => {
+  function client(paymentRows: { data: unknown; error: unknown }[]) {
+    return createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: APPROVED_SI, error: null },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      transactions: { data: [], error: null },
+      supplier_invoice_payments: paymentRows,
+    })
+  }
+
+  it('refuses an amount above what the invoice still owes with the plan\'s own code', async () => {
+    mockServiceClient.mockReturnValue(client([{ data: { id: 'pay-1' }, error: null }]).supabase)
+
+    const res = await markPaid(makeRequest({ amount: 1500, payment_date: '2026-05-12' }), detailParams())
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(body.error.details).toMatchObject({ remaining_amount: 1000, excess: 500 })
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('a payment row that cannot be written takes the voucher back: the invoice stays open', async () => {
+    const { supabase, calls } = client([{ data: null, error: { message: 'insert failed' } }])
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(makeRequest({ payment_date: '2026-05-12', force: true }), detailParams())
+    const body = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(body.error.code).toBe('SI_PAID_FAILED')
+    expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
+  })
+})
+
 describe('POST .../supplier-invoices/:id/mark-paid: a deferred invoice paid before Bokför', () => {
   const UNBOOKED_SI = { ...APPROVED_SI, registration_journal_entry_id: null }
   const registrationEntry = {
@@ -757,7 +801,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: a deferred invoice paid befo
       ],
       company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null },
       transactions: { data: [], error: null },
-      supplier_invoice_payments: { data: null, error: null },
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
     })
   }
 
@@ -791,7 +835,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: a deferred invoice paid befo
     })
     expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID }),
-      { id: SI_ID, is_credit_note: false, registration_journal_entry_id: null },
+      expect.objectContaining({ id: SI_ID, is_credit_note: false, registration_journal_entry_id: null }),
       { settlementDate: '2026-05-12' },
     )
     const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
@@ -864,7 +908,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: a deferred invoice paid befo
       ],
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
       transactions: { data: [], error: null },
-      supplier_invoice_payments: { data: null, error: null },
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
 

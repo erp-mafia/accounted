@@ -893,7 +893,7 @@ describe('POST :id/match-supplier-invoice', () => {
         { data: [{ id: SI_ID }], error: null },
       ],
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
-      supplier_invoice_payments: { data: null, error: null },
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
     })
     mockServiceClient.mockReturnValue(supa.supabase)
     const res = await matchSIPOST(
@@ -986,7 +986,7 @@ describe('POST :id/match-supplier-invoice', () => {
           ],
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
           cash_accounts: { data: { ledger_account: '1940' }, error: null },
-          supplier_invoice_payments: { data: null, error: null },
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         }).supabase,
       )
       const res = await matchSIPOST(
@@ -1042,7 +1042,7 @@ describe('POST :id/match-supplier-invoice', () => {
             error: null,
           },
           cash_accounts: { data: { ledger_account: '1930' }, error: null },
-          supplier_invoice_payments: { data: null, error: null },
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         }).supabase,
       )
       const res = await matchSIPOST(
@@ -1092,7 +1092,7 @@ describe('POST :id/match-supplier-invoice', () => {
             { data: [{ id: SI_ID }], error: null },
           ],
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
-          supplier_invoice_payments: { data: null, error: null },
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         }).supabase,
       )
       const res = await matchSIPOST(
@@ -1251,7 +1251,7 @@ describe('POST :id/match-supplier-invoice', () => {
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         cash_accounts: { data: { ledger_account: '1940' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       }
     }
 
@@ -1293,7 +1293,7 @@ describe('POST :id/match-supplier-invoice', () => {
         ],
         company_settings: { data: { accounting_method: 'cash' }, error: null },
         cash_accounts: { data: { ledger_account: '1940' }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       }
     }
 

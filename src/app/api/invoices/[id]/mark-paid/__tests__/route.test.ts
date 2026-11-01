@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
+
 // The sale-first rule (defer_invoice_booking) has its own suites
 // (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
 // here no invoice needs its sale booked first.
@@ -220,11 +225,25 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
   })
 
   it('rejects an original invoice while an active credit-note draft exists', async () => {
-    const invoice = {
-      ...makeInvoice({ status: 'sent', credited_invoice_id: null }),
-      credit_notes: [{ id: 'credit-1', status: 'draft', creation_complete: true }],
-    }
-    enqueue({ data: invoice, error: null })
+    enqueue({ data: makeInvoice({ status: 'sent', credited_invoice_id: null }), error: null })
+    mockHasActiveCreditNote.mockResolvedValueOnce(true)
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { body } = await parseJsonResponse<{ error: { code: string; details: unknown } }>(response)
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+    expect(body.error.details).toEqual({ reason: 'active_credit_note' })
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a följesedel: it has no payment lifecycle', async () => {
+    enqueue({ data: makeInvoice({ status: 'sent', document_type: 'delivery_note' }), error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const response = await POST(
       createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' }),
@@ -234,6 +253,24 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     expect(response.status).toBe(400)
     expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+  })
+
+  it('refuses a payment date ahead of today', async () => {
+    enqueue({ data: makeInvoice({ status: 'sent', remaining_amount: 1250, paid_amount: 0, total: 1250 }), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { id: 'pay-1' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST', body: { payment_date: '2099-01-01' } }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
     expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
   })
 

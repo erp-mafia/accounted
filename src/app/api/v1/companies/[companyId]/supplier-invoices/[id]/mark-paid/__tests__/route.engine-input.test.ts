@@ -5,8 +5,9 @@
  * (route.engine-input.json) that was taken before the door went through the
  * port. The payment verifikat comes from the caller's own rows, the
  * kontantmetoden generator or the 2440 clearing generator; a payment whose
- * invoice update fails, or that loses the settlement race, is reversed with
- * a storno on the payment date. Every argument is recorded, an absent one as
+ * invoice update fails, or that loses the settlement race, is cancelled through
+ * the engine's cleanup door, as on the dashboard (settleSupplierPayment's one
+ * failure policy). Every argument is recorded, an absent one as
  * '<undefined>'; trailing undefined arguments are dropped before the
  * comparison (see
  * src/lib/bookkeeping/__tests__/supplier-payment-entries.engine-input.test.ts).
@@ -14,11 +15,11 @@
  * Regenerate only on purpose, from the code before the move:
  *   UPDATE_ENGINE_INPUT_FIXTURE=1 npx vitest run 'src/app/api/v1/companies/[companyId]/supplier-invoices/[id]/mark-paid/__tests__/route.engine-input.test.ts'
  *
- * Since the payment verifikat and the door's stornos post through the
- * posting port, the scenarios also run with POSTING_EVENTS=shadow and
- * strict: the engine must get the same arguments plus only the event link,
- * a refused event write must still book and reverse under shadow, and under
- * strict the door stops before the engine is called.
+ * Since the payment verifikat posts through the posting port, the scenarios
+ * also run with POSTING_EVENTS=shadow and strict: the engine must get the same
+ * arguments plus only the event link, a refused event write must still book
+ * and cancel under shadow, and under strict the door stops before the engine
+ * is called.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -44,7 +45,7 @@ vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),
   findFiscalPeriod: vi.fn(),
   createJournalEntry: vi.fn(),
-  reverseEntry: vi.fn(),
+  cancelOrphanedEntry: vi.fn(),
 }))
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   anchorSupplierInvoiceDocument: vi.fn().mockResolvedValue(null),
@@ -70,12 +71,12 @@ vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
 }))
 
 const { validateApiKey, createServiceClientNoCookies } = await import('@/lib/auth/api-keys')
-const { createJournalEntry, findFiscalPeriod, reverseEntry } = await import('@/lib/bookkeeping/engine')
+const { createJournalEntry, findFiscalPeriod, cancelOrphanedEntry } = await import('@/lib/bookkeeping/engine')
 const { POST } = await import('../route')
 
 const mockedCreate = vi.mocked(createJournalEntry)
 const mockedFindPeriod = vi.mocked(findFiscalPeriod)
-const mockedReverse = vi.mocked(reverseEntry)
+const mockedCancel = vi.mocked(cancelOrphanedEntry)
 
 const FIXTURE = path.join(__dirname, 'route.engine-input.json')
 const SUPABASE = '<supabase>'
@@ -169,14 +170,14 @@ const SCENARIOS: Scenario[] = [
     accountingMethod: 'accrual',
   },
   {
-    name: 'a concurrent payment wins: the payment verifikat is reversed on the payment date',
+    name: 'a concurrent payment wins: the payment verifikat is cancelled',
     invoice: invoice(4),
     body: { payment_date: '2026-10-02' },
     accountingMethod: 'accrual',
     update: 'lost',
   },
   {
-    name: 'the invoice update fails: the payment verifikat is reversed on the payment date',
+    name: 'the invoice update fails: the payment verifikat is cancelled',
     invoice: invoice(5),
     body: { payment_date: '2026-10-03' },
     accountingMethod: 'accrual',
@@ -197,7 +198,7 @@ function trimTrailingUndefined(call: unknown[]): unknown[] {
 interface Run {
   name: string
   calls: unknown[][]
-  reversals: unknown[][]
+  cancels: unknown[][]
   outcome: unknown
   events: Array<Record<string, unknown>>
 }
@@ -217,7 +218,7 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
       s.update === 'lost' ? { data: null } : s.update === 'error' ? { error: { message: 'update refused', code: '42501' } } : { data: updated },
     ],
     company_settings: { data: { accounting_method: s.accountingMethod } },
-    supplier_invoice_payments: { data: null },
+    supplier_invoice_payments: { data: { id: 'pay-1' } },
     chart_of_accounts: { data: [] },
   })
 }
@@ -229,10 +230,10 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
   for (const [index, s] of SCENARIOS.entries()) {
     mockedCreate.mockReset()
     mockedFindPeriod.mockReset()
-    mockedReverse.mockReset()
+    mockedCancel.mockReset()
     mockedFindPeriod.mockResolvedValue(PERIOD)
     mockedCreate.mockImplementation(async (_sb, _c, _u, input: CreateJournalEntryInput) => ({ id: `je-${index}`, ...input }) as never)
-    mockedReverse.mockImplementation(async (_sb, _c, _u, entryId: string) => ({ id: `storno-${entryId}`, status: 'posted' }) as never)
+    mockedCancel.mockResolvedValue({ error: null })
     const mock = supabaseFor(s, opts)
     vi.mocked(createServiceClientNoCookies).mockReturnValue(mock.supabase as never)
     const request = new Request(`https://x.test/api/v1/companies/${COMPANY}/supplier-invoices/${s.invoice.id}/mark-paid`, {
@@ -249,7 +250,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
     out.push({
       name: s.name,
       calls: mockedCreate.mock.calls.map((c) => record(c as unknown[])),
-      reversals: mockedReverse.mock.calls.map((c) => record(c as unknown[])),
+      cancels: mockedCancel.mock.calls.map((c) => record(c as unknown[])),
       outcome: { status: response.status, error: body.error?.code ?? null },
       events: mock.findCalls('business_events', 'insert').map((args) => args[0] as Record<string, unknown>),
     })
@@ -275,10 +276,10 @@ describe('v1 supplier mark-paid engine input (posting port parity)', () => {
   it('hands the engine exactly what it handed it before the port', { timeout: 60_000 }, async () => {
     vi.stubEnv('POSTING_EVENTS', '')
     const runs = await runScenarios()
-    const recorded = runs.map(({ name, calls, reversals, outcome }) => ({
+    const recorded = runs.map(({ name, calls, cancels, outcome }) => ({
       name,
       calls: calls.map(trimTrailingUndefined),
-      reversals,
+      cancels,
       outcome,
     }))
     if (process.env.UPDATE_ENGINE_INPUT_FIXTURE === '1') {
@@ -297,8 +298,8 @@ describe('v1 supplier mark-paid engine input (posting port parity)', () => {
       const before = off[i]!
       expect(run.outcome, run.name).toEqual(before.outcome)
       expect(run.calls, run.name).toHaveLength(before.calls.length)
-      expect(run.reversals, run.name).toHaveLength(before.reversals.length)
-      expect(run.events, run.name).toHaveLength(before.calls.length + before.reversals.length)
+      expect(run.cancels, run.name).toEqual(before.cancels)
+      expect(run.events, run.name).toHaveLength(before.calls.length)
       const ids = run.events.map((e) => e.id)
       for (const [j, call] of run.calls.entries()) {
         expect(trimTrailingUndefined(before.calls[j]!)[0], run.name).toBe(4)
@@ -307,22 +308,15 @@ describe('v1 supplier mark-paid engine input (posting port parity)', () => {
         expect(call.slice(5, 7), run.name).toEqual(['<undefined>', '<undefined>'])
         expect(call[7], run.name).toEqual({ businessEvent: { id: ids[0], role: 'produced', onFailure: 'log' } })
       }
-      for (const [j, reversal] of run.reversals.entries()) {
-        // Off, reverseEntry's five arguments (the payment date); shadow adds only the options with the link.
-        expect(before.reversals[j]![0], run.name).toBe(5)
-        expect(reversal[0], run.name).toBe(6)
-        expect(reversal.slice(1, 6), run.name).toEqual(before.reversals[j]!.slice(1, 6))
-        expect(reversal[6], run.name).toEqual({ businessEvent: { id: ids[1], role: 'reversal', onFailure: 'log' } })
-      }
     }
   })
 
-  it('with POSTING_EVENTS=shadow a refused event write still books and reverses, with exactly the off calls', { timeout: 60_000 }, async () => {
+  it('with POSTING_EVENTS=shadow a refused event write still books and cancels, with exactly the off calls', { timeout: 60_000 }, async () => {
     vi.stubEnv('POSTING_EVENTS', 'off')
     const off = await runScenarios()
     vi.stubEnv('POSTING_EVENTS', 'shadow')
     const refused = await runScenarios({ refuseEvent: true })
-    const view = (runs: Run[]) => runs.map(({ calls, reversals, outcome }) => ({ calls, reversals, outcome }))
+    const view = (runs: Run[]) => runs.map(({ calls, cancels, outcome }) => ({ calls, cancels, outcome }))
     expect(view(refused)).toEqual(view(off))
   })
 
@@ -331,7 +325,7 @@ describe('v1 supplier mark-paid engine input (posting port parity)', () => {
     const refused = await runScenarios({ refuseEvent: true })
     for (const run of refused) {
       expect(run.calls, run.name).toEqual([])
-      expect(run.reversals, run.name).toEqual([])
+      expect(run.cancels, run.name).toEqual([])
       expect((run.outcome as { status: number }).status, run.name).toBeGreaterThanOrEqual(400)
     }
   })
@@ -359,20 +353,9 @@ describe('v1 supplier mark-paid engine input (posting port parity)', () => {
     expect(events('accrual: a partial payment from a named account')[0]).toMatchObject({ amount: 600, amount_sek: 600 })
     expect(events('cash: a never-booked invoice')[0]).toMatchObject({ tax_amounts: [{ tax: 'vat', treatment: 'standard_25', amount_sek: 300 }] })
     expect(events("custom lines: the caller's own rows")[0]).toMatchObject({ amount: 1500, amount_sek: null, mapping_version: null })
-    // The door's own storno: ledger.storno of the invoice, system_derived, dated the day.
+    // A cancelled voucher is no business event of its own: only its payment was recorded.
     for (const name of ['a concurrent payment wins', 'the invoice update fails']) {
-      const [paid, storno] = events(name)
-      expect(paid, name).toMatchObject({ kind: 'purchase.paid', subject_id: storno!.subject_id })
-      expect(storno, name).toMatchObject({
-        kind: 'ledger.storno',
-        subject_type: 'supplier_invoice',
-        party_type: null,
-        amount: null,
-        amount_sek: null,
-        mapping_version: null,
-        evidence: { link_basis: 'system_derived' },
-      })
-      expect(storno!.occurred_on, name).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(events(name).map((e) => e.kind), name).toEqual(['purchase.paid'])
     }
   })
 })

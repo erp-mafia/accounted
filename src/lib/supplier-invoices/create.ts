@@ -85,6 +85,7 @@ import type {
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
+import { recordSupplierInvoicePaymentRow } from '@/lib/invoices/supplier-invoice-payment-row'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { resolveSupplierInvoiceDueDate } from '@/lib/supplier-invoices/due-date'
@@ -1051,20 +1052,23 @@ export async function createSupplierInvoice(
         .eq('company_id', companyId)
       // Mirror the payment in supplier_invoice_payments so AR/AP and
       // payment-history queries stay consistent with the mark-paid path.
-      await supabase.from('supplier_invoice_payments').insert({
-        user_id: userId,
-        company_id: companyId,
-        supplier_invoice_id: invoiceId,
+      const recorded = await recordSupplierInvoicePaymentRow(supabase, {
+        userId,
+        companyId,
+        invoice: { id: invoiceId, currency: invoice.currency, paid_amount: 0 },
         // The out-of-pocket date may differ from the receipt date.
-        payment_date: body.payment_date ?? invoice.invoice_date,
-        amount: total,
-        currency: invoice.currency,
-        exchange_rate_difference: 0,
-        journal_entry_id: claim.journal_entry_id,
+        paymentDate: body.payment_date ?? invoice.invoice_date,
+        newPaidAmount: total,
+        journalEntryId: claim.journal_entry_id,
         notes: `Utlägg, betalat privat av ${claim.claimant_name}`,
         // Registered as paid privately in the same act that booked the claim.
-        ...linkBasisColumns('user_created'),
+        linkBasis: { basis: 'user_created' },
       })
+      if (!recorded.ok) {
+        // The claim's verifikat is the payment and it stands; the row is what
+        // the reversal and the kontantmetod cut-off read, so it must be seen.
+        log.error('privately paid invoice: payment row not written', new Error(recorded.error), { invoiceId })
+      }
     }
     if (inboxItem) {
       // registerExpenseClaim stamped created_journal_entry_id (which marks

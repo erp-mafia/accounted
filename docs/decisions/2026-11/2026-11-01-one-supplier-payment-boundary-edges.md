@@ -1,0 +1,1 @@
+[2026-11-01] settle-supplier-payment imports lib/supplier-invoices/registration-first, lib/supplier-invoices imports the payment row writer, link-journal-entry imports the payment plan: four new boundary edges, because a door that holds its own copy is the bug this fixes.

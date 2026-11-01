@@ -14,6 +14,11 @@
  * it books the sale before the payment.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { FiscalPeriodNotFoundError } from '@/lib/bookkeeping/errors'

@@ -417,6 +417,20 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
     expect(response.status).toBe(404)
   })
 
+  it('refuses a date ahead of today', async () => {
+    const response = await settlePOST(
+      createMockRequest(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`, {
+        method: 'POST',
+        body: { payment_date: '2099-01-01' },
+      }),
+      routeParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses an already settled request', async () => {
     enqueue({
       data: makePayoutRequestRow({

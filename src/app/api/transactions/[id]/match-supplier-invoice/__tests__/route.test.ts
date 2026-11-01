@@ -209,7 +209,7 @@ function enqueueHappyPath(opts: {
   // 7. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })
   // 8. supplier_invoice_payments insert
-  enqueue({ data: null, error: null })
+  enqueue({ data: { id: 'pay-1' }, error: null })
 }
 
 describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () => {
@@ -1423,7 +1423,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a bank row that is
     enqueue({ data: [{ account_number: '1930' }] }) // chart check before the storno
     enqueue({ data: [{ id: TX_UUID }] }) // transactions claim (CAS)
     enqueue({ data: [{ id: SI_UUID }] }) // supplier_invoices update (CAS)
-    enqueue({ data: null }) // supplier_invoice_payments insert
+    enqueue({ data: { id: 'pay-1' } }) // supplier_invoice_payments insert
     mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
 
     const res = await POST(makeStornoReq({ storno_existing: true }), createMockRouteParams({ id: TX_UUID }))

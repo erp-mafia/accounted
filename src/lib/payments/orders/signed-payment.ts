@@ -3,17 +3,25 @@
  * it: an order signed, or being signed, with BankID
  * (SIGNED_PAYMENT_ORDER_STATUSES).
  *
- * While one exists, recording a payment the person made another way (mark
- * paid) or marking the invoice as typed into the internet bank by hand pays
- * the supplier twice: the bank still executes the signed order. Both doors
- * refuse with SI_BANK_PAYMENT_UNDER_WAY, and the way out is to cancel the
- * bank payment under Betalningar first (crm#1243).
+ * While one exists, every door that settles or closes the invoice some other
+ * way pays the supplier twice, because the bank still executes the signed
+ * order: mark paid, the link to an existing verifikat (the Befintlig
+ * verifikation tab sits beside mark paid in the same dialog), the credit, and
+ * marking the invoice as typed into the internet bank by hand. All refuse with
+ * SI_BANK_PAYMENT_UNDER_WAY, and the way out is to cancel the bank payment
+ * under Betalningar first (crm#1243). Once the money has left, the bank refuses
+ * that cancel: the way out is then the match to the bank row, or the status sync
+ * moving the order to executed. A kvittning asks a wider question of its own
+ * (paymentInFlightSupplierInvoiceIds).
  *
- * Deliberately not refused: a draft or approved order was never sent (the
- * database cancels it when the invoice is paid), an unsigned one never
- * executes (the status sync cancels it at the bank), and an executed one is
- * settled by the payment that records it, so marking it paid by hand is one
- * of the ways its debit gets booked.
+ * Deliberately not refused:
+ *   - the bank row itself: a match to a bank row, one invoice or a
+ *     samlingsbetalning, IS that payment arriving, so it must get through;
+ *   - a draft or approved order: never sent (the database cancels it when the
+ *     invoice is paid);
+ *   - an unsigned one: never executes (the status sync cancels it at the bank);
+ *   - an executed one: settled by the payment that records it, so marking it
+ *     paid by hand is one of the ways its debit gets booked.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'

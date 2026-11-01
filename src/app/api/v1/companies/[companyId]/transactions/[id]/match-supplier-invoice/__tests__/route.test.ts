@@ -139,6 +139,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     const paidHandler = vi.fn()
     eventBus.on('supplier_invoice.paid', paidHandler)
     const { supabase, calls } = createTableMockSupabase({
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           supplier_invoices: [
@@ -198,6 +199,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     eventBus.on('supplier_invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { ...TRANSACTION, amount: -400 }, error: null },
         supplier_invoices: [
@@ -247,6 +249,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
   it('returns 400 VALIDATION_ERROR when supplier_invoice_id is missing', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       }).supabase,
     )
@@ -265,6 +268,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
   it('returns 404 when the supplier invoice does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         supplier_invoices: { data: null, error: null },
@@ -287,6 +291,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
   it('books each custom line with its own dimensions', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         supplier_invoices: [
@@ -330,6 +335,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
   it('refuses a payment date outside an open period before any write, the storno included', async () => {
 (mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
     const { supabase, calls } = createTableMockSupabase({
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           // A categorised row: the match would storno its verifikat first.
           transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
@@ -363,6 +369,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
   it('fails closed when the payment entry books nothing: the invoice stays unpaid', async () => {
     mockCreatePaymentEntry.mockResolvedValueOnce(null)
     const { supabase, calls } = createTableMockSupabase({
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           supplier_invoices: [
@@ -408,6 +415,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     lines?: Array<Record<string, unknown>>
   }) {
     const { supabase, calls } = createTableMockSupabase({
+          supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: { ...TRANSACTION, ...opts.transaction }, error: null },
           supplier_invoices: [
@@ -594,6 +602,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
 
   async function match(transaction: Record<string, unknown> = {}, body: Record<string, unknown> = {}) {
     const { supabase, calls } = createTableMockSupabase({
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: { ...TRANSACTION, ...transaction }, error: null },
       journal_entries: { data: [categorization], error: null },

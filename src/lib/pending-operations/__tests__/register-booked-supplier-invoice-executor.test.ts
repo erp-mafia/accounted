@@ -71,7 +71,7 @@ function books(voucherStatus = 'posted') {
     // verifikat's holder lookup, then the insert.
     supplier_invoices: [{ data: [] }, { data: [] }, { data: [] }, { data: { id: 'si-1', arrival_number: 501 } }],
     supplier_invoice_items: { data: null },
-    supplier_invoice_payments: { data: null },
+    supplier_invoice_payments: { data: { id: 'pay-1' } },
     'rpc:get_next_arrival_number': { data: 501 },
   })
 }

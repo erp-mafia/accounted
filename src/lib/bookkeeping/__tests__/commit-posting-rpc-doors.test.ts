@@ -207,6 +207,30 @@ describe('commitSupplierInvoiceVoucherLink: the stated share', () => {
   })
 })
 
+// A person's door sends no basis (the calls above), so it reads the same
+// against a database that does not have p_link_basis yet.
+describe('commitSupplierInvoiceVoucherLink: the named basis', () => {
+  it('sends p_link_basis when a door names one', async () => {
+    const { supabase, rpc } = makeSupabase({ data: { ok: true, journal_entry_id: 'je-pay' } })
+
+    await commitSupplierInvoiceVoucherLink(supabase, 'co', 'user-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-pay',
+      notes: null,
+      linkBasis: 'rule_counterparty',
+    })
+
+    expect(rpc).toHaveBeenCalledWith('link_supplier_invoice_to_voucher', {
+      p_supplier_invoice_id: 'si-1',
+      p_journal_entry_id: 'je-pay',
+      p_user_id: 'user-1',
+      p_company_id: 'co',
+      p_notes: null,
+      p_link_basis: 'rule_counterparty',
+    })
+  })
+})
+
 describe.each(DOORS)('$name', (door) => {
   it('announces the verifikat the RPC posted with journal_entry.committed, as commitEntry does', async () => {
     const { supabase, rpc, calls } = makeSupabase({ data: door.posted })

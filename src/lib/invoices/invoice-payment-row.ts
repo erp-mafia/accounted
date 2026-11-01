@@ -164,22 +164,23 @@ export async function removeInvoicePaymentRow(
   supabase: SupabaseClient,
   companyId: string,
   paymentRowId: string | null,
+  table: 'invoice_payments' | 'supplier_invoice_payments' = 'invoice_payments',
 ): Promise<boolean> {
   if (!paymentRowId) return true
-  const ctx = { companyId, invoicePaymentId: paymentRowId }
+  const ctx = { companyId, invoicePaymentId: paymentRowId, ...(table === 'invoice_payments' ? {} : { table }) }
   try {
     const { error } = await supabase
-      .from('invoice_payments')
+      .from(table)
       .delete()
       .eq('id', paymentRowId)
       .eq('company_id', companyId)
     if (error) {
-      log.error('invoice_payments rollback failed (row may be stranded)', error, ctx)
+      log.error(`${table} rollback failed (row may be stranded)`, error, ctx)
       return false
     }
     return true
   } catch (err) {
-    log.error('invoice_payments rollback threw (row may be stranded)', err as Error, ctx)
+    log.error(`${table} rollback threw (row may be stranded)`, err as Error, ctx)
     return false
   }
 }

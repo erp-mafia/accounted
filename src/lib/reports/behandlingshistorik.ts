@@ -1830,6 +1830,11 @@ const GUARD_LABELS: Record<string, { code: string; event: string; check: string 
     event: 'Dubbelbetalningskontroll förbikopplad',
     check: 'möjlig dubbelbetalning av leverantörsfaktura',
   },
+  invoice_duplicate_payment: {
+    code: 'invoice.duplicate_payment_guard_bypassed',
+    event: 'Dubbelbetalningskontroll förbikopplad',
+    check: 'möjlig dubbelbetalning av kundfaktura',
+  },
 }
 
 /** Why the detector flagged a bank row (DuplicatePaymentMatchReason). */
@@ -1876,13 +1881,13 @@ function guardBypassedEvent(
   const meta = guard ? GUARD_LABELS[guard] : undefined
   if (!meta) return null
 
-  const invoiceNumber = str(state.supplier_invoice_number)
+  const invoiceNumber = str(state.supplier_invoice_number) ?? str(state.invoice_number)
   const entryId = str(state.journal_entry_id)
   const entry = entryId ? ctx.entryById.get(entryId) : undefined
   const object = entry
     ? voucherLabel(entry.voucher_series, entry.voucher_number)
     : invoiceNumber
-      ? `Leverantörsfaktura ${invoiceNumber}`
+      ? `${state.supplier_invoice_number ? 'Leverantörsfaktura' : 'Kundfaktura'} ${invoiceNumber}`
       : null
 
   const details: string[] = [

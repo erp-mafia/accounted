@@ -285,3 +285,52 @@ describe("linkTransactionToJournalEntry: the verifikat's bank leg must have room
     expect(await outcome).toMatchObject({ ok: true, result: { journalEntryId: 'je-1', voucherLabel: 'A-17' } })
   })
 })
+
+describe('linkTransactionToJournalEntry: the payment plan', () => {
+  const row = {
+    id: 'tx-1',
+    date: '2026-06-11',
+    amount: 1500,
+    currency: 'SEK',
+    exchange_rate: null,
+    journal_entry_id: null,
+    invoice_id: null,
+    is_business: null,
+    potential_invoice_id: null,
+    potential_supplier_invoice_id: null,
+  }
+  const invoice = {
+    id: 'inv-1',
+    status: 'sent',
+    total: 1000,
+    paid_amount: 0,
+    remaining_amount: 1000,
+    currency: 'SEK',
+    exchange_rate: null,
+    paid_at: null,
+    invoice_number: 'F-1',
+    credited_invoice_id: null,
+  }
+
+  it('refuses a bank row larger than what the invoice owes, before anything is written', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: row, error: null })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueueBankLinkLeg(enqueue, 1500)
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1500 }], error: null })
+
+    const outcome = await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-1', journalEntryId: 'je-1', invoiceId: 'inv-1',
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+      details: { remaining_amount: 1000, excess: 500 },
+    })
+    expect(findCalls('invoices', 'update')).toHaveLength(0)
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  })
+})

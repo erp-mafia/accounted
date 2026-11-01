@@ -667,7 +667,8 @@ describe('link_supplier_invoice_to_voucher: a share and a foreign invoice', () =
 
 describe('link_supplier_invoice_to_voucher: one function, old callers intact', () => {
   // 20261016005100 appended p_actor_type / p_actor_label (defaulted) after
-  // the share; still one function, grants restated.
+  // the share, 20261018210400 the event parameters and 20261101045830
+  // p_link_basis; still one function, grants restated.
   it('exists once, with the share as a sixth defaulted argument and the grants restated', async () => {
     const { rows } = await getPool().query<{ signature: string; security_definer: boolean }>(
       `SELECT oid::regprocedure::text AS signature, prosecdef AS security_definer
@@ -675,13 +676,13 @@ describe('link_supplier_invoice_to_voucher: one function, old callers intact', (
        WHERE proname = 'link_supplier_invoice_to_voucher' AND pronamespace = 'public'::regnamespace`,
     )
     expect(rows).toEqual([
-      { signature: 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', security_definer: true },
+      { signature: 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)', security_definer: true },
     ])
 
     const grants = await getPool().query<{ anon: boolean; authenticated: boolean; service: boolean }>(
-      `SELECT has_function_privilege('anon', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS anon,
-              has_function_privilege('authenticated', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS authenticated,
-              has_function_privilege('service_role', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'EXECUTE') AS service`,
+      `SELECT has_function_privilege('anon', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)', 'EXECUTE') AS anon,
+              has_function_privilege('authenticated', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)', 'EXECUTE') AS authenticated,
+              has_function_privilege('service_role', 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)', 'EXECUTE') AS service`,
     )
     expect(grants.rows[0]).toEqual({ anon: false, authenticated: true, service: true })
   })

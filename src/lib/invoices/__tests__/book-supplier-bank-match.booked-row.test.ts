@@ -147,7 +147,7 @@ function world(w: World = {}) {
     journal_entries: { data: w.entries ?? [] },
     transactions: [w.claim ?? { data: [{ id: TX }] }, ...(w.claimUnbooked ? [w.claimUnbooked] : []), { data: [{ id: TX }] }],
     supplier_invoices: [w.invoiceCas ?? { data: [{ id: SI }] }, { data: [{ id: SI }] }],
-    supplier_invoice_payments: byMethod({ insert: w.paymentInsert ?? { data: null } }),
+    supplier_invoice_payments: byMethod({ insert: w.paymentInsert ?? { data: { id: 'pay-1' } } }),
     document_attachments: { data: null },
     business_events: { data: null },
   })

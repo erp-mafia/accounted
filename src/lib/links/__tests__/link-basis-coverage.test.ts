@@ -51,18 +51,8 @@ const SQL_MOVES_AND_RESTORES: Record<string, string> = {
   relink_documents_to_correction: 'moves underlag onto the correction; the update leaves link_basis as it was.',
 }
 
-/**
- * SQL functions that write a new link without a basis yet. Both are reached
- * by callers whose bases differ in a way neither the arguments nor the actor
- * show, so the function cannot pick one: stamping them waits for the caller
- * to name its basis. Shrink-only.
- */
-const SQL_NOT_YET_STAMPED: Record<string, string> = {
-  attach_supplier_invoice_settlement_voucher:
-    'supplier_invoice_payments row for an already settled invoice. A person resolving their own references (attach-settlement-voucher.ts), the provider-migration linker and the Bokio completion (complete_bokio_supplier_invoice) all call it, with no actor: user_confirmed and import_carried_over look alike here.',
-  link_supplier_invoice_to_voucher:
-    'supplier_invoice_payments row against an existing voucher. A person picks the pair, but the migration auto-linker (bulk-reconcile-supplier-vouchers.ts, a reference or amount rule) and commit_provider_migration_followup (positional, no actor: a carried-over payment) reach it too, and nothing in the call tells a rule or an import from a person.',
-}
+/** SQL functions that write a new link without a basis yet. Empty: shrink-only, never add. */
+const SQL_NOT_YET_STAMPED: Record<string, string> = {}
 
 describe('link-basis coverage ratchet', () => {
   const app = scanApplicationWriters()

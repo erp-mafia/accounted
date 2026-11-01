@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { findSignedBankPayment, signedBankPaymentDetails } from '../signed-payment'
 import { isOpenPaymentOrder, PAYMENT_ORDER_STATUSES, SIGNED_PAYMENT_ORDER_STATUSES } from '../status'
 
@@ -8,6 +9,17 @@ const { supabase, setTable, reset, findCall, findCalls } = createTableMockSupaba
 const client = supabase as unknown as SupabaseClient
 
 beforeEach(() => reset())
+
+describe('SI_BANK_PAYMENT_UNDER_WAY', () => {
+  // A verifikat booked from the order's own bank row is refused on the link, and
+  // by then the bank refuses a cancel: the text must name what still works.
+  it('names the way out once the money has left, not only the cancel', () => {
+    const entry = getErrorEntry('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(entry?.message_sv).toContain('koppla bankraden till fakturan')
+    expect(entry?.message_en).toContain('match the bank row to the invoice')
+    expect(entry?.remediation?.description).toContain('storno_existing')
+  })
+})
 
 describe('findSignedBankPayment (crm#1243)', () => {
   it('asks for the invoice\'s orders that are signed or being signed, inside the company', async () => {

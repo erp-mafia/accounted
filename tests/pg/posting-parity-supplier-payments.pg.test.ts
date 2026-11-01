@@ -7,7 +7,7 @@
  * the dashboard mark-paid route (the 2440 clearing, the person's own rows, a
  * kontantmetoden payment), the v1 mark-paid route on an API key (an EUR
  * payment with a kursdifferens, and one whose invoice flip fails, so its
- * payment is reversed), the dashboard bank match route (a fee on top), the
+ * payment is cancelled), the dashboard bank match route (a fee on top), the
  * debit of a signed payment order (bookSupplierBankMatch with a rule basis,
  * as lib/payments/orders/auto-settle.ts calls it), the v1 bank match (a row
  * categorized first, whose verifikat is reversed, and a kontantmetoden
@@ -503,7 +503,7 @@ const FLOWS: Flow[] = [
     ],
   },
   {
-    name: 'mark-paid (v1): the invoice flip fails, so the payment is reversed on the payment date',
+    name: 'mark-paid (v1): the invoice flip fails, so the payment is cancelled',
     setup: async (seed) => {
       const id = await register(seed, domesticInvoice(seed, 'F-2005', '2026-03-12'))
       return {
@@ -524,7 +524,6 @@ const FLOWS: Flow[] = [
     },
     events: [
       { ...PAID, occurred_on: '2026-04-03', subject: { type: 'supplier_invoice', index: 0 }, link_basis: 'client_asserted' },
-      { ...STORNO, subject: { type: 'supplier_invoice', index: 0 }, link_basis: 'system_derived' },
     ],
   },
   {
@@ -1378,8 +1377,10 @@ describe('posting port parity, supplier payments and bank-line booking (pg)', ()
           const owners = [...new Set(links.filter((l) => wanted.includes(l.journal_entry_id!)).map((l) => l.id))]
           expect(owners, label).toHaveLength(1)
           const rows = links.filter((l) => l.id === owners[0])
+          // A cancelled voucher keeps its event, and the fixture holds its status.
           const live = rows.filter((l) => LIVE.has(l.entry_status ?? '')).map((l) => l.journal_entry_id)
-          expect(new Set(live), label).toEqual(new Set(wanted))
+          const cancelled = rows.filter((l) => l.entry_status === 'cancelled').map((l) => l.journal_entry_id)
+          expect(new Set(live), label).toEqual(new Set(wanted.filter((id) => !cancelled.includes(id))))
           const event = rows[0]!
           const partyId = expected.party ? shadow.seed[expected.party] : null
           expect(event, label).toMatchObject({

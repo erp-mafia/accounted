@@ -511,7 +511,7 @@ describe('the six SQL posting functions: signature, security, grants and comment
     ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'customer invoice as its payment'],
     [
       'link_supplier_invoice_to_voucher',
-      'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)',
+      'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text,text)',
       'OPEN supplier invoice',
     ],
     ['create_expense_payout_batch', 'create_expense_payout_batch(uuid,uuid[],date,text,text,uuid,uuid,text,text,uuid[],text)', 'reimbursement transfer'],
@@ -546,7 +546,7 @@ describe('the six SQL posting functions: signature, security, grants and comment
       public_exec: false,
       event_params: ['p_event_ids', 'p_event_mode'],
     })
-    expect(rows[0].args).toMatch(/p_event_ids uuid\[\] DEFAULT NULL::uuid\[\], p_event_mode text DEFAULT NULL::text$/)
+    expect(rows[0].args).toMatch(/p_event_ids uuid\[\] DEFAULT NULL::uuid\[\], p_event_mode text DEFAULT NULL::text(, p_link_basis text DEFAULT 'user_confirmed'::text)?$/)
     expect(rows[0].comment).toContain(phrase)
     expect(rows[0].comment).toContain('p_event_ids')
   })

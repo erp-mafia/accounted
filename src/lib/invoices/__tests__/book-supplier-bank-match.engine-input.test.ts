@@ -253,7 +253,7 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
     business_events: opts.refuseEvent ? { error: { message: 'business_events refused', code: '42501' } } : { data: null },
     company_settings: { data: { accounting_method: s.accountingMethod } },
     supplier_invoices: { data: s.loseRace ? [] : [{ id: s.invoice.id }] },
-    supplier_invoice_payments: { data: null },
+    supplier_invoice_payments: { data: { id: 'pay-1' } },
     // The row claim's compare-and-set takes the row (the booked-row gate's
     // links read finds none: transaction_voucher_links answers nothing).
     transactions: { data: [{ id: 'claimed' }] },

@@ -7,6 +7,11 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
+
 beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'

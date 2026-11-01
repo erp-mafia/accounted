@@ -111,6 +111,7 @@ function seed(f: Fixture) {
     { data: [{ id: SI_ID }] },
   ])
   setTable('company_settings', { data: { accounting_method: f.accountingMethod ?? 'accrual' } })
+  setTable('supplier_invoice_payments', { data: { id: 'pay-1' } })
 }
 
 interface DoorResult {

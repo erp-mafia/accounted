@@ -3,6 +3,11 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
+
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') {
     throw new Error(
@@ -597,6 +602,57 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+  })
+
+  describe('the same documents as every other door', () => {
+    function client(invoice: Record<string, unknown>) {
+      return createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: invoice, error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+          { data: PAID_INVOICE, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null },
+        transactions: { data: [], error: null },
+        invoice_payments: { data: { id: 'pay-1' }, error: null },
+      })
+    }
+    const url = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`
+
+    it('refuses an invoice with a credit note draft, as the dashboard does', async () => {
+      mockServiceClient.mockReturnValue(client(SENT_INVOICE).supabase)
+      mockHasActiveCreditNote.mockResolvedValueOnce(true)
+
+      const res = await markPaid(makeRequest(url), detailParams(COMPANY_ID, INVOICE_ID))
+      const body = await res.json()
+
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+      expect(body.error.details).toEqual({ reason: 'active_credit_note' })
+      expect(mockPayment).not.toHaveBeenCalled()
+    })
+
+    it('refuses a följesedel with the code every door answers', async () => {
+      mockServiceClient.mockReturnValue(client({ ...SENT_INVOICE, document_type: 'delivery_note' }).supabase)
+
+      const res = await markPaid(makeRequest(url), detailParams(COMPANY_ID, INVOICE_ID))
+      const body = await res.json()
+
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+      expect(body.error.details).toEqual({ reason: 'delivery_note' })
+    })
+
+    it('refuses a payment date ahead of today, on a dry run too', async () => {
+      mockServiceClient.mockReturnValue(client(SENT_INVOICE).supabase)
+
+      const res = await markPaid(makeRequest(`${url}?dry_run=true`, { payment_date: '2099-01-01' }), detailParams(COMPANY_ID, INVOICE_ID))
+      const body = await res.json()
+
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
+    })
   })
 
   // #1717: a partially_paid invoice is payable on every door, as on the

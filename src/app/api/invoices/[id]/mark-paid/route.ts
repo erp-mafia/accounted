@@ -6,11 +6,11 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
 import type { RouteContext } from '@/lib/api/with-route-context'
@@ -98,8 +98,8 @@ async function creditNoteRefundResponse(
  * there refuses the payment with nothing written.
  *
  * The booking + status transition live in settleInvoicePayment (shared with
- * the Stripe payment sync); this route owns request parsing, the payable
- * guard, and the duplicate-payment advisory.
+ * the Stripe payment sync); this route owns request parsing and the
+ * duplicate-payment advisory.
  */
 export const POST = withRouteContext(
   'invoice.mark_paid',
@@ -110,7 +110,7 @@ export const POST = withRouteContext(
 
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*), items:invoice_items(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+      .select('*, customer:customers(*), items:invoice_items(*)')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -123,36 +123,6 @@ export const POST = withRouteContext(
     // credit back. The same door records that refund (Dr 1510 / Cr bank).
     if (invoice.credited_invoice_id) {
       return creditNoteRefundResponse(request, ctx, invoice as RefundCreditNoteRow, opLog)
-    }
-
-    const activeCreditNotes = ((invoice as { credit_notes?: Array<{
-      status: string
-      creation_complete?: boolean
-    }> }).credit_notes ?? []).filter(
-      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
-    )
-    if (activeCreditNotes.length > 0) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { reason: 'active_credit_note' },
-      })
-    }
-
-    // partially_paid is payable (#1717): an invoice stuck with a sub-krona
-    // remaining (öresavrundning) or an ordinary open partial is completed
-    // here. settleInvoicePayment's plan math and CAS guard already handle
-    // the state; only this route-level gate excluded it.
-    // A quote is an offer, not a claim: nothing is owed until it has been
-    // converted to a faktura.
-    if (invoice.document_type === 'quote') {
-      return errorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', opLog, { requestId })
-    }
-
-    if (!isMatchableInvoiceStatus(invoice.status)) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { currentStatus: invoice.status },
-      })
     }
 
     // Optional body. Backwards-compat: callers may POST with no body.
@@ -188,6 +158,13 @@ export const POST = withRouteContext(
     // The Swedish calendar day, as on the v1 and agent doors: near midnight
     // the UTC date is still yesterday (possibly last month or a closed period).
     const paymentDate = bodyPaymentDate || todayIsoStockholm()
+
+    // Before the duplicate guard: a document that cannot be paid hears that,
+    // not a warning about a bank row (settleInvoicePayment asks again).
+    const notPayable = await invoicePayableRefusal(supabase, companyId!, invoice, paymentDate)
+    if (notPayable) {
+      return errorResponseFromCode(notPayable.code, opLog, { requestId, details: notPayable.details })
+    }
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound bank
     // transaction before booking. Skipped on partial payments (explicit,
@@ -261,7 +238,8 @@ export const POST = withRouteContext(
 
     const paidRounded = Math.round(paymentAmountInInvoiceCurrency * 100) / 100
     const remainingRounded = Math.round(remainingAmount * 100) / 100
-    if (!force && paidRounded >= remainingRounded) {
+    const guardApplies = paidRounded >= remainingRounded
+    if (!force && guardApplies) {
       const customerName = (invoice as Invoice & { customer?: { name?: string } }).customer?.name
       if (!customerName) {
         opLog.warn('duplicate-payment guard skipped', {
@@ -331,6 +309,8 @@ export const POST = withRouteContext(
       customLines,
       settlementAccountNumber,
       paymentSource: 'manual',
+      // force on a partial overrides nothing: the guard never runs there.
+      ...(force && guardApplies ? { duplicateGuardBypass: { user_id: user.id, actor_type: 'user' as const } } : {}),
     })
 
     if (!result.ok) {
