@@ -14962,7 +14962,7 @@ export const tools: McpTool[] = [
           type: 'string',
           minLength: 1,
           maxLength: 64,
-          description: 'The number printed on the invoice, kept as is. A purely numeric old number may first need next_invoice_number set past the old series (gnubok_update_company_settings): ask the user for its last number before a batch.',
+          description: 'The number printed on the invoice, kept as is. A purely numeric old number may first need next_invoice_number set past the old series (gnubok_update_company_settings): ask the user for its last number before a batch. Already in the register without a verifikat (journal_entry_id null, same customer, currency and total): that invoice is linked to the verifikat instead, nothing else on it changes.',
         },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD' },
         due_date: { type: 'string', description: 'YYYY-MM-DD' },
@@ -14990,20 +14990,27 @@ export const tools: McpTool[] = [
       if (!planned.ok) throw codedRefusal(planned.code, planned.message)
       const { plan } = planned
       const remainingNote = plan.status === 'partially_paid' ? `, kvar ${plan.remainingAmount} per ${plan.paidAsOf}` : ''
+      // crm#1302: the number is in the register already, without its verifikat.
+      const title = plan.linksInvoiceId
+        ? `Koppla faktura ${params.invoice_number} i kundreskontran till verifikat ${plan.voucher.label}: ${plan.customerName} ${plan.total} ${plan.currency}`
+        : `Registrera bokförd faktura ${params.invoice_number}: ${plan.customerName} ${plan.total} ${plan.currency}${remainingNote} (verifikat ${plan.voucher.label})`
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'create_invoice',
-        title: `Registrera bokförd faktura ${params.invoice_number}: ${plan.customerName} ${plan.total} ${plan.currency}${remainingNote} (verifikat ${plan.voucher.label})`,
+        title,
         params,
         preview: {
           mode: params.mode,
+          // The row approval links, from null; nothing else on it changes.
+          ...(plan.linksInvoiceId ? { links_invoice_id: plan.linksInvoiceId } : {}),
           customer_name: plan.customerName,
           invoice_number: params.invoice_number,
-          invoice_date: params.invoice_date,
-          due_date: params.due_date,
+          // A linked row keeps its own dates: the approver sees those.
+          invoice_date: plan.invoiceDate,
+          due_date: plan.dueDate,
           currency: plan.currency,
           // A foreign invoice: the rate read from its verifikat and the kronor it books.
           ...(plan.exchangeRate === null ? {} : { exchange_rate: plan.exchangeRate, total_sek: plan.totalSek, vat_amount_sek: plan.vatAmountSek }),

@@ -127,6 +127,27 @@ describe('gnubok_register_booked_invoice: staging', () => {
     expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['insert pending_operations'])
   })
 
+  it('stages a link when the number is in the register without its verifikat, showing the row as it is (crm#1302)', async () => {
+    const { supabase, setTable, findCall } = books()
+    const existing = {
+      id: '66666666-6666-4666-8666-666666666666', customer_id: CUSTOMER_ID, invoice_date: '2026-03-01', due_date: '2026-03-31', status: 'sent',
+      document_type: 'invoice', currency: 'SEK', exchange_rate: null, total: 12500, total_sek: 12500, subtotal: 10000,
+      subtotal_sek: 10000, vat_amount: 2500, vat_amount_sek: 2500, vat_rate: 25, vat_treatment: 'standard_25', moms_ruta: '05',
+      reverse_charge_text: null, paid_amount: 0, remaining_amount: 12500, journal_entry_id: null,
+    }
+    setTable('invoices', [{ data: [existing] }, { data: [] }])
+    const { remaining_amount: _remaining, balance_as_of: _asOf, ...args } = ARGS
+    await tool.execute(args, COMPANY_ID, USER_ID, supabase as never, ACTOR)
+
+    const staged = findCall('pending_operations', 'insert')?.[0] as { title: string; preview_data: Record<string, unknown> }
+    expect(staged.title).toBe('Koppla faktura 1023 i kundreskontran till verifikat B45: Testkund AB 12500 SEK')
+    // The row's own dates, not the caller's 2026-03-02 / 2026-04-01: nothing else is written.
+    expect(staged.preview_data).toMatchObject({
+      links_invoice_id: existing.id, invoice_date: '2026-03-01', due_date: '2026-03-31',
+      status: 'sent', remaining_amount: 12500, journal_entry_id: VOUCHER_ID,
+    })
+  })
+
   it('stages a euro invoice with its euro amounts, the rate its verifikat books and those kronor (#90)', async () => {
     const lines = [
       { account_number: '1510', debit_amount: 11482.5, credit_amount: 0, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11.4825, line_description: null },

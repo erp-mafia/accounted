@@ -1,0 +1,1 @@
+[2026-11-01] gnubok_register_booked_invoice links an invoice already in the register without its verifikat (same customer, currency, total) instead of refusing its number: one door, one corroboration, no second link tool and no founder-run reconcile (crm#1302).

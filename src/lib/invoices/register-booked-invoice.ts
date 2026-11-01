@@ -39,6 +39,19 @@
  *    accrual path once journal_entry_id is set (kontantmetod-cutoff.ts), so
  *    a link would leave the sale unbooked.
  *
+ * An invoice already in the register under that number, with no verifikat
+ * (invoices.journal_entry_id null), is the same door's other end (crm#1302):
+ * a provider migration that wrote the row but never linked it leaves an
+ * invoice that reads as unbooked while its sale is in the books, and
+ * booking it would book the revenue and the VAT a second time. When that row
+ * is this invoice (same customer, currency and total; issued, never a draft
+ * or a cancelled row) and the verifikat passes every rule above, the
+ * registration links the row instead of inserting one: journal_entry_id from
+ * null, nothing else. Its lines, VAT and payments are the row's own and stay
+ * as they are, so the voucher-shape rules that guard a header-only row do
+ * not apply; its kronor must equal what the verifikat books on 151x, the
+ * migration linker's rule (link-migrated-registration-vouchers.ts).
+ *
  * No invoice_items are written, on purpose: invoice-register-coverage.ts
  * reads "linked to a verifikat, no lines" as an invoice registered from the
  * books, one open item of an older history, so registrations never move the
@@ -65,10 +78,11 @@ import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { NON_ISSUED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { statedVatFitsRate } from '@/lib/bookkeeping/gross-split'
 import { ledgerLineAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
-import { FOREIGN_CURRENCIES, type VatTreatment } from '@/types'
+import { FOREIGN_CURRENCIES, type InvoiceStatus, type VatTreatment } from '@/types'
 import { recordInvoicePaymentRow } from './invoice-payment-row'
 import { seriesNumberOf } from '@/lib/company/invoice-number-series'
 import { REGISTER_BOOKED_INVOICE_MODE } from './register-booked-invoice-mode'
@@ -430,7 +444,17 @@ export interface BookedInvoiceWarning {
 export interface BookedInvoicePlan {
   customerName: string
   voucher: { journalEntryId: string; label: string; entryDate: string; description: string | null }
-  status: 'sent' | 'partially_paid'
+  /**
+   * Set when the register already holds this invoice without its verifikat
+   * (see the module header): the registration links that row and writes no
+   * other column. Every amount and the status below are then the row's.
+   */
+  linksInvoiceId: string | null
+  /** The invoice's dates: the caller's for a new row, the row's own when linked. */
+  invoiceDate: string
+  dueDate: string
+  /** 'sent' or 'partially_paid' for a new row; a linked row keeps its own. */
+  status: InvoiceStatus
   /** The invoice's own currency: total, subtotal, vatAmount and the paid and remaining parts are in it. */
   currency: string
   /** The rate that gives the booked kronor back; null for SEK. */
@@ -467,6 +491,34 @@ const refuse = (
   details?: Record<string, unknown>,
 ): BookedInvoiceRefusal => ({ ok: false, code, message, ...(details ? { details } : {}) })
 
+/** The invoice the number already names, as far as linking it needs. */
+interface RegisteredRow {
+  id: string
+  customer_id: string | null
+  invoice_date: string
+  due_date: string
+  status: InvoiceStatus | null
+  document_type: string | null
+  currency: string | null
+  exchange_rate: number | string | null
+  total: number | string
+  total_sek: number | string | null
+  subtotal: number | string
+  subtotal_sek: number | string | null
+  vat_amount: number | string
+  vat_amount_sek: number | string | null
+  vat_rate: number | string | null
+  vat_treatment: VatTreatment | null
+  moms_ruta: string | null
+  reverse_charge_text: string | null
+  paid_amount: number | string | null
+  remaining_amount: number | string | null
+  journal_entry_id: string | null
+}
+
+/** A row the registration may link: issued, so its status is known. */
+type LinkableRow = RegisteredRow & { status: InvoiceStatus }
+
 interface VoucherRow {
   id: string
   voucher_series: string | null
@@ -502,7 +554,7 @@ export async function planBookedInvoiceRegistration(
       .maybeSingle(),
     supabase
       .from('invoices')
-      .select('id')
+      .select('id, customer_id, invoice_date, due_date, status, document_type, currency, exchange_rate, total, total_sek, subtotal, subtotal_sek, vat_amount, vat_amount_sek, vat_rate, vat_treatment, moms_ruta, reverse_charge_text, paid_amount, remaining_amount, journal_entry_id')
       .eq('company_id', companyId)
       .eq('invoice_number', input.invoice_number)
       .limit(1),
@@ -560,16 +612,40 @@ export async function planBookedInvoiceRegistration(
     `Invoice number ${input.invoice_number} is already in the register (invoice_id ${id}).`,
     { invoice_id: id },
   )
-  const taken = ((numberRes.data ?? []) as { id: string }[])[0]
-  if (taken) return numberTaken(taken.id)
+  const taken = ((numberRes.data ?? []) as RegisteredRow[])[0]
+  // The row the registration links instead of inserting one (crm#1302).
+  let existing: LinkableRow | null = null
+  if (taken) {
+    // An issued invoice only: a draft has no verifikat
+    // (invoices_draft_has_no_verifikat) and a cancelled row is no sale. A
+    // null status reads as the column's default, draft.
+    const status = taken.status ?? 'draft'
+    if (taken.journal_entry_id || (NON_ISSUED_INVOICE_STATUSES as readonly string[]).includes(status) || (taken.document_type ?? 'invoice') !== 'invoice') {
+      return numberTaken(taken.id)
+    }
+    const differs = [
+      taken.customer_id !== input.customer_id ? `customer_id ${taken.customer_id}` : null,
+      (taken.currency ?? 'SEK') !== currency ? `currency ${taken.currency ?? 'SEK'}` : null,
+      Math.abs(Number(taken.total) - input.total) > ORE_TOLERANCE ? `total ${Number(taken.total)}` : null,
+    ].filter((part): part is string => part !== null)
+    if (differs.length > 0) {
+      return refuse(
+        'INVOICE_REGISTER_NUMBER_TAKEN',
+        `Invoice number ${input.invoice_number} is already in the register (invoice_id ${taken.id}) without a verifikat, but it is not this invoice: it has ${differs.join(', ')}. Registering links that row only when customer, currency and total are the same.`,
+        { invoice_id: taken.id },
+      )
+    }
+    existing = { ...taken, status }
+  }
 
   // Accounted issues invoice_prefix + next_invoice_number, padded to three
   // digits, and never skips a number that is taken. So an old number in that
   // series is one löpnummer with Accounted's spelling of it ("12" and "012"),
   // and one at or past the counter would be issued a second time later. The
   // counter is never moved here: only the user knows where the old series
-  // ended, open items alone do not say.
-  const inSeries = settings ? seriesNumberOf(input.invoice_number, settings.invoice_prefix) : null
+  // ended, open items alone do not say. A row being linked keeps the number
+  // it already holds, so the series is not asked.
+  const inSeries = settings && !existing ? seriesNumberOf(input.invoice_number, settings.invoice_prefix) : null
   const nextNumber = Number(settings?.next_invoice_number ?? 1)
   if (inSeries !== null && inSeries >= nextNumber) {
     return refuse(
@@ -680,6 +756,15 @@ export async function planBookedInvoiceRegistration(
       { currency, booked_in_currency: fx.amount, booked_sek: booked },
     )
   }
+  const warningsFor = (invoiceDate: string): BookedInvoiceWarning[] => voucherCorroborationWarnings({
+    label,
+    entryDate: voucher.entry_date,
+    invoiceDate,
+    texts: [voucher.description, ...lines.map((line) => line.line_description ?? null)],
+    references: [input.invoice_number],
+  })
+  if (existing) return linkPlan(existing, customer.name ?? '', voucher, label, booked, warningsFor(existing.invoice_date))
+
   // The sale in kronor, as the verifikat books it: for SEK the caller's
   // total, which the check above holds to the booked amount.
   const totalSek = fx ? booked : input.total
@@ -714,13 +799,7 @@ export async function planBookedInvoiceRegistration(
   const remaining = roundOre(input.remaining_amount)
   const status = remaining < input.total - ORE_TOLERANCE ? 'partially_paid' : 'sent'
   const paidAmount = roundOre(input.total - remaining)
-  const warnings: BookedInvoiceWarning[] = voucherCorroborationWarnings({
-    label,
-    entryDate: voucher.entry_date,
-    invoiceDate: input.invoice_date,
-    texts: [voucher.description, ...lines.map((line) => line.line_description ?? null)],
-    references: [input.invoice_number],
-  })
+  const warnings = warningsFor(input.invoice_date)
   // The daily reminder ladder follows only invoices sent from here
   // (lib/reminders/policy.ts): a registered one has no delivery history, so
   // with reminders on it is still never reminded by itself. Said where a
@@ -746,6 +825,9 @@ export async function planBookedInvoiceRegistration(
     plan: {
       customerName: customer.name ?? '',
       voucher: { journalEntryId: voucher.id, label, entryDate: voucher.entry_date, description: voucher.description },
+      linksInvoiceId: null,
+      invoiceDate: input.invoice_date,
+      dueDate: input.due_date,
       status,
       currency,
       exchangeRate,
@@ -768,6 +850,61 @@ export async function planBookedInvoiceRegistration(
 }
 
 /**
+ * The plan for linking a row the register already holds: its kronor must be
+ * what the verifikat books on 151x (the migration linker's rule), and every
+ * amount the approver sees is the row's own, since none of it is written.
+ */
+function linkPlan(
+  row: LinkableRow,
+  customerName: string,
+  voucher: VoucherRow,
+  label: string,
+  booked: number,
+  warnings: BookedInvoiceWarning[],
+): { ok: true; plan: BookedInvoicePlan } | BookedInvoiceRefusal {
+  const total = Number(row.total)
+  const totalSek = roundOre(Number(row.total_sek ?? row.total))
+  if (Math.abs(booked - totalSek) > ORE_TOLERANCE) {
+    return refuse(
+      'INVOICE_REGISTER_AMOUNT_MISMATCH',
+      `Verifikat ${label} debits 151x by ${booked} SEK but invoice_id ${row.id} in the register is ${totalSek} SEK.`,
+      { booked_sek: booked, expected_sek: totalSek, invoice_id: row.id },
+    )
+  }
+  const currency = row.currency ?? 'SEK'
+  const subtotal = Number(row.subtotal)
+  const vatAmount = Number(row.vat_amount)
+  return {
+    ok: true,
+    plan: {
+      customerName,
+      voucher: { journalEntryId: voucher.id, label, entryDate: voucher.entry_date, description: voucher.description },
+      linksInvoiceId: row.id,
+      invoiceDate: row.invoice_date,
+      dueDate: row.due_date,
+      status: row.status,
+      currency,
+      exchangeRate: row.exchange_rate == null ? null : Number(row.exchange_rate),
+      totalSek,
+      subtotalSek: Number(row.subtotal_sek ?? subtotal),
+      vatAmountSek: Number(row.vat_amount_sek ?? vatAmount),
+      total,
+      subtotal,
+      vatAmount,
+      vatRate: Number(row.vat_rate ?? 0),
+      // The column's default, for a row that never set it.
+      vatTreatment: row.vat_treatment ?? 'standard_25',
+      momsRuta: row.moms_ruta,
+      reverseChargeText: row.reverse_charge_text,
+      paidAmount: Number(row.paid_amount ?? 0),
+      remainingAmount: Number(row.remaining_amount ?? total),
+      paidAsOf: null,
+      warnings,
+    },
+  }
+}
+
+/**
  * Register the invoice: the plan's rules once more, then one invoices row
  * and, for a partly paid invoice, the payment row that dates its paid part.
  * No journal entry or line is written.
@@ -782,6 +919,26 @@ export async function registerBookedInvoice(
   const planned = await planBookedInvoiceRegistration(supabase, companyId, input, options)
   if (!planned.ok) return planned
   const { plan } = planned
+
+  if (plan.linksInvoiceId) {
+    // From null only: a row linked since the plan read it is left alone.
+    const { data: linked, error: linkError } = await supabase
+      .from('invoices')
+      .update({ journal_entry_id: plan.voucher.journalEntryId })
+      .eq('id', plan.linksInvoiceId)
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .select('id')
+    if (linkError) throw dbError(linkError)
+    if (!linked || linked.length === 0) {
+      return refuse(
+        'INVOICE_REGISTER_NUMBER_TAKEN',
+        `Invoice number ${input.invoice_number} got a verifikat since the registration was staged (invoice_id ${plan.linksInvoiceId}).`,
+        { invoice_id: plan.linksInvoiceId },
+      )
+    }
+    return { ok: true, invoiceId: plan.linksInvoiceId, plan }
+  }
 
   const { data, error } = await supabase
     .from('invoices')
