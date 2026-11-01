@@ -57,6 +57,7 @@ import {
   ShieldExclamationIcon,
 } from '@/components/icons'
 import type {
+  AttestedToPayDue,
   BankSwitchDue,
   ExpensePayoutDue,
   SkattekontoPaymentDue,
@@ -109,6 +110,11 @@ interface AttGoraSectionProps {
   documentsToSign?: DocumentToSignDue[]
   /** The next skattekonto charge the balance does not cover: one Betala row. */
   skattekontoPayment?: SkattekontoPaymentDue | null
+  /**
+   * Supplier invoices the attesters released for payment (lib/worklist
+   * attested_to_pay): one Betala row, "Betala N attesterade fakturor".
+   */
+  attestedToPay?: AttestedToPayDue | null
   /**
    * Bank connections still to switch from Enable Banking to Open Payments
    * (lib/worklist bank_switch): one row each, in Bevaka while the deadline
@@ -282,6 +288,7 @@ export default function AttGoraSection({
   attestsDue = [],
   documentsToSign = [],
   skattekontoPayment = null,
+  attestedToPay = null,
   bankSwitches = [],
   paymentsVerification = null,
   supplierPayeeChanges = [],
@@ -390,7 +397,7 @@ export default function AttGoraSection({
     showInboxDocuments ||
     invoiceSetRows.length > 0 ||
     otherSuggestedMatches > 0
-  const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
+  const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null || attestedToPay !== null
   const granskaRows =
     documentsToSign.length > 0 ||
     attestsDue.length > 0 ||
@@ -688,6 +695,21 @@ export default function AttGoraSection({
                 <div>
                   <BandHeader>{t('band_betala')}</BandHeader>
                   <div>
+                    {attestedToPay && (
+                      <WorklistRow
+                        href="/supplier-invoices?tab=to_pay"
+                        icon={BanknotesIcon}
+                        label={t('row_attested_to_pay', { count: attestedToPay.count })}
+                        detail={
+                          attestedToPay.overdue > 0
+                            ? t('row_attested_to_pay_detail_overdue', {
+                                overdue: attestedToPay.overdue,
+                                date: formatDate(attestedToPay.next_due),
+                              })
+                            : t('row_attested_to_pay_detail', { date: formatDate(attestedToPay.next_due) })
+                        }
+                      />
+                    )}
                     {skattekontoPayment && (
                       <WorklistRow
                         href="/skattekonto?betala=1"

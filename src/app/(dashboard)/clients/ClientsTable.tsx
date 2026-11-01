@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { filterClientRows, type ClientBankSwitch, type ClientOverviewRow } from '@/lib/clients/aggregate'
+import type { AttestQueue } from '@/lib/supplier-invoices/attest-queues'
 import { CLIENT_NUMBER_MAX_LENGTH } from '@/lib/clients/client-number'
 
 /** The bank connection switch campaign as the page passes it: on with its deadline, or null. */
@@ -54,6 +55,13 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  * (PUT /api/clients/:companyId/client-number), so a byrå fills its whole
  * list without entering any client; the filter matches it too. The column
  * hides for a plain member while no client has a number.
+ *
+ * Where any client attests its supplier invoices (the attest policy), two
+ * columns say what waits on whom: Väntar på kund (invoices the client has not
+ * attested) and Redo att betala (attested, still to pay), each with the
+ * nearest due date and the fallen-due ones marked. A count enters the client
+ * on the supplier invoice list's matching tab. Same queues as the client's
+ * own Att göra row (lib/supplier-invoices/attest-queues.ts).
  */
 export default function ClientsTable({ clients, bankSwitchCampaign = null, canEditClientNumber = false }: ClientsTableProps) {
   const t = useTranslations('clients')
@@ -72,13 +80,14 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
   const rows = useMemo(() => filterClientRows(withNumbers, query), [withNumbers, query])
   const showClientNumber = canEditClientNumber || withNumbers.some((c) => c.clientNumber)
   const showBankSwitch = bankSwitchCampaign !== null
-  const columnCount = 6 + (showClientNumber ? 1 : 0) + (showBankSwitch ? 1 : 0)
+  const showAttest = withNumbers.some((c) => c.attest)
+  const columnCount = 6 + (showClientNumber ? 1 : 0) + (showBankSwitch ? 1 : 0) + (showAttest ? 2 : 0)
   const notSwitched = useMemo(
     () => clients.filter((c) => c.bankSwitch?.state === 'pending' || c.bankSwitch?.state === 'stopped'),
     [clients],
   )
 
-  const handleEnter = async (companyId: string, destination: '/' | '/settings/company' = '/') => {
+  const handleEnter = async (companyId: string, destination: string = '/') => {
     if (pendingId) return
     setPendingId(companyId)
     const result = await performCompanySwitch(companyId, { destination })
@@ -160,6 +169,8 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
               <th className={TH_CLASS}>{t('col_company')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('col_unbooked')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('col_inbox')}</th>
+              {showAttest && <th className={TH_CLASS}>{t('col_attest_waiting')}</th>}
+              {showAttest && <th className={TH_CLASS}>{t('col_attest_ready')}</th>}
               <th className={TH_CLASS}>{t('col_next_deadline')}</th>
               <th className={TH_CLASS}>{t('col_last_booked')}</th>
               {showBankSwitch && <th className={TH_CLASS}>{t('col_bank_switch')}</th>}
@@ -234,6 +245,28 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
                     <span className="text-muted-foreground">0</span>
                   )}
                 </td>
+                {showAttest && (
+                  <td className={TD_CLASS}>
+                    <AttestQueueCell
+                      value={row.attest ? row.attest.waiting : null}
+                      disabled={pendingId !== null}
+                      ariaLabel={t('attest_waiting_aria', { client: row.name })}
+                      overdueLabel={(count: number) => t('attest_overdue', { count })}
+                      onOpen={() => void handleEnter(row.companyId, '/supplier-invoices?tab=registered')}
+                    />
+                  </td>
+                )}
+                {showAttest && (
+                  <td className={TD_CLASS}>
+                    <AttestQueueCell
+                      value={row.attest ? row.attest.ready : null}
+                      disabled={pendingId !== null}
+                      ariaLabel={t('attest_ready_aria', { client: row.name })}
+                      overdueLabel={(count: number) => t('attest_overdue', { count })}
+                      onOpen={() => void handleEnter(row.companyId, '/supplier-invoices?tab=to_pay')}
+                    />
+                  </td>
+                )}
                 <td className={TD_CLASS}>
                   {row.nextDeadline ? (
                     <span className="flex items-center gap-2">
@@ -318,6 +351,42 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
         }}
       />
     </div>
+  )
+}
+
+interface AttestQueueCellProps {
+  /** Null: the client has no attest step, shown as a dash. */
+  value: AttestQueue | null
+  disabled: boolean
+  ariaLabel: string
+  overdueLabel: (count: number) => string
+  onOpen: () => void
+}
+
+/**
+ * One attest queue of a client: the count, the nearest due date muted
+ * beside it, and a chip when some have fallen due. A count opens the client
+ * on the matching supplier invoice tab; zero is a muted 0, no attest step a
+ * dash.
+ */
+function AttestQueueCell({ value, disabled, ariaLabel, overdueLabel, onOpen }: AttestQueueCellProps) {
+  if (!value) return <span className="text-muted-foreground">-</span>
+  if (value.count === 0) return <span className="text-muted-foreground tabular-nums">0</span>
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onOpen()
+      }}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className="-mx-1 flex items-center gap-2 rounded-sm px-1 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      <span className="tabular-nums text-foreground">{value.count}</span>
+      {value.overdue > 0 && <Badge variant="warning">{overdueLabel(value.overdue)}</Badge>}
+      {value.next_due && <span className="text-muted-foreground tabular-nums">{formatDate(value.next_due)}</span>}
+    </button>
   )
 }
 

@@ -378,6 +378,22 @@ export const WORKLIST_CATEGORIES = [
    * (lib/payments/orders/outcome-notify.ts).
    */
   'payment_failed',
+  /**
+   * Supplier invoices the attest policy held back and the attesters have now
+   * released ("Betala 3 attesterade fakturor"), one grouped row: the hand-
+   * back from whoever attests (often a byrå's client) to whoever pays.
+   * Pending:  the ready queue of lib/supplier-invoices/attest-queues.ts: an
+   *           invoice the policy governs, attested (approved_at set), still
+   *           owed (registered, approved or overdue with remaining_amount
+   *           above zero), not debited by the supplier itself (auto_debit)
+   *           and without an open bank payment. Only with the policy on and
+   *           faktureringsmetoden: without a policy nobody waits on attest.
+   * Done:     paid (a bank payment opens, or the invoice is settled), or the
+   *           policy is switched off.
+   * Counts INVOICES, but the total takes the row as one thing to do (one
+   * payment run), like overdue_invoice.
+   */
+  'attested_to_pay',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
@@ -509,6 +525,18 @@ export interface SupplierInvoiceAttestDue {
   total: number
   currency: string
   due_date: string
+}
+
+/**
+ * The attested supplier invoices waiting to be paid: the Att göra row "Betala
+ * N attesterade fakturor" (attested_to_pay). Null when there are none.
+ */
+export interface AttestedToPayDue {
+  count: number
+  /** The earliest due date among them (ISO yyyy-MM-dd). */
+  next_due: string
+  /** How many have passed their due date. */
+  overdue: number
 }
 
 /**

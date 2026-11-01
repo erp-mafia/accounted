@@ -14,6 +14,7 @@ import {
   daysUntilDeadline,
 } from '@/lib/deadlines/status-engine'
 import type { CompanySwitchState } from '@/lib/bank-feed/switch-campaign'
+import type { AttestQueues } from '@/lib/supplier-invoices/attest-queues'
 
 export type DeadlineUrgency = 'overdue' | 'action_needed' | 'upcoming'
 
@@ -79,6 +80,14 @@ export interface ClientOverviewRow {
    * had a bank feed.
    */
   bankSwitch?: ClientBankSwitch | null
+  /**
+   * The client's attest queues (lib/supplier-invoices/attest-queues.ts):
+   * invoices waiting for the client's attest and attested ones ready to pay.
+   * Only present when the fetch layer was asked for them (the byrå client
+   * list); null for a client without an attest step (no policy, policy off,
+   * kontantmetoden), which the columns show as a dash.
+   */
+  attest?: AttestQueues | null
   /**
    * Open deadlines sorted by due date (at most DEADLINES_PER_COMPANY_CAP).
    * Only present when the fetch layer was asked for them (portfolio reads

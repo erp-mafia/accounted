@@ -35,6 +35,12 @@ vi.mock('@/lib/pending-operations/record-app-approval', () => ({
   recordAppApproval: (...args: unknown[]) => mockRecordAppApproval(...args),
 }))
 
+// The staged attests' answers: one batch per request, flushed once after the loop.
+const attestBatch = vi.hoisted(() => ({ add: vi.fn(), size: 0, flush: vi.fn() }))
+vi.mock('@/lib/supplier-invoices/attest-decision-notify', () => ({
+  createAttestDecisionBatch: () => attestBatch,
+}))
+
 import { POST } from '../route'
 
 const emptyParams = { params: Promise.resolve({}) }
@@ -229,6 +235,51 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     expect(mockRecordAppApproval).not.toHaveBeenCalled()
   })
 
+  it('hands every commit one batch for the staged attests\' answers and flushes it once, after the loop', async () => {
+    enqueue({
+      data: [VALID_ID_1, VALID_ID_2, VALID_ID_3].map((id, i) =>
+        makeOp({ id, operation_type: 'approve_supplier_invoice', params: { supplier_invoice_id: `si-${i}` } }),
+      ),
+    })
+    mockCommit.mockResolvedValue({ status: 'committed', data: {} })
+    attestBatch.flush.mockResolvedValue(undefined)
+
+    const request = createMockRequest('/api/pending-operations/bulk-commit', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1, VALID_ID_2, VALID_ID_3] },
+    })
+    const { status } = await parseJsonResponse(await POST(request, emptyParams))
+
+    expect(status).toBe(200)
+    expect(mockCommit).toHaveBeenCalledTimes(3)
+    for (const call of mockCommit.mock.calls) {
+      expect(call[4]).toMatchObject({ commitMethod: 'bulk_accept', attestDecisions: attestBatch })
+    }
+    // One flush for the whole approval: one mail per company and attester, not one per invoice.
+    expect(attestBatch.flush).toHaveBeenCalledTimes(1)
+    expect(attestBatch.flush.mock.invocationCallOrder[0]).toBeGreaterThan(mockCommit.mock.invocationCallOrder[2])
+  })
+
+  it('still tells the answers already stored when an approval throws: the flush is in a finally', async () => {
+    enqueue({
+      data: [VALID_ID_1, VALID_ID_2].map((id, i) =>
+        makeOp({ id, operation_type: 'approve_supplier_invoice', params: { supplier_invoice_id: `si-${i}` } }),
+      ),
+    })
+    mockCommit.mockResolvedValueOnce({ status: 'committed', data: {} }).mockRejectedValueOnce(new Error('connection reset'))
+    attestBatch.flush.mockResolvedValue(undefined)
+
+    const request = createMockRequest('/api/pending-operations/bulk-commit', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1, VALID_ID_2] },
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(500)
+    expect(mockCommit).toHaveBeenCalledTimes(2)
+    expect(attestBatch.flush).toHaveBeenCalledTimes(1)
+  })
+
   describe('one acknowledgment for routine high-risk operations (crm#1489)', () => {
     const samlingsverifikat = (id: string, params: Record<string, unknown> = {}, preview: Record<string, unknown> = {}) =>
       makeOp({
@@ -412,11 +463,13 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       // commit_method must be 'bulk_accept' so any journal_entries created
       // during bulk approval are tagged distinctly from single-approval ones
       // (BFNAR 2013:2 behandlingshistorik). The actor option attributes the
-      // commits to the approving user (migration 20260619120000).
+      // commits to the approving user (migration 20260619120000). The staged
+      // attests' answers go to one batch, mailed once after the loop.
       {
         userEmail: 'test@test.se',
         commitMethod: 'bulk_accept',
         actor: { type: 'user', label: 'test@test.se' },
+        attestDecisions: attestBatch,
       }
     )
     // Each approved item leaves the same approval record as the MCP and API

@@ -36,6 +36,7 @@ vi.mock('../categories', () => ({
   countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
   countDocumentsToSign: vi.fn().mockResolvedValue(0),
   countPaymentsFailedDue: vi.fn().mockResolvedValue(0),
+  countAttestedToPayDue: vi.fn().mockResolvedValue(0),
 }))
 
 vi.mock('@/lib/suggestions/list', () => ({
@@ -95,6 +96,7 @@ describe('getWorklistCounts', () => {
       supplier_payee_change: 0,
       documents_to_sign: 0,
       payment_failed: 0,
+      attested_to_pay: 0,
     })
   })
 
@@ -110,6 +112,21 @@ describe('getWorklistCounts', () => {
     expect(second.counts.payment_failed).toBe(1)
     expect(second.total).toBe(32)
     expect(countPaymentsFailedDue).not.toHaveBeenCalled()
+  })
+
+  it('counts the attested invoices to pay as one row in the total, from a caller-supplied value when given', async () => {
+    const { countAttestedToPayDue } = await import('../categories')
+    vi.mocked(countAttestedToPayDue).mockResolvedValueOnce(3)
+    const base = (await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: null })).total
+    vi.mocked(countAttestedToPayDue).mockClear()
+    const counted = await getWorklistCounts(supabase, 'company-1')
+    expect(counted.counts.attested_to_pay).toBe(3)
+    // One payment run, however many invoices: the total moves by one.
+    expect(counted.total).toBe(base + 1)
+    vi.mocked(countAttestedToPayDue).mockClear()
+    const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0 }) })
+    expect(given.counts.attested_to_pay).toBe(2)
+    expect(countAttestedToPayDue).not.toHaveBeenCalled()
   })
 
   it('says where the company\'s inbox lives: the new Inkorg in the rollout, else the workspace', async () => {
