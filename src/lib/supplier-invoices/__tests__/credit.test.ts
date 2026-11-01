@@ -214,6 +214,22 @@ describe('creditSupplierInvoice: plain Kreditera', () => {
     })
   })
 
+  it('refuses while a signed bank payment will still execute: crediting would leave the bank paying a closed invoice', async () => {
+    happyTables()
+    setTable('payment_orders', {
+      data: [{ id: 'order-1', status: 'accepted', requested_execution_date: '2026-10-30' }],
+    })
+
+    const outcome = await creditSupplierInvoice(ctx(), ORIGINAL_ID, {}, { emit })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'SI_BANK_PAYMENT_UNDER_WAY',
+      details: { payment_order_id: 'order-1', payment_order_status: 'accepted' },
+    })
+    expectNothingWritten()
+  })
+
   it('refuses a locked period before anything is written', async () => {
     happyTables()
     setTable('company_settings', { data: { accounting_method: 'accrual', bookkeeping_locked_through: '2026-12-31' } })

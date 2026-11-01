@@ -16,6 +16,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+// The signed bank payment read: mocked so it takes no slot in the queued
+// Supabase mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: vi.fn(async () => null),
+}))
+
 // The registration-first rule (defer_invoice_booking) has its own suites
 // (registration-first.test.ts and the deferred-door tests); here no invoice
 // needs its registration booked first.

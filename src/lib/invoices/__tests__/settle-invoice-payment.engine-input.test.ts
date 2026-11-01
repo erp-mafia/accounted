@@ -28,6 +28,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { CreateJournalEntryInput, Invoice, InvoiceItem } from '@/types'
 import type { SettleInvoicePaymentParams } from '../settle-invoice-payment'

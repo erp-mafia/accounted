@@ -10,8 +10,13 @@
  */
 import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import { voucherLinkKursdifferensBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { Logger } from '@/lib/logger'
 import { formatAmount as formatNumber } from '@/lib/utils'
 import type { VoucherNumber } from './voucher-label'
@@ -31,6 +36,92 @@ export const AMOUNT_TOLERANCE = 0.005
 
 /** Date-proximity bump applied when entry_date is within ±7 days of due_date. */
 export const DATE_PROXIMITY_BUMP = 0.05
+
+/**
+ * What an invoice still owes when a verifikat is linked to it, read the way
+ * link_invoice_to_voucher and link_supplier_invoice_to_voucher read it: the
+ * stored remaining_amount whenever there is one, a legitimate 0 included.
+ * Falling through to `total - paid_amount` on a 0 made a paid ROT invoice owe
+ * Skatteverket's share and leaked rounding drift past the fully-paid refusal.
+ */
+export function storedRemaining(invoice: {
+  total: number
+  paid_amount?: number | null
+  remaining_amount?: number | null
+}): number {
+  if (typeof invoice.remaining_amount === 'number') return Math.max(0, invoice.remaining_amount)
+  return Math.max(0, roundOre(invoice.total - (invoice.paid_amount ?? 0)))
+}
+
+/**
+ * The payment event of a voucher link, for the kursdifferens verifikat the RPC
+ * posts when a foreign-currency invoice is settled by a plain-kronor verifikat
+ * at another rate. None for an invoice in the ledger currency (the RPC posts
+ * nothing of its own), for a link that states its share (the RPC settles a
+ * share without that fallback) or when the invoice or verifikat is not there
+ * (the RPC refuses as before). A read error throws: the port logs it under
+ * shadow and stops the link under strict.
+ */
+export async function voucherLinkEvents(
+  supabase: SupabaseClient,
+  companyId: string,
+  link: {
+    side: 'customer' | 'supplier'
+    invoiceId: string
+    journalEntryId: string
+    amount?: number | null
+    /** Why the pair is linked, on a door no person chose it on. */
+    linkBasis?: ScopeFreeLinkBasis
+  },
+): Promise<BusinessEventDraft[]> {
+  if (link.amount != null) return []
+  const { data: invoice, error: invoiceError } =
+    link.side === 'customer'
+      ? await supabase
+          .from('invoices')
+          .select('id, customer_id, currency, total, paid_amount, remaining_amount')
+          .eq('id', link.invoiceId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+      : await supabase
+          .from('supplier_invoices')
+          .select('id, supplier_id, currency, total, paid_amount, remaining_amount')
+          .eq('id', link.invoiceId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+  if (invoiceError) throw invoiceError
+  const row = invoice as {
+    id: string
+    customer_id?: string
+    supplier_id?: string
+    currency: string
+    total: number
+    paid_amount?: number | null
+    remaining_amount?: number | null
+  } | null
+  if (!row || isLedgerCurrency(row.currency)) return []
+  const { data: voucher, error: voucherError } = await supabase
+    .from('journal_entries')
+    .select('entry_date')
+    .eq('id', link.journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (voucherError) throw voucherError
+  if (!voucher) return []
+  return [
+    voucherLinkKursdifferensBusinessEvent(
+      {
+        side: link.side,
+        invoiceId: row.id,
+        partyId: (link.side === 'customer' ? row.customer_id : row.supplier_id) as string,
+        currency: row.currency,
+        remaining: storedRemaining(row),
+        voucherDate: (voucher as { entry_date: string }).entry_date,
+      },
+      linkBasisColumns(link.linkBasis ?? 'user_confirmed'),
+    ),
+  ]
+}
 
 export interface VoucherMatchLineRow {
   id: string

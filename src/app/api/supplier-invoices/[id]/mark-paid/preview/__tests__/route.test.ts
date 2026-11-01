@@ -6,6 +6,12 @@
  * thing that matters: what the dialog shows is what mark-paid books (#2852).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The payment date's lock: mocked so it consumes no slot in the Supabase mock;
+// pinned by lib/api/v1/__tests__/check-period-lock.test.ts.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(async () => ({ locked: false })),
+}))
 import {
   createQueuedMockSupabase,
   createMockRouteParams,
@@ -54,6 +60,7 @@ import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { GET } from '../route'
 
 type PreviewBody = {
@@ -122,6 +129,37 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
     expect(mockFindSignedBankPayment).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
+  })
+
+  // Every refusal is the POST's own (planSupplierSettlement): the dialog says
+  // why before anything is booked, in place of the rows.
+  it('refuses an amount above what the invoice still owes, as the POST refuses it', async () => {
+    enqueue({ data: roundedInvoice({ remaining_amount: 1000, total: 2000, paid_amount: 1000, status: 'partially_paid' }) })
+
+    const res = await GET(makeReq('amount=1500&payment_account=1930'), createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(body.error.details).toMatchObject({ remaining_amount: 1000, excess: 500 })
+  })
+
+  it('refuses a credit note and a date ahead of today, as the POST refuses them', async () => {
+    enqueue({ data: roundedInvoice({ is_credit_note: true }) })
+    const creditNote = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    expect((await parseJsonResponse<{ error: { code: string } }>(creditNote)).body.error.code).toBe('SI_PAID_NOT_PAYABLE')
+
+    enqueue({ data: roundedInvoice() })
+    const ahead = await GET(makeReq('amount=1234.56&payment_date=2099-01-01'), createMockRouteParams({ id: 'si-1' }))
+    expect((await parseJsonResponse<{ error: { code: string } }>(ahead)).body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
+  })
+
+  it('shows the rows beside a bank row that may be this payment: the duplicate warning is the POST\'s', async () => {
+    enqueue({ data: roundedInvoice({ registration_journal_entry_id: 'je-reg' }) })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    expect(res.status).toBe(200)
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
   })
 
   it('kontantmetod + öresavrundning: previews the whole-krona payment and the 3740 residual', async () => {
@@ -479,13 +517,13 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview: a deferred invoice 
     expect(body.error.details).toMatchObject({ registration_first: true })
   })
 
-  it('without a payment date the preview does not check one', async () => {
+  it('without a payment date the preview judges today, as the POST does', async () => {
     enqueueUnbooked()
     await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
     expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      { settlementDate: null },
+      { settlementDate: todayIsoStockholm() },
     )
   })
 

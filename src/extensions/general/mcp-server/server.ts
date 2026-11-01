@@ -173,6 +173,7 @@ import {
   type RefundCreditNoteResult,
   type RefundCreditNoteRow,
 } from '@/lib/invoices/refund-credit-note'
+import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
@@ -11273,21 +11274,14 @@ export const tools: McpTool[] = [
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
-      // A quote is an offer, not a claim (parity with the dashboard mark-paid
-      // route, which likewise refuses only quotes: marking a sent proforma paid
-      // is a supported prepayment record with no verifikat).
-      if (invoice.document_type === 'quote') {
-        throw registryError('INVOICE_QUOTE_NOT_PAYABLE')
-      }
-      if (!isMatchableInvoiceStatus(invoice.status)) {
-        throw new Error('Invoice can only be marked as paid when status is sent, overdue or partially paid')
-      }
-
       const paymentDate = (args.payment_date as string) || todayIsoStockholm()
 
       // A kreditfaktura: the refund paid back to the customer (Dr 1510 / Cr
       // bank), planned with every check the approval runs.
       if (invoice.credited_invoice_id) {
+        if (!isMatchableInvoiceStatus(invoice.status)) {
+          throw new Error('Invoice can only be marked as paid when status is sent, overdue or partially paid')
+        }
         const creditNote = invoice as unknown as RefundCreditNoteRow
         const refund = await refundCreditNote(supabase, companyId, userId, {
           creditNote,
@@ -11322,6 +11316,11 @@ export const tools: McpTool[] = [
           dateForPeriodCheck: paymentDate,
         })
       }
+
+      // The approval's first answer, refused here so nothing is staged that
+      // cannot be approved.
+      const notPayable = await invoicePayableRefusal(supabase, companyId, invoice as Invoice, paymentDate)
+      if (notPayable) throw registryError(notPayable.code)
 
       // Duplicate-payment guard: surface a likely existing bank payment to the
       // agent before staging, so it matches the transaction to the invoice
@@ -11701,7 +11700,7 @@ export const tools: McpTool[] = [
       if (paid?.block_reason) {
         throw codedRefusal(
           'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED',
-          `This invoice cannot be issued already paid (${paid.block_reason}): only a plain faktura without periodised lines can.`,
+          `This invoice cannot be issued already paid (${paid.block_reason}): only a plain faktura without periodised lines, dated today at the latest, can.`,
           {
             description: 'Mark it sent without paid_at_issue_account, then record the payment with gnubok_mark_invoice_as_paid.',
             tool: 'gnubok_mark_invoice_as_sent',

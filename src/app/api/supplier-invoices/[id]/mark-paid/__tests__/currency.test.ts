@@ -11,6 +11,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The payment date's lock: mocked so it consumes no slot in the Supabase mock;
+// pinned by lib/api/v1/__tests__/check-period-lock.test.ts.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(async () => ({ locked: false })),
+}))
+
 // The registration-first rule (defer_invoice_booking) has its own suites
 // (registration-first.test.ts and the deferred-door tests); here no invoice
 // needs its registration booked first.
@@ -168,8 +174,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
 
   it('the ticket: 37.50 USD clears 361.55 kr off 2440; the invoice and payment row stay in USD', async () => {
     enqueueUsdUpToLedger()
-    enqueue({ data: [{ id: 'si-1' }] }) // CAS update
-    enqueue({ data: null }) // payment row
+    enqueue({ data: { id: 'pay-1' } }) // payment row
+    enqueue({ data: [{ id: 'si-1' }] }) // status CAS
 
     const res = await post({ amount: 37.5, payment_date: '2026-09-15', payment_account: '1686' })
     const { status, body } = await parseJsonResponse<{ status: string; paid_amount: number; remaining_amount: number }>(res)
@@ -189,8 +195,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
 
   it('amount_sek books the kursdifferens and records it on the payment row', async () => {
     enqueueUsdUpToLedger()
+    enqueue({ data: { id: 'pay-1' } })
     enqueue({ data: [{ id: 'si-1' }] })
-    enqueue({ data: null })
 
     const res = await post({ amount: 37.5, amount_sek: 365 })
     expect(res.status).toBe(200)
@@ -219,8 +225,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
 
     // ...then the POST with the same inputs against the same ledger.
     enqueueUsdUpToLedger()
+    enqueue({ data: { id: 'pay-1' } })
     enqueue({ data: [{ id: 'si-1' }] })
-    enqueue({ data: null })
     const res = await post({ amount: 37.5, amount_sek: 365, payment_account: '1686' })
     expect(res.status).toBe(200)
 
@@ -267,10 +273,10 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
     enqueue({ data: { accounting_method: 'accrual' } })
 
     const res = await post({ amount: 40, amount_sek: 385 })
-    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { field: string } } }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { excess: number } } }>(res)
     expect(status).toBe(400)
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.field).toBe('amount')
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(body.error.details.excess).toBe(2.5)
     expect(mockPaymentEntry).not.toHaveBeenCalled()
     expect(findCalls('supplier_invoices', 'update')).toHaveLength(0)
   })
@@ -293,8 +299,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
   it('edited rows are SEK already: posted as given, no ledger read', async () => {
     enqueue({ data: usdInvoice() })
     enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { id: 'pay-1' } })
     enqueue({ data: [{ id: 'si-1' }] })
-    enqueue({ data: null })
     const lines = [
       { account_number: '2440', debit_amount: 361.55, credit_amount: 0 },
       { account_number: '1930', debit_amount: 0, credit_amount: 361.55 },
@@ -309,8 +315,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: foreign currency (#2955)',
   it('kontantmetoden: amount_sek pins the cash entry to the SEK that left the account', async () => {
     enqueue({ data: usdInvoice({ registration_journal_entry_id: null }) })
     enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: { id: 'pay-1' } })
     enqueue({ data: [{ id: 'si-1' }] })
-    enqueue({ data: null })
 
     const res = await post({ amount: 37.5, amount_sek: 365 })
     expect(res.status).toBe(200)

@@ -34,8 +34,10 @@ import {
   linkSupplierInvoiceToVoucher,
   type SupplierVoucherCandidate,
 } from './supplier-voucher-matching'
+import { CONFIDENCE } from './invoice-matching'
 import type { SupplierInvoice, Supplier } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 
 const log = createLogger('bulk-reconcile-supplier-vouchers')
 
@@ -54,6 +56,14 @@ const AUTO_LINK_MIN_CONFIDENCE = 0.95
  * margin (not exact equality) absorbs the ±0.05 date-proximity perturbation.
  */
 const AUTO_LINK_MIN_MARGIN = 0.1
+/**
+ * The rule that cleared AUTO_LINK_MIN_CONFIDENCE. Only a reference hit reaches
+ * OCR_REFERENCE_MATCH, the date bump stops below it; what else clears the bar
+ * is the exact amount with the supplier's name.
+ */
+function autoLinkBasis(confidence: number): ScopeFreeLinkBasis {
+  return confidence >= CONFIDENCE.OCR_REFERENCE_MATCH ? 'rule_ocr_reference' : 'rule_counterparty'
+}
 /** 0.5 öre: mirrors the tolerance used across the matching/RPC paths. */
 const AMOUNT_TOLERANCE = 0.005
 /** Safety cap on invoices processed in a single run (Vercel 300s budget). */
@@ -78,6 +88,8 @@ export interface ReconcileLink {
   invoice_status: 'paid' | 'partially_paid'
   confidence: number
   match_reason: string
+  /** The rule that chose the pair. A dry run's plan carries it to the provider migration's settle phase. */
+  link_basis: ScopeFreeLinkBasis
 }
 
 export interface ReconcileReviewItem {
@@ -329,6 +341,8 @@ export async function reconcileSupplierInvoiceVouchers(
       continue
     }
 
+    const linkBasis = autoLinkBasis(top.confidence)
+
     if (dryRun) {
       const willBeFullyPaid = top.ap_debit_amount >= remaining - AMOUNT_TOLERANCE
       result.autoLinked++
@@ -340,6 +354,7 @@ export async function reconcileSupplierInvoiceVouchers(
         invoice_status: willBeFullyPaid ? 'paid' : 'partially_paid',
         confidence: top.confidence,
         match_reason: top.match_reason,
+        link_basis: linkBasis,
       })
       consumedVouchers.add(top.journal_entry_id)
       done++
@@ -353,6 +368,7 @@ export async function reconcileSupplierInvoiceVouchers(
       supplierInvoiceId: plan.invoice.id,
       journalEntryId: top.journal_entry_id,
       notes: `Auto-länkad vid avstämning (${Math.round(top.confidence * 100)}% säkerhet): ${top.match_reason}`,
+      linkBasis,
     })
 
     if (outcome.ok) {
@@ -366,6 +382,7 @@ export async function reconcileSupplierInvoiceVouchers(
         invoice_status: outcome.result.invoiceStatus,
         confidence: top.confidence,
         match_reason: top.match_reason,
+        link_basis: linkBasis,
       })
     } else {
       // The RPC re-validates atomically; a rejection here (race, already-linked,

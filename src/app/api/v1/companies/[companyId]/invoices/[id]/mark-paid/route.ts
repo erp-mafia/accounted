@@ -44,7 +44,7 @@ import {
   planInvoicePaymentForLines,
 } from '@/lib/invoices/apply-invoice-payment'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
@@ -102,6 +102,7 @@ registerEndpoint({
     'Reverting a payment: the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments: those flow through the transactions endpoints.',
   pitfalls: [
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
+    'Not payable: a quote (400 INVOICE_QUOTE_NOT_PAYABLE), a delivery note, a document outside sent/overdue/partially_paid, or an invoice with an active credit note, a draft included (400 INVOICE_PAID_NOT_PAYABLE; details.reason says which). A payment_date after today (Swedish calendar day) returns 400 PAYMENT_DATE_IN_FUTURE. All of these fire under dry-run too.',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
     'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
@@ -219,22 +220,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
-    // Document-shape guards before status check (consistent with mark-sent).
-    // A quote is an offer, not a claim: convert it to a faktura first.
-    if (typed.document_type === 'quote') {
-      return v1ErrorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-    if (typed.document_type === 'delivery_note') {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'document_type',
-          message: 'Delivery notes do not have payment lifecycle.',
-        },
-      })
-    }
     // A kreditfaktura: the company pays its credit back to the customer. The
     // same door records that refund (Dr 1510 / Cr bank), dry run included.
     if (typed.credited_invoice_id) {
@@ -292,12 +277,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    // partially_paid is payable (#1717), as on the dashboard: the remaining
-    // amount is booked. One list for every door and the CAS guard below.
-    if (!isMatchableInvoiceStatus(typed.status)) {
-      return v1ErrorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', ctx.log, {
+    const paymentDate = bodyPaymentDate || todayIsoStockholm()
+    const paidAt = paidAtFromDate(paymentDate)
+
+    // The one answer of every door, here so a dry run hears it too and it
+    // comes before the duplicate guard (settleInvoicePayment asks again).
+    const notPayable = await invoicePayableRefusal(ctx.supabase, ctx.companyId!, typed, paymentDate)
+    if (notPayable) {
+      return v1ErrorResponseFromCode(notPayable.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { current_status: typed.status },
+        details: notPayable.details,
       })
     }
 
@@ -312,10 +301,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
     }
-
-    const today = todayIsoStockholm()
-    const paymentDate = bodyPaymentDate || today
-    const paidAt = paidAtFromDate(paymentDate)
 
     // Fetch settings for accounting method + entity type. Fail closed
     // (accounted#58): an unreadable method or form refuses instead of
@@ -468,7 +453,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const remainingForGuard = typed.remaining_amount ?? typed.total
     const paidRoundedGuard = Math.round(paymentAmountInInvoiceCurrency * 100) / 100
     const remainingRoundedGuard = Math.round(remainingForGuard * 100) / 100
-    if (!force && paidRoundedGuard >= remainingRoundedGuard) {
+    const guardApplies = paidRoundedGuard >= remainingRoundedGuard
+    if (!force && guardApplies) {
       const customerName = typed.customer?.name
       if (!customerName) {
         ctx.log.warn('duplicate-payment guard skipped', {
@@ -552,6 +538,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       customLines,
       settlementAccountNumber,
       paymentSource: 'manual',
+      // force on a partial overrides nothing: the guard never runs there.
+      ...(force && guardApplies
+        ? {
+            duplicateGuardBypass: {
+              user_id: ctx.userId,
+              actor_id: ctx.apiKeyId ?? null,
+              actor_type: ctx.actor.type,
+              actor_label: ctx.actor.label ?? null,
+            },
+          }
+        : {}),
     })
 
     if (!result.ok) {

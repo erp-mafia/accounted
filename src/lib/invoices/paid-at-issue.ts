@@ -1,5 +1,6 @@
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import type { InvoiceDocumentType } from '@/types'
 
 /**
@@ -39,6 +40,9 @@ export function isPaidAtIssueAccount(accountNumber: string | null | undefined): 
  *   schedule the registration verifikat creates; the cash entry books
  *   revenue directly, so the periodisering would be lost. Such an invoice is
  *   sent as usual and its payment registered afterwards.
+ * - dated_ahead: the payment is dated the invoice date, and a payment is never
+ *   dated ahead of today (lib/invoices/payment-date.ts). Asked here so it is
+ *   refused before a number is taken, not by the settlement after it.
  */
 export type PaidAtIssueBlockReason =
   | 'custom_lines'
@@ -46,12 +50,14 @@ export type PaidAtIssueBlockReason =
   | 'credit_note'
   | 'self_billed'
   | 'periodisering'
+  | 'dated_ahead'
 
 export function paidAtIssueBlockReason(
   invoice: {
     document_type?: InvoiceDocumentType | string | null
     credited_invoice_id?: string | null
     is_self_billed?: boolean | null
+    invoice_date?: string | null
     items?: ReadonlyArray<{
       accrual_period_start?: string | null
       accrual_period_end?: string | null
@@ -64,5 +70,6 @@ export function paidAtIssueBlockReason(
   if (invoice.credited_invoice_id) return 'credit_note'
   if (invoice.is_self_billed) return 'self_billed'
   if ((invoice.items ?? []).some((item) => itemHasAccrual(item))) return 'periodisering'
+  if (invoice.invoice_date && futurePaymentDateRefusal(invoice.invoice_date)) return 'dated_ahead'
   return null
 }

@@ -30,7 +30,7 @@
         }
       ]
     ],
-    "reversals": [],
+    "cancels": [],
     "outcome": {
       "status": 200,
       "error": null
@@ -73,7 +73,7 @@
         }
       ]
     ],
-    "reversals": [],
+    "cancels": [],
     "outcome": {
       "status": 200,
       "error": null
@@ -122,7 +122,7 @@
         }
       ]
     ],
-    "reversals": [],
+    "cancels": [],
     "outcome": {
       "status": 200,
       "error": null
@@ -158,14 +158,14 @@
         }
       ]
     ],
-    "reversals": [],
+    "cancels": [],
     "outcome": {
       "status": 200,
       "error": null
     }
   },
   {
-    "name": "a concurrent payment wins: the payment verifikat is reversed on the payment date",
+    "name": "a concurrent payment wins: the payment verifikat is cancelled",
     "calls": [
       [
         4,
@@ -195,14 +195,16 @@
         }
       ]
     ],
-    "reversals": [
+    "cancels": [
       [
         5,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
         "00000000-0000-4000-8000-00000000a001",
         "je-4",
-        "2026-10-02"
+        {
+          "gapExplanation": "Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd"
+        }
       ]
     ],
     "outcome": {
@@ -211,7 +213,7 @@
     }
   },
   {
-    "name": "the invoice update fails: the payment verifikat is reversed on the payment date",
+    "name": "the invoice update fails: the payment verifikat is cancelled",
     "calls": [
       [
         4,
@@ -241,14 +243,16 @@
         }
       ]
     ],
-    "reversals": [
+    "cancels": [
       [
         5,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
         "00000000-0000-4000-8000-00000000a001",
         "je-5",
-        "2026-10-03"
+        {
+          "gapExplanation": "Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning"
+        }
       ]
     ],
     "outcome": {

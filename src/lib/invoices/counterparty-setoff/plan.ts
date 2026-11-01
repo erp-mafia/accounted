@@ -8,6 +8,7 @@
  * in the same order, answering the same codes.
  */
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { roundOre } from '@/lib/money'
 import type { SetoffErrorCode } from './errors'
 
@@ -187,7 +188,9 @@ export function planSetoff(input: {
     }
   }
 
-  if (setoffDate > today) return { ok: false, code: 'SETOFF_DATE_INVALID', details: { reason: 'future', setoff_date: setoffDate } }
+  if (futurePaymentDateRefusal(setoffDate, today)) {
+    return { ok: false, code: 'SETOFF_DATE_INVALID', details: { reason: 'future', setoff_date: setoffDate } }
+  }
   if (setoffDate < invoice.invoiceDate || setoffDate < supplierInvoice.invoiceDate) {
     return { ok: false, code: 'SETOFF_DATE_INVALID', details: { reason: 'before_invoice', setoff_date: setoffDate } }
   }

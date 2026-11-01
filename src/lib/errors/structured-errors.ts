@@ -1676,9 +1676,13 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
   MATCH_SI_AMOUNT_EXCEEDS_REMAINING: {
     httpStatus: 400,
     message_sv:
-      'Transaktionsbeloppet är större än leverantörsfakturans återstående belopp. Dela betalningen och fördela överskottet på en eller flera andra leverantörsfakturor.',
+      'Beloppet är större än leverantörsfakturans återstående belopp. Ange det som återstår, eller dela betalningen och fördela överskottet på en eller flera andra leverantörsfakturor.',
     message_en:
-      'Transaction amount exceeds the supplier invoice remaining amount. Use the split-payment flow to allocate the excess across one or more other supplier invoices.',
+      'The amount exceeds the supplier invoice remaining amount. State what remains, or split the payment and allocate the excess across one or more other supplier invoices.',
+    remediation: {
+      description:
+        'details.remaining_amount is what the invoice still owes and details.excess what the payment is above it. Pay at most the remaining amount. For over-billing issue a credit note; a real overpayment is a claim on the supplier, booked as its own verifikat.',
+    },
   },
   TX_UNCATEGORIZE_NOT_BOOKED: {
     httpStatus: 400,
@@ -2317,9 +2321,9 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   INVOICE_PAID_AT_ISSUE_NOT_ALLOWED: {
     httpStatus: 400,
     message_sv:
-      'Den här fakturan kan inte utfärdas som redan betald (kontantfaktura). Det går bara för en vanlig faktura utan periodiserade rader. Skicka den som vanligt och registrera betalningen efteråt.',
+      'Den här fakturan kan inte utfärdas som redan betald (kontantfaktura). Det går bara för en vanlig faktura utan periodiserade rader, daterad senast i dag. Skicka den som vanligt och registrera betalningen efteråt.',
     message_en:
-      'This invoice cannot be issued as already paid (cash invoice). Only a plain invoice without periodised lines can. Send it as usual and register the payment afterwards.',
+      'This invoice cannot be issued as already paid (cash invoice). Only a plain invoice without periodised lines, dated today at the latest, can. Send it as usual and register the payment afterwards.',
   },
   INVOICE_MARK_SENT_REPAIR_REQUIRED: {
     httpStatus: 500,
@@ -2690,6 +2694,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Invoice is not in a payable status.',
+  },
+  // Every door that records a payment by hand (lib/invoices/payment-date.ts).
+  PAYMENT_DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Betalningsdatumet ligger i framtiden. En betalning bokförs den dag pengarna flyttades.',
+    message_en: 'The payment date is in the future. A payment is booked on the day the money moved.',
   },
   INVOICE_QUOTE_NOT_PAYABLE: {
     httpStatus: 400,
@@ -6657,12 +6667,12 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_BANK_PAYMENT_UNDER_WAY: {
     httpStatus: 409,
     message_sv:
-      'Fakturan har redan en betalning via banken som är signerad eller signeras just nu. Har fakturan betalats på annat sätt, avbryt den betalningen under Betalningar först, annars betalas den två gånger.',
+      'Fakturan har redan en betalning via banken som är signerad eller signeras just nu, och banken genomför den ändå. Har pengarna redan lämnat kontot: koppla bankraden till fakturan under Transaktioner. Har fakturan betalats på annat sätt eller ska krediteras: avbryt betalningen under Betalningar först.',
     message_en:
-      'The invoice already has a bank payment that is signed or being signed. If the invoice was paid another way, cancel that payment under Payments first, or it is paid twice.',
+      'The invoice already has a bank payment that is signed or being signed, and the bank will still execute it. If the money has already left the account, match the bank row to the invoice under Transactions. If the invoice was paid another way or is to be credited, cancel that payment under Payments first.',
     remediation: {
       description:
-        'details.payment_order_id is the open bank payment and details.requested_execution_date the day the bank pays it. Leave the invoice alone and let that payment settle it when its debit is matched, or cancel the payment order first (POST /api/payments/orders/{id}/cancel; the bank must confirm) and then record the other payment.',
+        'details.payment_order_id is the open bank payment and details.requested_execution_date the day the bank pays it. Once the money has left, the bank refuses a cancel: match the bank row to the invoice (POST /api/transactions/{id}/match-supplier-invoice, with storno_existing on a row already booked as a verifikat), or wait for the status sync, which lifts this refusal when the bank reports the payment executed. Before that, leave the invoice alone and let that payment settle it when its debit is matched, or cancel the payment order first (POST /api/payments/orders/{id}/cancel; the bank must confirm) and then record the other payment, link the verifikat or credit the invoice.',
     },
   },
   SI_PAID_PERIOD_LOCKED: {

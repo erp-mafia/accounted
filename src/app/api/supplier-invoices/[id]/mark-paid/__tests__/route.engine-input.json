@@ -259,7 +259,7 @@
     }
   },
   {
-    "name": "the payment row cannot be recorded: the invoice is rolled back and the verifikat cancelled",
+    "name": "the payment row cannot be recorded: the verifikat is cancelled, the invoice never moved",
     "calls": [
       [
         4,

@@ -381,6 +381,7 @@ describe('issueAndBookInvoice: kontantfaktura, paid at issue (crm#1281)', () => 
         { account_number: '3001', debit_amount: 0, credit_amount: 1250 },
       ],
     ],
+    ['dated_ahead', { invoice_date: '2099-01-01' }, undefined],
   ])('refuses %s before anything changes', async (reason, overrides, customLines) => {
     const result = await issueAndBookInvoice({
       supabase: mockSupabase as never,

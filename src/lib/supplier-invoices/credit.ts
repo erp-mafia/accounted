@@ -66,6 +66,7 @@ import {
   supplierCreditNoteNumber,
 } from './credit-note'
 import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './credit-target'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
@@ -311,6 +312,15 @@ export async function creditSupplierInvoice(
     }
   }
   if (original.status === 'credited') return { ok: false, code: 'SI_CREDIT_ALREADY_CREDITED' }
+
+  // A signed bank payment still executes: crediting beside it closes an invoice
+  // the bank is about to pay. The way out is cancelling that payment first
+  // (crm#1243), on a dry run too.
+  const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+  if (signedBankPayment) {
+    return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
+  }
+
   const supplier = pickSupplier(original.supplier)
   const originalItems = original.items ?? []
 

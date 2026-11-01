@@ -248,7 +248,7 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
     },
     supplier_invoices: [{ data: s.invoice }, { data: s.loseRace ? [] : [{ id: s.invoice.id }] }],
     company_settings: { data: { accounting_method: s.accountingMethod } },
-    supplier_invoice_payments: { data: null },
+    supplier_invoice_payments: { data: { id: 'pay-1' } },
     document_attachments: { data: null },
     chart_of_accounts: { data: [] },
   })

@@ -78,6 +78,26 @@ describe('validateVoucherForInvoiceLink', () => {
     if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
   })
 
+  // What an invoice still owes is the stored remaining_amount, read as the RPC
+  // and the supplier validator read it: a stored 0 is paid, never total minus
+  // paid_amount (a paid ROT invoice owes no deduction, drift owes no öre).
+  it.each([
+    ['a paid ROT invoice: paid 17 500 of 25 000, the rest is Skatteverket\'s share', { total: 25000, paid_amount: 17500, remaining_amount: 0 }],
+    ['rounding drift across payments', { total: 1000, paid_amount: 999.99, remaining_amount: 0 }],
+  ])('rejects %s', async (_label, amounts) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: AR_CREDIT_ROW })
+    enqueue({ data: null, error: null })
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeInvoice({ ...amounts, currency: 'SEK' }) as never,
+      'je-1',
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
+  })
+
   it('rejects when the voucher is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()

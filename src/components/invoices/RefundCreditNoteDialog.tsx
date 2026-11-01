@@ -145,6 +145,7 @@ export default function RefundCreditNoteDialog({
                 id="refund-date"
                 type="date"
                 value={refundDate}
+                max={todayIsoStockholm()}
                 onChange={(e) => setRefundDate(e.target.value)}
                 className="w-full sm:w-48"
               />

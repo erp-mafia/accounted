@@ -83,6 +83,13 @@ vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
   findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
 }))
 
+// The payment date's lock: mocked so it consumes no slot in the queued Supabase
+// mock; pinned by lib/api/v1/__tests__/check-period-lock.test.ts.
+const mockCheckPeriodLock = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ locked: false }))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: (...args: unknown[]) => mockCheckPeriodLock(...args),
+}))
+
 // Edited rows' accounts are checked before anything books; every account
 // resolves unless a test says otherwise (the read is pinned by
 // lib/bookkeeping/__tests__/account-validation.test.ts).
@@ -143,10 +150,10 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect((body.error as unknown as { code: string }).code).toBe('SI_NOT_FOUND')
   })
 
-  it('returns 400 when invoice is in wrong status', async () => {
+  it('returns 400 when the invoice is not in a payable status', async () => {
     const invoice = makeSupplierInvoice({
       id: 'si-1',
-      status: 'paid',
+      status: 'draft' as never,
       supplier: makeSupplier(),
       items: [],
     })
@@ -157,10 +164,46 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
       body: {},
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(400)
-    expect((body.error as unknown as { code: string }).code).toBe('SI_PAID_NOT_PAYABLE')
+    expect(body.error.code).toBe('SI_PAID_NOT_PAYABLE')
+  })
+
+  it('returns 409 SI_PAID_ALREADY for an invoice already settled, as the v1 door does', async () => {
+    enqueue({
+      data: makeSupplierInvoice({ id: 'si-1', status: 'paid', supplier: makeSupplier(), items: [] }),
+      error: null,
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_PAID_ALREADY')
+  })
+
+  it('refuses a locked payment date with the code the v1 door answers, before anything books', async () => {
+    enqueue({
+      data: makeSupplierInvoice({ id: 'si-1', status: 'approved', supplier: makeSupplier(), items: [] }),
+      error: null,
+    })
+    mockCheckPeriodLock.mockResolvedValueOnce({ locked: true, reason: 'period_locked_at_set', fiscal_period_id: 'fp-1' })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_PAID_PERIOD_LOCKED')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
   it('returns 409 SI_BANK_PAYMENT_UNDER_WAY while a bank payment signed for the invoice is under way, and books nothing (crm#1243)', async () => {
@@ -194,6 +237,95 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
+  // planSupplierPayment is the only math: this door used to have none, so 1500
+  // on a remaining 1000 cleared 1500 off 2440 and paid_amount passed the total.
+  it('refuses an amount above what the invoice still owes and books nothing', async () => {
+    enqueue({
+      data: makeSupplierInvoice({
+        id: 'si-1',
+        status: 'partially_paid',
+        total: 2440,
+        paid_amount: 1440,
+        remaining_amount: 1000,
+        supplier: makeSupplier(),
+        items: [],
+      }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: [], error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { amount: 1500, payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(body.error.details).toMatchObject({ remaining_amount: 1000, excess: 500 })
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a credit note, as the v1 door does', async () => {
+    enqueue({
+      data: makeSupplierInvoice({
+        id: 'si-1',
+        status: 'registered',
+        is_credit_note: true,
+        total: -500,
+        remaining_amount: 500,
+        supplier: makeSupplier(),
+        items: [],
+      }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: [], error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { amount: 500, payment_date: '2026-05-12' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_PAID_NOT_PAYABLE')
+    expect(body.error.details).toEqual({ reason: 'credit_note' })
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a payment date ahead of today, as the v1 door does', async () => {
+    enqueue({
+      data: makeSupplierInvoice({ id: 'si-1', status: 'approved', total: 1000, remaining_amount: 1000, paid_amount: 0, supplier: makeSupplier(), items: [] }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: [], error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2099-01-01' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
   it('marks as fully paid with accrual method', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({
@@ -208,17 +340,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    // Fetch company settings
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    // Record payment
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const paidHandler = vi.fn()
     eventBus.on('supplier_invoice.paid', paidHandler)
@@ -280,9 +410,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-2' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const paidHandler = vi.fn()
     eventBus.on('supplier_invoice.paid', paidHandler)
@@ -341,15 +471,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'cash' }, error: null })
 
     mockCreateSupplierInvoiceCashEntry.mockResolvedValue({ id: 'je-3' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -382,9 +512,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
     // Duplicate-payment guard is skipped on partials, so the next query is
     // the settings fetch.
-    enqueue({ data: { accounting_method: 'cash' }, error: null })
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -412,9 +542,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
     // Full-remaining payment: duplicate-payment guard runs (no candidates).
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'cash' }, error: null })
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -442,16 +572,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'cash' }, error: null })
 
     mockCreateSupplierInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    // Record payment
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -487,16 +616,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-pay' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    // Record payment
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -530,9 +658,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     mockCreateSupplierInvoicePaymentEntry.mockRejectedValue(new Error('Period locked'))
 
@@ -560,6 +688,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Duplicate-payment guard: one likely-matching unlinked transaction
     enqueue({
       data: [
@@ -600,6 +729,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // The single counterparty sweep: the bank feed wrote "HI3G" and nothing in
     // merchant_name. The full-name needle never hit this row.
     enqueue({
@@ -652,6 +782,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({
       data: [
         {
@@ -705,11 +836,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // No sweep is issued without a needle: the next query is the settings fetch.
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // No sweep is issued without a needle: the next query is the settings fetch.
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -755,14 +886,14 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
   it('EUR invoice: a 1 000 SEK bank row is not treated as the payment for 1 000 EUR', async () => {
     enqueue({ data: eurInvoice(), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Sweep 1 (EUR rows): nothing. Sweep 2 (kronor rows): a same-magnitude
     // kronor row, which is exactly what the old EUR band selected.
     enqueue({ data: [], error: null })
     enqueue({ data: [bankRow({ amount: -1000 })], error: null })
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -778,6 +909,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
   it('EUR invoice with a rate: the 11 500 SEK bank row that paid it IS flagged', async () => {
     enqueue({ data: eurInvoice(), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: [], error: null })
     enqueue({ data: [bankRow({ amount: -11500 })], error: null })
 
@@ -798,10 +930,10 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
   it('EUR invoice with no stored rate: kronor rows are excluded, never compared raw', async () => {
     enqueue({ data: eurInvoice({ total_sek: null, exchange_rate: null }), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Only the EUR sweep can be planned; the kronor row it returns here cannot
     // be brought into a shared unit and must be dropped, not read as kronor.
     enqueue({ data: [bankRow({ amount: -1000 })], error: null })
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
@@ -821,6 +953,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
   it('EUR invoice: a 1 000 EUR bank row still matches in its own currency', async () => {
     enqueue({ data: eurInvoice(), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({
       data: [bankRow({ amount: -1000, currency: 'EUR', amount_sek: -11500 })],
       error: null,
@@ -852,7 +985,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const response = await POST(
       createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
@@ -880,11 +1014,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // No candidates query happens because force=true skips the blocking guard
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // No candidates query happens because force=true skips the blocking guard
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -933,8 +1067,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -964,8 +1098,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -991,13 +1125,12 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
@@ -1065,8 +1198,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('books the registration through the Bokför step first, then the payment against its 2440', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null }) // duplicate guard
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null }) // duplicate guard
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
     vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
       ok: true,
@@ -1075,8 +1208,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
       warnings: [],
     })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
-    enqueue({ data: [{ id: 'si-1' }], error: null }) // CAS update
-    enqueue({ data: null, error: null }) // payment row
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -1113,8 +1246,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('refuses the payment with the Bokför code and books nothing when the registration is refused', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
       ok: false,
       code: 'PERIOD_LOCKED',
@@ -1148,8 +1281,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('answers a typed bookkeeping error from the registration builder with its own code', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
       ok: false,
       code: 'SI_BOOK_FAILED',
@@ -1171,8 +1304,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('books no payment when the Bokför step refuses at commit (a concurrent change)', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
     vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
       ok: false,
@@ -1195,8 +1328,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('refuses unbalanced edited rows before the registration is booked', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
@@ -1219,8 +1352,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('refuses edited rows naming an account the engine cannot resolve, before the registration is booked', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
     mockFindUnresolvableAccounts.mockResolvedValueOnce(['8022'])
 
@@ -1258,8 +1391,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
       items: [],
     })
     enqueue({ data: invoice, error: null })
-    // force: the duplicate guard is not what this test is about.
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    // force: the duplicate guard is not what this test is about.
     // Per-line rounding: the registration credits 2440 with 1150.02, not 100 x 11.5.
     vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({ ...requiredPlan, payableSek: 1150.02 })
     vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
@@ -1269,8 +1402,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
       warnings: [],
     })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
@@ -1287,11 +1420,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
 
   it('an invoice that needs nothing booked first pays as before, with no registration id', async () => {
     enqueue({ data: unbooked(), error: null })
-    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: [], error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-payment' })
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'pay-1' }, error: null }) // payment row
+    enqueue({ data: [{ id: 'si-1' }], error: null }) // status CAS
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',

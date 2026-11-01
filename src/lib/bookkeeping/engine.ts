@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SIEChunkResult, SIEJob } from '@/lib/import/sie-job-contract'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
@@ -2327,33 +2328,29 @@ export async function commitInvoiceVoucherLink(
  * land separately), where the five-argument function is the only one. The
  * actor is handed on as for commitInvoiceVoucherLink.
  *
+ * `linkBasis` is the payment row's basis on a door no person chose the pair
+ * on. Left out, the RPC records a person's: `p_link_basis` is sent only when
+ * named, for the same reason as `p_amount`.
+ *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
 export async function commitSupplierInvoiceVoucherLink(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: VoucherLinkInput & { supplierInvoiceId: string; amount?: number | null },
+  input: VoucherLinkInput & { supplierInvoiceId: string; amount?: number | null; linkBasis?: ScopeFreeLinkBasis },
 ): Promise<PostingRpcAnswer> {
   const { data, error } = await callWithBusinessEvents('link_supplier_invoice_to_voucher', input.businessEvents, (events) =>
-    input.amount == null
-      ? rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
-          p_supplier_invoice_id: input.supplierInvoiceId,
-          p_journal_entry_id: input.journalEntryId,
-          p_user_id: userId,
-          p_company_id: companyId,
-          p_notes: input.notes,
-          ...events,
-        })
-      : rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
-          p_supplier_invoice_id: input.supplierInvoiceId,
-          p_journal_entry_id: input.journalEntryId,
-          p_user_id: userId,
-          p_company_id: companyId,
-          p_notes: input.notes,
-          p_amount: input.amount,
-          ...events,
-        }),
+    rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
+      p_supplier_invoice_id: input.supplierInvoiceId,
+      p_journal_entry_id: input.journalEntryId,
+      p_user_id: userId,
+      p_company_id: companyId,
+      p_notes: input.notes,
+      ...(input.amount == null ? {} : { p_amount: input.amount }),
+      ...(input.linkBasis ? { p_link_basis: input.linkBasis } : {}),
+      ...events,
+    }),
   )
   if (error) return { data, error }
 

@@ -16,6 +16,13 @@ vi.mock('@/lib/import/sie-jobs',async (importOriginal)=>({
  * is exercised alongside executor logic.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The signed bank payment read: mocked so it takes no slot in the Supabase
+// mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: vi.fn(async () => null),
+}))
 import { eventBus } from '@/lib/events/bus'
 import {
   createQueuedMockSupabase,

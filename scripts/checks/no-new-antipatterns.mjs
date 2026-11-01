@@ -38,12 +38,15 @@
  *      Tracked as a file-set. Voucher/line LISTINGS are sanctioned in
  *      LEDGER_SCAN_SANCTIONED: they have no closingEntry decision to make.
  *   3c. direct-invoice-payment-insert: a file that inserts into
- *      `invoice_payments` outside lib/invoices/invoice-payment-row.ts. Five
- *      hand-built inserts each computed their own `amount`, and the bank-match
- *      ones stored the cash received instead of the amount applied to the
- *      invoice, so a whole-krona overshoot absorbed on 3740 made the row
- *      exceed the receivable (#2250). recordInvoicePaymentRow() is the one
- *      writer. Tracked as a file-set, no baseline: the count is 0 today.
+ *      `invoice_payments` or `supplier_invoice_payments` outside
+ *      lib/invoices/invoice-payment-row.ts and
+ *      lib/invoices/supplier-invoice-payment-row.ts. Five hand-built inserts
+ *      each computed their own `amount`, and the bank-match ones stored the
+ *      cash received instead of the amount applied to the invoice, so a
+ *      whole-krona overshoot absorbed on 3740 made the row exceed the
+ *      receivable (#2250). recordInvoicePaymentRow() and
+ *      recordSupplierInvoicePaymentRow() are the writers. Tracked as a
+ *      file-set, no baseline: the count is 0 today.
  *   3d. consent-token-access: a read of a token column or any write of
  *      `provider_consent_tokens` outside lib/providers/consent-tokens.ts, the
  *      module that seals provider tokens at rest (accounted#58).
@@ -438,13 +441,17 @@ function findDirectJelInserts() {
     .sort()
 }
 
-// The one writer of invoice_payments rows: recordInvoicePaymentRow() owns the
-// field semantics (amount = applied to the invoice, never the cash received).
-const INVOICE_PAYMENT_INSERT_SANCTIONED = new Set(['lib/invoices/invoice-payment-row.ts'])
+// The one writer of each payment table: recordInvoicePaymentRow() and
+// recordSupplierInvoicePaymentRow() own the field semantics (amount = applied
+// to the invoice, never the cash received) and require a link basis.
+const INVOICE_PAYMENT_INSERT_SANCTIONED = new Set([
+  'lib/invoices/invoice-payment-row.ts',
+  'lib/invoices/supplier-invoice-payment-row.ts',
+])
 const INVOICE_PAYMENT_INSERT_CHAIN_RE =
-  /\.from\(\s*['"]invoice_payments['"]\s*\)\s*\.\s*(insert|upsert)\(/
+  /\.from\(\s*['"](?:supplier_)?invoice_payments['"]\s*\)\s*\.\s*(insert|upsert)\(/
 
-/** Files that insert into invoice_payments outside the sanctioned writer. */
+/** Files that insert into a payment table outside its sanctioned writer. */
 function findDirectInvoicePaymentInserts() {
   const files = [
     ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
@@ -1566,13 +1573,14 @@ if (current.directJelInsert.length) {
 if (current.directInvoicePaymentInsert.length) {
   failed = true
   console.error(
-    `\n✗ direct-invoice-payment-insert: ${current.directInvoicePaymentInsert.length} file(s) insert into invoice_payments ` +
-      `outside lib/invoices/invoice-payment-row.ts:`,
+    `\n✗ direct-invoice-payment-insert: ${current.directInvoicePaymentInsert.length} file(s) insert a payment row ` +
+      `outside its writer:`,
   )
   current.directInvoicePaymentInsert.forEach((f) => console.error(`    ${f}`))
   console.error(
-    '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts):\n' +
-      '    it owns the row semantics (amount = applied to the invoice, never the cash received, #2250).',
+    '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts) or\n' +
+      '    recordSupplierInvoicePaymentRow() (lib/invoices/supplier-invoice-payment-row.ts): they own the row\n' +
+      '    semantics (amount = applied to the invoice, never the cash received, #2250) and the link basis.',
   )
 }
 

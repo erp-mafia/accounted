@@ -2085,7 +2085,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -2101,7 +2101,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -2117,7 +2117,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         supplier_invoices: { data: { ...approvedSI, ...updated }, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -2224,7 +2224,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   })
 
   it('requires exchange_rate_difference for non-SEK accrual', async () => {
-    const eurSI = { ...approvedSI, currency: 'EUR' }
+    const eurSI = { ...approvedSI, currency: 'EUR', exchange_rate: 11.5 }
     mockServiceClient.mockReturnValue(
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -2265,7 +2265,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-        supplier_invoice_payments: { data: null, error: null },
+        supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -2282,11 +2282,10 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(mockedPayment.mock.calls[0][4]).toBe(14375)
   })
 
-  it('rejects a future payment_date with 400 VALIDATION_ERROR', async () => {
+  it('rejects a future payment_date with 400 PAYMENT_DATE_IN_FUTURE', async () => {
     mockServiceClient.mockReturnValue(
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        // The pre-flight fetch should not even fire: the schema check runs first.
         supplier_invoices: { data: approvedSI, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -2301,7 +2300,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     )
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.code).toBe('PAYMENT_DATE_IN_FUTURE')
     expect(body.error.details.field).toBe('payment_date')
     expect(body.error.details.attempted).toBe(future)
     expect(mockedPayment).not.toHaveBeenCalled()
@@ -2342,7 +2341,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       supplier_invoices: { data: cashSI, error: null },
       company_settings: { data: { accounting_method: 'cash' }, error: null },
       fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-      supplier_invoice_payments: { data: null, error: null },
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       idempotency_keys: { data: null, error: null },
     })
     mockServiceClient.mockReturnValue(selectMock.supabase)
@@ -2385,10 +2384,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     )
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.field).toBe('amount')
-    expect(body.error.details.attempted).toBe(1500)
-    expect(body.error.details.remaining_amount).toBe(1250)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(body.error.details).toEqual({ transaction_amount: 1500, remaining_amount: 1250, excess: 250 })
     expect(mockedPayment).not.toHaveBeenCalled()
   })
 })

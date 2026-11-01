@@ -68,6 +68,24 @@ describe('refundCreditNote', () => {
     mockRemoveRow.mockResolvedValue(true)
   })
 
+  it('refuses a refund dated ahead of today before it reads anything, the dry run included', async () => {
+    for (const dryRun of [false, true]) {
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote: CREDIT_NOTE,
+        refundDate: '2099-01-01',
+        settlementAccountNumber: '1930',
+        dryRun,
+      })
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'PAYMENT_DATE_IN_FUTURE',
+        details: { field: 'payment_date', attempted: '2099-01-01' },
+      })
+    }
+    expect(findCalls('invoices', 'select')).toEqual([])
+    expect(mockPostJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('books Dr 1510 / Cr the bank for what the customer has tillgodo and records it on the credit note', async () => {
     enqueueReads()
     enqueue({ data: [] }) // already-booked guard: nothing

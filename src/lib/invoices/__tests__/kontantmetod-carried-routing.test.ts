@@ -8,6 +8,14 @@
  * door changed for it; these tests pin that they route it that way.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// These books are dated ahead of the suite's clock; the date rule has its own tests.
+vi.mock('@/lib/invoices/payment-date', () => ({ futurePaymentDateRefusal: () => null }))
+
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice } from '@/types'
 import { createQueuedMockSupabase, makeInvoice } from '@/tests/helpers'

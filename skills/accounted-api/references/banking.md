@@ -3970,6 +3970,7 @@ Anchors the row to an existing POSTED journal entry: the row counts as booked an
 - A row already linked to a posted verifikat returns 409 LINK_TX_TX_ALREADY_LINKED; a pointer left by a storno does not count.
 - The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.
 - invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.
+- invoice_id: a row larger than what the invoice still owes returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING, on a dry run too: nothing is written.
 - invoice_id: the verifikat must settle the invoice on its own side (LINK_TX_INVOICE_SETTLEMENT_SIDE): a 151x credit for a booked invoice, including a kontantmetod invoice carried over the year end, a 19xx debit for a kontantmetod invoice never booked.
 - Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): when the invoice was sent without its verifikat and the linked verifikat clears 151x, the invoices :book step books the sale first (dated on the invoice date); sale_journal_entry_id names it and the dry run returns it as sale_entry. A verifikat that books the revenue itself (no 151x credit) is refused with LINK_TX_INVOICE_SETTLEMENT_SIDE before any sale is planned. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice), the link is refused with that code, details.sale_first is true, and nothing is written.
 

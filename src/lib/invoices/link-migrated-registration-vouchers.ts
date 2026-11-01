@@ -816,6 +816,7 @@ export async function linkMigratedRegistrationVouchers(
         const attached = await attachSupplierInvoiceSettlementVoucher(supabase, {
           companyId, userId: input.settlement.userId, supplierInvoiceId: input.invoiceId,
           journalEntryId: entryId, dryRun, notes: 'Bokio source invoice reference',
+          linkBasis: 'import_carried_over',
         })
         if (!attached.ok) {
           report(input, attached.code === 'ATTACH_SI_SETTLEMENT_ALREADY_LINKED' ? 'alreadyLinked' : 'unresolved', attached.code, entryId)

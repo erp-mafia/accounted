@@ -270,6 +270,37 @@ describe('settleRotRutPayoutRequest', () => {
     )
   })
 
+  it('refuses a date ahead of today typed by hand, before anything is read or booked', async () => {
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2099-01-01',
+      amount: 3000,
+    })
+
+    expect(outcome).toMatchObject({ ok: false, kind: 'code', code: 'PAYMENT_DATE_IN_FUTURE' })
+    expect(findCall('rot_rut_payout_requests', 'select')).toBeUndefined()
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
+  it('does not judge a bank row: its date is the bank\'s fact', async () => {
+    enqueue({ data: makeRequestRow() })
+    enqueue({
+      data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-1', decided_total: 3000 }),
+    })
+    enqueue({ data: [{ id: TX_ID }] }) // transactions CAS update
+    enqueue({ data: [] }) // items
+
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2099-01-01',
+      amount: 3000,
+      bankAccount: '1930',
+      transactionId: TX_ID,
+    })
+
+    expect(outcome.ok).toBe(true)
+  })
+
   it('links the bank transaction to the settlement voucher and clears its hints', async () => {
     enqueue({ data: makeRequestRow() })
     enqueue({

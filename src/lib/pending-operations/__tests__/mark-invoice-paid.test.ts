@@ -13,6 +13,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
+
 // The sale-first rule (defer_invoice_booking) has its own suites
 // (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
 // here no invoice needs its sale booked first.
@@ -308,6 +313,56 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
 
   // #1717: a partially_paid invoice is payable on every door, as on the
   // dashboard; the remaining amount clears 1510.
+  describe('the same documents as every other door', () => {
+    const sent = {
+      id: 'inv-1',
+      invoice_number: '2026001',
+      status: 'sent',
+      total: 525,
+      remaining_amount: 525,
+      paid_amount: null,
+      document_type: 'invoice',
+      journal_entry_id: null,
+      customer: { name: 'Test AB' },
+    }
+    async function approve(invoice: Record<string, unknown>, paymentDate = '2026-03-30') {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: invoice, error: null }) // invoice fetch
+      enqueue({ data: null, error: null }) // dispatcher pending_operations update
+      const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: paymentDate } })
+      return commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+    }
+
+    it('refuses an invoice with a credit note draft, as the dashboard does', async () => {
+      mockHasActiveCreditNote.mockResolvedValueOnce(true)
+      const result = await approve(sent)
+
+      expect(result.status).toBe('rejected')
+      expect(result.http_status).toBe(409)
+      expect(result.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+      expect(settleInvoicePayment).not.toHaveBeenCalled()
+      expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a följesedel', async () => {
+      const result = await approve({ ...sent, document_type: 'delivery_note' })
+
+      expect(result.status).toBe('rejected')
+      expect(result.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+      expect(settleInvoicePayment).not.toHaveBeenCalled()
+    })
+
+    it('refuses a payment date ahead of today', async () => {
+      const result = await approve(sent, '2099-01-01')
+
+      expect(result.status).toBe('rejected')
+      expect(result.code).toBe('PAYMENT_DATE_IN_FUTURE')
+      expect(settleInvoicePayment).not.toHaveBeenCalled()
+      expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    })
+  })
+
   it('completes a partially_paid invoice booked at issue', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

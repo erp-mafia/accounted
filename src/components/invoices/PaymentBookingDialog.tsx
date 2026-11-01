@@ -497,6 +497,7 @@ export default function PaymentBookingDialog({
                 id="payment-date"
                 type="date"
                 value={paymentDate}
+                max={todayIsoStockholm()}
                 onChange={(e) => setPaymentDate(e.target.value)}
                 className="w-full sm:w-48"
               />

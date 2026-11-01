@@ -34,9 +34,9 @@
  * payment with edited rows. So is a ledger figure more than 10% away from
  * what the invoice's own rate says it owes: that gap is a rättelse of the
  * skuld itself (e.g. moms taken off the registration), not a rate movement,
- * and booking it on 3960/7960 would call it a kursdifferens. So is an amount
- * above what a foreign invoice still owes: no SEK on 244x stands behind the
- * excess.
+ * and booking it on 3960/7960 would call it a kursdifferens. An amount above
+ * what the invoice still owes never gets here: planSupplierPayment refuses it
+ * first on every door (lib/invoices/settle-supplier-payment.ts).
  *
  * The SEK that left the payment account is a separate input (`amountSek`).
  * When it differs from the SEK cleared, the difference is the realised
@@ -295,7 +295,7 @@ export type SupplierPaymentSekResult =
     }
   | {
       ok: false
-      code: typeof SI_PAID_SEK_UNRESOLVED | 'SI_FX_RATE_MISSING' | 'VALIDATION_ERROR'
+      code: typeof SI_PAID_SEK_UNRESOLVED | 'SI_FX_RATE_MISSING'
       details: Record<string, unknown>
     }
 
@@ -321,23 +321,7 @@ export async function resolveSupplierPaymentSek(
     }
   }
 
-  // More than the invoice still owes has no SEK on 244x behind it: refused
-  // rather than booked as a kursdifferens (the v1 door already refuses every
-  // overpayment; the dashboard door lets a SEK one through, as before).
   const remaining = Number(invoice.remaining_amount)
-  if (input.amount > remaining + ORE_TOLERANCE) {
-    return {
-      ok: false,
-      code: 'VALIDATION_ERROR',
-      details: {
-        field: 'amount',
-        message: 'amount exceeds remaining_amount: a foreign-currency invoice cannot be overpaid.',
-        attempted: input.amount,
-        remaining_amount: remaining,
-      },
-    }
-  }
-
   let clearingSek: number
   if (!invoice.registration_journal_entry_id && input.pendingRegistrationPayableSek !== undefined) {
     clearingSek = prorateSupplierPaymentSek({

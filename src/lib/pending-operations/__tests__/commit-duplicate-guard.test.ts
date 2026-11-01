@@ -12,6 +12,11 @@
  * lib/invoices/__tests__/duplicate-payment-detection.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// Whether a credit note is active: mocked so it takes no slot in the Supabase
+// mock; the read is pinned by lib/invoices/__tests__/active-credit-note.test.ts.
+const { mockHasActiveCreditNote } = vi.hoisted(() => ({ mockHasActiveCreditNote: vi.fn(async (..._args: unknown[]) => false) }))
+vi.mock('@/lib/invoices/active-credit-note', () => ({ invoiceHasActiveCreditNote: mockHasActiveCreditNote }))
 import { eventBus } from '@/lib/events/bus'
 import type { PendingOperation } from '@/types'
 
@@ -32,6 +37,13 @@ vi.mock('@/lib/invoices/duplicate-payment-candidates', () => ({
 }))
 
 const mockAppendProcessingHistory = vi.fn()
+// The override is recorded by the settlement (settle-invoice-payment.test.ts).
+const { mockSettleInvoicePayment } = vi.hoisted(() => ({ mockSettleInvoicePayment: vi.fn() }))
+vi.mock('@/lib/invoices/settle-invoice-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/settle-invoice-payment')>()),
+  settleInvoicePayment: (...args: unknown[]) => mockSettleInvoicePayment(...args),
+}))
+
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: (...args: unknown[]) => mockAppendProcessingHistory(...args),
 }))
@@ -230,11 +242,21 @@ describe('commit duplicate guard: mark_invoice_paid (forward / book the payment)
     expect(result.http_status).toBe(409)
   })
 
-  it('does not enforce the guard when allow_duplicate=true, but records the dismissal to behandlingshistorik', async () => {
+  it('does not enforce the guard when allow_duplicate=true: the settlement records the override with its voucher', async () => {
     mockFindDupPayments.mockResolvedValue([
       { id: 'tx-9', date: '2026-03-26', amount: 98565, description: '2026001', merchant_name: null, reference: null, match_reason: 'ocr_exact', match_confidence: 0.99 },
     ])
-    // claim → invoice fetch → company_settings → bare downstream (allowed to fail)
+    mockSettleInvoicePayment.mockResolvedValueOnce({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 98565,
+      newRemaining: 0,
+      journalEntryId: 'je-1',
+      paidAt: '2026-03-30T12:00:00Z',
+      saleJournalEntryId: null,
+      warnings: [],
+    })
+    // claim → invoice fetch → company_settings → the invoice as settled
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'inv-1', invoice_number: '2026001', status: 'sent', total: 98565, remaining_amount: 98565, customer: { name: 'Arcim Technology AB' } } },
@@ -250,23 +272,9 @@ describe('commit duplicate guard: mark_invoice_paid (forward / book the payment)
 
     // Guard not enforced: not auto-rejected at the duplicate-payment guard.
     expect(result.status).not.toBe('rejected')
-    expect(mockFindDupPayments).toHaveBeenCalledTimes(1)
-    expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
-    const event = mockAppendProcessingHistory.mock.calls[0][0]
-    expect(event).toMatchObject({
-      companyId: 'company-1',
-      aggregateType: 'System',
-      aggregateId: 'inv-1',
-      eventType: 'InvoiceDuplicatePaymentDismissed',
-      actor: { type: 'user', id: 'user-1' },
+    expect(mockFindDupPayments).not.toHaveBeenCalled()
+    expect(mockSettleInvoicePayment.mock.calls[0][3]).toMatchObject({
+      duplicateGuardBypass: { user_id: 'user-1', actor_type: 'user' },
     })
-    expect(event.payload).toMatchObject({
-      invoice_id: 'inv-1',
-      dismissed_transaction_ids: ['tx-9'],
-      candidate_count: 1,
-      via: 'allow_duplicate',
-    })
-    // PII-safe: no customer or merchant name in the payload.
-    expect(JSON.stringify(event.payload)).not.toContain('Arcim')
   })
 })

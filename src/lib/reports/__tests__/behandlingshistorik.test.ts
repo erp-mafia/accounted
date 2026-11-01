@@ -453,6 +453,24 @@ describe('auditRowToEvent: bypassed guards (issue #2366)', () => {
     ])
   })
 
+  it('labels a customer invoice the same way: every door records one row', () => {
+    const ev = auditRowToEvent(
+      bypassRow({
+        guard: 'invoice_duplicate_payment',
+        supplier_invoice_number: undefined,
+        invoice_number: 'F-7',
+        journal_entry_id: null,
+      }),
+      ctxWithEntries([]),
+    )!
+    expect(ev).toMatchObject({
+      code: 'invoice.duplicate_payment_guard_bypassed',
+      event: 'Dubbelbetalningskontroll förbikopplad',
+      object: 'Kundfaktura F-7',
+    })
+    expect(ev.details[0]).toBe('Kontroll: möjlig dubbelbetalning av kundfaktura F-7')
+  })
+
   it('names each flagged bank row, and the verifikat an already-booked row carries', () => {
     const ev = auditRowToEvent(
       bypassRow({

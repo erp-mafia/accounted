@@ -23,6 +23,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The payment date's lock: mocked so it consumes no slot in the Supabase mock;
+// pinned by lib/api/v1/__tests__/check-period-lock.test.ts.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(async () => ({ locked: false })),
+}))
 import { createMockRequest, createMockRouteParams, createTableMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
@@ -184,7 +190,7 @@ const SCENARIOS: Scenario[] = [
     loseRace: true,
   },
   {
-    name: 'the payment row cannot be recorded: the invoice is rolled back and the verifikat cancelled',
+    name: 'the payment row cannot be recorded: the verifikat is cancelled, the invoice never moved',
     invoice: invoice(6),
     body: { payment_date: '2026-10-04' },
     accountingMethod: 'accrual',
@@ -224,7 +230,7 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
       { data: null },
     ],
     company_settings: { data: { accounting_method: s.accountingMethod, last_supplier_payment_account: null } },
-    supplier_invoice_payments: s.paymentRowFails ? { error: { message: 'insert refused', code: '42501' } } : { data: null },
+    supplier_invoice_payments: s.paymentRowFails ? { error: { message: 'insert refused', code: '42501' } } : { data: { id: 'pay-1' } },
     chart_of_accounts: { data: [] },
   })
   mock.supabase.auth.getUser.mockResolvedValue({ data: { user: { id: USER, email: 'test@test.se' } }, error: null })

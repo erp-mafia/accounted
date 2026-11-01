@@ -71,6 +71,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { eventBus } from '@/lib/events'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { REGISTER_BOOKED_INVOICE_MODE } from '@/lib/invoices/register-booked-invoice-mode'
+import { recordSupplierInvoicePaymentRow } from '@/lib/invoices/supplier-invoice-payment-row'
 import {
   refineRegistrationDatesAndAmounts,
   registeredAmountSchema,
@@ -83,7 +84,6 @@ import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import type { SupplierInvoice, VatTreatment } from '@/types'
-import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('register-booked-supplier-invoice')
 
@@ -790,22 +790,20 @@ export async function registerBookedSupplierInvoice(
   // tied to no verifikat: the payments are in the books already, wherever
   // the old system booked them.
   if (plan.paidAmount > 0 && plan.paidAsOf) {
-    const { error: paymentError } = await supabase.from('supplier_invoice_payments').insert({
-      user_id: userId,
-      company_id: companyId,
-      supplier_invoice_id: supplierInvoiceId,
-      payment_date: plan.paidAsOf,
-      amount: plan.paidAmount,
-      currency: 'SEK',
-      exchange_rate_difference: 0,
-      journal_entry_id: null,
+    const recorded = await recordSupplierInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: { id: supplierInvoiceId, currency: 'SEK', paid_amount: 0 },
+      paymentDate: plan.paidAsOf,
+      newPaidAmount: plan.paidAmount,
+      journalEntryId: null,
       notes: `Betalt före registreringen enligt leverantörsreskontran per ${plan.paidAsOf}`,
       // The old system's leverantörsreskontra says it was paid; no pair was chosen here.
-      ...linkBasisColumns('import_carried_over'),
+      linkBasis: { basis: 'import_carried_over' },
     })
-    if (paymentError) {
+    if (!recorded.ok) {
       await undoRegistration(supabase, companyId, supplierInvoiceId)
-      throw dbError(paymentError)
+      throw dbError({ message: recorded.error, code: recorded.code })
     }
   }
 

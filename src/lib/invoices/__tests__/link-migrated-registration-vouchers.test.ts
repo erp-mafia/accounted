@@ -796,7 +796,7 @@ describe('Bokio cash-purchase source references', () => {
   it('attaches settlement evidence without writing the registration FK', async () => {
     cashQueue()
     expect((await run([cashInput()])).reports[0]).toMatchObject({ outcome: 'linked', linkType: 'settlement' })
-    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: false, journalEntryId: 'cash' }))
+    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: false, journalEntryId: 'cash', linkBasis: 'import_carried_over' }))
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
   it('uses the source entry date across a fiscal year boundary', async () => {

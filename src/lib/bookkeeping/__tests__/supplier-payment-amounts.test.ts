@@ -250,15 +250,6 @@ describe('resolveSupplierPaymentSek', () => {
     expect(result).toMatchObject({ ok: false, code: 'SI_FX_RATE_MISSING' })
   })
 
-  it('an overpayment of a foreign invoice is refused before the ledger is read', async () => {
-    const result = await resolveSupplierPaymentSek(supabase as never, COMPANY, usdInvoice(), {
-      amount: 40,
-      amountSek: 385,
-    })
-    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'amount' } })
-    expect(findCalls('journal_entries', 'select')).toHaveLength(0)
-  })
-
   it('an unresolvable ledger is refused with SI_PAID_SEK_UNRESOLVED and its reason', async () => {
     enqueue({ data: { id: 'je-reg', status: 'reversed' } })
     enqueue({ data: [] }) // stornoed with no correction

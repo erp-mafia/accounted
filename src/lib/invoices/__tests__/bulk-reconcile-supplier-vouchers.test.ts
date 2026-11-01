@@ -115,6 +115,31 @@ describe('reconcileSupplierInvoiceVouchers', () => {
     }))
   })
 
+  it.each([
+    ['a reference hit whose amount settles the invoice', 0.99, 'rule_ocr_reference'],
+    ['the exact amount with the supplier name', 0.95, 'rule_counterparty'],
+    ['the same with the date bump, which stops below a reference hit', 0.989, 'rule_counterparty'],
+  ])('records the rule that chose the pair: %s', async (_case, confidence, linkBasis) => {
+    queue([inv({ id: 'i1', remaining: 1000 })])
+    mFind.mockResolvedValueOnce([cand({ je: 'v1', confidence, amount: 1000 })] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v1' }) as never)
+
+    const res = await run()
+
+    expect(mLink).toHaveBeenCalledWith({}, 'u1', 'c1', expect.objectContaining({ linkBasis }))
+    expect(res.links[0].link_basis).toBe(linkBasis)
+  })
+
+  it('a dry run plans the rule too: the provider migration links that plan later', async () => {
+    queue([inv({ id: 'i1', remaining: 1000 })])
+    mFind.mockResolvedValueOnce([cand({ je: 'v1', confidence: 0.99, amount: 1000 })] as never)
+
+    const res = await reconcileSupplierInvoiceVouchers({ supabase: {} as never, companyId: 'c1', userId: 'u1', dryRun: true })
+
+    expect(res.links[0].link_basis).toBe('rule_ocr_reference')
+    expect(mLink).not.toHaveBeenCalled()
+  })
+
   it('does not auto-link a below-threshold (amount-only) candidate', async () => {
     queue([inv({ id: 'i1' })])
     mFind.mockResolvedValueOnce([cand({ je: 'v1', confidence: 0.8, amount: 1000 })] as never)

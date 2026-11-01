@@ -60,6 +60,61 @@ vi.mock('@/lib/invoices/supplier-settlement-side', async (importOriginal) => {
   return { ...actual, resolveSupplierSettlementSide: async () => actual.AP_DEBIT_SIDE }
 })
 
+// The signed bank payment read: mocked so it takes no slot in the queued
+// Supabase mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const { mockFindSignedBankPayment } = vi.hoisted(() => ({
+  mockFindSignedBankPayment: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+}))
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
+const SIGNED_ORDER = { id: 'order-1', status: 'accepted', requested_execution_date: '2026-11-03' }
+
+describe('a bank payment signed for the invoice still executes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFindSignedBankPayment.mockResolvedValue(null)
+  })
+
+  it('the link refuses before the RPC: the Befintlig verifikation tab pays the supplier twice otherwise', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockFindSignedBankPayment.mockResolvedValueOnce(SIGNED_ORDER)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SI_BANK_PAYMENT_UNDER_WAY',
+      details: {
+        payment_order_id: 'order-1',
+        payment_order_status: 'accepted',
+        requested_execution_date: '2026-11-03',
+      },
+    })
+    expect(mockFindSignedBankPayment).toHaveBeenCalledWith(supabase, 'company-1', 'si-1')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('the validator refuses it at staging, the way the commit will', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockFindSignedBankPayment.mockResolvedValueOnce(SIGNED_ORDER)
+
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({ id: 'si-1', remaining_amount: 1000, total: 1000, currency: 'SEK' }) as never,
+      'je-1',
+    )
+
+    expect(result).toMatchObject({ ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY' })
+  })
+})
+
 // ============================================================
 // validateVoucherForSupplierInvoiceLink: happy path + rejects
 // ============================================================
@@ -94,6 +149,19 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_FULLY_PAID')
+  })
+
+  // A stored 0 is paid, as the RPC reads it: rounding drift across payments must
+  // not read as a tiny amount still owed (storedRemaining).
+  it('rejects when the stored remainder is 0 though total minus paid_amount is not', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({ remaining_amount: 0, paid_amount: 999.99, total: 1000, currency: 'SEK' }) as never,
+      'je-1',
+    )
+    expect(result).toEqual({ ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' })
   })
 
   it('rejects when the voucher is missing', async () => {
@@ -372,6 +440,20 @@ describe('linkSupplierInvoiceToVoucher', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_NOT_FOUND')
     expect(mockAnchorSupplierDoc).not.toHaveBeenCalled()
+  })
+
+  it('hands a door\'s named basis to the RPC, and sends none for a person', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }, error: null })
+    enqueue({ data: { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }, error: null })
+    const params = { supplierInvoiceId: 'si-1', journalEntryId: 'je-1' }
+
+    await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', { ...params, linkBasis: 'rule_counterparty' })
+    await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', params)
+
+    const calls = vi.mocked(supabase.rpc).mock.calls.filter(([fn]) => fn === 'link_supplier_invoice_to_voucher')
+    expect(calls[0][1]).toMatchObject({ p_link_basis: 'rule_counterparty' })
+    expect(calls[1][1]).not.toHaveProperty('p_link_basis')
   })
 
   it('rejects with INVOICE_FULLY_PAID when the RPC reports the invoice is already paid', async () => {

@@ -32,17 +32,15 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 import { createLogger } from '@/lib/logger'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
-import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
-import { voucherLinkKursdifferensBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
-import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
-import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { SupplierInvoice, Supplier } from '@/types'
 import {
   bookRegistrationBeforeSettlement,
@@ -65,7 +63,9 @@ import {
   scoreVoucherCandidate,
   sekBookedReason,
   sekBookedSettlement,
+  storedRemaining,
   voucherCapacity,
+  voucherLinkEvents,
   voucherShareFields,
   type SettlementSideLine,
   type VoucherRow,
@@ -153,7 +153,7 @@ export async function findMatchingVouchersForSupplierInvoice(
   const limit = options.limit ?? 10
   const windowDays = options.dateWindowDays ?? DEFAULT_DATE_WINDOW_DAYS
 
-  const remainingAmount = computeRemaining(invoice)
+  const remainingAmount = storedRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) return []
 
   const settlement =
@@ -277,6 +277,7 @@ export type SupplierVoucherLinkErrorCode =
   | 'LINK_SI_VOUCHER_CURRENCY_MISMATCH'
   | 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID'
   | 'LINK_SI_VOUCHER_DB_ERROR'
+  | 'SI_BANK_PAYMENT_UNDER_WAY'
 
 export type ValidateSupplierVoucherResult =
   | {
@@ -324,10 +325,13 @@ export async function validateVoucherForSupplierInvoiceLink(
     return { ok: false, code: 'LINK_SI_VOUCHER_AMOUNT_INVALID', details: { amount } }
   }
 
-  const remainingAmount = computeRemaining(invoice)
+  const remainingAmount = storedRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) {
     return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' }
   }
+
+  const signedBankPayment = await signedBankPaymentRefusal(supabase, companyId, invoice.id)
+  if (signedBankPayment) return signedBankPayment
 
   const { data: voucher, error: voucherError } = await supabase
     .from('journal_entries')
@@ -593,6 +597,9 @@ export interface LinkSupplierInvoiceToVoucherParams {
    *  currency. Omitted: what the voucher has left must fit inside the
    *  invoice's remainder (see the module header). */
   amount?: number
+  /** Why the pair is linked, on a door no person chose it on. Left out: the
+   *  caller named this verifikat for this invoice. */
+  linkBasis?: ScopeFreeLinkBasis
 }
 
 export interface LinkSupplierInvoiceToVoucherResult {
@@ -649,6 +656,9 @@ export async function linkSupplierInvoiceToVoucher(
   // books first was refused (details.registration_first).
   | { ok: false; code: SupplierVoucherLinkErrorCode | RegistrationFirstRefusal['code']; details?: Record<string, unknown> }
 > {
+  const signedBankPayment = await signedBankPaymentRefusal(supabase, companyId, params.supplierInvoiceId)
+  if (signedBankPayment) return signedBankPayment
+
   // Faktureringsmetoden with defer_invoice_booking: an invoice registered
   // without its verifikat is booked first by the Bokför step, so the linked
   // voucher's 244x debit clears a skuld the ledger carries
@@ -677,7 +687,14 @@ export async function linkSupplierInvoiceToVoucher(
     businessEvents = await postingPort.recordEventsForSql({
       supabase,
       companyId,
-      events: () => supplierVoucherLinkEvents(supabase, companyId, params),
+      events: () =>
+        voucherLinkEvents(supabase, companyId, {
+          side: 'supplier',
+          invoiceId: params.supplierInvoiceId,
+          journalEntryId: params.journalEntryId,
+          amount: params.amount,
+          linkBasis: params.linkBasis,
+        }),
     })
   } catch (err) {
     // strict: an event that could not be recorded stops the link before any number.
@@ -702,6 +719,7 @@ export async function linkSupplierInvoiceToVoucher(
         journalEntryId: params.journalEntryId,
         notes: params.notes ?? null,
         amount: params.amount ?? null,
+        ...(params.linkBasis ? { linkBasis: params.linkBasis } : {}),
         ...(businessEvents ? { businessEvents } : {}),
       },
     ],
@@ -896,61 +914,16 @@ async function fetchVoucherPaymentRows(
 }
 
 /**
- * The payment event of a voucher link, for the kursdifferens verifikat the
- * RPC posts when a foreign-currency invoice is paid by a plain-kronor
- * verifikat at another rate. None for an invoice in the ledger currency, for
- * a link that states its share (the RPC settles a share without that
- * fallback, so it posts nothing of its own) or when the invoice or verifikat
- * is not there (the RPC refuses as before). A read error throws: the port
- * logs it under shadow and stops the link under strict.
+ * A signed bank payment still executes: settling the invoice against a verifikat
+ * beside it pays the supplier twice, the same refusal as mark-paid (crm#1243).
+ * Linked verifikat are not that payment: the bank match is, and it stays open.
  */
-async function supplierVoucherLinkEvents(
+async function signedBankPaymentRefusal(
   supabase: SupabaseClient,
   companyId: string,
-  params: LinkSupplierInvoiceToVoucherParams,
-): Promise<BusinessEventDraft[]> {
-  if (params.amount != null) return []
-  const { data: invoiceRow, error: invoiceError } = await supabase
-    .from('supplier_invoices')
-    .select('id, supplier_id, currency, total, paid_amount, remaining_amount')
-    .eq('id', params.supplierInvoiceId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (invoiceError) throw invoiceError
-  const invoice = invoiceRow as Pick<SupplierInvoice, 'id' | 'supplier_id' | 'currency' | 'total' | 'paid_amount' | 'remaining_amount'> | null
-  if (!invoice || isLedgerCurrency(invoice.currency)) return []
-  const { data: voucher, error: voucherError } = await supabase
-    .from('journal_entries')
-    .select('entry_date')
-    .eq('id', params.journalEntryId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (voucherError) throw voucherError
-  if (!voucher) return []
-  return [
-    voucherLinkKursdifferensBusinessEvent(
-      {
-        side: 'supplier',
-        invoiceId: invoice.id,
-        partyId: invoice.supplier_id,
-        currency: invoice.currency,
-        remaining: computeRemaining(invoice as SupplierInvoice),
-        voucherDate: (voucher as { entry_date: string }).entry_date,
-      },
-      linkBasisColumns('user_confirmed'),
-    ),
-  ]
-}
-
-function computeRemaining(invoice: SupplierInvoice): number {
-  // Trust the stored value whenever present, including the legitimate 0 for
-  // a fully-paid invoice. Falling through to `total - paid_amount` for the
-  // 0 case can leak rounding drift across multiple payments and return a
-  // tiny positive number, slipping a fully-paid invoice past
-  // LINK_SI_VOUCHER_INVOICE_FULLY_PAID. PR #602 review fix.
-  if (typeof invoice.remaining_amount === 'number') {
-    return Math.max(0, invoice.remaining_amount)
-  }
-  const paid = invoice.paid_amount ?? 0
-  return Math.max(0, roundOre(invoice.total - paid))
+  supplierInvoiceId: string,
+): Promise<{ ok: false; code: 'SI_BANK_PAYMENT_UNDER_WAY'; details: Record<string, unknown> } | null> {
+  const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+  if (!signedBankPayment) return null
+  return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
 }

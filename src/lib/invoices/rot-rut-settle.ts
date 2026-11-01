@@ -42,6 +42,7 @@ import {
 import type { RotRutPostingContext } from '@/lib/bookkeeping/rot-rut-business-events'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { roundOre } from '@/lib/money'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
@@ -95,6 +96,7 @@ export type SettleRotRutPayoutErrorCode =
   | 'ROT_RUT_SETTLE_RACE'
   | 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN'
   | 'ROT_RUT_MATCH_TX_LINK_FAILED'
+  | 'PAYMENT_DATE_IN_FUTURE'
 
 export type SettleRotRutPayoutOutcome =
   | {
@@ -326,6 +328,12 @@ export async function settleRotRutPayoutRequest(
   companyId: string,
   params: SettleRotRutPayoutParams,
 ): Promise<SettleRotRutPayoutOutcome> {
+  // Typed by hand, the date is the day the money moved. A bank row brings its own.
+  if (!params.transactionId) {
+    const futureDate = futurePaymentDateRefusal(params.paymentDate)
+    if (futureDate) return { ok: false, kind: 'code', ...futureDate }
+  }
+
   const { data: payoutRequest, error: fetchError } = await supabase
     .from('rot_rut_payout_requests')
     .select('*')
