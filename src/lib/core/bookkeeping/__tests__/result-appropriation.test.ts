@@ -125,12 +125,14 @@ describe('generateResultAppropriation', () => {
     const input = vi.mocked(createJournalEntry).mock.calls[0][3] as {
       source_type: string
       entry_date: string
-      voucher_series: string
+      voucher_series?: string
       lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
     }
     expect(input.source_type).toBe('result_appropriation')
     expect(input.entry_date).toBe('2025-01-01')
-    expect(input.voucher_series).toBe('A')
+    // No series: the engine takes the company's result_appropriation series
+    // (default_voucher_series_per_source_type), not a hardcoded A (accounted#58).
+    expect(input.voucher_series).toBeUndefined()
     expect(input.lines).toContainEqual(
       expect.objectContaining({ account_number: '2099', debit_amount: 100000, credit_amount: 0 })
     )

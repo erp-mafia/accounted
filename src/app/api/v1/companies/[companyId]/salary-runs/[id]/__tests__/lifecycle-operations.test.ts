@@ -464,9 +464,9 @@ describe('POST /salary-runs/:id/unapprove', () => {
   })
 
   it.each([
-    ['a submitted AGI declaration', { data: { id: AGI_ID, status: 'submitted' }, error: null }, APPROVED],
-    ['an AGI awaiting signature', { data: { id: AGI_ID, status: 'pending_signature' }, error: null }, APPROVED],
-    ['agi_submitted_at on the run', { data: null, error: null }, { ...APPROVED, agi_submitted_at: '2026-09-22T10:00:00Z' }],
+    ['a submitted AGI declaration', { data: [{ id: AGI_ID, status: 'submitted' }], error: null }, APPROVED],
+    ['an AGI awaiting signature', { data: [{ id: AGI_ID, status: 'pending_signature' }], error: null }, APPROVED],
+    ['agi_submitted_at on the run', { data: [], error: null }, { ...APPROVED, agi_submitted_at: '2026-09-22T10:00:00Z' }],
   ])('409 SALARY_RUN_UNAPPROVE_AGI_FILED with %s, even on a dry run', async (_label, agi, run) => {
     for (const query of ['', '?dry_run=true']) {
       const c = makeClient({ company_members: MEMBER, salary_runs: { data: run, error: null }, agi_declarations: agi })
@@ -483,7 +483,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
     const c = makeClient({
       company_members: MEMBER,
       salary_runs: { data: APPROVED, error: null },
-      agi_declarations: { data: { id: AGI_ID, status: 'generated' }, error: null },
+      agi_declarations: { data: [{ id: AGI_ID, status: 'generated' }], error: null },
       salary_payslip_deliveries: { data: null, error: null, count: 2 },
     })
     mockServiceClient.mockReturnValue(c)
@@ -510,7 +510,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
         { data: { id: RUN_ID, status: 'review' }, error: null },
       ],
       agi_declarations: [
-        { data: { id: AGI_ID, status: 'exported' }, error: null },
+        { data: [{ id: AGI_ID, status: 'exported' }], error: null },
         { data: [{ id: AGI_ID }], error: null },
       ],
     })
@@ -548,7 +548,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
         { data: APPROVED, error: null },
         { data: { id: RUN_ID, status: 'review' }, error: null },
       ],
-      agi_declarations: { data: { id: AGI_ID, status: 'rejected' }, error: null },
+      agi_declarations: { data: [{ id: AGI_ID, status: 'rejected' }], error: null },
     })
     mockServiceClient.mockReturnValue(c)
     const res = await post()

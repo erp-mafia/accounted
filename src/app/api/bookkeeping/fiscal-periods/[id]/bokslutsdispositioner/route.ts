@@ -301,7 +301,6 @@ export const POST = withRouteContext(
             description: `Bokslutsdisposition: ${proposal.label}`,
             source_type: 'year_end',
             source_id: item.kind === 'bolagsskatt' ? id : undefined,
-            voucher_series: 'A',
             lines: proposal.lines,
           },
         })

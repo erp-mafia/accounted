@@ -4,7 +4,7 @@
 // app/(dashboard)/pending/page.tsx so the vocabulary has exactly one owner.
 
 import type { PendingOperationRejectionCategory, PendingOperationSystemRejectionCategory } from '@/types'
-import { PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
+import { isHighRisk, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import {
   isRegisterBookedInvoiceParams,
   registerBookedLedgerOf,
@@ -86,7 +86,19 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   hold_corporate_meeting: 'warning_hold_corporate_meeting',
   save_tax_loss_carryforward: 'warning_save_tax_loss_carryforward',
   book_webshop_day: 'warning_book_webshop_day',
+  // High-tier types that had no sentence, so their approval showed none (accounted#22).
+  settle_rot_rut_payout: 'warning_settle_rot_rut_payout',
+  post_kontantmetod_cutoff: 'warning_post_kontantmetod_cutoff',
+  bulk_book_inbox_items: 'warning_bulk_book_inbox_items',
+  book_salary_run: 'warning_book_salary_run',
+  generate_agi: 'warning_generate_agi',
+  vacation_year_close: 'warning_vacation_year_close',
+  submit_vat_declaration: 'warning_submit_vat_declaration',
+  submit_agi: 'warning_submit_agi',
 }
+
+/** The schedule types whose tier rises to 'high' with auto_send (risk-tiers.ts). */
+const RECURRING_SCHEDULE_TYPES: ReadonlySet<string> = new Set(['create_recurring_schedule', 'update_recurring_schedule'])
 
 // Full-sentence warning for the single-op confirmation dialog AND the inline
 // list-view warning when risk is medium/high. The list-view truncates beyond
@@ -250,6 +262,11 @@ export function singleActionWarning(
   // A rule for a supplier's invoices from the inbox (grants slice 2), not a bank line's.
   if (operationType === 'create_grant' && params?.operation_type === 'create_supplier_invoice_from_inbox') {
     return SUPPLIER_INVOICE_GRANT_SENTENCE
+  }
+  // A schedule that emails every run is high risk only by its params; the
+  // sentence follows the tier, so it shows exactly when the row is 'high'.
+  if (RECURRING_SCHEDULE_TYPES.has(operationType) && isHighRisk(operationType, params ?? undefined)) {
+    return t ? t('warning_recurring_schedule_auto_send') : ''
   }
   const key = SINGLE_ACTION_WARNING_KEYS[operationType]
   if (key && t) return t(key)

@@ -248,6 +248,8 @@ describe('booking the lagerförändring', () => {
         expect.objectContaining({ account_number: '4960', debit_amount: 0, credit_amount: 200 }),
       ],
     })
+    // The engine takes the company's year_end series (accounted#58).
+    expect(request.input).not.toHaveProperty('voucher_series')
     expect(mock.payloads('inventory_counts', 'update')).toEqual([expect.objectContaining({ status: 'booked', journal_entry_id: 'je-1' })])
     expect(mocks.linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-1', 'je-1', expect.anything())
   })

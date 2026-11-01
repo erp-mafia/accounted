@@ -10,6 +10,9 @@ import {
   type MultiUserGrantRow,
 } from './multi-user-state'
 import { isUuid } from '@/lib/invariants/uuid'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('entitlements')
 
 /**
  * Entitlement gate: the single primitive behind the paywall ("non-payer loses
@@ -239,7 +242,19 @@ export async function hasCapability(
   // ENTITLEMENT axis: any unexpired grant on the company or its team.
   const { data: grants, error: grantsError } = await readGrants(supabase, companyId, [key])
 
-  if (grantsError) return false // fail-closed on any read error
+  if (grantsError) {
+    // Fail closed, but say so: callers (the webshop/Stripe runner, the AGI and
+    // VAT receipt crons) read false as "not entitled" and silently skip the
+    // company (accounted#115).
+    const err = grantsError as { code?: string; message?: string }
+    log.error('capability grants read failed; failing closed', {
+      companyId,
+      capability: key,
+      code: err.code ?? null,
+      reason: err.message ?? String(grantsError),
+    })
+    return false
+  }
   const now = Date.now()
   const entitled = (grants ?? []).some((g) => {
     const row = g as { expires_at: string | null; source?: string | null }

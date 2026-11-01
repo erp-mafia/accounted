@@ -377,10 +377,12 @@ export async function promoteAgiDeclaration(
       .eq('id', decl.salary_run_id)
       .eq('company_id', companyId)
     if (runError) {
-      // The declaration is already promoted and cannot be unwound here; a
-      // missing agi_submitted_at stamp must stay investigable (BFNAR 2013:2
-      // kap 8 behandlingshistorik) without aborting the remaining steps.
-      log.warn('salary_runs agi_submitted_at stamp failed after claim', {
+      // The declaration is already promoted and cannot be unwound here, and
+      // no run revisits a submitted declaration, so the stamp stays missing
+      // until someone sets it: an error, so it reaches error tracking
+      // (BFNAR 2013:2 kap 8 behandlingshistorik, accounted#115). The
+      // remaining steps still run.
+      log.error('salary_runs agi_submitted_at stamp failed after claim', {
         declarationId, companyId, period,
         message: runError.message,
       })
@@ -417,7 +419,8 @@ export async function promoteAgiDeclaration(
       'confirmed'
     )
   } catch (deadlineErr) {
-    log.warn('completeTaxDeadline failed after successful filing', {
+    // Never retried (the declaration is submitted now): an error.
+    log.error('completeTaxDeadline failed after successful filing', {
       declarationId, companyId, period,
       message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
     })

@@ -24,6 +24,11 @@
  *     not be in a locked or closed period nor on or before the company lock
  *     date, and an open fiscal year must cover it. The proposal already
  *     picks a date the books accept; this check is the race guard.
+ * The "already posted" read and the write are separate calls, so the
+ * verifikat carries source_id = vatSettlementSourceId(company, period) and
+ * journal_entries_vat_settlement_live_unique (migration 20261101002920) lets
+ * one live settlement per key exist: a booking racing another for the same
+ * period fails at the draft insert and answers VAT_SETTLEMENT_ALREADY_BOOKED.
  * A dry run reads, checks and previews the verifikat and writes nothing.
  */
 import { createHash } from 'node:crypto'
@@ -69,6 +74,32 @@ export function proposalFingerprint(proposal: VatSettlementProposal): string {
     lines: proposal.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount]),
   })
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
+}
+
+/**
+ * The settlement verifikat's source_id: a name based UUID (RFC 9562 version 5
+ * layout) over the company and the period bounds. Two bookings of the same
+ * period compute the same id, and journal_entries_vat_settlement_live_unique
+ * allows one live (draft or posted) entry per id, so the second fails at the
+ * draft insert instead of clearing the 26xx accounts twice (accounted#58).
+ */
+export function vatSettlementSourceId(companyId: string, period: { start: string; end: string }): string {
+  const bytes = createHash('sha1').update(`accounted:vat-settlement:${companyId}:${period.start}:${period.end}`, 'utf8').digest().subarray(0, 16)
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+const VAT_SETTLEMENT_LIVE_UNIQUE_INDEX = 'journal_entries_vat_settlement_live_unique'
+
+/**
+ * The engine wraps the draft insert's 23505 in BookkeepingDatabaseError and
+ * keeps the Postgres message, which names the index: match on that, the same
+ * technique as the skattekonto booking's live-unique check.
+ */
+function isVatSettlementLiveUniqueError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes(VAT_SETTLEMENT_LIVE_UNIQUE_INDEX)
 }
 
 async function loadProposal(
@@ -164,6 +195,38 @@ const DRAFT_EXISTS: OperationWarning = {
   message_en: 'A draft settlement already existed for the period. It is left untouched; delete it if it is not needed.',
 }
 
+/**
+ * The 409 for a booking that lost the race on the live-unique index: the
+ * winner's verifikat in details when it can be read (still a draft for the
+ * moment its commit runs), the bare code when it cannot.
+ */
+async function alreadyBookedByKey(ctx: OperationContext, sourceId: string): Promise<Failure> {
+  const { data, error } = await ctx.supabase
+    .from('journal_entries')
+    .select('id, voucher_series, voucher_number, entry_date')
+    .eq('company_id', ctx.companyId)
+    .eq('source_type', 'vat_settlement')
+    .eq('source_id', sourceId)
+    .in('status', ['draft', 'posted'])
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) {
+    if (error) ctx.log.warn('vat settlement winner lookup failed', { error: error.message })
+    return { ok: false, code: 'VAT_SETTLEMENT_ALREADY_BOOKED' }
+  }
+  const winner = data as { id: string; voucher_series: string | null; voucher_number: number | null; entry_date: string }
+  return {
+    ok: false,
+    code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+    details: {
+      journal_entry_id: winner.id,
+      voucher_series: winner.voucher_series,
+      voucher_number: winner.voucher_number,
+      entry_date: winner.entry_date,
+    },
+  }
+}
+
 export async function bookVatSettlement(
   ctx: OperationContext,
   input: BookVatSettlementInput,
@@ -212,11 +275,13 @@ export async function bookVatSettlement(
     return { ok: false, code: 'VAT_SETTLEMENT_NO_FISCAL_PERIOD', details: { entry_date: proposal.entry_date } }
   }
 
+  const sourceId = vatSettlementSourceId(companyId, proposal.period)
   const entryInput: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: proposal.entry_date,
     description: proposal.description,
     source_type: 'vat_settlement',
+    source_id: sourceId,
     lines: proposal.lines.map((line) => ({
       account_number: line.account_number,
       debit_amount: line.debit_amount,
@@ -256,6 +321,9 @@ export async function bookVatSettlement(
       input: entryInput,
     })
   } catch (err) {
+    // Another booking of the same period got there first (the read above
+    // passed for both): name its verifikat like the read would have.
+    if (isVatSettlementLiveUniqueError(err)) return alreadyBookedByKey(ctx, sourceId)
     if (isBookkeepingError(err)) return { ok: false, code: 'VAT_SETTLEMENT_FAILED', error: err }
     log.error('vat settlement booking failed', err as Error, { ...input })
     return { ok: false, code: 'VAT_SETTLEMENT_FAILED' }

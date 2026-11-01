@@ -79,6 +79,26 @@ describe('syncCommunityFromRepo', () => {
     expect(findCall('agent_atom_registry', 'upsert')?.[0]).toMatchObject({ version: 2, mcp_exposed: true })
   })
 
+  it('reads stored signals structurally: jsonb key order is not a change (accounted#115)', async () => {
+    const same = withoutSubmission('same')
+    // jsonb returns keys shortest first, not in the order signals() builds them.
+    const stored = Object.fromEntries(Object.entries(signalsFor('same', sha(same))).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)))
+    enqueue({ data: [{ id: 'community/same', body: same.trim(), version: 3, is_active: true, mcp_exposed: true, title: 'Titel same', description: 'Beskrivning.', trigger_signals: stored, reviewed_at: '2026-09-25T10:00:00Z' }] })
+    const result = await syncCommunityFromRepo(supabase as never, fakeGitHub({ same }))
+    expect(result).toMatchObject({ published: [], updated: [], deactivated: [] })
+    expect(findCalls('agent_atom_registry', 'upsert')).toHaveLength(0)
+  })
+
+  it('never switches anything off when the repository listing answers 404 or refuses access (accounted#115)', async () => {
+    for (const status of [404, 401, 403]) {
+      reset()
+      enqueue({ data: [{ id: 'community/live', body: '# Live', version: 1, is_active: true, mcp_exposed: true, title: 'Live', description: 'Live', trigger_signals: {}, reviewed_at: null }] })
+      const github = (async () => new Response('{"message":"Not Found"}', { status })) as unknown as typeof fetch
+      await expect(syncCommunityFromRepo(supabase as never, github)).rejects.toThrow(`GitHub listing failed: ${status}`)
+      expect(findCall('agent_atom_registry', 'update')).toBeUndefined()
+    }
+  })
+
   it('does not count an approval once its author took the item back', async () => {
     enqueue({ data: [] })
     enqueue({ data: [{ id: SUBMISSION, approved_body_sha: sha(file('ny-rutin')), share_status: 'private' }] })

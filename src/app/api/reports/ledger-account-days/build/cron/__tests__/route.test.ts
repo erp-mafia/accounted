@@ -4,6 +4,21 @@ import { createCronRequest } from '@/tests/helpers'
 const rpc = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => ({ rpc }) }))
 
+// The run's warn/error lines (accounted#115): only those two levels are
+// swapped, every other export of the logger stays real.
+const { logWarn, logError } = vi.hoisted(() => ({ logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      warn: logWarn,
+      error: logError,
+    }),
+  }
+})
+
 import { GET } from '../route'
 
 const PATH = '/api/reports/ledger-account-days/build/cron'
@@ -70,6 +85,23 @@ describe('GET /api/reports/ledger-account-days/build/cron', () => {
     expect(await response.json()).toEqual({ data: { built: 1, compacted: 0, skipped: 1, deferred: 0 } })
     const builds = rpc.mock.calls.filter(([fn]) => fn === 'build_ledger_account_days')
     expect(builds).toHaveLength(2)
+    // The next run fixes a lock wait by itself: a warning, not an error.
+    expect(logWarn).toHaveBeenCalledWith('ledger_account_days build skipped', { companyId: 'c2', code: '55P03' })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('logs a build that fails for any other reason as an error: it fails the same way every run (accounted#115)', async () => {
+    serve([['c1', 'c2'], ['c2']], {
+      'build_ledger_account_days:c2': { code: '57014', message: 'canceling statement due to statement timeout' },
+    })
+    const response = await GET(createCronRequest(PATH, 'Bearer cron-secret'))
+    expect(await response.json()).toEqual({ data: { built: 1, compacted: 0, skipped: 1, deferred: 0 } })
+    expect(logError).toHaveBeenCalledWith('ledger_account_days build failed', {
+      companyId: 'c2',
+      code: '57014',
+      reason: 'canceling statement due to statement timeout',
+    })
+    expect(logWarn).not.toHaveBeenCalledWith('ledger_account_days build skipped', expect.anything())
   })
 
   it('leaves a large company for the night: its postings wait for its build', async () => {

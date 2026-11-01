@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const { warnRecorder } = vi.hoisted(() => ({ warnRecorder: vi.fn() }))
+const { warnRecorder, errorRecorder } = vi.hoisted(() => ({ warnRecorder: vi.fn(), errorRecorder: vi.fn() }))
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
     warn: warnRecorder,
-    error: vi.fn(),
+    error: errorRecorder,
     child() {
       return this
     },
@@ -224,8 +224,9 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
     expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
     expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
-    const warned = warnRecorder.mock.calls.map(c => String(c[0]))
-    expect(warned.some(m => m.includes('agi_submitted_at stamp failed'))).toBe(true)
+    // Nothing revisits a submitted declaration: the missing stamp is an error (accounted#115).
+    const errored = errorRecorder.mock.calls.map(c => String(c[0]))
+    expect(errored.some(m => m.includes('agi_submitted_at stamp failed'))).toBe(true)
   })
 
   it('keeps every receipt Skatteverket lists for the period before claiming, keyed for idempotent re-reads', async () => {

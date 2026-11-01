@@ -19,6 +19,8 @@ exports[`correctEntry: runs no reversal hook (characterisation) > invoice_paid 1
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
   "emit journal_entry.corrected",
 ]
 `;
@@ -39,6 +41,8 @@ exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclai
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
   "emit journal_entry.corrected",
 ]
 `;
@@ -59,6 +63,8 @@ exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclas
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
   "emit journal_entry.corrected",
 ]
 `;

@@ -12,6 +12,7 @@ import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
+import { HourlyTotalHours } from '@/components/salary/HourlyTotalHours'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { AddPayslipLineDialog } from '@/components/salary/AddPayslipLineDialog'
 import {
@@ -119,6 +120,9 @@ export default function SalaryRunEmployeeDetailPage({
   // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
+  // Hourly: the calendar's worked hours in the period (null until it has
+  // loaded). With any, the calendar is the source and the total is read-only.
+  const [calendarHours, setCalendarHours] = useState<number | null>(null)
 
   // Reloads overlap now that the content stays mounted while one is in
   // flight (save twice in the calendar, or save and recalculate): only the
@@ -285,6 +289,10 @@ export default function SalaryRunEmployeeDetailPage({
       overridden: figures.avgifter_overridden,
     },
   ]
+  // Hourly: a total on the run row with no calendar days is what the
+  // calculation prices, so the calendar takes no worked hours meanwhile.
+  const isHourly = employee.salary_type === 'hourly'
+  const workedHoursFromTotal = isHourly && calendarHours === 0 && (Number(runEmployee.hours_worked) || 0) > 0
   const absenceCounts = [
     { label: t('sick_days'), days: liveCounts?.sick ?? runEmployee.sick_days },
     { label: t('vab_days'), days: liveCounts?.vab ?? runEmployee.vab_days },
@@ -403,6 +411,16 @@ export default function SalaryRunEmployeeDetailPage({
           </HelpPopover>
         }
       >
+        {isHourly && (
+          <HourlyTotalHours
+            runId={runId}
+            employeeId={employeeId}
+            hoursWorked={runEmployee.hours_worked}
+            calendarHours={calendarHours}
+            editable={run.status === 'draft'}
+            onSaved={load}
+          />
+        )}
         <SalaryCalendar
           employeeId={employee.id}
           salaryType={employee.salary_type}
@@ -414,6 +432,8 @@ export default function SalaryRunEmployeeDetailPage({
           readOnly={readOnly}
           onChange={load}
           onAbsenceCountsChange={setLiveCounts}
+          onWorkedHoursChange={setCalendarHours}
+          workedHoursFromTotal={workedHoursFromTotal}
         />
         <div className="mt-4 flex flex-wrap gap-x-10 gap-y-3">
           {absenceCounts.map(({ label, days }) => (

@@ -12,6 +12,7 @@
           "entry_date": "2026-03-31",
           "description": "Momsredovisning Kvartal 1 2026",
           "source_type": "vat_settlement",
+          "source_id": "2a2f275d-f885-5e59-b3a7-2ce78b661de4",
           "lines": [
             {
               "account_number": "2611",
@@ -47,6 +48,7 @@
           "entry_date": "2026-06-30",
           "description": "Momsredovisning Kvartal 2 2026",
           "source_type": "vat_settlement",
+          "source_id": "39e07f80-b065-5212-9628-e0051826e25b",
           "lines": [
             {
               "account_number": "2611",
@@ -88,6 +90,7 @@
           "entry_date": "2026-01-01",
           "description": "Momsredovisning År 2025",
           "source_type": "vat_settlement",
+          "source_id": "e553fcff-d41a-5f02-a6ba-d587519410cc",
           "lines": [
             {
               "account_number": "2611",

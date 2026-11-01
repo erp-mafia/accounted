@@ -24126,9 +24126,9 @@ export const tools: McpTool[] = [
               housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning; required on rot and gron_teknik lines.' },
               apartment_number: { type: ['string', 'null'] },
               brf_org_number: { type: ['string', 'null'] },
-              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue. Pass back to keep.' },
+              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers revenue. Pass back to keep.' },
               accrual_period_end: { type: ['string', 'null'] },
-              accrual_balance_account: { type: ['string', 'null'], description: '29xx or 17xx interim; null = 2970.' },
+              accrual_balance_account: { type: ['string', 'null'], description: '29xx/17xx; null = 2970 (1790 if past).' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },

@@ -99,3 +99,43 @@ describe('CreateSupplierInvoiceSchema: periodisering balance account', () => {
     expect(issues(result)[0]).toMatchObject({ path: 'items.0.accrual_balance_account' })
   })
 })
+
+// accounted#113: a förutbetald kostnad (17xx) of months that ended before the
+// invoice month would book them all on the invoice date.
+describe('CreateSupplierInvoiceSchema: a 17xx deferral of past months', () => {
+  it('refuses Aug-Sep on 1790 on an October invoice, naming 2990 on the account field', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      invoice({ accrual_period_start: '2026-08-01', accrual_period_end: '2026-09-30', accrual_balance_account: '1790' }),
+    )
+    expect(result.success).toBe(false)
+    expect(issues(result)).toEqual([
+      expect.objectContaining({ path: 'items.0.accrual_balance_account', message: expect.stringMatching(/välj 2990/) }),
+    ])
+  })
+
+  it('names 2960 for a räntekostnad (84xx)', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      invoice({
+        account_number: '8410',
+        accrual_period_start: '2026-07-01',
+        accrual_period_end: '2026-09-30',
+        accrual_balance_account: '1740',
+      }),
+    )
+    expect(issues(result)).toEqual([expect.objectContaining({ message: expect.stringMatching(/välj 2960/) })])
+  })
+
+  it('accepts the same period with the account omitted: the server picks 2990', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      invoice({ accrual_period_start: '2026-08-01', accrual_period_end: '2026-09-30' }),
+    )
+    expect(issues(result)).toEqual([])
+  })
+
+  it('accepts a 17xx period that overlaps the invoice month (Sep-Nov on an October invoice)', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      invoice({ accrual_period_start: '2026-09-01', accrual_period_end: '2026-11-30', accrual_balance_account: '1790' }),
+    )
+    expect(issues(result)).toEqual([])
+  })
+})

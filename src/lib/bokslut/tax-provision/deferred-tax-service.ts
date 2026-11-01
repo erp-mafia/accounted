@@ -367,7 +367,6 @@ export async function postDeferredTax(
       entry_date: period.period_end,
       description: `Bokslutsdisposition: ${proposal.label}`,
       source_type: 'year_end',
-      voucher_series: 'A',
       lines: proposal.lines,
     },
   })

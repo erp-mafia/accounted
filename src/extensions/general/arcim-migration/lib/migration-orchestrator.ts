@@ -1751,7 +1751,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
     // ── Step 6: Reconcile supplier invoices to GL payment vouchers ────
     // The GL (incl. the Dr 2440 / Cr 1930 bank-payment vouchers) is imported
-    // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
+    // separately via SIE. Supplier invoices arrive (only the open ones) as open
     // payables with no link to those vouchers, so settled invoices would surface
     // as overdue. Auto-link the unambiguous matches. Best-effort: a failure here
     // must never fail the migration: the imported data is already persisted.

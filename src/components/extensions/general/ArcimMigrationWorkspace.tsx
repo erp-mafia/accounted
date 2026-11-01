@@ -3048,9 +3048,9 @@ export function ResultStep({
       })
     }
     if (results.supplierInvoices) {
-      // Shown even at zero: the Fortnox import fetches only unpaid supplier
-      // invoices unless the member asked for all (filter=unpaid in
-      // lib/providers/fortnox/config.ts), so a register with every invoice
+      // Shown even at zero: the Fortnox import keeps only open supplier
+      // invoices unless the member asked for all (fortnoxSupplierInvoiceNotOpen
+      // in lib/providers/fortnox/mapper.ts), so a register with every invoice
       // paid imports none, and a hidden row read as "the supplier invoices
       // were lost" (crm#251). The paid ones are in the ledger as the SIE
       // file's verifikat.

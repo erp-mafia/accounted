@@ -15,8 +15,14 @@ import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
+import { createLogger } from '@/lib/logger'
 
 export const maxDuration = 60
+
+// The structured logger, not console: third-party error strings pass its
+// redaction, and log.error is the level that reaches error tracking
+// (accounted#115).
+const log = createLogger('vat-kvittenser-cron')
 
 /**
  * GET /api/extensions/skatteverket/vat/kvittenser/cron
@@ -68,7 +74,7 @@ export async function GET(request: Request) {
         .range(from, to),
     )
   } catch (rowsError) {
-    console.error('[vat-kvittenser-cron] Failed to fetch submission states', {
+    log.error('Failed to fetch submission states', {
       message: rowsError instanceof Error ? rowsError.message : String(rowsError),
     })
     return NextResponse.json({ error: 'Failed to fetch submission states' }, { status: 500 })
@@ -115,7 +121,7 @@ export async function GET(request: Request) {
 
   for (const item of locked) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
-      console.log(`[vat-kvittenser-cron] Time budget reached after ${results.length} rows`)
+      log.info('time budget reached', { rows: results.length })
       break
     }
 
@@ -190,7 +196,7 @@ export async function GET(request: Request) {
         // The row is still draft_locked, so the next run retries it. Skip
         // the deadline completion and the notification: doing them now
         // would double-fire when the retry succeeds.
-        console.error('[vat-kvittenser-cron] Failed to persist signed state', {
+        log.error('Failed to persist signed state', {
           companyId,
           period,
           message: updateError.message,
@@ -229,7 +235,7 @@ export async function GET(request: Request) {
             period: state.periodType === 'yearly' ? 1 : Number(state.period),
           })
         } catch (recordError) {
-          console.error('[vat-kvittenser-cron] Failed to record filing on the moms deadline', {
+          log.error('Failed to record filing on the moms deadline', {
             companyId,
             period,
             message: recordError instanceof Error ? recordError.message : String(recordError),
@@ -260,7 +266,7 @@ export async function GET(request: Request) {
         try {
           await recordGrantRefusal(companyId, 'moms_ombud')
         } catch (revokeErr) {
-          console.warn('[vat-kvittenser-cron] Failed to record the grant refusal', {
+          log.warn('Failed to record the grant refusal', {
             companyId,
             period,
             message: revokeErr instanceof Error ? revokeErr.message : 'Unknown error',
@@ -285,7 +291,7 @@ export async function GET(request: Request) {
             await markNeedsReconsent(supabase, tokenRow.userId, companyId, err.code)
           }
         } catch (reconsentErr) {
-          console.warn('[vat-kvittenser-cron] Failed to persist reconsent flag', {
+          log.warn('Failed to persist reconsent flag', {
             companyId,
             period,
             message: reconsentErr instanceof Error ? reconsentErr.message : 'Unknown error',
@@ -299,7 +305,7 @@ export async function GET(request: Request) {
         continue
       }
 
-      console.error('[vat-kvittenser-cron] Reconciliation failed', { companyId, period, message })
+      log.error('Reconciliation failed', { companyId, period, message })
       results.push({ companyId, period, status: 'error', error: getUserErrorMessage(err) })
     }
   }
@@ -309,9 +315,13 @@ export async function GET(request: Request) {
   const expired = results.filter((r) => r.status === 'expired_token').length
   const errors = results.filter((r) => r.status === 'error').length
 
-  console.log(
-    `[vat-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${errors} errors`
-  )
+  log.info('vat kvittens reconciliation run', {
+    processed: results.length,
+    signed,
+    stillPending,
+    expired,
+    errors,
+  })
 
   return NextResponse.json({
     processed: results.length,

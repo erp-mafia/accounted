@@ -35,7 +35,9 @@ export const GET = withRouteContext(
           .select('*')
           .eq('company_id', companyId)
         if (!includeInactive) query = query.eq('active', true)
-        return query.order('name', { ascending: true }).range(from, to)
+        // Names repeat, so id makes the order total: fetchAllRows pages with
+        // .range() and a tie on a page boundary could repeat or drop a row.
+        return query.order('name', { ascending: true }).order('id', { ascending: true }).range(from, to)
       })) as unknown as Article[]
 
       const { buffer, contentType, filename } = await buildRegisterExport(

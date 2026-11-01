@@ -10,6 +10,7 @@ import {
   AccruedCostPeriodLockedError,
   AccruedIncomePeriodInvalidError,
   AccruedIncomePeriodLockedError,
+  DeferralPeriodPastError,
   INVOICE_ACCRUED_INCOME_PERIOD_LOCKED,
   SI_ACCRUED_COST_PERIOD_LOCKED,
   isBookkeepingError,
@@ -242,6 +243,82 @@ describe('the accrued income refusal as a structured error', () => {
     })
     expect(getErrorMessage({ error: { code: 'INVOICE_ACCRUED_INCOME_PERIOD_INVALID', message: err.message } })).toMatch(
       /dela raden/i,
+    )
+  })
+})
+
+// accounted#113: the opposite mistake, a deferral of months that are over.
+describe('a deferral of months before the invoice month', () => {
+  it('refuses a 17xx cost period that ended before the invoice month, naming 2990, before any lookup', async () => {
+    const attempt = assertAccruedCostLinesBookable(supabase, COMPANY, '2026-10-08', [
+      { ...accruedLine('2026-08-01', '2026-09-30', '1790'), account_number: '6540' },
+    ])
+    await expect(attempt).rejects.toBeInstanceOf(DeferralPeriodPastError)
+    await expect(attempt).rejects.toMatchObject({
+      code: 'SI_PREPAID_COST_PERIOD_PAST',
+      balanceAccount: '1790',
+      suggestedAccount: '2990',
+    })
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('names 2960 for a räntekostnad (84xx)', async () => {
+    await expect(
+      assertAccruedCostLinesBookable(supabase, COMPANY, '2026-10-08', [
+        { ...accruedLine('2026-07-01', '2026-09-30', '1740'), account_number: '8410' },
+      ]),
+    ).rejects.toMatchObject({ suggestedAccount: '2960' })
+  })
+
+  it('refuses a line without an account too: the booking would fall back to a 17xx deferral', async () => {
+    await expect(
+      assertAccruedCostLinesBookable(supabase, COMPANY, '2026-10-08', [
+        { ...accruedLine('2026-08-01', '2026-09-30'), accrual_balance_account: null, account_number: '5020' },
+      ]),
+    ).rejects.toMatchObject({ code: 'SI_PREPAID_COST_PERIOD_PAST', balanceAccount: null, suggestedAccount: '2990' })
+  })
+
+  it('refuses a 29xx revenue period that ended before the invoice month, naming 1790', async () => {
+    const attempt = assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-26', [
+      accruedLine('2026-09-01', '2026-09-30', '2970'),
+    ])
+    await expect(attempt).rejects.toMatchObject({
+      code: 'INVOICE_DEFERRED_INCOME_PERIOD_PAST',
+      periodStart: '2026-09-01',
+      periodEnd: '2026-09-30',
+      invoiceDate: '2026-10-26',
+      suggestedAccount: '1790',
+    })
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('keeps a deferral that overlaps the invoice month (Sep-Nov on an October invoice)', async () => {
+    await assertAccruedCostLinesBookable(supabase, COMPANY, '2026-10-08', [accruedLine('2026-09-01', '2026-11-30', '1790')])
+    await assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-26', [accruedLine('2026-09-01', '2026-11-30', '2970')])
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('keeps a deferral after the invoice month', async () => {
+    await assertAccruedCostLinesBookable(supabase, COMPANY, '2026-10-08', [accruedLine('2026-11-01', '2027-10-31', '1730')])
+    await assertAccruedIncomeLinesBookable(supabase, COMPANY, '2026-10-26', [accruedLine('2026-11-01', '2027-04-30', '2970')])
+    expect(mockCheckPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('is a typed bookkeeping error whose Swedish message names the right account', () => {
+    const cost = new DeferralPeriodPastError('expense', '2026-08-01', '2026-09-30', '2026-10-08', '1790', '2990')
+    expect(isBookkeepingError(cost)).toBe(true)
+    expect(classifyError(cost)).toMatchObject({
+      code: 'SI_PREPAID_COST_PERIOD_PAST',
+      details: { periodEnd: '2026-09-30', invoiceDate: '2026-10-08', balanceAccount: '1790', suggestedAccount: '2990' },
+    })
+    expect(getErrorMessage({ error: { code: 'SI_PREPAID_COST_PERIOD_PAST', message: cost.message } })).toMatch(
+      /upplupen kostnad.*2990/,
+    )
+
+    const income = new DeferralPeriodPastError('revenue', '2026-09-01', '2026-09-30', '2026-10-26', '2970', '1790')
+    expect(classifyError(income)).toMatchObject({ code: 'INVOICE_DEFERRED_INCOME_PERIOD_PAST' })
+    expect(getErrorMessage({ error: { code: 'INVOICE_DEFERRED_INCOME_PERIOD_PAST', message: income.message } })).toMatch(
+      /upplupen intäkt.*1790/,
     )
   })
 })

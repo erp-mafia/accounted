@@ -134,7 +134,6 @@ export async function bookStockCount(
         entry_date: record.balance_date,
         description: `Lagerförändring enligt inventering per ${record.balance_date}`,
         source_type: 'year_end',
-        voucher_series: 'A',
         lines: preview.lines,
       },
     })

@@ -132,7 +132,6 @@ export async function bookContractRevenueAdjustment(args: BookContractRevenueArg
         ? `Successiv vinstavräkning pågående arbeten ${args.periodEnd}`
         : `Pågående arbeten enligt färdigställandemetoden ${args.periodEnd}`,
       source_type: 'year_end',
-      voucher_series: 'A',
       lines: result.lines,
     },
   })

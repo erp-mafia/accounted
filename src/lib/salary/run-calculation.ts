@@ -722,24 +722,34 @@ export async function runSalaryCalculation(
       })
 
       // Refresh the hourly_salary line item so the displayed Lönerader table
-      // matches what the engine actually calculated.
-      if (derivedHoursWorked > 0 && (emp.hourly_rate || 0) > 0) {
+      // matches what the engine actually calculated: the calendar's hours,
+      // or without calendar days the period's total set on the run row
+      // (accounted#1), the same hours step 8f prices. One Timlön line with
+      // the total either way.
+      // The rate and an account chosen on the line stay on it: the payslip
+      // prints the à-pris, and the booking posts the line on its account.
+      const pricedHours = derivedHoursWorked > 0 ? derivedHoursWorked : Number(sre.hours_worked) || 0
+      if (pricedHours > 0 && (emp.hourly_rate || 0) > 0) {
         const baseAmount =
-          Math.round((emp.hourly_rate as number) * derivedHoursWorked * 100) / 100
+          Math.round((emp.hourly_rate as number) * pricedHours * 100) / 100
+        const currentLine = ((sre.line_items || []) as Array<Record<string, unknown>>).find(
+          (li) => li.item_type === 'hourly_salary',
+        )
         hourlyLineRefreshIds.push(sre.id)
         hourlyLineRows.push({
           salary_run_employee_id: sre.id,
           company_id: companyId,
           item_type: 'hourly_salary',
           description: 'Timlön',
-          quantity: derivedHoursWorked,
+          quantity: pricedHours,
+          unit_price: emp.hourly_rate,
           amount: baseAmount,
           is_taxable: true,
           is_avgift_basis: true,
           is_vacation_basis: true,
           is_gross_deduction: false,
           is_net_deduction: false,
-          account_number: null,
+          account_number: (currentLine?.account_number as string | null | undefined) ?? null,
           sort_order: 0,
         })
       }

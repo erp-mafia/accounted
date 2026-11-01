@@ -290,7 +290,6 @@ export async function generateResultAppropriation(
       entry_date: plan.periodStart,
       description: `Omföring av föregående års resultat (${plan.resultAccount} → ${plan.priorResultAccount})`,
       source_type: 'result_appropriation',
-      voucher_series: 'A',
       lines: plan.lines,
     },
   })

@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
-import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { getRiskLevel, OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import {
   complianceWarningOf,
   operationLabel,
@@ -316,5 +316,76 @@ describe('keyed consequence sentences (crm#1367)', () => {
       expect(en[key], `en pending.${key}`).toBeTruthy()
       expect(singleActionWarnings[type], `${type} literal`).toBeUndefined()
     }
+  })
+})
+
+/**
+ * A high-tier approval opens a dialog whose sentence is the consent: what the
+ * approval books, sends or files. Eight high types once had none, so the
+ * dialog and the Granskning row showed nothing (accounted#22). The list comes
+ * from the tier table, so a new high type fails here until it has one.
+ */
+describe('a consent sentence for every high-tier operation (accounted#22)', () => {
+  const messages = (lang: 'sv' | 'en') =>
+    JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src', 'messages', `${lang}.json`), 'utf8')) as {
+      pending: Record<string, string>
+    }
+  const translator = (lang: 'sv' | 'en') => {
+    const pending = messages(lang).pending
+    return (key: string) => pending[key] ?? ''
+  }
+  const highTypes = PENDING_OPERATION_TYPES.filter((type) => OPERATION_RISK_TIERS[type] === 'high')
+
+  it('shows a sentence on the pending row and in the dialog of every high type, in both languages', () => {
+    expect(highTypes.length).toBeGreaterThan(50)
+    for (const lang of ['sv', 'en'] as const) {
+      const t = translator(lang)
+      const missing = highTypes.filter((type) => {
+        const row = rowConsentSentence({ operation_type: type, status: 'pending', risk_level: 'high', params: {} }, t)
+        return !row.trim() || singleActionWarning(type, {}, t) !== row
+      })
+      expect(missing, lang).toEqual([])
+    }
+  })
+
+  it('says what the filings and payroll approvals do, without dashes', () => {
+    const sv = messages('sv').pending
+    const en = messages('en').pending
+    const expectations: Record<string, { sv: string; en: string }> = {
+      submit_vat_declaration: { sv: 'inlämnad först när', en: 'filed only once' },
+      submit_agi: { sv: 'inlämnad först när', en: 'filed only once' },
+      generate_agi: { sv: 'Inget skickas till Skatteverket', en: 'Nothing is sent to Skatteverket' },
+      book_salary_run: { sv: 'markeras som utbetald', en: 'marked as paid' },
+      settle_rot_rut_payout: { sv: 'ROT/RUT-utbetalning', en: 'ROT/RUT payout' },
+      post_kontantmetod_cutoff: { sv: 'räkenskapsårets sista dag', en: 'last day of the financial year' },
+      vacation_year_close: { sv: 'Avslutet kan inte ångras', en: 'cannot be undone' },
+      bulk_book_inbox_items: { sv: 'hoppas över', en: 'skipped' },
+    }
+    for (const [type, expected] of Object.entries(expectations)) {
+      const key = SINGLE_ACTION_WARNING_KEYS[type]
+      expect(key, type).toBe(`warning_${type}`)
+      expect(sv[key]).toMatch(/^Genom att klicka godkänn så /)
+      expect(sv[key]).toContain(expected.sv)
+      expect(en[key]).toMatch(/^By clicking approve, /)
+      expect(en[key]).toContain(expected.en)
+      expect(`${sv[key]} ${en[key]}`).not.toMatch(/[\u2013\u2014]/)
+    }
+  })
+
+  it('warns that a recurring schedule with auto_send emails every run, exactly when that raises it to high', () => {
+    for (const lang of ['sv', 'en'] as const) {
+      const t = translator(lang)
+      const expected = messages(lang).pending.warning_recurring_schedule_auto_send
+      expect(expected).toBeTruthy()
+      for (const type of ['create_recurring_schedule', 'update_recurring_schedule']) {
+        expect(getRiskLevel(type, { auto_send: true })).toBe('high')
+        expect(singleActionWarning(type, { auto_send: true }, t)).toBe(expected)
+        expect(rowConsentSentence({ operation_type: type, status: 'pending', risk_level: 'high', params: { auto_send: true } }, t)).toBe(expected)
+        // Without auto_send the schedule stays medium and its row shows nothing.
+        expect(getRiskLevel(type, { auto_send: false })).toBe('medium')
+        expect(singleActionWarning(type, { auto_send: false }, t)).toBe('')
+      }
+    }
+    expect(messages('sv').pending.warning_recurring_schedule_auto_send).toContain('mejlas till kunden')
   })
 })

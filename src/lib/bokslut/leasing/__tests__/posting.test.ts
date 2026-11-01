@@ -35,6 +35,8 @@ describe('bookFinanceLeasesYearEnd', () => {
     expect(entry).toEqual({ id: 'entry-1' })
     const call = vi.mocked(postingPort.postJournalEntry).mock.calls[0][0]
     expect(call.input).toMatchObject({ entry_date: '2026-12-31', source_type: 'year_end', fiscal_period_id: 'period-1' })
+    // The engine takes the company's year_end series (accounted#58).
+    expect(call.input).not.toHaveProperty('voucher_series')
     const total = call.input.lines.reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0)
     expect(Math.abs(total)).toBeLessThan(0.005)
     const event = typeof call.event === 'function' ? call.event() : call.event

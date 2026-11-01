@@ -46,6 +46,7 @@ import {
 } from '@/lib/bookkeeping/payout-fee-lines'
 import {
   isAccruedCostAccount,
+  pastPeriodDeferralSuggestion,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
@@ -2141,6 +2142,27 @@ export const CreateSupplierInvoiceSchema = z.object({
       message:
         'En upplupen kostnad (29xx) måste avse månader före fakturamånaden. Dela raden: ' +
         'månaderna före fakturamånaden på 29xx och resten som förutbetald kostnad (17xx) eller direkt på kostnadskontot.',
+    })
+  })
+
+  // The opposite (accounted#113): a förutbetald kostnad (17xx) of months that
+  // ended before the invoice month would book all of them on the invoice
+  // date. An omitted account gets the upplupen one server side instead.
+  invoice.items.forEach((item, index) => {
+    if (!item.accrual_period_start || !item.accrual_balance_account) return
+    const suggested = pastPeriodDeferralSuggestion(
+      { direction: 'expense', targetAccount: item.account_number },
+      item.accrual_balance_account,
+      item.accrual_period_end,
+      invoice.invoice_date,
+    )
+    if (!suggested) return
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items', index, 'accrual_balance_account'],
+      message:
+        `Perioden slutar före fakturamånaden, så kostnaden är en upplupen kostnad: välj ${suggested} i stället för ` +
+        `${item.accrual_balance_account}, så bokförs varje månad i sin egen månad. På 17xx skulle hela beloppet bokföras på fakturadatumet.`,
     })
   })
 })
@@ -5839,6 +5861,9 @@ export const UnderlagImportPreviewSchema = z.object({
 // catches typos (e.g. an extra zero) before they reach the ledger or AGI.
 export const SALARY_OVERRIDE_MAX = 10_000_000
 
+/** Upper bound for hours in one pay month: 31 days of 24 hours. */
+export const HOURS_WORKED_MAX = 744
+
 export const SalaryEmployeeOverrideSchema = z
   .object({
     // Per-run monthly salary for this employee, editable while the run is a
@@ -5846,6 +5871,10 @@ export const SalaryEmployeeOverrideSchema = z
     // override: it sets the base the engine uses for this month only and does
     // not require a reason. The route gates this field to `draft` status.
     monthly_salary: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).optional(),
+    // The hourly counterpart (accounted#1): the period's worked hours as one
+    // total, for a period kept without calendar days. Draft only, like
+    // monthly_salary; the service refuses it once the calendar has days.
+    hours_worked: z.number().nonnegative().max(HOURS_WORKED_MAX).optional(),
     // Skatteavdrag is stated in whole kronor (öretal bortfaller, SFF
     // 2011:1261 22 kap. 1 §) and the engine's own values already are: an
     // öre-bearing override would book 2710 with öre that the whole-krona
