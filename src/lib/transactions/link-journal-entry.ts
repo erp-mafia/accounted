@@ -25,6 +25,7 @@
  * kontantmetoden, before the sale is planned. The match log records
  * 'linked_to_existing_voucher' for audit on success.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
@@ -285,7 +286,7 @@ export async function linkTransactionToJournalEntry(
 
     // One rule with the match doors: a credit note, or an original with an
     // active credit note, takes no payment.
-    if (invoiceRow.credited_invoice_id || hasActiveCreditNote(invoiceRow)) {
+    if (isCreditNoteDocument(invoiceRow) || hasActiveCreditNote(invoiceRow)) {
       return { ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' }
     }
 

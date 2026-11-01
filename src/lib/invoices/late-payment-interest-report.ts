@@ -1,3 +1,5 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
@@ -36,7 +38,6 @@ export const PAYMENT_SOURCE_TYPES: ReadonlySet<string> = new Set([
   'counterparty_setoff',
 ])
 
-const OPEN_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
 
 export interface LatePaidInvoice {
   invoice_id: string
@@ -91,6 +92,7 @@ interface InvoiceRow {
   status: string
   document_type: string
   credited_invoice_id: string | null
+  total?: number | string | null
   remaining_amount?: number | string | null
   customer: { name: string | null } | null
 }
@@ -105,7 +107,7 @@ interface PaymentRow {
 }
 
 function isChargeableInvoice(invoice: InvoiceRow | null): invoice is InvoiceRow {
-  return !!invoice && invoice.document_type === 'invoice' && !invoice.credited_invoice_id
+  return !!invoice && invoice.document_type === 'invoice' && !isCreditNoteDocument(invoice)
 }
 
 export async function getLatePaymentInterestReport(
@@ -127,7 +129,7 @@ export async function getLatePaymentInterestReport(
     supabase
       .from('invoice_payments')
       .select(
-        'id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, customer:customers(name))',
+        'id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, customer:customers(name))',
       )
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
@@ -140,11 +142,11 @@ export async function getLatePaymentInterestReport(
     supabase
       .from('invoices')
       .select(
-        'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, remaining_amount, customer:customers(name)',
+        'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, remaining_amount, customer:customers(name)',
       )
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
-      .in('status', [...OPEN_STATUSES])
+      .in('status', OWED_INVOICE_STATUSES)
       .lt('due_date', asOf)
       .gt('remaining_amount', 0)
       .order('id', { ascending: true })

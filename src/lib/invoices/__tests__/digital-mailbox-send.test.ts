@@ -33,6 +33,7 @@ describe('invoiceMailboxBlock', () => {
 
   it('refuses credit notes, other documents, settled invoices and foreign currency', () => {
     expect(invoiceMailboxBlock(makeInvoice({ credited_invoice_id: 'x' }))).toBe('DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE')
+    expect(invoiceMailboxBlock(makeInvoice({ total: -500 }))).toBe('DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE')
     expect(invoiceMailboxBlock(makeInvoice({ document_type: 'quote' }))).toBe('DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE')
     expect(invoiceMailboxBlock(makeInvoice({ status: 'paid' }))).toBe('DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE')
     expect(invoiceMailboxBlock(makeInvoice({ currency: 'EUR' }))).toBe('DIGITAL_MAILBOX_CURRENCY_UNSUPPORTED')

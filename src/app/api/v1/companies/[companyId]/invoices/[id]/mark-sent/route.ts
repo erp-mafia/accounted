@@ -47,18 +47,17 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { MarkInvoiceSentPaidAtIssueSchema } from '@/lib/api/schemas'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import {
+  issuable,
   issueAndBookInvoice,
+  lacksMomsRuta,
   type IssuableInvoice,
   type IssuePartialFailure,
 } from '@/lib/invoices/issue-and-book-invoice'
-import {
-  hasRequiredInvoicePaymentAccount,
-} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import type { CompanySettings, Invoice } from '@/types'
 
 // Explicit projection for the pre-flight, the dry run and the response:
@@ -104,7 +103,8 @@ registerEndpoint({
   pitfalls: [
     'Only invoices in `status=draft` can be marked sent. Other states return 409 INVOICE_UPDATE_NOT_DRAFT (re-used; the action is structurally an update).',
     'Allocation is atomic. If a concurrent transition beats the agent\'s request to the same draft, the runner-up gets 409 INVOICE_UPDATE_NOT_DRAFT and no number is consumed.',
-    'Delivery notes (document_type=delivery_note) don\'t transition to sent: they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.',
+    'A delivery note (document_type=delivery_note) keeps its own D-series number: mark-sent books nothing and takes no F-number. It is never emailed, so this is its only way to sent.',
+    'A momsfri sale (a company outside the VAT register, vat_treatment=exempt, vat_amount=0) states no moms_ruta. Any other invoice without one, an imported draft, returns 400 VALIDATION_ERROR (details.field moms_ruta): send its items again with PATCH /invoices/{id}, or re-create it.',
     'Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.',
     'Fails closed: when the invoice\'s verifikat cannot be posted (no open or a locked period, a required dimension, an account outside the chart) the invoice stays a draft, keeps any number already allocated, and the request fails with the engine\'s code or 500 INVOICE_MARK_SENT_BOOK_FAILED (details.reason in Swedish). Fix the cause and retry.',
     'paid_at_issue is only for a plain faktura: a proforma or quote (details.reason not_invoice), a självfaktura (self_billed) or an invoice with periodised lines (periodisering) returns 400 INVOICE_PAID_AT_ISSUE_NOT_ALLOWED before anything changes; issue it without paid_at_issue and record the payment with :mark-paid. account_number must be a 19xx account (400 VALIDATION_ERROR otherwise) that exists in the chart. It always settles the full amount on the invoice date: for a partial or later payment, issue without it and use :mark-paid.',
@@ -193,25 +193,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
-    // Type/document-shape guards run BEFORE the status check so the
-    // returned error matches the documented contract (400 VALIDATION_ERROR
-    // for delivery notes / credit notes regardless of their current
-    // status; 409 INVOICE_UPDATE_NOT_DRAFT only for genuine invoices).
-    if (typed.document_type === 'delivery_note') {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'document_type',
-          message: 'Delivery notes are not transitioned via mark-sent; they have no F-series lifecycle.',
-        },
-      })
-    }
-
-    // Credit notes (document_type='invoice' but credited_invoice_id set)
+    // The document-shape guard runs BEFORE the status check so the returned
+    // error matches the documented contract (400 VALIDATION_ERROR for credit
+    // notes regardless of their current status; 409 INVOICE_UPDATE_NOT_DRAFT
+    // only for genuine invoices).
+    //
+    // Credit notes (document_type='invoice', a link or a total below zero)
     // need the credit-note journal entry generator (reverses sign of the
     // original invoice). The PR-B-2b-4 :credit endpoint handles them.
     // Reject here so we don't post the wrong-direction journal entry.
-    if (typed.credited_invoice_id) {
+    if (isCreditNoteDocument(typed)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
@@ -225,26 +216,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
-      })
-    }
-
-    // Defense in depth: moms_ruta drives which output-VAT account the
-    // journal-entry generator posts to (2611 / 2614 / etc.). A null value
-    // would silently default: wrong for reverse-charge / EU-service /
-    // zero-rated invoices. moms_ruta is populated by the POST handler
-    // from getVatRules(); a null here means the row was created via a
-    // path that bypassed v1 (legacy import, manual SQL).
-    if (!typed.moms_ruta) {
-      ctx.log.warn('invoices.mark-sent: missing moms_ruta', {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'moms_ruta',
-          message: 'Invoice has no moms_ruta set. The customer\'s VAT rule must be applied (re-create the draft via POST /invoices).',
-        },
       })
     }
 
@@ -267,6 +238,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const companySettings = settings as CompanySettings
+
+    if (lacksMomsRuta(typed, companySettings)) {
+      ctx.log.warn('invoices.mark-sent: missing moms_ruta', {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set. The customer\'s VAT rule must be applied: send its items with PATCH /invoices/{id} or re-create it via POST /invoices.',
+        },
+      })
+    }
+
     const accountingMethod = companySettings.accounting_method ?? 'accrual'
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     // #967: kontantmetoden and defer_invoice_booking companies mark sent
@@ -293,15 +279,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
       typed.payment_details = payeeSnapshot.payee
-      if (!hasRequiredInvoicePaymentAccount(companySettings, typed)) {
-        return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+      const refused = issuable(typed, companySettings)
+      if (refused) {
+        return v1ErrorResponseFromCode(refused.code, ctx.log, {
           requestId: ctx.requestId,
-          details: { currency: typed.currency },
-        })
-      }
-      if (!hasRequiredSellerVatNumber(companySettings, typed)) {
-        return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
-          requestId: ctx.requestId,
+          details: refused.details,
         })
       }
       // Preview the post-send state. invoice_number can't be predicted

@@ -93,6 +93,11 @@ describe('getAmountToPay', () => {
     expect(r.rounding.roundingDelta).toBe(0.44)
   })
 
+  it('applies no deduction to a credit note, linked or imported without a link', () => {
+    expect(getAmountToPay({ ...inv(-1000), credited_invoice_id: 'inv-0', deduction_total: 300 }, co(true)).deductionApplies).toBe(false)
+    expect(getAmountToPay({ ...inv(-1000), deduction_total: 300 }, co(true)).deductionApplies).toBe(false)
+  })
+
   it('subtracts the ROT/RUT deduction from the ROUNDED total', () => {
     const r = getAmountToPay({ ...inv(1234.56), deduction_total: 500 }, co(true))
     expect(r.deductionApplies).toBe(true)

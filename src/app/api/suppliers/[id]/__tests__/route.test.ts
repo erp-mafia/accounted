@@ -65,9 +65,9 @@ describe('GET /api/suppliers/[id]', () => {
       data: [
         // Amounts are invoice-currency: a EUR + SEK mix must never collapse
         // into one number.
-        { status: 'pending', total: 1000, remaining_amount: 600, paid_amount: 400, currency: 'EUR' },
+        { status: 'partially_paid', total: 1000, remaining_amount: 600, paid_amount: 400, currency: 'EUR' },
         { status: 'paid', total: 500, remaining_amount: 0, paid_amount: 500, currency: 'EUR' },
-        { status: 'pending', total: 2000, remaining_amount: 2000, paid_amount: 0, currency: 'SEK' },
+        { status: 'approved', total: 2000, remaining_amount: 2000, paid_amount: 0, currency: 'SEK' },
         // Paid invoices contribute to total_paid but not outstanding.
         { status: 'credited', total: 300, remaining_amount: 300, paid_amount: 0, currency: 'SEK' },
       ],
@@ -88,10 +88,33 @@ describe('GET /api/suppliers/[id]', () => {
     ])
   })
 
+  // The stat said more than the leverantörsreskontra: a reversed or disputed
+  // invoice keeps a remainder that no ledger reads as open.
+  it('counts as outstanding what the ledger reads as open, the four statuses', async () => {
+    enqueue({ data: SUPPLIER, error: null })
+    enqueue({
+      data: [
+        { status: 'registered', total: 100, remaining_amount: 100, paid_amount: 0, currency: 'SEK' },
+        { status: 'overdue', total: 100, remaining_amount: 100, paid_amount: 0, currency: 'SEK' },
+        { status: 'reversed', total: 100, remaining_amount: 100, paid_amount: 0, currency: 'SEK' },
+        { status: 'disputed', total: 100, remaining_amount: 100, paid_amount: 0, currency: 'SEK' },
+      ],
+      error: null,
+    })
+
+    const request = new Request('http://localhost/api/suppliers/sup-1')
+    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const { body } = await parseJsonResponse<{
+      data: { stats: { by_currency: { currency: string; total_outstanding: number }[] } }
+    }>(response)
+
+    expect(body.data.stats.by_currency).toEqual([{ currency: 'SEK', total_outstanding: 200, total_paid: 0 }])
+  })
+
   it('defaults a missing invoice currency to SEK', async () => {
     enqueue({ data: SUPPLIER, error: null })
     enqueue({
-      data: [{ status: 'pending', total: 100, remaining_amount: 100.005, paid_amount: 0, currency: null }],
+      data: [{ status: 'registered', total: 100, remaining_amount: 100.005, paid_amount: 0, currency: null }],
       error: null,
     })
 

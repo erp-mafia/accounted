@@ -116,3 +116,20 @@ describe('invoiceRowStatus: the status line the list and the customer card share
     })
   })
 })
+
+describe('invoiceRowStatus: a credit note imported without a link', () => {
+  const imported = (status: string) => row({ status, total: -500, remaining_amount: 0, paid_at: '2026-02-01' })
+
+  it('reads as a credit note, never as paid or credited', () => {
+    for (const status of ['paid', 'credited', 'draft', 'overdue', 'sent']) {
+      expect(invoiceRowStatus(imported(status), TODAY), status).toMatchObject({
+        kind: 'credit_note',
+        labelKey: 'badge_credit',
+      })
+    }
+  })
+
+  it('a cancelled one reads as cancelled, like a linked one', () => {
+    expect(invoiceRowStatus(imported('cancelled'), TODAY).kind).toBe('cancelled')
+  })
+})

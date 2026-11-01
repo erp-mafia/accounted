@@ -37,6 +37,7 @@
  * failed submission at the access point (replacesSubmissionId). The buyer's
  * business rejection is final: credit the invoice and issue a new one.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
@@ -254,7 +255,7 @@ function isRealInvoice(invoice: Pick<Invoice, 'document_type'>): boolean {
 
 function isSendableInvoice(invoice: PeppolInvoiceRecord): boolean {
   return isRealInvoice(invoice)
-    && !invoice.credited_invoice_id
+    && !isCreditNoteDocument(invoice)
     && !invoice.is_self_billed
     && SENDABLE_STATUSES.has(invoice.status)
 }

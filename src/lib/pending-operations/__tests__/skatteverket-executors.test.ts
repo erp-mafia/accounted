@@ -25,6 +25,12 @@ import { commitPendingOperation } from '../commit'
 // before the atomic claim for submit_vat_declaration/submit_agi. These tests
 // isolate the registry/lifecycle wiring, so make the gate transparent here;
 // its enforcement is covered by commit-capability-gate.test.ts.
+// The sandbox read in front of a paid operation: an ordinary company here.
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }

@@ -59,7 +59,7 @@ The rule of thumb: **if the customer received the invoice and it was wrong, it i
 
 **Always a full credit.** Swedish law allows a partial kreditfaktura, but Accounted credits the whole original. For a partial credit: credit the whole invoice, then issue a new invoice for what is still owed with \`gnubok_create_invoice\` (see \`invoicing-rules\`). Tell the user this before staging, with the numbers: "Jag krediterar hela faktura 1042 (12 500 kr) och skapar en ny faktura på 10 000 kr för de 8 timmar som ska stå kvar." Round money to whole öre (two decimals), never with toFixed.
 
-Then deliver the credit note: \`gnubok_send_invoice({ invoice_id: <credit_note_id> })\` e-mails the PDF (requires a customer e-mail address). If the customer received the original by Peppol or by post, tell the user to deliver the credit note another way; Peppol sending does not take credit notes.
+The credit note has not reached the customer yet: approval books it and delivers nothing, and says so in its \`warning\`. No agent tool delivers one, \`gnubok_send_invoice\` refuses a credit note and Peppol sending does not take them. Tell the user to download its PDF from the invoice page and send it the way the customer got the original.
 
 ## Step 4: Moms and locked periods
 

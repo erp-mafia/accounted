@@ -39,6 +39,10 @@ function recordingQuery() {
       calls.push(['is', column, value])
       return query
     },
+    gte(column: string, value: number) {
+      calls.push(['gte', column, value])
+      return query
+    },
     lt(column: string, value: string) {
       calls.push(['lt', column, value])
       return query
@@ -139,6 +143,7 @@ describe('filterOwedInvoices', () => {
       ['in', 'status', ['sent', 'overdue', 'partially_paid']],
       ['eq', 'document_type', 'invoice'],
       ['is', 'credited_invoice_id', null],
+      ['gte', 'total', 0],
       ['gt', 'remaining_amount', 0],
     ])
   })
@@ -152,6 +157,7 @@ describe('filterOverdueInvoices', () => {
       ['in', 'status', ['sent', 'overdue', 'partially_paid']],
       ['eq', 'document_type', 'invoice'],
       ['is', 'credited_invoice_id', null],
+      ['gte', 'total', 0],
       ['gt', 'remaining_amount', 0],
       ['lt', 'due_date', TODAY],
     ])
@@ -199,7 +205,7 @@ describe('filterInvoicesByReportedStatus', () => {
     filterInvoicesByReportedStatus(query, 'sent', TODAY)
     expect(query.calls).toEqual([
       ['in', 'status', ['sent', 'overdue']],
-      ['or', `document_type.neq.invoice,credited_invoice_id.not.is.null,due_date.gte.${TODAY},remaining_amount.lte.0`],
+      ['or', `document_type.neq.invoice,credited_invoice_id.not.is.null,total.lt.0,due_date.gte.${TODAY},remaining_amount.lte.0`],
     ])
   })
 
@@ -232,5 +238,14 @@ describe('filterInvoicesByReportedStatus', () => {
       expect(overdue).toBe(!inSentFilter(r))
       expect(effectiveInvoiceStatus(r, TODAY)).toBe(overdue ? 'overdue' : 'sent')
     }
+  })
+})
+
+describe('a credit note imported without a link', () => {
+  const imported = invoice({ status: 'sent', due_date: '2026-01-01', remaining_amount: null, total: -500 })
+
+  it('is never overdue, whether or not the row carries a remainder', () => {
+    expect(isInvoiceOverdue(imported, TODAY)).toBe(false)
+    expect(effectiveInvoiceStatus(imported, TODAY)).toBe('sent')
   })
 })

@@ -1,4 +1,6 @@
 import type { Invoice } from '@/types'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { isInvoiceOverdue } from './overdue'
 
 /**
@@ -22,17 +24,17 @@ export type InvoiceRowToneInput = Pick<Invoice, 'status' | 'credited_invoice_id'
   document_type?: Invoice['document_type'] | null
   due_date?: string | null
   remaining_amount?: number | null
+  total?: number | null
 }
 
 const SETTLED_STATUSES: ReadonlySet<Invoice['status']> = new Set(['paid', 'cancelled', 'credited', 'written_off'])
 
 export function invoiceRowTone(invoice: InvoiceRowToneInput, today?: string): InvoiceRowTone {
   if (SETTLED_STATUSES.has(invoice.status)) return 'settled'
-  const isCustomerInvoice =
-    (invoice.document_type || 'invoice') === 'invoice' && !invoice.credited_invoice_id
+  const isCustomerInvoice = (invoice.document_type || 'invoice') === 'invoice' && !isCreditNoteDocument(invoice)
   if (!isCustomerInvoice) return 'none'
   // Past due with an open remainder, whatever the stored status (lib/invoices/overdue.ts).
   if (isInvoiceOverdue(invoice, today)) return 'overdue'
-  if (invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') return 'open'
+  if (isOwedInvoiceStatus(invoice.status)) return 'open'
   return 'none'
 }

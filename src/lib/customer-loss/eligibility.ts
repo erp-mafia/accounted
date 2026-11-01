@@ -2,19 +2,20 @@
  * Whether an invoice's open claim can take a kundförlust decision, and where
  * the menu shows (build spec 3.10).
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { roundOre } from '@/lib/money'
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { CustomerLossErrorCode } from './errors'
 import type { CustomerLossInvoice, CustomerLossState, LatestCase } from './state'
-
-/** Invoice statuses that still carry an open claim on 1510. */
-export const OPEN_CLAIM_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
 
 /** Close reasons that say the customer cannot pay (Appendix A of the build spec). */
 export const LOSS_CLOSE_REASONS = ['insolvent', 'bankrupt', 'deceased', 'moved_abroad'] as const
 
-function isRealInvoice(invoice: Pick<CustomerLossInvoice, 'document_type' | 'credited_invoice_id'>): boolean {
-  return (invoice.document_type ?? 'invoice') === 'invoice' && !invoice.credited_invoice_id
+function isRealInvoice(
+  invoice: Pick<CustomerLossInvoice, 'document_type' | 'credited_invoice_id'> & Partial<Pick<CustomerLossInvoice, 'total'>>,
+): boolean {
+  return (invoice.document_type ?? 'invoice') === 'invoice' && !isCreditNoteDocument(invoice)
 }
 
 /**
@@ -23,13 +24,14 @@ function isRealInvoice(invoice: Pick<CustomerLossInvoice, 'document_type' | 'cre
  * the customer cannot pay.
  */
 export function customerLossMenuVisible(
-  invoice: Pick<CustomerLossInvoice, 'status' | 'currency' | 'due_date' | 'remaining_amount' | 'document_type' | 'credited_invoice_id'>,
+  invoice: Pick<CustomerLossInvoice, 'status' | 'currency' | 'due_date' | 'remaining_amount' | 'document_type' | 'credited_invoice_id'> &
+    Partial<Pick<CustomerLossInvoice, 'total'>>,
   latestCase: Pick<LatestCase, 'is_open' | 'close_reason'> | null,
   today: string,
 ): boolean {
   if (!isRealInvoice(invoice)) return false
   if ((invoice.currency ?? 'SEK') !== 'SEK') return false
-  if (!(OPEN_CLAIM_STATUSES as readonly string[]).includes(invoice.status)) return false
+  if (!isOwedInvoiceStatus(invoice.status)) return false
   if (roundOre(invoice.remaining_amount) <= 0) return false
   const closedAsLoss =
     !!latestCase && !latestCase.is_open && (LOSS_CLOSE_REASONS as readonly string[]).includes(latestCase.close_reason ?? '')
@@ -45,7 +47,7 @@ export function openClaimRefusal(state: CustomerLossState): CustomerLossErrorCod
   const { invoice } = state
   if (!isRealInvoice(invoice)) return 'CUSTOMER_LOSS_INVOICE_NOT_OPEN'
   if ((invoice.currency ?? 'SEK') !== 'SEK') return 'CUSTOMER_LOSS_CURRENCY_UNSUPPORTED'
-  if (!(OPEN_CLAIM_STATUSES as readonly string[]).includes(invoice.status)) return 'CUSTOMER_LOSS_INVOICE_NOT_OPEN'
+  if (!isOwedInvoiceStatus(invoice.status)) return 'CUSTOMER_LOSS_INVOICE_NOT_OPEN'
   if (roundOre(invoice.remaining_amount) <= 0) return 'CUSTOMER_LOSS_INVOICE_NOT_OPEN'
   if (invoice.deduction_total > 0) return 'CUSTOMER_LOSS_DEDUCTION_UNSUPPORTED'
   if (!state.booked) {

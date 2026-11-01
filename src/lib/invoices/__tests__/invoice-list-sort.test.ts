@@ -178,3 +178,14 @@ describe('sortInvoiceList', () => {
     expect(invoices.map((invoice) => invoice.id)).toEqual(originalOrder)
   })
 })
+
+describe('sortInvoiceList: a credit note imported without a link', () => {
+  it('sorts with the credit notes and shows no due date', () => {
+    const imported = makeInvoice({ id: 'imported', status: 'paid', total: -500, credited_invoice_id: null, due_date: '2024-01-01' })
+    const linked = makeInvoice({ id: 'linked', status: 'sent', total: -500, credited_invoice_id: 'inv-0', due_date: '2024-02-01' })
+    const paid = makeInvoice({ id: 'paid', status: 'paid', total: 500, due_date: '2024-03-01' })
+
+    expect(sort([imported, paid, linked], { column: 'status', direction: 'asc' }).map((i) => i.id)).toEqual(['paid', 'imported', 'linked'])
+    expect(sort([imported, paid], { column: 'due', direction: 'asc' }).map((i) => i.id)).toEqual(['paid', 'imported'])
+  })
+})

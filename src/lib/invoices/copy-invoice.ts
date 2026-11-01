@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type {
   Currency,
   DeductionType,
@@ -60,11 +61,11 @@ export interface InvoiceCopyInitial {
 }
 
 export function canCopyInvoice(
-  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed'>,
+  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed' | 'total'>,
 ): boolean {
   return (
     invoice.document_type === 'invoice' &&
-    !invoice.credited_invoice_id &&
+    !isCreditNoteDocument(invoice) &&
     !invoice.is_self_billed &&
     COPYABLE_STATUSES.has(invoice.status)
   )

@@ -29,7 +29,9 @@ import {
   readCustomerRecord,
 } from '@/lib/customers/customer-record'
 import { updateCustomer } from '@/lib/customers/customer-commands'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 
@@ -49,7 +51,6 @@ const CustomerDetail = CustomerRecordSchema.extend({
 })
 
 const ALLOWED_EXPAND = ['invoices', 'party'] as const
-const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 
 const CUSTOMER_DETAIL_COLUMNS = CUSTOMER_RECORD_COLUMNS
 
@@ -154,15 +155,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     let invoices: unknown[] | undefined
     const partialExpansions: string[] = []
     if (expand.has('invoices')) {
-      const { data: invs, error: invErr } = await ctx.supabase
-        .from('invoices')
-        .select(OPEN_INVOICE_COLUMNS)
-        .eq('company_id', ctx.companyId!)
-        .eq('customer_id', customerId)
-        // Proformas, delivery notes and quotes are never open receivables.
-        .eq('document_type', 'invoice')
-        .in('status', OPEN_INVOICE_STATUSES)
-        .order('invoice_date', { ascending: false })
+      const { data: invs, error: invErr } = await filterOwedInvoices(
+        ctx.supabase
+          .from('invoices')
+          .select(OPEN_INVOICE_COLUMNS)
+          .eq('company_id', ctx.companyId!)
+          .eq('customer_id', customerId),
+      ).order('invoice_date', { ascending: false })
 
       if (invErr) {
         // Soft-degrade: log but still return the customer. The agent gets
@@ -353,7 +352,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       .select('id', { count: 'exact', head: true })
       .eq('company_id', ctx.companyId!)
       .eq('customer_id', customerId)
-      .in('status', OPEN_INVOICE_STATUSES)
+      .in('status', OWED_INVOICE_STATUSES)
 
     if (openErr) {
       return v1ErrorResponse(openErr, ctx.log, { requestId: ctx.requestId })

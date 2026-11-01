@@ -110,6 +110,8 @@ import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventTaxAmount } from '@/lib/posting/store'
 import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { isCreditNoteDocument, isSettledCreditNote } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import {
   fetchCreditedAfter,
   fetchPaymentsAsOf,
@@ -1672,7 +1674,7 @@ function customerOutstandingAsOf(
   // it again would book the credit twice (the reporting company's own
   // kreditfaktura in feedback seq 798354). A credit note issued here rests
   // at 'sent' and keeps offsetting its original.
-  const liveOwn = totalOwn < 0 && row.status === 'credited'
+  const liveOwn = isSettledCreditNote(row)
     ? 0
     : invoiceCustomerOutstanding(shareInput, Number(row.paid_amount ?? 0))
   const asOfResult = resolveOutstandingAsOf(
@@ -1855,7 +1857,7 @@ export async function collectKontantmetodCutoff(
             .eq('company_id', companyId)
             .lte('invoice_date', periodEnd)
             // written_off: open on the day unless written off by then (below).
-            .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited', 'written_off'])
+            .in('status', [...OWED_INVOICE_STATUSES, 'paid', 'credited', 'written_off'])
           if (perInvoice) query = query.is('journal_entry_id', null)
           return query.order('id', { ascending: true }).range(from, to)
         },
@@ -1981,7 +1983,7 @@ export async function collectKontantmetodCutoff(
         perInvoice &&
         hasDeduction &&
         totalOwn > 0 &&
-        !row.credited_invoice_id &&
+        !isCreditNoteDocument(row) &&
         row.status !== 'credited' &&
         row.status !== 'written_off' &&
         Math.abs(Number(row.deduction_reclaimed_total ?? 0)) < ORE_TOLERANCE
@@ -2054,7 +2056,7 @@ export async function collectKontantmetodCutoff(
       reference: reference || `utkast ${String(row.id).slice(0, 8)}`,
       invoiceDate: row.invoice_date as string,
       creditedInvoiceId: (row.credited_invoice_id as string | null) ?? null,
-      creditNote: totalOwn < 0 || Boolean(row.credited_invoice_id),
+      creditNote: isCreditNoteDocument(row),
       outstandingOwn,
       fullOwn: customerShareOwn,
       row,
@@ -2420,7 +2422,7 @@ function rotPartialManualInvoice(
   return {
     invoiceId: row.id as string,
     reference: reference || (row.id as string),
-    creditNote: totalOwn < 0 || Boolean(row.credited_invoice_id),
+    creditNote: isCreditNoteDocument(row),
     openCustomerShareSek: toSek(outstandingOwn),
     openDeductionSek: toSek(roundOre(deductionLeft * openRatio)) ?? 0,
     openPartHasVat: Math.abs(openVatSek) >= ORE_TOLERANCE,
@@ -2986,7 +2988,7 @@ async function resolveLiveCarries(
         customer.set(m.invoice_id as string, {
           entryId: m.journal_entry_id,
           reference: (row.invoice_number as string | null) ?? (m.invoice_id as string),
-          creditNote: Number(row.total ?? 0) < 0 || Boolean(row.credited_invoice_id),
+          creditNote: isCreditNoteDocument(row),
         })
       }
     }

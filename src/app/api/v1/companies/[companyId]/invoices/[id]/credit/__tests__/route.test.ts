@@ -474,7 +474,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.data.journal_entry_id).toBeNull()
-    expect(body.data.warnings).toBeUndefined()
+    // The one warning every credit carries: nothing reached the customer.
+    expect(body.data.warnings).toEqual([expect.objectContaining({ code: 'CREDIT_NOTE_NOT_DELIVERED' })])
     expect(mocks.createJournalEntry).not.toHaveBeenCalled()
   })
 

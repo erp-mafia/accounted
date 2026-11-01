@@ -20,7 +20,7 @@ import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicat
 import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
-import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 
 const log = createLogger('invoices/duplicate-payment-candidates')
 
@@ -494,15 +494,9 @@ async function findAggregateCandidates(
   const rows = (Array.isArray(rowsData) ? rowsData : []) as AggregateRow[]
   if (rows.length === 0) return []
 
-  let othersQuery = supabase
-    .from('invoices')
-    .select('id, invoice_number, remaining_amount, total, due_date')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .in('status', [...MATCHABLE_INVOICE_STATUSES])
-    .gt('remaining_amount', 0)
-    .or('currency.is.null,currency.eq.SEK')
+  let othersQuery = filterOwedInvoices(
+    supabase.from('invoices').select('id, invoice_number, remaining_amount, total, due_date').eq('company_id', companyId),
+  ).or('currency.is.null,currency.eq.SEK')
   if (invoiceNumber) othersQuery = othersQuery.neq('invoice_number', invoiceNumber)
   const { data: othersData } = await othersQuery
     .order('due_date', { ascending: true })

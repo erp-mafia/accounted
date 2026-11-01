@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
@@ -56,6 +57,7 @@ export function paidAtIssueBlockReason(
   invoice: {
     document_type?: InvoiceDocumentType | string | null
     credited_invoice_id?: string | null
+    total?: number | null
     is_self_billed?: boolean | null
     invoice_date?: string | null
     items?: ReadonlyArray<{
@@ -67,7 +69,7 @@ export function paidAtIssueBlockReason(
 ): PaidAtIssueBlockReason | null {
   if (request.customLines) return 'custom_lines'
   if (invoice.document_type && invoice.document_type !== 'invoice') return 'not_invoice'
-  if (invoice.credited_invoice_id) return 'credit_note'
+  if (isCreditNoteDocument(invoice)) return 'credit_note'
   if (invoice.is_self_billed) return 'self_billed'
   if ((invoice.items ?? []).some((item) => itemHasAccrual(item))) return 'periodisering'
   if (invoice.invoice_date && futurePaymentDateRefusal(invoice.invoice_date)) return 'dated_ahead'

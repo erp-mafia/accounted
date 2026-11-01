@@ -59,7 +59,8 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
     insert: unknown[]
     update: unknown[]
     selects: Record<string, string[]>
-  } = { insert: [], update: [], selects: {} }
+    filters: Record<string, unknown[][]>
+  } = { insert: [], update: [], selects: {}, filters: {} }
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -73,6 +74,7 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
           if (prop === 'select' && typeof args[0] === 'string') {
             ;(captured.selects[table] ??= []).push(args[0])
           }
+          ;(captured.filters[table] ??= []).push([prop, ...args])
           return buildChain(table)
         }
       },
@@ -419,6 +421,35 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.invoices[0].id).toBe('inv-open-1')
     // Successful expansion MUST NOT set the partial flag.
     expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
+  // A sent credit note carries status 'sent' and nothing remaining: it read as
+  // an open invoice here, where the other readers of what is owed left it out.
+  it('reads the open invoices through the one owed filter', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+      invoices: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(supabase.captured.filters.invoices).toEqual(
+      expect.arrayContaining([
+        ['in', 'status', ['sent', 'overdue', 'partially_paid']],
+        ['eq', 'document_type', 'invoice'],
+        ['is', 'credited_invoice_id', null],
+        ['gte', 'total', 0],
+        ['gt', 'remaining_amount', 0],
+      ]),
+    )
   })
 
   // crm#1568: the open invoices carried the exact total only, so an

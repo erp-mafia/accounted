@@ -35,3 +35,11 @@ describe('hasActiveCreditNote', () => {
     expect(hasActiveCreditNote({ credit_notes: null })).toBe(false)
   })
 })
+
+describe('invoiceDocumentRefusal: a credit note imported without a link', () => {
+  it('refuses it by the one identity', () => {
+    expect(invoiceDocumentRefusal({ document_type: 'invoice', credited_invoice_id: null, total: -500 })).toEqual({
+      code: 'MATCH_INVOICE_CREDIT_NOTE',
+    })
+  })
+})

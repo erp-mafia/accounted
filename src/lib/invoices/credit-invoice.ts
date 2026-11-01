@@ -39,6 +39,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { creditBooksOriginalFirst } from '@/lib/bookkeeping/booking-mode'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { Logger } from '@/lib/logger'
@@ -47,7 +48,6 @@ import {
   buildCreditNoteFields,
   creditNoteNumber,
   creditNoteOriginalReference,
-  isCreditNoteDocument,
 } from './build-credit-note'
 import { buildCreditNoteItem } from './build-credit-note-item'
 import {
@@ -515,6 +515,16 @@ export type CreditInvoiceResult =
       /** Set when a verifikat was posted before the failure (INVOICE_CREDIT_REPAIR_REQUIRED). */
       postedIds?: Record<string, string>
     }
+
+/**
+ * What the v1 and MCP doors add to a credit that went through: the one-call
+ * credit issues and books the credit note and delivers nothing. The dashboard
+ * sends or marks the draft itself, which records the delivery.
+ */
+export const CREDIT_NOTE_NOT_DELIVERED = {
+  code: 'CREDIT_NOTE_NOT_DELIVERED',
+  message: 'Kreditfakturan är utfärdad och bokförd men har inte skickats till kunden. Skicka PDF:en själv.',
+} as const
 
 /**
  * Credit `invoiceId` in one call: the refusal, the period of today when a

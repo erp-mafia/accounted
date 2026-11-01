@@ -23,6 +23,7 @@
  * minute), an expired token mid-run, a locked or closed period for today's
  * voucher, and the time budget.
  */
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { chunk as chunks } from '@/lib/utils'
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -136,7 +137,6 @@ const defaultDeps: DeductionBackfillDeps = {
 }
 
 const PROVIDER = 'visma'
-const OPEN_STATUSES = ['sent', 'overdue', 'partially_paid']
 const ACTIVE_JOB_STATES = ['queued', 'running', 'retry_wait']
 /** Detail fetches in flight at once; the client's limiter keeps Visma's pace. */
 const FETCH_CONCURRENCY = 4
@@ -260,7 +260,7 @@ async function loadCandidates(
       .select('id, invoice_number, invoice_date, status, currency, total, paid_amount, deduction_total')
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
-      .in('status', OPEN_STATUSES)
+      .in('status', OWED_INVOICE_STATUSES)
       .order('id', { ascending: true })
       .range(from, to),
   )

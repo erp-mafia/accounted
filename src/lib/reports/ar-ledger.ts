@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { roundOre } from '@/lib/money'
 import { outstandingAsOf, paymentsAsOfFromFacts } from './reskontra-payments'
 import {
@@ -83,24 +85,7 @@ export interface ARLedgerReport {
  * reconciliation read that same population, so the aggregate and its detail
  * rows cannot drift apart.
  */
-export const AR_LEDGER_STATUSES = ['sent', 'overdue', 'partially_paid', 'credited'] as const
-
-/**
- * A kreditfaktura the provider migration imported as settled. Accounted issues
- * its own credit notes as 'sent' (issue-credit-note.ts) and reserves
- * 'credited' for the invoice a credit note reverses, which is why
- * AR_LEDGER_STATUSES keeps that status. The migration gives every imported
- * credit note 'credited' instead, as a terminal state with nothing paid and
- * nothing remaining (arcim-migration entity-mapper): the provider had already
- * netted it into the balance of the invoice it credits, whose paid_amount
- * carries it. Read like an original, total - paid_amount counted each credit a
- * second time, as an open negative receivable, while 1510 stood at 0. Same
- * rule as the kontantmetod cut-off (kontantmetod-cutoff.ts). The population
- * read (get_ar_ledger_invoices) leaves these rows out in SQL.
- */
-export function isSettledCreditNote(inv: { status?: string | null; total?: unknown }): boolean {
-  return inv.status === 'credited' && (Number(inv.total) || 0) < 0
-}
+export const AR_LEDGER_STATUSES = [...OWED_INVOICE_STATUSES, 'credited'] as const
 
 /**
  * Generate AR ledger (kundreskontra) with aging analysis.
@@ -183,7 +168,7 @@ export async function generateARLedger(
       creditUsed.get(inv.id)
     ))
   }
-  const creditNoteIds = invoices.filter((inv) => (Number(inv.total) || 0) < 0).map((inv) => inv.id)
+  const creditNoteIds = invoices.filter(isCreditNoteDocument).map((inv) => inv.id)
   const creditedInvoiceOf = creditNoteIds.length > 0
     ? await fetchCreditedInvoiceIds(supabase, companyId, creditNoteIds)
     : new Map<string, string>()

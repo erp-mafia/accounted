@@ -1,3 +1,5 @@
+import { excludeCreditNotes } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
@@ -124,15 +126,16 @@ export async function GET(
       feed.include_invoices
         ? fetchAllRows<Invoice>(
             ({ from, to }) =>
-              supabase
-                .from('invoices')
-                .select('*, customer:customers(*)')
-                .eq('company_id', feed.company_id)
-                .in('status', ['sent', 'paid', 'partially_paid', 'overdue'])
-                // A quote's due_date only mirrors its expiry; it is not a
-                // payment date. Proformas and delivery notes are not owed.
-                .eq('document_type', 'invoice')
-                .is('credited_invoice_id', null)
+              excludeCreditNotes(
+                supabase
+                  .from('invoices')
+                  .select('*, customer:customers(*)')
+                  .eq('company_id', feed.company_id)
+                  .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
+                  // A quote's due_date only mirrors its expiry; it is not a
+                  // payment date. Proformas and delivery notes are not owed.
+                  .eq('document_type', 'invoice'),
+              )
                 .gte('due_date', startStr)
                 .lte('due_date', endStr)
                 .order('due_date')

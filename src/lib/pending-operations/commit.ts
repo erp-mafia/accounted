@@ -32,10 +32,13 @@ import { createCustomer, PERSONAL_NUMBER_CIPHERTEXT_RE, updateCustomer } from '@
 import { toCustomerRecord } from '@/lib/customers/customer-record'
 import {
   archiveIssuedInvoicePdf,
+  emailRefusal,
+  issuable,
   issueAndBookInvoice,
   markInvoiceSentAndBook,
   restoreUnbookedDraft,
   type IssuableInvoice,
+  type IssueRefusal,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
@@ -130,7 +133,7 @@ import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { describeRefundFailure, refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
 import type { SaleFirstRefusal } from '@/lib/invoices/sale-first'
-import { creditInvoice } from '@/lib/invoices/credit-invoice'
+import { CREDIT_NOTE_NOT_DELIVERED, creditInvoice } from '@/lib/invoices/credit-invoice'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import {
@@ -172,6 +175,7 @@ import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { isSandboxCompany, SANDBOX_BLOCKED_MESSAGE_SV } from '@/lib/sandbox/guard'
 import { exceedsUnattendedLimit } from './unattended-limit'
 import {
   generateInvoiceEmailHtml,
@@ -181,12 +185,7 @@ import {
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
-import {
-  describeMissingInvoicePaymentAccount,
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/cash-accounts/invoice-payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { describeMissingInvoicePaymentAccount, invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import {
   exceedsInvoiceEmailRecipientLimit,
   invoiceEmailRecipientCount,
@@ -290,7 +289,8 @@ import type {
   FiscalPeriod,
 } from '@/types'
 import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
-import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
   ACCOUNTING_METHOD_MISSING,
@@ -2777,6 +2777,15 @@ async function commitCreditNoteRefund(
   }
 }
 
+/** A refused issue as the executors answer it. */
+function issueRefusalResult(refusal: IssueRefusal, currency: Invoice['currency']): ExecutorResult {
+  if (refusal.code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING') {
+    return { error: describeMissingInvoicePaymentAccount(currency).sv, status: 400 }
+  }
+  const entry = getErrorEntry(refusal.code)
+  return { error: entry?.message_sv ?? refusal.code, errorCode: refusal.code, status: entry?.httpStatus ?? 400 }
+}
+
 async function commitSendInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -2799,15 +2808,17 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.credited_invoice_id) {
+  if (isCreditNoteDocument(invoice)) {
     return {
       error: 'Credit notes must be issued through the invoice send flow',
       status: 409,
     }
   }
+  const notEmailed = emailRefusal(invoice)
+  if (notEmailed) return issueRefusalResult(notEmailed, invoice.currency)
   // partially_paid/credited imply the invoice was already issued too: the
   // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
-  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited', 'written_off'].includes(invoice.status)) {
+  if ([...OWED_INVOICE_STATUSES, 'paid', 'credited', 'written_off'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
   }
   // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance
@@ -2843,21 +2854,8 @@ async function commitSendInvoice(
     }
   }
   ;(invoice as Invoice).payment_details = payeeSnapshot.payee
-  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-    return {
-      error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv,
-      status: 400,
-    }
-  }
-
-  if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
-    return {
-      error:
-        getErrorEntry('INVOICE_SEND_VAT_NUMBER_MISSING')?.message_sv
-        ?? 'Momsregistreringsnummer saknas i företagsinställningarna.',
-      status: 400,
-    }
-  }
+  const refused = issuable(invoice as Invoice, company as CompanySettings)
+  if (refused) return issueRefusalResult(refused, invoice.currency)
 
   const recipients = resolveInvoiceEmailRecipients({
     to: customer.email,
@@ -2879,13 +2877,6 @@ async function commitSendInvoice(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
   )
 
-  let originalInvoiceNumber: string | undefined
-  if (invoice.credited_invoice_id) {
-    const { data: orig } = await supabase
-      .from('invoices').select('invoice_number').eq('id', invoice.credited_invoice_id).single()
-    if (orig) originalInvoiceNumber = orig.invoice_number
-  }
-
   // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
   // number, so a render failure can't leave a numbered-but-never-issued
   // invoice (an F-series gap if the draft is later abandoned). Skipped when
@@ -2900,7 +2891,6 @@ async function commitSendInvoice(
         customer,
         items,
         company: company as CompanySettings,
-        originalInvoiceNumber,
         paymentAccountRequired,
       })
     } catch (err) {
@@ -2987,11 +2977,9 @@ async function commitSendInvoice(
     customer,
     items,
     company: company as CompanySettings,
-    originalInvoiceNumber,
     paymentAccountRequired,
   })
 
-  const isCreditNote = !!invoice.credited_invoice_id
   const filename = invoicePdfFilename({
     companyName: company.company_name,
     customerName: customer.name,
@@ -2999,7 +2987,7 @@ async function commitSendInvoice(
     invoiceId: invoice.id,
     invoiceDate: invoice.invoice_date,
     documentType: invoice.document_type,
-    isCreditNote,
+    isCreditNote: false,
   })
 
   // Issue BEFORE delivery, fail closed: status sent + the verifikat through
@@ -3166,7 +3154,7 @@ async function commitMarkInvoiceSent(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.credited_invoice_id) {
+  if (isCreditNoteDocument(invoice)) {
     return {
       error: 'Credit notes must be issued through the invoice send flow',
       status: 409,
@@ -3207,14 +3195,8 @@ async function commitMarkInvoiceSent(
       case 'INVOICE_CUSTOMER_MISSING':
         return customerMissingResult()
       case 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING':
-        return { error: describeMissingInvoicePaymentAccount((invoice as Invoice).currency).sv, status: 400 }
       case 'INVOICE_SEND_VAT_NUMBER_MISSING':
-        return {
-          error:
-            getErrorEntry('INVOICE_SEND_VAT_NUMBER_MISSING')?.message_sv
-            ?? 'Momsregistreringsnummer saknas i företagsinställningarna.',
-          status: 400,
-        }
+        return issueRefusalResult({ code: issued.errorCode }, (invoice as Invoice).currency)
       case 'INVOICE_NUMBER_SERIES_BEHIND':
         return {
           error: issued.messageSv ?? getErrorEntry(issued.errorCode)?.message_sv ?? issued.errorCode,
@@ -4492,6 +4474,7 @@ async function commitCreditInvoice(
       journal_entry_id: result.journalEntryId,
       // accounted#45: the deferred original was booked first, on its own date.
       ...(result.originalJournalEntryId ? { original_journal_entry_id: result.originalJournalEntryId } : {}),
+      warning: CREDIT_NOTE_NOT_DELIVERED.message,
     },
   }
 }
@@ -6494,6 +6477,19 @@ async function commitPendingOperationInner(
       error: capabilityBlockedError(requiredCapability).message_sv,
       http_status: 403,
       code: 'capability_blocked',
+      operation_status: 'pending',
+    }
+  }
+
+  // ── The sandbox gate: the same operations reach the same paid services, and
+  //    a sandbox holds a trial of them all, so the capability above says yes.
+  //    The routes run guardSandbox; an approval comes through here instead.
+  if (requiredCapability && (await isSandboxCompany(supabase, companyId))) {
+    return {
+      status: 'failed',
+      error: SANDBOX_BLOCKED_MESSAGE_SV,
+      http_status: 403,
+      code: 'sandbox_blocked',
       operation_status: 'pending',
     }
   }

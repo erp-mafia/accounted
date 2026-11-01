@@ -177,6 +177,11 @@ describe('linkTransactionToJournalEntry: the invoice settlement side (#3440)', (
   const AR_CREDIT = { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }
   const BANK_DEBIT = { settlement_side: 'bank_debit', account_prefix: '19', entry_side: 'debit' }
 
+  it('refuses a credit note imported without a link, as the match doors do', async () => {
+    expect(await run(revenueVoucher, BANK_DEBIT, { total: -500 }).outcome)
+      .toMatchObject({ ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' })
+  })
+
   it('refuses an original with an active credit note, as the match doors do, and a cancelled or half-created one does not count', async () => {
     const live = { id: 'cn-1', status: 'sent', creation_complete: true }
     expect(await run(revenueVoucher, BANK_DEBIT, { credit_notes: [live] }).outcome)

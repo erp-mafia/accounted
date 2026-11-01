@@ -116,6 +116,7 @@ describe('getLatePaymentInterestReport', () => {
   it('skips credit notes, quotes and other document types', async () => {
     const report = await run([
       payment({ invoice: invoice({ credited_invoice_id: 'inv-0' }) }),
+      payment({ id: 'p-imported', invoice: invoice({ id: 'cn-1', total: -500 } as never) }),
       payment({ id: 'p-quote', invoice: invoice({ id: 'q-1', document_type: 'quote' }) }),
     ])
     expect(report.paid_late).toEqual([])

@@ -90,6 +90,11 @@ describe('evaluateEligibility', () => {
     expect(codes(facts({ invoice: { ...base, is_self_billed: true } }))).toContain('elig_not_invoice')
   })
 
+  it('refuses a credit note imported without a link', () => {
+    const base = facts().invoice
+    expect(codes(facts({ invoice: { ...base, total: -1250 } }))).toContain('elig_credit_note')
+  })
+
   it('refuses an invoice with a draft credit note, or one already credited', () => {
     expect(codes(facts({ creditNotes: [{ status: 'draft' }] }))).toContain('elig_credit_draft')
     expect(codes(facts({ creditNotes: [{ status: 'sent' }] }))).toContain('elig_credited')

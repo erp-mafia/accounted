@@ -21,6 +21,7 @@
  *     verifikat on the invoice date, the buildInvoiceCashLines lines the
  *     payment at issue books, in either accounting method.
  */
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { buildInvoiceCashLines, buildInvoicePaymentLines } from '@/lib/bookkeeping/invoice-entries'
@@ -302,7 +303,7 @@ export async function buildIssuePreview(
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
 
   let willPost = false
-  if (isDraft && isRealInvoice && !invoice.credited_invoice_id && !invoice.journal_entry_id) {
+  if (isDraft && isRealInvoice && !isCreditNoteDocument(invoice) && !invoice.journal_entry_id) {
     const { data: settings, error } = await supabase
       .from('company_settings')
       .select('accounting_method, defer_invoice_booking')

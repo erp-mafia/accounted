@@ -7,6 +7,7 @@
  * (migration 20261022130100) checks the same rules again under its row locks,
  * in the same order, answering the same codes.
  */
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { roundOre } from '@/lib/money'
@@ -68,13 +69,12 @@ export type SetoffIneligibleReason =
   | 'collection_open'
   | 'payment_in_flight'
 
-const OPEN_INVOICE_STATUSES: ReadonlySet<string> = new Set(['sent', 'overdue', 'partially_paid'])
 const OPEN_SUPPLIER_INVOICE_STATUSES: ReadonlySet<string> = new Set(['registered', 'approved', 'overdue', 'partially_paid'])
 
 /** Why a customer invoice cannot be set off, or null when it can. */
 export function customerInvoiceIneligibility(invoice: SetoffInvoiceFacts): SetoffIneligibleReason | null {
   if ((invoice.documentType ?? 'invoice') !== 'invoice' || invoice.creditedInvoiceId) return 'credit_note'
-  if (!OPEN_INVOICE_STATUSES.has(invoice.status) || !(invoice.remaining > 0)) return 'not_open'
+  if (!isOwedInvoiceStatus(invoice.status) || !(invoice.remaining > 0)) return 'not_open'
   if (!isLedgerCurrency(invoice.currency)) return 'currency'
   if (invoice.deductionTotal > 0) return 'deduction'
   if (!invoice.booked) return 'not_booked'

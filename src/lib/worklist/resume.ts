@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm, stockholmYearMonth } from '@/lib/dates/iso'
+import { HAS_ISSUE_STEP_OR_ARMS } from '@/lib/bookkeeping/credit-note-state'
 import { effectiveQuoteStatus, quoteHasLiveFollowUp } from '@/lib/invoices/quote-status'
 
 /**
@@ -197,6 +198,7 @@ export async function listResumeItems(
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
       .eq('status', 'draft')
+      .or(HAS_ISSUE_STEP_OR_ARMS)
       .order('updated_at', { ascending: false })
       .limit(RESUME_MAX_ROWS + 1)
       .then((r) => r, () => ({ data: null })),

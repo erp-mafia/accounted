@@ -1,3 +1,4 @@
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import type { CollectionsAction, CollectionsStage } from '@accounted/connect-contract'
 import type { CollectionsStartState } from './flags'
 import { NOT_STARTED_STAGES, isInCollectionStage } from './stages'
@@ -8,9 +9,6 @@ import { isInvoiceOverdue } from '@/lib/invoices/overdue'
  * 3.5), pure and client-safe: whether "Skicka till inkasso" is offered, and
  * what the Påminnelser card says about who reminds the customer.
  */
-
-/** Statuses of an invoice the customer still owes. */
-const OWED_STATUSES: ReadonlySet<string> = new Set(['sent', 'overdue', 'partially_paid'])
 
 export interface EntryInvoice {
   status: string
@@ -60,7 +58,7 @@ export function remindersAside(input: {
   const open = input.openCase?.isOpen ? input.openCase : null
   if (open && isInCollectionStage(open.stage)) return { key: 'reminders_by_provider' }
   if (open || input.connection?.state !== 'active') return null
-  if (!OWED_STATUSES.has(input.invoice.status)) return null
+  if (!isOwedInvoiceStatus(input.invoice.status)) return null
   if (input.connection.ladderMode === 'staged') {
     // Proposed for the daily batch; without its day count the card keeps its own aside.
     return input.connection.ladderDaysAfterDue === null ? null : { key: 'reminders_batch', days: input.connection.ladderDaysAfterDue }

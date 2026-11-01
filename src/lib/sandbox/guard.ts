@@ -25,6 +25,10 @@ export async function isSandboxCompany(
   return data?.is_sandbox === true
 }
 
+/** What a sandbox user is told, on every door. */
+export const SANDBOX_BLOCKED_MESSAGE_SV =
+  'Inte tillgängligt i sandlådan. Skapa ett konto för att använda AI-assistenten och externa tjänster.'
+
 /**
  * Standard 403 response for sandbox-blocked endpoints. The bilingual envelope
  * matches the rest of the app's error shape: the UI picks the right field
@@ -33,7 +37,7 @@ export async function isSandboxCompany(
 export function sandboxBlockedResponse(): NextResponse {
   return NextResponse.json(
     {
-      error: 'Inte tillgängligt i sandlådan. Skapa ett konto för att använda AI-assistenten och externa tjänster.',
+      error: SANDBOX_BLOCKED_MESSAGE_SV,
       error_en: 'Not available in the sandbox. Create an account to use the AI assistant and external services.',
       sandbox_blocked: true,
     },

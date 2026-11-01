@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { HAS_ISSUE_STEP_OR_ARMS } from '@/lib/bookkeeping/credit-note-state'
 import { createTableMockSupabase } from '@/tests/helpers'
 import {
   mergeResumeItems,
@@ -242,6 +243,17 @@ describe('listResumeItems', () => {
       ['document_type', 'invoice'],
       ['document_type', 'quote'],
     ])
+  })
+
+  it('asks only for drafts with an issue step: nothing nudges a send no door can make', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({
+      invoices: [{ data: [] }, { data: [] }],
+    })
+
+    await listResumeItems(supabase as unknown as SupabaseClient, 'company-1', now)
+
+    // The arms themselves are judged over a real PostgREST (invoice-filters.tool.test.ts).
+    expect(findCalls('invoices', 'or')[0]).toEqual([HAS_ISSUE_STEP_OR_ARMS])
   })
 
   it('leaves overdue invoices to the Att göra group: the faktura read is drafts only (crm#1084)', async () => {

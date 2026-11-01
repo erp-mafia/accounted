@@ -2,6 +2,12 @@
 // a database refusal by its class and code (crm#1272).
 // Booking review rules (accounted#130): none in these tests; the queued mock
 // would otherwise hand their read a response queued for the operation.
+// The sandbox read in front of a paid operation: an ordinary company here.
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+}))
+
 vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
   loadActiveBookingReviewRules: vi.fn(async () => []),

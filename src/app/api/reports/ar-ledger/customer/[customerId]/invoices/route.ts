@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from '@/lib/reports/ar-ledger-invoices'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
@@ -82,7 +83,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     ])
   )
   // Each credit note set against the invoice it credits, as in generateARLedger.
-  const creditNoteIds = population.filter((inv) => (Number(inv.total) || 0) < 0).map((inv) => inv.id)
+  const creditNoteIds = population.filter(isCreditNoteDocument).map((inv) => inv.id)
   const paired = netCreditedPairs(
     population,
     ownOutstanding,

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { invoiceHasActiveCreditNote } from '@/lib/invoices/active-credit-note'
 import { futurePaymentDateRefusal, type FuturePaymentDateRefusal } from '@/lib/invoices/payment-date'
@@ -31,10 +32,11 @@ export async function invoicePayableRefusal(
     status: string
     document_type?: string | null
     credited_invoice_id?: string | null
+    total?: number | string | null
   },
   paymentDate: string,
 ): Promise<InvoicePayableRefusal | null> {
-  if (invoice.credited_invoice_id) return { code: 'INVOICE_PAID_NOT_PAYABLE', details: { reason: 'credit_note' } }
+  if (isCreditNoteDocument(invoice)) return { code: 'INVOICE_PAID_NOT_PAYABLE', details: { reason: 'credit_note' } }
   if (invoice.document_type === 'quote') return { code: 'INVOICE_QUOTE_NOT_PAYABLE' }
   if (invoice.document_type === 'delivery_note') {
     return { code: 'INVOICE_PAID_NOT_PAYABLE', details: { reason: 'delivery_note' } }

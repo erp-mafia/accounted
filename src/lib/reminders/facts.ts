@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanySettings, Customer, Invoice, InvoiceDeliveryProviderStatus } from '@/types'
 import { collectionClaim } from '@/lib/collections/eligibility'
@@ -115,7 +116,7 @@ export async function loadReminderContext(
 
   const email = customer?.email?.trim() ?? ''
   const facts: ReminderInvoiceFacts = {
-    kind: invoice.credited_invoice_id || (invoice.document_type ?? 'invoice') !== 'invoice' || raw.is_self_billed ? 'other' : 'invoice',
+    kind: isCreditNoteDocument(invoice) || (invoice.document_type ?? 'invoice') !== 'invoice' || raw.is_self_billed ? 'other' : 'invoice',
     status: invoice.status,
     invoiceDate: invoice.invoice_date,
     dueDate: invoice.due_date,

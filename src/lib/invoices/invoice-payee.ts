@@ -90,7 +90,7 @@ export async function snapshotInvoicePayee(
   supabase: SupabaseClient,
   companyId: string,
   invoice: Pick<Invoice, 'id' | 'currency'>
-    & Partial<Pick<Invoice, 'payment_cash_account_id' | 'payment_details' | 'document_type' | 'credited_invoice_id'>>,
+    & Partial<Pick<Invoice, 'payment_cash_account_id' | 'payment_details' | 'document_type' | 'credited_invoice_id' | 'total'>>,
   opts: SnapshotInvoicePayeeOptions = {},
 ): Promise<InvoicePayeeSnapshotResult> {
   const cashAccountId = invoice.payment_cash_account_id ?? null
@@ -100,6 +100,7 @@ export async function snapshotInvoicePayee(
   if (!invoiceRequiresPaymentAccount({
     credited_invoice_id: invoice.credited_invoice_id ?? null,
     document_type: invoice.document_type ?? 'invoice',
+    total: invoice.total,
   })) {
     return { ok: true, payee: invoice.payment_details ?? null }
   }

@@ -1,4 +1,6 @@
 import type { InvoiceStatus } from '@/types'
+import { CREDIT_NOTE_OR_ARMS, excludeCreditNotes, isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { isOwedInvoiceStatus, OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { daysBetweenIso, isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
@@ -24,11 +26,6 @@ import { daysBetweenIso, isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
  * kontantmetoden and faktureringsmetoden read it the same way.
  */
 
-/** Statuses of an invoice the customer still owes. */
-export const OWED_INVOICE_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
-
-const OWED: ReadonlySet<string> = new Set(OWED_INVOICE_STATUSES)
-
 export interface OverdueInvoiceInput {
   status: string
   /** YYYY-MM-DD. */
@@ -37,16 +34,17 @@ export interface OverdueInvoiceInput {
   remaining_amount?: number | null
   /** Older rows can lack it; a missing value is 'invoice'. */
   document_type?: string | null
-  /** Set on a credit note (kreditfaktura): never a receivable. */
+  /** A credit note (kreditfaktura) is never a receivable: a link, or a total below zero. */
   credited_invoice_id?: string | null
+  total?: number | string | null
 }
 
 /** The invoice has an unpaid remainder past its due date. */
 export function isInvoiceOverdue(invoice: OverdueInvoiceInput, today: string = todayIsoStockholm()): boolean {
-  if (!OWED.has(invoice.status)) return false
+  if (!isOwedInvoiceStatus(invoice.status)) return false
   // Proformas, delivery notes and quotes carry a date but no receivable.
   if ((invoice.document_type || 'invoice') !== 'invoice') return false
-  if (invoice.credited_invoice_id) return false
+  if (isCreditNoteDocument(invoice)) return false
   if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount <= 0) return false
   return !!invoice.due_date && isPastDue(invoice.due_date, today)
 }
@@ -80,6 +78,7 @@ interface InvoiceFilterQuery {
   in(column: string, values: readonly string[]): InvoiceFilterQuery
   eq(column: string, value: string): InvoiceFilterQuery
   is(column: string, value: null): InvoiceFilterQuery
+  gte(column: string, value: number): InvoiceFilterQuery
   lt(column: string, value: string): InvoiceFilterQuery
   gt(column: string, value: number): InvoiceFilterQuery
   or(filters: string): InvoiceFilterQuery
@@ -97,15 +96,12 @@ function assertIsoDate(today: string): void {
 /**
  * Narrows an `invoices` query to the ones a customer still owes money on,
  * whatever the due date: a real faktura in an owed status with an open
- * remainder. A credit note is never owed: it carries credited_invoice_id and
- * nothing remaining, even while its status says 'sent' (crm#1435).
+ * remainder. A credit note is never owed, even while its status says 'sent'
+ * (crm#1435): it has nothing remaining and isCreditNoteDocument says what it is.
  */
 export function filterOwedInvoices<Q extends FilterableQuery>(query: Q): Q {
-  return (query as unknown as InvoiceFilterQuery)
-    .in('status', OWED_INVOICE_STATUSES)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .gt('remaining_amount', 0) as unknown as Q
+  const owed = (query as unknown as InvoiceFilterQuery).in('status', OWED_INVOICE_STATUSES).eq('document_type', 'invoice')
+  return excludeCreditNotes(owed).gt('remaining_amount', 0) as unknown as Q
 }
 
 /**
@@ -139,7 +135,7 @@ export function filterInvoicesByReportedStatus<Q extends FilterableQuery>(
     // scopeTransactionsToAccount in lib/reconciliation/bank-reconciliation).
     return builder
       .in('status', ['sent', 'overdue'])
-      .or(`document_type.neq.invoice,credited_invoice_id.not.is.null,due_date.gte.${today},remaining_amount.lte.0`) as unknown as Q
+      .or(`document_type.neq.invoice,${CREDIT_NOTE_OR_ARMS},due_date.gte.${today},remaining_amount.lte.0`) as unknown as Q
   }
   return builder.eq('status', status) as unknown as Q
 }

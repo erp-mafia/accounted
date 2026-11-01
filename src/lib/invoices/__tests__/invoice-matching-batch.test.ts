@@ -41,8 +41,12 @@ function createFixtureSupabase(tables: Record<string, Row[]>) {
         filters.push((row) => (row[col] ?? null) === value)
         return builder
       },
-      in: (col: string, values: unknown[]) => {
+      in: (col: string, values: readonly unknown[]) => {
         filters.push((row) => values.includes(row[col]))
+        return builder
+      },
+      gte: (col: string, value: number) => {
+        filters.push((row) => Number(row[col]) >= value)
         return builder
       },
       not: (col: string, op: string, value: unknown) => {

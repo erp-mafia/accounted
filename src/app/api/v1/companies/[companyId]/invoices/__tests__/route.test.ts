@@ -444,7 +444,7 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     const invoiceFilters = filters.filter((f) => f.table === 'invoices').map((f) => [f.method, ...f.args])
     expect(invoiceFilters).toContainEqual(['in', 'status', ['sent', 'overdue']])
     const or = invoiceFilters.find((f) => f[0] === 'or')
-    expect(String(or?.[1])).toMatch(/^document_type\.neq\.invoice,credited_invoice_id\.not\.is\.null,due_date\.gte\.\d{4}-\d{2}-\d{2},remaining_amount\.lte\.0$/)
+    expect(String(or?.[1])).toMatch(/^document_type\.neq\.invoice,credited_invoice_id\.not\.is\.null,total\.lt\.0,due_date\.gte\.\d{4}-\d{2}-\d{2},remaining_amount\.lte\.0$/)
   })
 
   it('emits a next_cursor when the page is full', async () => {

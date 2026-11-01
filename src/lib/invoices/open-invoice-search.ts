@@ -2,10 +2,8 @@ import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import {
-  MATCHABLE_INVOICE_STATUSES,
-  MATCHABLE_SUPPLIER_INVOICE_STATUSES,
-} from '@/lib/bookkeeping/matchable-statuses'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
+import { filterOwedInvoices } from './overdue'
 import {
   closedLookupNumbers,
   resolvePastedReferences,
@@ -84,14 +82,9 @@ export async function searchOpenInvoices<T extends PickerRow>(
   // faktura per ML 17 kap 24 § and must never be matched against a receipt.
   // Literal select strings throughout: the schema guard checks their columns.
   const pattern = pickerSearchPattern(term)
-  let byNumberQuery = supabase
-    .from('invoices')
-    .select('*, customer:customers(*)')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .in('status', [...MATCHABLE_INVOICE_STATUSES])
-    .gt('remaining_amount', 0)
+  let byNumberQuery = filterOwedInvoices(
+    supabase.from('invoices').select('*, customer:customers(*)').eq('company_id', companyId),
+  )
   if (pattern) byNumberQuery = byNumberQuery.ilike('invoice_number', pattern)
   const byNumber = rowsOf<T>(
     byNumberQuery
@@ -102,14 +95,9 @@ export async function searchOpenInvoices<T extends PickerRow>(
   if (!pattern) return byNumber
 
   const byCustomer = rowsOf<T>(
-    supabase
-      .from('invoices')
-      .select('*, customer:customers!inner(*)')
-      .eq('company_id', companyId)
-      .eq('document_type', 'invoice')
-      .is('credited_invoice_id', null)
-      .in('status', [...MATCHABLE_INVOICE_STATUSES])
-      .gt('remaining_amount', 0)
+    filterOwedInvoices(
+      supabase.from('invoices').select('*, customer:customers!inner(*)').eq('company_id', companyId),
+    )
       .ilike('customer.name', pattern)
       .order('invoice_date', { ascending: false })
       .order('id', { ascending: true })
@@ -363,16 +351,14 @@ export async function loadInvoicesForPaste(
     // The embed is many-to-one (an object at runtime); the untyped client infers an array.
     const open = (await fetchAllRows(
       ({ from, to }) =>
-        supabase
-          .from('invoices')
-          .select(
-            'id, invoice_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, customer:customers(name)',
-          )
-          .eq('company_id', companyId)
-          .eq('document_type', 'invoice')
-          .is('credited_invoice_id', null)
-          .in('status', [...MATCHABLE_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
+        filterOwedInvoices(
+          supabase
+            .from('invoices')
+            .select(
+              'id, invoice_number, status, total, remaining_amount, currency, exchange_rate, due_date, invoice_date, customer:customers(name)',
+            )
+            .eq('company_id', companyId),
+        )
           .order('id', { ascending: true })
           .range(from, to),
       { dedupeBy: (row) => row.id, maxRows: PASTE_OPEN_INVOICES_MAX },

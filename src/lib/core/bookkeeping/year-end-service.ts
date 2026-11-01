@@ -1,3 +1,4 @@
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -1445,9 +1446,9 @@ async function countOpenFxItemsAtBalansdagen(
       // rows the revaluation engine cannot see.
       const scoped = isHistorical
         ? base
-            .in('status', ['sent', 'overdue', 'partially_paid', 'paid'])
+            .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
             .lte('invoice_date', balansdagen)
-        : base.in('status', ['sent', 'overdue', 'partially_paid'])
+        : base.in('status', OWED_INVOICE_STATUSES)
       // Stable total order for correct paging (see fetch-all.ts).
       return scoped.order('id', { ascending: true }).range(from, to)
     },

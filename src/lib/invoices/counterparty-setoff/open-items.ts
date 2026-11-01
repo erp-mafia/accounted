@@ -9,6 +9,7 @@
  * credit flow, never by a set-off, so the net here is the net of the open
  * invoices, not the whole reskontra balance.
  */
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { customerInvoiceIneligibility, supplierInvoiceIneligibility, type SetoffIneligibleReason } from './plan'
@@ -85,7 +86,6 @@ export interface CounterpartyBalance {
   setoffs: CounterpartySetoffRow[]
 }
 
-const OPEN_INVOICE_STATUSES = ['sent', 'overdue', 'partially_paid'] as const
 const OPEN_SUPPLIER_INVOICE_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid'] as const
 /** Rows read per side: a counterparty with more open invoices than this is not a set-off case. */
 const OPEN_ITEM_LIMIT = 500
@@ -200,17 +200,15 @@ export async function loadCounterpartyBalance(
   const [invoicesRes, supplierInvoicesRes] = await Promise.all([
     customers.length === 0
       ? Promise.resolve({ data: [], error: null })
-      : supabase
-          .from('invoices')
-          .select(
-            'id, invoice_number, external_invoice_number, status, document_type, credited_invoice_id, currency, total, remaining_amount, paid_amount, deduction_total, invoice_date, due_date, journal_entry_id, customer_id',
-          )
-          .eq('company_id', companyId)
-          .in('customer_id', customers.map((c) => c.id))
-          .eq('document_type', 'invoice')
-          .is('credited_invoice_id', null)
-          .in('status', [...OPEN_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
+      : filterOwedInvoices(
+          supabase
+            .from('invoices')
+            .select(
+              'id, invoice_number, external_invoice_number, status, document_type, credited_invoice_id, currency, total, remaining_amount, paid_amount, deduction_total, invoice_date, due_date, journal_entry_id, customer_id',
+            )
+            .eq('company_id', companyId)
+            .in('customer_id', customers.map((c) => c.id)),
+        )
           .order('invoice_date')
           .limit(OPEN_ITEM_LIMIT),
     suppliers.length === 0

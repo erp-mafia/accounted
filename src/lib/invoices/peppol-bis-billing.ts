@@ -1,3 +1,4 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { escapeXml } from '@/lib/xml/escape'
 import {
   generateOcrReference,
@@ -343,7 +344,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
   const { invoice, customer, company } = input
   const issues: PeppolValidationIssue[] = []
 
-  if (invoice.document_type !== 'invoice' || invoice.credited_invoice_id || invoice.is_self_billed) {
+  if (invoice.document_type !== 'invoice' || isCreditNoteDocument(invoice) || invoice.is_self_billed) {
     issues.push(validationIssue(
       'DOCUMENT_TYPE_UNSUPPORTED', 'invoice.document_type',
       'Endast vanliga kundfakturor kan exporteras i detta Peppol-format.',

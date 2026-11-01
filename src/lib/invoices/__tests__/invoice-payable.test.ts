@@ -25,6 +25,14 @@ describe('invoicePayableRefusal', () => {
     expect(await ask({ document_type: 'proforma' })).toBeNull()
   })
 
+  it('refuses a kreditfaktura imported without a link by the one identity', async () => {
+    expect(await ask({ total: -500 })).toEqual({ code: 'INVOICE_PAID_NOT_PAYABLE', details: { reason: 'credit_note' } })
+  })
+
+  it('takes a zero total: no credit note', async () => {
+    expect(await ask({ total: 0 })).toBeNull()
+  })
+
   it('refuses a kreditfaktura: it is paid back, not paid', async () => {
     expect(await ask({ credited_invoice_id: 'inv-0' })).toEqual({
       code: 'INVOICE_PAID_NOT_PAYABLE',

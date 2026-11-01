@@ -560,6 +560,32 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(mockIssueCreditNote).toHaveBeenCalledOnce()
   })
 
+  it('refuses a credit note imported without a link: it has no original to reference (ML 17 kap 22 §)', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, total: -500, credited_invoice_id: null }), error: null })
+    enqueue({ data: company, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREDIT_NOTE_NOT_ISSUABLE')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('marks a delivery note sent: its only way out of draft, no verifikat', async () => {
+    enqueue({ data: makeInvoice({ ...invoice, document_type: 'delivery_note', total: 0, moms_ruta: null, vat_treatment: 'exempt' }), error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip draft -> sent
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 409 when another request already marked the draft as sent', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

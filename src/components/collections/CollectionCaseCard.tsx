@@ -1,5 +1,6 @@
 'use client'
 
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { useState } from 'react'
 import Link from 'next/link'
 import type { CollectionsStage } from '@accounted/connect-contract'
@@ -239,7 +240,7 @@ export function CollectionCaseCard({
         <div className="space-y-2 py-2 text-[13px]">
           <p>{tp('card_failed')}</p>
           {view.syncError && <p className="text-muted-foreground">{errorText(view.syncError)}</p>}
-          {canWrite && availability.start === 'ready' && ['sent', 'overdue', 'partially_paid'].includes(invoiceStatus) && (
+          {canWrite && availability.start === 'ready' && isOwedInvoiceStatus(invoiceStatus) && (
             <Button size="sm" variant="outline" onClick={onOpenHandover}>
               {tp('card_retry')}
             </Button>

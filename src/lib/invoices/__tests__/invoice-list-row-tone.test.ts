@@ -56,3 +56,10 @@ describe('invoiceRowTone', () => {
     ).toBe('overdue')
   })
 })
+
+describe('invoiceRowTone: a credit note imported without a link', () => {
+  it('is no open receivable, like a linked one', () => {
+    expect(invoiceRowTone(row('sent', { total: -500, due_date: '2026-01-01', remaining_amount: 0 }), TODAY)).toBe('none')
+    expect(invoiceRowTone(row('draft', { total: -500 }), TODAY)).toBe('none')
+  })
+})

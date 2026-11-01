@@ -1,3 +1,4 @@
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { isDigitalMailboxProvider, type DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import type { InvoiceStatus } from '@/types'
 
@@ -73,12 +74,7 @@ export function parseInvoiceMailboxView(body: unknown): InvoiceMailboxView {
 }
 
 /** The statuses the send accepts: a draft (issued on the way) or an issued, unpaid invoice. */
-export const MAILBOX_SENDABLE_STATUSES: ReadonlySet<InvoiceStatus> = new Set<InvoiceStatus>([
-  'draft',
-  'sent',
-  'overdue',
-  'partially_paid',
-])
+export const MAILBOX_SENDABLE_STATUSES: ReadonlySet<InvoiceStatus> = new Set<InvoiceStatus>(['draft', ...OWED_INVOICE_STATUSES])
 
 /** Why an offered provider cannot take this invoice yet: the kundkort or the currency. */
 export type MailboxSendBlock = 'recipient_unidentified' | 'currency'

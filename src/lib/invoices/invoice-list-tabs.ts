@@ -1,4 +1,5 @@
 import type { Invoice } from '@/types'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { effectiveQuoteStatus } from './quote-status'
 import { isInvoiceOverdue } from './overdue'
 
@@ -89,6 +90,8 @@ type ListInvoice = Pick<Invoice, 'status' | 'invoice_number' | 'credited_invoice
   /** Förfallna follows the due date and the open remainder (lib/invoices/overdue.ts). */
   due_date?: string | null
   remaining_amount?: number | null
+  /** A credit note is a link or a total below zero (isCreditNoteDocument). */
+  total?: number | null
 }
 
 export function documentTypeOf(invoice: Pick<ListInvoice, 'document_type'>): string {
@@ -110,7 +113,7 @@ export function isUnsentNumberedInvoice(invoice: ListInvoice): boolean {
     invoice.status === 'draft' &&
     !!invoice.invoice_number &&
     documentTypeOf(invoice) === 'invoice' &&
-    !invoice.credited_invoice_id &&
+    !isCreditNoteDocument(invoice) &&
     !invoice.is_self_billed
   )
 }
@@ -127,7 +130,7 @@ export interface InvoiceListTabContext {
 
 export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab, context: InvoiceListTabContext = {}): boolean {
   if (isQuoteRow(invoice)) return false
-  const isCreditNote = !!invoice.credited_invoice_id
+  const isCreditNote = isCreditNoteDocument(invoice)
   const docType = documentTypeOf(invoice)
   const inCollectionsView =
     !!invoice.id && (!!context.inCollection?.has(invoice.id) || !!context.collectionAttention?.has(invoice.id))
@@ -140,10 +143,7 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab,
       // Derived, never the stored status (crm#1084): an owed invoice past its
       // due date, partly paid included. One "Hos inkasso" lists is that
       // view's, as in the Att göra group (lib/worklist overdue_invoice).
-      return !isCreditNote && docType === 'invoice' && !inCollectionsView && isInvoiceOverdue(
-        { status: invoice.status, due_date: invoice.due_date, remaining_amount: invoice.remaining_amount },
-        context.today,
-      )
+      return !inCollectionsView && isInvoiceOverdue(invoice, context.today)
     case 'unsent':
       return isUnsentNumberedInvoice(invoice)
     case 'draft':
@@ -154,7 +154,8 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab,
         !isUnsentNumberedInvoice(invoice)
       )
     case 'paid':
-      return invoice.status === 'paid'
+      // An imported credit note can carry 'paid': it is in Kreditfakturor.
+      return invoice.status === 'paid' && !isCreditNote
     case 'written_off':
       return invoice.status === 'written_off'
     case 'collections':

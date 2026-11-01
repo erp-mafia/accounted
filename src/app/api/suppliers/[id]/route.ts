@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validateBody } from '@/lib/api/validate'
@@ -51,7 +52,9 @@ export const GET = withRouteContext(
     for (const inv of invoices) {
       const currency = inv.currency || 'SEK'
       const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
-      if (inv.status !== 'paid' && inv.status !== 'credited') {
+      // What the supplier ledger reads as open: a reversed or disputed
+      // invoice has a remainder nobody is asked to pay.
+      if (isMatchableSupplierInvoiceStatus(inv.status)) {
         row.total_outstanding += inv.remaining_amount || 0
       }
       row.total_paid += inv.paid_amount || 0

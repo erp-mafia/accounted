@@ -1,5 +1,6 @@
 'use client'
 
+import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { useState, useEffect, useRef, use } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -22,7 +23,6 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
-import { roundOre } from '@/lib/money'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
@@ -39,8 +39,8 @@ import {
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
-import { isCreditNoteDocument } from '@/lib/invoices/build-credit-note'
-import { planCreditNoteRefund } from '@/lib/invoices/credit-note-refund-plan'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { creditNoteRefundedAmount, planCreditNoteRefund } from '@/lib/invoices/credit-note-refund-plan'
 import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -431,7 +431,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // invoice of our own can have one; the read is an obligation path and
   // renders an open case whatever the start gates say.
   const collectionEligible =
-    !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !invoice.credited_invoice_id && !invoice.is_self_billed
+    !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !isCreditNoteDocument(invoice) && !invoice.is_self_billed
   const collection = useInvoiceCollection(id, collectionEligible)
   const { tp: tCollections, words: collectionWords } = useCaseWords(collection.data?.availability.displayName ?? null)
   const [showCollectionDialog, setShowCollectionDialog] = useState(false)
@@ -518,7 +518,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     if (!invoice || invoice.id !== id) return
     const eligible = (!invoice.document_type || invoice.document_type === 'invoice')
-      && !invoice.credited_invoice_id
+      && !isCreditNoteDocument(invoice)
       && !invoice.is_self_billed
     if (!eligible) return
     void loadPeppolDeliveries()
@@ -1862,11 +1862,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           voucher_number: v.voucher_number,
         }))
       : payments
-  const isCreditNote = !!invoice.credited_invoice_id
+  const isCreditNote = isCreditNoteDocument(invoice)
   // What the customer has tillgodo on this credit note (follow-up of
   // crm#1435): the same rule the mark-paid door records the refund by.
   const refundPlan = isCreditNote && originalInvoice ? planCreditNoteRefund(invoice, originalInvoice) : null
-  const refundedAmount = isCreditNote ? roundOre(-(Number(invoice.paid_amount) || 0)) : 0
+  const refundedAmount = creditNoteRefundedAmount(invoice)
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
     : accountingMethod === 'accrual' && !deferInvoiceBooking
@@ -2024,6 +2024,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             }
           : invoice.status === 'overdue'
             ? baseStatus('sent')
+          : invoice.status === 'paid' && isCreditNote
+            ? { label: tInvoices('badge_credit'), exception: true, variant: 'destructive' }
           : invoice.status === 'paid' && invoice.paid_at
             ? { label: tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
             : baseStatus(invoice.status)
@@ -2038,10 +2040,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   // Secondary actions collapse into one overflow menu (convention 9: one
   // obvious next step in the header, the alternatives behind a caret).
+  // A credit note imported without a link names no original: no door issues it.
+  const canIssueDraft = !isDeliveryNote && (!isCreditNote || !!invoice.credited_invoice_id)
   const showManualSendAlternative =
     !isProforma &&
     !isQuote &&
-    !isDeliveryNote &&
+    canIssueDraft &&
     isUnsentNumberedInvoice &&
     preferredSendMode === 'email'
   const canCreateCreditNote =
@@ -2307,7 +2311,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t(quoteInvoice ? 'quote_invoice_rest' : 'quote_create_invoice')}
             </Button>
           )}
-          {isUnnumberedDraft && (
+          {isUnnumberedDraft && canIssueDraft && (
             <Button size="sm"
               onClick={openFinalizeDialog}
               disabled={isFinalizing || !canWrite}
@@ -2317,7 +2321,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('finalize_action')}
             </Button>
           )}
-          {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
+          {invoice.status === 'draft' && canIssueDraft && invoice.invoice_number && (
             preferredSendMode === 'email' ? (
               <Button size="sm"
                 onClick={() => openSendDialog('email')}
@@ -2365,7 +2369,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* partially_paid included (#1717): completes a stuck partial, e.g.
               a sub-krona öresavrundning remaining, via the same dialog. */}
-          {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
+          {isOwedInvoiceStatus(invoice.status) && isRealInvoice && !isCreditNote && (
             <Button size="sm"
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
@@ -2667,7 +2671,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             <TrashIcon className="h-4 w-4" />
                             {isUnnumberedDraft
                               ? t('remove_action')
-                              : t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
+                              : t(invoice.credited_invoice_id ? 'remove_credit_draft' : 'delete_draft')}
                           </DropdownMenuItem>
                         )}
                       </>
@@ -2996,7 +3000,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Link>
             </DefRow>
           )}
-          {isCreditNote && refundedAmount > 0 && (
+          {refundedAmount > 0 && (
             <DefRow label={t('def_refunded')}>
               <span className="tabular-nums">
                 {formatCurrency(refundedAmount, invoice.currency)}
@@ -3617,14 +3621,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {isCreditNote
+              {invoice.credited_invoice_id
                 ? t('remove_credit_dialog_title')
                 : invoice.invoice_number
                   ? t('delete_dialog_title')
                   : t('remove_dialog_title')}
             </DialogTitle>
             <DialogDescription>
-              {isCreditNote ? (
+              {invoice.credited_invoice_id ? (
                 t('remove_credit_dialog_desc')
               ) : invoice.invoice_number ? (
                 <>
@@ -3648,7 +3652,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('delete_dialog_cancel')}
             </Button>
             <Button variant="destructive" onClick={deleteInvoice} loading={isDeleting}>
-              {isCreditNote
+              {invoice.credited_invoice_id
                 ? t('remove_credit_dialog_confirm')
                 : invoice.invoice_number
                   ? t('delete_dialog_confirm')
