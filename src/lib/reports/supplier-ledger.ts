@@ -110,16 +110,6 @@ export async function generateSupplierLedger(
     const supplierId = inv.supplier_id
     const supplierName = inv.supplier_name || 'Okänd leverantör'
 
-    // Foreign-currency invoice with no exchange_rate cannot be converted to
-    // SEK; adding the raw foreign amount to a SEK total would be unsound, so
-    // the row is excluded from sums and only counted.
-    const isFx = inv.currency && inv.currency !== 'SEK'
-    const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-    if (isFx && !hasRate) {
-      unconvertedFxCount += 1
-      continue
-    }
-
     // Outstanding in invoice currency: live view trusts the stored
     // remaining_amount; a historical view recomputes it from the payment
     // history as of the reconstruction date.
@@ -129,9 +119,20 @@ export async function generateSupplierLedger(
       : liveOutstanding
 
     // Historical view: 'paid' invoices are only fetched to catch ones still
-    // open at the as-of date. One already settled by then adds nothing.
+    // open at the as-of date. One already settled by then adds nothing, and
+    // needs no rate: this runs before the check below, as in the kundreskontra.
     if (payments && inv.status === 'paid' && outstandingRaw === 0) {
       settledSkipped += 1
+      continue
+    }
+
+    // Foreign-currency invoice with no exchange_rate cannot be converted to
+    // SEK; adding the raw foreign amount to a SEK total would be unsound, so
+    // the row is excluded from sums and only counted.
+    const isFx = inv.currency && inv.currency !== 'SEK'
+    const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
+    if (isFx && !hasRate) {
+      unconvertedFxCount += 1
       continue
     }
 

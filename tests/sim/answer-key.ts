@@ -17,8 +17,11 @@
  *   skatteavdrag   column 1 of the employee's table, by the gross of the month
  *   semester       procentregeln: 12 % of gross, plus avgifter on it
  *   avskrivning    linear from the day of purchase, whole kronor per year
- *   bolagsskatt    20.6 % of the result with non-deductible cost added back,
- *                  the base floored to a whole ten kronor
+ *   lagerförändring the counted value on balansdagen against the stock the
+ *                  books hold, the difference in the year's result
+ *   bolagsskatt    20.6 % of the whole result before tax with non-deductible
+ *                  cost added back, the base floored to a whole ten kronor;
+ *                  what the bokslut books is in that result like any other line
  *   representation meals give no income tax deduction; moms is deductible up to
  *                  300 kr per person, which these lunches stay under
  */
@@ -40,10 +43,12 @@ export const LINES = [
   'revenue',
   'externalCosts',
   'personnelCosts',
+  'stockChange',
   'depreciation',
   'corporateTax',
   // Assets
   'tangibleAssets',
+  'stock',
   'receivables',
   'cash',
   // Equity and liabilities
@@ -100,6 +105,8 @@ export interface YearFigures {
   revenue: number
   externalCosts: number
   personnelCosts: number
+  /** Lagerförändring: a stock that grew is a negative cost. */
+  stockChange: number
   depreciation: number
   resultBeforeTax: number
   corporateTax: number
@@ -108,6 +115,7 @@ export interface YearFigures {
   taxBase: number
   /** Balance sheet at the last day of the year. */
   tangibleAssets: number
+  stock: number
   receivables: number
   cash: number
   totalAssets: number
@@ -265,6 +273,7 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
       -(row?.get('revenue') ?? 0) -
         (row?.get('externalCosts') ?? 0) -
         (row?.get('personnelCosts') ?? 0) -
+        (row?.get('stockChange') ?? 0) -
         (row?.get('depreciation') ?? 0),
     )
   }
@@ -368,6 +377,11 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
         post(date, event.type, [['vatLiability', filedNet], ['cash', -filedNet]])
         break
       }
+      case 'stock_count': {
+        const change = roundOre(event.value - (ledger.get('stock') ?? 0))
+        post(date, event.type, [['stock', change], ['stockChange', -change]])
+        break
+      }
       case 'depreciation': {
         const amount = sum(assets.map((asset) => depreciationFor(asset, event.year)))
         post(date, event.type, [['depreciation', amount], ['tangibleAssets', -amount]])
@@ -413,11 +427,13 @@ function yearFigures(
   const revenue = -income('revenue')
   const externalCosts = income('externalCosts')
   const personnelCosts = income('personnelCosts')
+  const stockChange = income('stockChange')
   const depreciation = income('depreciation')
-  const resultBeforeTax = roundOre(revenue - externalCosts - personnelCosts - depreciation)
+  const resultBeforeTax = roundOre(revenue - externalCosts - personnelCosts - stockChange - depreciation)
   const result = roundOre(resultBeforeTax - corporateTax)
   const retainedEarnings = roundOre(years[year - 1] ? years[year - 1].retainedEarnings + years[year - 1].result : 0)
   const tangibleAssets = of('tangibleAssets')
+  const stock = of('stock')
   const receivables = of('receivables')
   const cash = of('cash')
   const shareCapital = -of('shareCapital')
@@ -431,6 +447,7 @@ function yearFigures(
     revenue,
     externalCosts,
     personnelCosts,
+    stockChange,
     depreciation,
     resultBeforeTax,
     corporateTax,
@@ -438,9 +455,10 @@ function yearFigures(
     nonDeductibleCosts,
     taxBase: Math.floor(Math.max(0, resultBeforeTax + nonDeductibleCosts) / 10) * 10,
     tangibleAssets,
+    stock,
     receivables,
     cash,
-    totalAssets: sum([tangibleAssets, receivables, cash]),
+    totalAssets: sum([tangibleAssets, stock, receivables, cash]),
     shareCapital,
     retainedEarnings,
     supplierPayables,

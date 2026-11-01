@@ -140,6 +140,7 @@ const RECON_CLEAN = {
 
 const AR_CLEAN = {
   ar_ledger_total: 0,
+  as_of_date: null,
   account_1510_balance: 0,
   difference: 0,
   is_reconciled: true,
@@ -148,6 +149,7 @@ const AR_CLEAN = {
 
 const AP_CLEAN = {
   supplier_ledger_total: 0,
+  as_of_date: null,
   account_2440_balance: 0,
   difference: 0,
   is_reconciled: true,

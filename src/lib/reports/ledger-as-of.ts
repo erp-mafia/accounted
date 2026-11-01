@@ -1,14 +1,13 @@
 import { stockholmYearMonth } from '@/lib/dates/iso'
 /**
  * The balance date of the AR and AP ledgers (kundreskontra and
- * leverantörsreskontra), checked once for every door: v1 /reports/ar-ledger
- * and /reports/supplier-ledger and the MCP tools gnubok_get_ar_ledger and
- * gnubok_get_supplier_ledger.
+ * leverantörsreskontra), checked once for every door: the dashboard's JSON,
+ * PDF and xlsx routes, v1 /reports/ar-ledger and /reports/supplier-ledger and
+ * the MCP tools gnubok_get_ar_ledger and gnubok_get_supplier_ledger.
  *
  * The ledgers age every open invoice against this date, so a date that does
  * not exist is no harmless default: "2025-02-30" gave an empty ledger and a
- * string that is no date at all put every invoice in the 90+ bucket. v1 held
- * the check in each route and MCP had none; now both read this one.
+ * string that is no date at all put every invoice in the 90+ bucket.
  */
 
 export type LedgerAsOfDate =

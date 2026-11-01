@@ -1,20 +1,19 @@
 import { NextResponse } from 'next/server'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseLedgerAsOfDate } from '@/lib/reports/ledger-as-of'
+import { ledgerAsOfRefusal } from '@/lib/reports/ledger-as-of-refusal'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { fileResponse } from '@/lib/api/file-response'
 
-export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
-  const asOfParam = searchParams.get('as_of_date')
-
-  if (asOfParam && !/^\d{4}-\d{2}-\d{2}$/.test(asOfParam)) {
-    return NextResponse.json({ error: 'as_of_date måste vara på formatet ÅÅÅÅ-MM-DD' }, { status: 400 })
-  }
-  const asOfDate = asOfParam ?? todayIsoStockholm()
+  const asOf = parseLedgerAsOfDate(searchParams.get('as_of_date'))
+  if (!asOf.ok) return ledgerAsOfRefusal(asOf, log, requestId)
+  const asOfDate = asOf.asOfDate ?? todayIsoStockholm()
 
   const { data: companyRow } = await supabase
     .from('company_settings')

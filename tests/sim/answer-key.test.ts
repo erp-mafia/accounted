@@ -107,6 +107,17 @@ describe('computeAnswerKey', () => {
     expect(computeAnswerKey(plan).payroll[monthKey(2024, 1)].totalTax).toBe(8_968)
   })
 
+  it('books what a stock count changes, and the result before tax carries it', () => {
+    const { years } = computeAnswerKey(
+      planWith([
+        { type: 'stock_count', date: '2024-12-31', year: 2024, value: 40_000 },
+        { type: 'stock_count', date: '2025-12-31', year: 2025, value: 25_000 },
+      ]),
+    )
+    expect(years[2024]).toMatchObject({ stock: 40_000, stockChange: -40_000, resultBeforeTax: 40_000 })
+    expect(years[2025]).toMatchObject({ stock: 25_000, stockChange: 15_000, resultBeforeTax: -15_000 })
+  })
+
   it('depreciates linearly from the purchase day, whole kronor per year', () => {
     const asset = { date: '2024-07-01', cost: 60_000, usefulLifeMonths: 60 }
     expect(depreciationFor(asset, 2024)).toBe(Math.round((12_000 * 184) / 366))

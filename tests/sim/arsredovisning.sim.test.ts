@@ -37,6 +37,7 @@ describe.each(closedYears)('årsredovisning %i', (year) => {
     const { report } = await preview()
     const rows = report.resultatrakning as Row[]
     expectKronor(amount(rows, 'Nettoomsättning'), figures.revenue)
+    expectKronor(amount(rows, 'Handelsvaror'), -figures.stockChange)
     expectKronor(amount(rows, 'Övriga externa kostnader'), -figures.externalCosts)
     expectKronor(amount(rows, 'Personalkostnader'), -figures.personnelCosts)
     expectKronor(amount(rows, 'Av- och nedskrivningar av materiella och immateriella anläggningstillgångar'), -figures.depreciation)
@@ -52,6 +53,7 @@ describe.each(closedYears)('årsredovisning %i', (year) => {
     const assets = balansrakning.assets
     const claims = balansrakning.equity_liabilities
     expectKronor(amount(assets, 'Inventarier, verktyg och installationer'), figures.tangibleAssets)
+    expectKronor(amount(assets, 'Färdiga varor och handelsvaror'), figures.stock)
     expectKronor(amount(assets, 'Kundfordringar'), figures.receivables)
     expectKronor(amount(assets, 'Kassa och bank'), figures.cash)
     expectKronor(amount(claims, 'Aktiekapital'), figures.shareCapital)

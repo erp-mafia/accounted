@@ -99,28 +99,23 @@ describe('whole-krona rounding survives double drift (#2597)', () => {
     expect(proposal?.computation).toMatchObject({ alreadyProvisioned: 2496, maxAmount: 2500 })
   })
 
-  it('does not clamp the bolagsskatt base a whole ten too low', async () => {
+  it('does not clamp the bolagsskatt base a whole ten too low', () => {
     // The only site in the class that floors to TENS rather than to kronor,
     // so the same drift costs 10 kr of base, not 1. These five adjustment
     // terms sum to 56109.99999999999, which clamped to 56100.
-    const proposal = await calculateBolagsskatt(
-      null as never,
-      'company-1',
-      'period-1',
-      {
-        resultBeforeTaxOverride: 715.21,
-        manualAdjustments: {
-          nonDeductibleExpenses: 19_196.29 + 1_515.44,
-          schablonintaktPeriodiseringsfond: 19_658.68,
-          other: 15_024.38,
-        },
+    const proposal = calculateBolagsskatt({
+      resultBeforeTax: 715.21,
+      manualAdjustments: {
+        nonDeductibleExpenses: 19_196.29 + 1_515.44,
+        schablonintaktPeriodiseringsfond: 19_658.68,
+        other: 15_024.38,
       },
-    )
+    })
 
-    const computation = proposal?.computation as { taxableResultClamped: number } | undefined
+    const computation = proposal.computation as { taxableResultClamped: number } | undefined
     expect(computation?.taxableResultClamped).toBe(56_110)
-    expect(proposal?.amount).toBe(11_559)
-    expect(proposal?.lines).toEqual([
+    expect(proposal.amount).toBe(11_559)
+    expect(proposal.lines).toEqual([
       expect.objectContaining({ account_number: '8910', debit_amount: 11_559, credit_amount: 0 }),
       expect.objectContaining({ account_number: '2512', debit_amount: 0, credit_amount: 11_559 }),
     ])
@@ -132,11 +127,9 @@ describe('whole-krona rounding survives double drift (#2597)', () => {
     { result: 56_119.99, base: 56_110, tax: 11_559 },
     { result: 0, base: 0, tax: 0 },
     { result: -56_110, base: 0, tax: 0 },
-  ])('preserves tax $tax on non-drifting result $result', async ({ result, base, tax }) => {
-    const proposal = await calculateBolagsskatt(null as never, 'company-1', 'period-1', {
-      resultBeforeTaxOverride: result,
-    })
-    expect(proposal?.computation).toMatchObject({ taxableResult: result, taxableResultClamped: base })
-    expect(proposal?.amount).toBe(tax)
+  ])('preserves tax $tax on non-drifting result $result', ({ result, base, tax }) => {
+    const proposal = calculateBolagsskatt({ resultBeforeTax: result })
+    expect(proposal.computation).toMatchObject({ taxableResult: result, taxableResultClamped: base })
+    expect(proposal.amount).toBe(tax)
   })
 })

@@ -15,7 +15,7 @@ const { supabase, calls } = createReskontraClient(() => tables)
 function setBooks(books: ReskontraTables) {
   tables = {
     ...books,
-    invoices: (books.invoices ?? []).map((row, i) => ({ id: `inv-${i + 1}`, status: 'sent', ...row })),
+    invoices: (books.invoices ?? []).map((row, i) => ({ id: `inv-${i + 1}`, status: 'sent', due_date: '2026-01-31', ...row })),
   }
 }
 
@@ -434,5 +434,52 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
 
     expect(result.ar_ledger_total).toBe(1250)
     expect(result.is_reconciled).toBe(true)
+  })
+})
+
+describe('generateARReconciliation: the reskontra on the year\'s balansdag', () => {
+  // Year 2025, UB 500. Invoice B 500 kr, open at year end, paid in January.
+  // Invoice A 1 000 kr dated after the year: open today, nothing to do with it.
+  const twoYears = (): ReskontraTables => ({
+    fiscal_periods: [{ id: 'fy2025', period_end: '2025-12-31' }],
+    invoices: [
+      { id: 'b', invoice_number: 'B', invoice_date: '2025-11-01', due_date: '2025-12-01', status: 'paid', total: 500, paid_amount: 500, paid_at: '2026-01-10' },
+      { id: 'a', invoice_number: 'A', invoice_date: '2026-01-15', due_date: '2026-02-15', status: 'sent', total: 1000, paid_amount: 0 },
+    ],
+    invoice_payments: [{ id: 'p1', invoice_id: 'b', payment_date: '2026-01-10', amount: 500 }],
+  })
+
+  it('reads the invoices open on the last day of a past year, not the ones open today', async () => {
+    setBooks(twoYears())
+    booked(500)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'fy2025')
+
+    expect(result).toMatchObject({ as_of_date: '2025-12-31', ar_ledger_total: 500, difference: 0, is_reconciled: true })
+  })
+
+  it('is the figure the ledger shows for that day', async () => {
+    setBooks(twoYears())
+    booked(500)
+
+    const [card, ledger] = await Promise.all([
+      generateARReconciliation(supabase, 'company-1', 'fy2025'),
+      generateARLedger(supabase, 'company-1', '2025-12-31'),
+    ])
+
+    expect(card.ar_ledger_total).toBe(ledger.total_outstanding)
+  })
+
+  it('reads the live register while the year runs', async () => {
+    setBooks({
+      fiscal_periods: [{ id: 'running', period_end: '2999-12-31' }],
+      invoices: [{ total: 1000, paid_amount: 0 }],
+    })
+    booked(1000)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'running')
+
+    expect(calls.find((c) => c.name === 'get_ar_ledger_invoices')?.args).toMatchObject({ p_as_of_date: null })
+    expect(result).toMatchObject({ ar_ledger_total: 1000, is_reconciled: true })
   })
 })

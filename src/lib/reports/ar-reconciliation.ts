@@ -1,17 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { hasPreRegisterArInPeriod } from '@/lib/reports/invoice-register-coverage'
-import {
-  liveReceivableOutstanding,
-  skatteverketSettledByInvoice,
-} from '@/lib/bookkeeping/skatteverket-share'
-import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
-import { fetchArLedgerInvoices } from './ar-ledger-invoices'
+import { generateARLedger } from './ar-ledger'
+import { reskontraBalanceDate } from './reskontra-balance-date'
 import { closingBalanceOf } from './trial-balance'
 
 export interface ARReconciliationResult {
+  /** The kundreskontra's total on the balance date: the same figure as generateARLedger. */
   ar_ledger_total: number
+  /** The day the reskontra is read as of: a past year's last day, null while the year runs (today). */
+  as_of_date: string | null
   /**
    * Closing balance (UB, ingående balans included) of accounts 1510
    * (Kundfordringar) and 1513 (Kundfordringar: delad faktura), as the balance
@@ -43,8 +41,11 @@ export interface ARReconciliationResult {
 }
 
 /**
- * Compare sum of open customer invoices against account 1510 balance.
- * Account 1510 is debit-normal (asset): balance = debits - credits.
+ * Compare the kundreskontra with accounts 1510 and 1513 at the end of a fiscal
+ * year: generateARLedger as of the year's last day against the UB. While the
+ * year runs that is the live register (the ledger's rule for today or a date
+ * ahead); a past year reads the invoices open on its balansdag, not the ones
+ * open today. Account 1510 is debit-normal (asset): balance = debits - credits.
  *
  * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
  * which matches what was originally posted to 1510. This means the report will
@@ -58,17 +59,10 @@ export async function generateARReconciliation(
   companyId: string,
   periodId: string
 ): Promise<ARReconciliationResult> {
+  const asOfDate = await reskontraBalanceDate(supabase, companyId, periodId)
 
-  // total/paid_amount are stored in invoice currency; account 1510 is in SEK
-  // (booked at invoice-date rate), so convert each row before summing.
-  // The open invoices are the live kundreskontra's whole population (one
-  // read, ar-ledger-invoices.ts): a partially paid invoice still carries
-  // total - paid_amount on 1510, a paid one with a ROT/RUT deduction can
-  // still carry Skatteverket's share on 1513, and a 'credited' original
-  // still carries its debit, which its credit note's own row (Cr 1510)
-  // nets. The 1510 balance and the coverage context are read beside it.
-  const [population, account1510Balance, preRegisterArInPeriod] = await Promise.all([
-    fetchArLedgerInvoices(supabase, companyId),
+  const [ledger, account1510Balance, preRegisterArInPeriod] = await Promise.all([
+    generateARLedger(supabase, companyId, asOfDate ?? undefined, { strict: true }),
     // The booked AR balance: 1510 (Kundfordringar) AND 1513 (Kundfordringar:
     // delad faktura), so the comparison stays correct under ROT/RUT
     // fakturamodellen, where the customer portion sits on 1510 and the
@@ -93,56 +87,20 @@ export async function generateARReconciliation(
     // excused.
     hasPreRegisterArInPeriod(supabase, companyId, periodId).catch(() => false),
   ])
-  // In id order, the order the sum below has always run in: each step rounds.
-  // The same rows the kundreskontra sums (generateARLedger). Leaving the
-  // credited originals out while their credit notes stayed in counted each
-  // credit against nothing, and the register fell short of 1510 by exactly
-  // the credited amount (crm#1537).
-  const invoices = [...population].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-  // A credit note whose verifikat paid another invoice has used that much of
-  // its credit: the kundreskontra's rule (credit-note-settlement.ts).
-  const creditUsed = creditNoteCreditUsed(invoices)
-  // What Skatteverket has paid out of each invoice's deduction, which no
-  // longer sits on 1513: the kundreskontra's rule (skatteverket-share.ts).
-  const settled = skatteverketSettledByInvoice(invoices)
 
-  let unconvertedFxCount = 0
-  const arLedgerTotal = (invoices || [])
-    .reduce((sum, inv) => {
-      const outstanding = outstandingWithCreditUsed(
-        liveReceivableOutstanding(
-          inv,
-          (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0),
-          settled.get(inv.id)
-        ),
-        creditUsed.get(inv.id)
-      )
-      // A paid invoice Skatteverket has settled in full is not a receivable.
-      if (inv.status === 'paid' && outstanding === 0) return sum
-      const isFx = inv.currency && inv.currency !== 'SEK'
-      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum: adding raw foreign amounts
-      // to a SEK total is arithmetically unsound. Counted instead.
-      if (isFx && !hasRate) {
-        unconvertedFxCount += 1
-        return sum
-      }
-      const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
-      return Math.round((sum + sek) * 100) / 100
-    }, 0)
-
-  const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
+  const difference = Math.round((ledger.total_outstanding - account1510Balance) * 100) / 100
 
   return {
-    ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
+    ar_ledger_total: ledger.total_outstanding,
+    as_of_date: asOfDate,
     account_1510_balance: Math.round(account1510Balance * 100) / 100,
     difference,
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
     // Avstämd: the user must fix the underlying data first.
-    is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
-    unconverted_fx_count: unconvertedFxCount,
+    is_reconciled: Math.abs(difference) < 0.01 && ledger.unconverted_fx_count === 0,
+    unconverted_fx_count: ledger.unconverted_fx_count,
     pre_register_ar_in_period: preRegisterArInPeriod,
   }
 }

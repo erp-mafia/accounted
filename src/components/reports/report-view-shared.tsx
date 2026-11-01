@@ -136,17 +136,33 @@ export function ReportSectionTable({
 // toISOString() is UTC and rolls the date over an hour early in Sweden.
 // Shared "Per datum" control + export menu header for the two reskontra views
 // (#1020/#1021): pick an arbitrary as-of date and export PDF/Excel for it.
-export function ReskontraToolbar({
-  asOfDate,
-  onAsOfDateChange,
-  inputId,
-  exportBase,
-}: {
+/**
+ * One aging bucket on a reskontra row. Blank only at zero: a credit note not
+ * yet due is a negative bucket, the PDF and the xlsx print it, and without it
+ * the row does not add up to its own Totalt.
+ */
+export function agingCell(amount: number): string {
+  return amount === 0 ? '' : formatAmount(amount)
+}
+
+interface ReskontraToolbarProps {
   asOfDate: string
   onAsOfDateChange: (date: string) => void
   inputId: string
   exportBase: string
-}) {
+}
+
+/** A reskontra that could not be read. The toolbar stays: a refused date is mended in the field that sent it. */
+export function ReskontraErrorCard({ message, ...toolbar }: ReskontraToolbarProps & { message: string }) {
+  return (
+    <div className="space-y-4">
+      <ReskontraToolbar {...toolbar} />
+      <ReportErrorCard message={message} />
+    </div>
+  )
+}
+
+export function ReskontraToolbar({ asOfDate, onAsOfDateChange, inputId, exportBase }: ReskontraToolbarProps) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="space-y-1">

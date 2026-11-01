@@ -1,0 +1,1 @@
+[2026-11-01] Bolagsskatt and the 25 % cap start from the trial balance without the resultatavslut (readYearResult), every result account but the tax and 899x: no account list, so a stock count or a cut-off counts the day the declaration does. Replaces the income statement base of 2026-10-26.

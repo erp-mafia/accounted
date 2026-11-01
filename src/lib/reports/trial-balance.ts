@@ -145,29 +145,6 @@ async function fetchActivityViaRpc(scope: ActivityScope): Promise<PeriodActivity
 }
 
 /**
- * The company's reversed year_end entries: the roots of the storno and
- * correction chain that 'exclude-all-year-end' drops with them (the set
- * itself is fetchYearEndEntryIds). Company-wide on purpose: a storno in this
- * period can reverse a year-end entry of another period.
- */
-export async function fetchReversedYearEndEntryIds(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<string[]> {
-  const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('source_type', 'year_end')
-      .eq('status', 'reversed')
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
-  return rows.map((r) => r.id)
-}
-
-/**
  * The entries of one fiscal period that 'exclude-all-year-end' leaves out,
  * from the year_end_chain_entry_ids SQL function: every source_type
  * 'year_end' entry, the storno and correction of a reversed one, and a

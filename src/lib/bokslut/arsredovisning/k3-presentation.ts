@@ -41,7 +41,6 @@ interface Range {
 /** One K3 post carved out of a K2 post. */
 export interface K3Split {
   concept: string
-  label: string
   /** The K2 concept the balance sits in today. */
   from: string
   orientation: 'debit' | 'credit'
@@ -52,42 +51,36 @@ export interface K3Split {
 export const K3_SPLITS: readonly K3Split[] = [
   {
     concept: 'BalanseradeUtgifterUtvecklingsarbetenLiknandeArbeten',
-    label: 'Balanserade utgifter för utvecklingsarbeten och liknande arbeten',
     from: 'KoncessionerPatentLicenserVarumarkenLiknandeRattigheter',
     orientation: 'debit',
     ranges: [{ start: '1010', end: '1019' }],
   },
   {
     concept: 'UppskjutenSkattefordran',
-    label: 'Uppskjuten skattefordran',
     from: 'AndraLangfristigaFordringar',
     orientation: 'debit',
     ranges: [{ start: '1370', end: '1379' }],
   },
   {
     concept: 'FondUtvecklingsutgifter',
-    label: 'Fond för utvecklingsutgifter',
     from: 'Reservfond',
     orientation: 'credit',
     ranges: [{ start: '2089', end: '2089' }],
   },
   {
     concept: 'FondVerkligtVarde',
-    label: 'Fond för verkligt värde',
     from: 'BalanseratResultat',
     orientation: 'credit',
     ranges: [{ start: '2096', end: '2096' }],
   },
   {
     concept: 'UppskjutenSkatteskuld',
-    label: 'Uppskjuten skatteskuld',
     from: 'OvrigaAvsattningar',
     orientation: 'credit',
     ranges: [{ start: '2240', end: '2249' }],
   },
   {
     concept: 'AvsattningarOvrigSkatt',
-    label: 'Övriga avsättningar för skatter',
     from: 'OvrigaAvsattningar',
     orientation: 'credit',
     ranges: [{ start: '2250', end: '2259' }],
@@ -97,13 +90,6 @@ export const K3_SPLITS: readonly K3Split[] = [
 /** Aktuell skattefordran: BAS 1640-1649 with a debit balance. */
 const CURRENT_TAX_RECEIVABLE_RANGES: readonly Range[] = [{ start: '1640', end: '1649' }]
 export const CURRENT_TAX_RECEIVABLE_CONCEPT = 'AktuellSkattefodran'
-export const CURRENT_TAX_RECEIVABLE_LABEL = 'Aktuell skattefordran'
-
-/** Labels of every K3-only post, for the statement rows. */
-export const K3_POST_LABELS: Record<string, string> = {
-  ...Object.fromEntries(K3_SPLITS.map((split) => [split.concept, split.label])),
-  [CURRENT_TAX_RECEIVABLE_CONCEPT]: CURRENT_TAX_RECEIVABLE_LABEL,
-}
 
 function inRanges(account: string, ranges: readonly Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)

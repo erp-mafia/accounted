@@ -21,7 +21,9 @@ vi.mock('@/lib/reports/income-statement', () => ({
 vi.mock('@/lib/bokslut/tax-provision/bolagsskatt-calculator', () => ({
   calculateBolagsskatt: vi.fn(),
   getBookedBolagsskatt: vi.fn(),
-  sumPostedYearEndDispositions: vi.fn(),
+}))
+vi.mock('@/lib/bokslut/tax-provision/result-before-tax', () => ({
+  readYearResult: vi.fn(),
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
   // INK2S 4.9 (lib/bokslut/assets/building-tax-service): no buildings here.
@@ -42,11 +44,8 @@ vi.mock('@/lib/bokslut/reserves/periodiseringsfond-service', async (importOrigin
 })
 
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import {
-  calculateBolagsskatt,
-  getBookedBolagsskatt,
-  sumPostedYearEndDispositions,
-} from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import { calculateBolagsskatt, getBookedBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import { readYearResult } from '@/lib/bokslut/tax-provision/result-before-tax'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
@@ -114,11 +113,7 @@ beforeEach(() => {
   vi.mocked(generateIncomeStatement).mockResolvedValue({
     net_result: 100_000,
   } as Awaited<ReturnType<typeof generateIncomeStatement>>)
-  vi.mocked(sumPostedYearEndDispositions).mockResolvedValue({
-    total: 0,
-    slpPortion: 0,
-    taxProvisionPortion: 0,
-  })
+  vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 100_000, beforeTax: 100_000 })
   vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
     items: [],
     nonDeductibleExpenses: 0,
@@ -136,7 +131,7 @@ beforeEach(() => {
     maximumSignedChange: 0,
   })
   vi.mocked(calculateSarskildLoneskatt).mockResolvedValue(null)
-  vi.mocked(calculateBolagsskatt).mockResolvedValue(bolagsskattProposal)
+  vi.mocked(calculateBolagsskatt).mockReturnValue(bolagsskattProposal)
 })
 
 describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
@@ -149,9 +144,6 @@ describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
     expect(result.proposals.map((p) => p.kind)).toContain('bolagsskatt')
     // Inga fonder: no schablonintäkt reaches the tax base.
     expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalledWith(
-      supabase,
-      'company-1',
-      'period-1',
       expect.objectContaining({
         manualAdjustments: expect.objectContaining({ schablonintaktPeriodiseringsfond: 0 }),
       }),
@@ -200,9 +192,6 @@ describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
 
     // 100 000 × 2.62 % (SLR 2023-11-30) = 2 620 kr schablonintäkt, INK2S 4.6a.
     expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalledWith(
-      supabase,
-      'company-1',
-      'period-1',
       expect.objectContaining({
         manualAdjustments: expect.objectContaining({ schablonintaktPeriodiseringsfond: 2_620 }),
       }),
@@ -248,47 +237,34 @@ describe('buildDispositionsProposal: forms without corporate tax dispositions', 
   })
 })
 
-describe('buildDispositionsProposal: income tax booked outside the flow (INK2 4.3a)', () => {
-  // The income statement excludes the flow's own year_end tax, so every
-  // income-tax account it still holds was booked outside the flow. Before,
-  // only 8910 was added back: a deferred tax on 8940 shrank the base and a
-  // refund on 8930 inflated it.
-  it('adds back every income-tax account the income statement holds, signed', async () => {
-    vi.mocked(generateIncomeStatement).mockResolvedValue({
-      net_result: 100_000,
-      financial_sections: [
-        {
-          title: 'Skatter och årets resultat',
-          rows: [
-            // Financial rows are credit - debit: expenses are negative.
-            { account_number: '8910', account_name: 'Skatt som belastar årets resultat', amount: -30_000 },
-            { account_number: '8940', account_name: 'Uppskjuten skatt', amount: -10_000 },
-            { account_number: '8930', account_name: 'Restituerad skatt', amount: 5_000 },
-          ],
-          subtotal: -35_000,
-        },
-        {
-          title: 'Bokslutsdispositioner',
-          rows: [{ account_number: '8811', account_name: 'Avsättning till periodiseringsfond', amount: -1_000 }],
-          subtotal: -1_000,
-        },
-      ],
-    } as unknown as Awaited<ReturnType<typeof generateIncomeStatement>>)
+describe('buildDispositionsProposal: the result the declaration reads', () => {
+  it('shows the year before dispositions and rests the cap and the tax on the year before tax', async () => {
+    // readYearResult: 120 000 before dispositions, 15 000 of återföring booked.
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 120_000, beforeTax: 135_000 })
     const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
 
     const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
 
-    // 100 000 + 30 000 (8910) + 10 000 (8940) - 5 000 (8930); 8811 is not tax.
-    expect(result.netResultBefore).toBe(135_000)
-    // The periodiseringsfond cap is 25 % of that base, and the bolagsskatt
+    expect(result.netResultBefore).toBe(120_000)
+    // The periodiseringsfond cap is 25 % of the base, and the bolagsskatt
     // base is the same result after the avsättning.
     const avsattning = result.proposals.find((p) => p.kind === 'periodiseringsfond_avsattning')
     expect(avsattning?.amount).toBe(33_750)
     expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalledWith(
-      supabase,
-      'company-1',
-      'period-1',
-      expect.objectContaining({ resultBeforeTaxOverride: 135_000 - 33_750 }),
+      expect.objectContaining({ resultBeforeTax: 135_000 - 33_750 }),
     )
+  })
+
+  it('warns when the booked tax no longer matches the base, a stock count booked after it', async () => {
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 60_000, beforeTax: 60_000 })
+    vi.mocked(getBookedBolagsskatt).mockResolvedValue(20_600)
+    vi.mocked(calculateBolagsskatt).mockReturnValue({ ...bolagsskattProposal, amount: 12_360 })
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(result.completedDispositions).toEqual([
+      expect.objectContaining({ kind: 'bolagsskatt', amount: 20_600, status: 'needs_correction' }),
+    ])
   })
 })

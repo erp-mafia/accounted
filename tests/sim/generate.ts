@@ -104,6 +104,7 @@ export type SimEvent = Dated &
     | { type: 'payroll_taxes_paid'; year: number; month: number }
     | { type: 'vat_settlement'; year: number; quarter: number }
     | { type: 'vat_paid'; year: number; quarter: number }
+    | { type: 'stock_count'; year: number; value: number }
     | { type: 'depreciation'; year: number }
     | { type: 'corporate_tax'; year: number }
     | { type: 'year_end'; year: number }
@@ -313,6 +314,9 @@ function monthlyPurchases(random: Random, year: number, month: number, index: { 
   return events
 }
 
+/** The handelsvaror the signed list counts on each balansdag: a stock count books the change, as year_end. */
+const STOCK_VALUE: Record<number, number> = { 2024: 40_000, 2025: 25_000 }
+
 const CARD_COSTS = [
   { category: 'expense_office', account: '6110', vatRate: 25, text: 'Kontorsmaterial', min: 180, max: 1_900 },
   { category: 'expense_software', account: '6540', vatRate: 25, text: 'Mjukvaruprenumeration', min: 90, max: 900 },
@@ -424,6 +428,7 @@ export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan 
       }
     }
     if (year !== 2026) {
+      events.push({ type: 'stock_count', date: iso(year, 12, 31), year, value: STOCK_VALUE[year] })
       events.push({ type: 'depreciation', date: iso(year, 12, 31), year })
       events.push({ type: 'corporate_tax', date: iso(year, 12, 31), year })
       events.push({ type: 'year_end', date: iso(year + 1, 3, 20), year })

@@ -196,7 +196,6 @@ export const LOCAL_SUPABASE_CHAIN_ALLOWED = new Set([
   'src/lib/api/v1/__tests__/report-query-gate-strict.test.ts',
   'src/lib/api/v1/__tests__/report-query-gate.test.ts',
   'src/lib/auth/__tests__/oauth-flows.test.ts',
-  'src/lib/bokslut/__tests__/bolagsskatt-calculator.test.ts',
   'src/lib/bokslut/__tests__/k3-framework-dispositions.test.ts',
   'src/lib/bokslut/assets/__tests__/asset-delete.test.ts',
   'src/lib/bokslut/assets/__tests__/depreciation-posting.test.ts',

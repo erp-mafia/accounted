@@ -20,6 +20,7 @@ describe.each(closedYears)('INK2 %i', (year) => {
   it('carries the statements in the räkenskapsschema', async () => {
     const { ink2r } = await declaration()
     expectKronor(ink2r['7215'], figures.tangibleAssets)
+    expectKronor(ink2r['7243'], figures.stock)
     expectKronor(ink2r['7251'], figures.receivables)
     expectKronor(ink2r['7281'], figures.cash)
     expectKronor(ink2r['7301'], figures.shareCapital)
@@ -29,6 +30,7 @@ describe.each(closedYears)('INK2 %i', (year) => {
     expectKronor(ink2r['7369'], figures.vatLiability + figures.payrollLiabilities)
     expectKronor(ink2r['7370'], figures.accruedVacation)
     expectKronor(ink2r['7410'], figures.revenue)
+    expectKronor(ink2r['7512'], figures.stockChange)
     expectKronor(ink2r['7513'], figures.externalCosts)
     expectKronor(ink2r['7514'], figures.personnelCosts)
     expectKronor(ink2r['7515'], figures.depreciation)

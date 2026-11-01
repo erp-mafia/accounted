@@ -1,4 +1,6 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseLedgerAsOfDate } from '@/lib/reports/ledger-as-of'
+import { ledgerAsOfRefusal } from '@/lib/reports/ledger-as-of-refusal'
 import { NextResponse } from 'next/server'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import {
@@ -21,9 +23,10 @@ interface AgingRow {
   total_outstanding: number
 }
 
-export const GET = withRouteContext('report.supplier_ledger.xlsx', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.supplier_ledger.xlsx', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
-  const asOfDate = searchParams.get('as_of_date') || undefined
+  const asOf = parseLedgerAsOfDate(searchParams.get('as_of_date'))
+  if (!asOf.ok) return ledgerAsOfRefusal(asOf, log, requestId)
 
   const { data: companyRow } = await supabase
     .from('company_settings')
@@ -32,7 +35,7 @@ export const GET = withRouteContext('report.supplier_ledger.xlsx', async (reques
     .single()
 
   try {
-    const ledger = await generateSupplierLedger(supabase, companyId, asOfDate)
+    const ledger = await generateSupplierLedger(supabase, companyId, asOf.asOfDate)
 
     const rows: AgingRow[] = ledger.entries.map((e) => ({
       supplier_name: e.supplier_name,
@@ -72,7 +75,7 @@ export const GET = withRouteContext('report.supplier_ledger.xlsx', async (reques
     const filename = xlsxFilename(
       'leverantorsreskontra',
       companyRow?.company_name ?? '',
-      asOfDate ?? todayIsoStockholm(),
+      asOf.asOfDate ?? todayIsoStockholm(),
     )
     return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {

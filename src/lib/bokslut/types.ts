@@ -118,7 +118,11 @@ export interface DispositionsProposal {
     period_start: string
     period_end: string
   }
-  /** Result before any new dispositions, from the income statement (positive = profit). */
+  /**
+   * The result before dispositions (positive = profit): resultat efter
+   * finansiella poster as the declaration reads it (readYearResult), or the
+   * income statement's result for a form without corporate tax dispositions.
+   */
   netResultBefore: number
   proposals: ProposedDisposition[]
   taxAdjustments?: TaxAdjustmentSnapshot

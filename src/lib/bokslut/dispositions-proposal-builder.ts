@@ -1,13 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
-import { roundOre } from '@/lib/money'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import {
-  calculateBolagsskatt,
-  getBookedBolagsskatt,
-  sumPostedYearEndDispositions,
-} from './tax-provision/bolagsskatt-calculator'
-import { incomeTaxInResult } from './tax-provision/income-tax-accounts'
+import { calculateBolagsskatt, getBookedBolagsskatt } from './tax-provision/bolagsskatt-calculator'
+import { readYearResult, type YearResult } from './tax-provision/result-before-tax'
 import { loadBuildingTaxAdjustment, loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
 import type { TaxAdjustmentSnapshot } from './types'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
@@ -33,16 +28,8 @@ import type { EntityType } from '@/types'
 export interface DispositionState {
   fiscalPeriodId: string
   fiscalYear: number
-  /** The income statement's result: source_type year_end excluded. */
-  netResult: number
-  /**
-   * Income tax inside netResult (incomeTaxInResult): every income-tax
-   * account INK2 adds back on 4.3a, booked outside this flow. Expense
-   * positive, tax income negative.
-   */
-  incomeTaxInResult: number
-  /** Dispositions already posted in this period (sumPostedYearEndDispositions). */
-  postedEffect: Awaited<ReturnType<typeof sumPostedYearEndDispositions>>
+  /** The year's result as the declaration reads it, posted dispositions in it. */
+  result: YearResult
   taxAdjustments: TaxAdjustmentSnapshot
   /** Bolagsskatt already on 8910 (this flow's and any manual posting). */
   bookedTax: number
@@ -57,9 +44,8 @@ export async function loadDispositionState(
   period: { id: string; period_start: string; period_end: string; opening_balance_entry_id: string | null },
   form?: EntityType,
 ): Promise<DispositionState> {
-  const [incomeStatement, postedEffect, taxAdjustments, bookedTax, existingFonder, buildingTax] = await Promise.all([
-    generateIncomeStatement(supabase, companyId, period.id),
-    sumPostedYearEndDispositions(supabase, companyId, period.id),
+  const [result, taxAdjustments, bookedTax, existingFonder, buildingTax] = await Promise.all([
+    readYearResult(supabase, companyId, period.id),
     loadTaxAdjustmentSnapshot(supabase, companyId, period.id, form),
     getBookedBolagsskatt(supabase, companyId, period.id),
     listExistingPeriodiseringsfonder(
@@ -74,26 +60,12 @@ export async function loadDispositionState(
   return {
     fiscalPeriodId: period.id,
     fiscalYear: parseInt(period.period_end.slice(0, 4), 10),
-    netResult: incomeStatement.net_result,
-    incomeTaxInResult: incomeTaxInResult(incomeStatement),
-    postedEffect,
+    result,
     taxAdjustments,
     bookedTax,
     existingFonder,
     buildingTaxAdjustment: Math.trunc(buildingTax.net),
   }
-}
-
-/**
- * Resultat före skatt, stable on reload: the income statement's result with
- * the income tax in it added back. The income statement excludes the tax this
- * flow posts (year_end) but includes tax booked outside the flow on any
- * income-tax account (8900-8989, the INK2 4.3a set): a manual 8910, a
- * deferred tax on 8940, a refund on 8930. All of it is added back, signed,
- * as INK2 does.
- */
-export function resultBeforeTax(state: DispositionState): number {
-  return roundOre(state.netResult + state.incomeTaxInResult)
 }
 
 /** The återföringar (and the schablonintäkt on the fonder's opening balance). */
@@ -119,10 +91,10 @@ export function alreadyProvisionedAvsattning(state: DispositionState): number {
  * The avsättning to periodiseringsfond, or null when this year's avsättning
  * is already booked (a completed decision, never topped up on reload).
  *
- * Cap base = skattemässigt resultat före avsättning: resultat före skatt plus
- * the posted dispositions (a posted avsättning added back: its headroom effect
- * is alreadyProvisioned), plus `pendingResultEffect` (the result effect of the
- * dispositions proposed before this one but not yet posted: återföring,
+ * Cap base = skattemässigt resultat före avsättning: resultat före skatt, with
+ * every posted disposition in it (a posted avsättning added back: its headroom
+ * effect is alreadyProvisioned), plus `pendingResultEffect` (the result effect
+ * of the dispositions proposed before this one but not yet posted: återföring,
  * överavskrivningar, SLP), plus schablonintäkt and the tax adjustments.
  */
 export function avsattningDisposition(
@@ -133,7 +105,7 @@ export function avsattningDisposition(
   if (alreadyProvisioned > 0) return null
   const { taxAdjustments } = state
   const base =
-    resultBeforeTax(state) + state.postedEffect.total + alreadyProvisioned + options.pendingResultEffect
+    state.result.beforeTax + alreadyProvisioned + options.pendingResultEffect
     + options.schablonintaktAmount
     + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
     + state.buildingTaxAdjustment
@@ -148,17 +120,15 @@ export function avsattningDisposition(
 
 /**
  * Bolagsskatt on the result AFTER every disposition: the posted ones are in
- * postedEffect, `pendingResultEffect` carries those proposed but not yet
+ * state.result, `pendingResultEffect` carries those proposed but not yet
  * posted (+ återföring, + överavskrivningar effect, − avsättning, − SLP).
  */
-export async function bolagsskattDisposition(
-  supabase: SupabaseClient,
-  companyId: string,
+export function bolagsskattDisposition(
   state: DispositionState,
   options: { pendingResultEffect: number; schablonintaktAmount: number },
-): Promise<ProposedDisposition | null> {
-  return calculateBolagsskatt(supabase, companyId, state.fiscalPeriodId, {
-    resultBeforeTaxOverride: resultBeforeTax(state) + state.postedEffect.total + options.pendingResultEffect,
+): ProposedDisposition {
+  return calculateBolagsskatt({
+    resultBeforeTax: state.result.beforeTax + options.pendingResultEffect,
     manualAdjustments: {
       nonDeductibleExpenses: state.taxAdjustments.nonDeductibleExpenses,
       nonTaxableIncome: state.taxAdjustments.nonTaxableIncome,
@@ -221,15 +191,12 @@ export async function buildDispositionsProposal(
   const warnings: string[] = []
 
   // Dispositions already POSTED in this period (a partially completed
-  // bokslut run) are excluded from the income statement like all year_end
-  // entries, but they do affect the taxable base: the per-kind functions fold
-  // their signed P&L effect in, and the effect of the ones proposed here but
-  // not posted yet goes in as pendingResultEffect, so a re-visit previews the
-  // same amounts the POST books (it calls the same functions after posting
-  // each item).
+  // bokslut run) are in the year's result, and the effect of the ones proposed
+  // here but not posted yet goes in as pendingResultEffect, so a re-visit
+  // previews the same amounts the POST books (it calls the same functions
+  // after posting each item).
   const state = await loadDispositionState(supabase, companyId, period, form)
-  const { postedEffect, taxAdjustments, bookedTax } = state
-  const normalizedResultBeforeTax = resultBeforeTax(state)
+  const { taxAdjustments, bookedTax } = state
 
   // Rate resolves lazily: a company without opening fonder never touches
   // the SLR table, so an unmapped year cannot break its bokslut.
@@ -262,13 +229,8 @@ export async function buildDispositionsProposal(
     overavskrivningar.proposal?.signedAmount ?? 0
   )
 
-  // SLP already posted in this period (resumed run): don't re-propose it
-  // (that would book it twice) and don't subtract it twice below (its
-  // effect is already inside postedEffect.total).
-  const slp =
-    postedEffect.slpPortion !== 0
-      ? null
-      : await calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId)
+  // SLP already booked is the calculator's: it proposes the remainder only.
+  const slp = await calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId)
 
   // An avsättning already booked in this bokslut eats into the 25 % cap;
   // without this, revisiting the page after committing re-proposes the full
@@ -299,13 +261,13 @@ export async function buildDispositionsProposal(
   //   − SLP        (7533, kostnad)
   // Without this, the previewed tax ignores the avsättning (tax too high) and
   // diverges from what the sequential commit books and from ÅR/INK2.
-  const bolagsskatt = await bolagsskattDisposition(supabase, companyId, state, {
+  const bolagsskatt = bolagsskattDisposition(state, {
     pendingResultEffect:
       ateforingTotal + overavskrivningarResultEffect - (avsattning?.amount ?? 0) - (slp?.amount ?? 0),
     schablonintaktAmount: ateforing.schablonintaktAmount,
   })
   if (bookedTax > 0) {
-    const expectedTax = bolagsskatt?.amount ?? 0
+    const expectedTax = bolagsskatt.amount
     const matches = bookedTax === expectedTax
     completedDispositions.push({
       kind: 'bolagsskatt',
@@ -318,7 +280,7 @@ export async function buildDispositionsProposal(
             `Bokförd skatt är ${bookedTax} kr, men aktuellt underlag ger ${expectedTax} kr. Rätta den bokförda skatten innan bokslutet verkställs.`,
           ],
     })
-  } else if (bolagsskatt && bolagsskatt.amount > 0) {
+  } else if (bolagsskatt.amount > 0) {
     proposals.push(bolagsskatt)
   }
 
@@ -346,7 +308,7 @@ export async function buildDispositionsProposal(
   return {
     entityType,
     fiscalPeriod: period,
-    netResultBefore: normalizedResultBeforeTax,
+    netResultBefore: state.result.beforeDispositions,
     proposals,
     taxAdjustments,
     completedDispositions,

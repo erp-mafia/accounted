@@ -5,11 +5,16 @@
  * figure, as a company pays what it worked out, so a report that disagrees shows
  * up as a balance that does not clear.
  *
- * The one door that is not an MCP tool is registering a supplier invoice: that
- * is createSupplierInvoice, the function behind the dashboard and v1 routes.
+ * Two doors are not MCP tools. Registering a supplier invoice is
+ * createSupplierInvoice, the function behind the dashboard and v1 routes. The
+ * stock count's tools are served only behind a company switch and a person
+ * signs the list, so the count goes through the functions behind those routes.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { bookStockCount } from '@/lib/bokslut/stock-count/booking'
+import { createStockCount } from '@/lib/bokslut/stock-count/register'
+import { signStockCountManually } from '@/lib/bokslut/stock-count/signing'
 import { createCompanyCore } from '@/lib/company/create-company'
 import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-input'
 import { createLogger } from '@/lib/logger'
@@ -386,6 +391,19 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
         await bankVoucher(event.date, `Moms ${event.year} kvartal ${event.quarter}`, -filedNet, [
           { account_number: '2650', debit_amount: filedNet },
         ])
+        return
+      }
+      case 'stock_count': {
+        const count = await createStockCount(supabase, companyId, userId, {
+          fiscal_period_id: fiscalPeriods[event.year],
+          count_date: event.date,
+          rows: [{ description: 'Handelsvaror', quantity: 1, unit_cost: event.value }],
+        })
+        await signStockCountManually(supabase, companyId, userId, count.id, {
+          signerName: SIM_COMPANY.contact.name,
+          signedOn: event.date,
+        })
+        await bookStockCount(supabase, companyId, userId, count.id)
         return
       }
       case 'depreciation':

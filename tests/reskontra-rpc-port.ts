@@ -38,6 +38,7 @@ export interface ReskontraTables {
   supplier_invoices?: Row[]
   suppliers?: Row[]
   supplier_invoice_payments?: Row[]
+  fiscal_periods?: Row[]
 }
 
 const AR_LIVE = ['sent', 'overdue', 'partially_paid', 'credited']
@@ -367,12 +368,31 @@ export function creditedInvoiceRead(rows: Row[], failure: { message: string; cod
   return chain
 }
 
+/** select().eq('id').eq('company_id').maybeSingle() over the fiscal_periods rows. */
+function fiscalPeriodRead(rows: Row[], failure: { message: string; code?: string } | undefined) {
+  const filters: Row = {}
+  const chain = {
+    select: () => chain,
+    eq: (column: string, value: unknown) => {
+      filters[column] = value
+      return chain
+    },
+    maybeSingle: async () => {
+      if (failure) return { data: null, error: failure }
+      const hit = rows.find((row) => Object.entries(filters).every(([column, value]) => (row[column] ?? value) === value))
+      return { data: hit ?? null, error: null }
+    },
+  }
+  return chain
+}
+
 /**
  * A supabase client whose rpc() answers through the ports from the tables
  * `tables()` returns at call time, so a test can assign its books after the
  * client is made. Every call is recorded; a name in `failures()` answers
  * that error instead. Table reads are not expected and throw, except the
- * credit notes' originals (creditedInvoiceRead).
+ * credit notes' originals (creditedInvoiceRead) and the reconciliations' read
+ * of a fiscal year's last day.
  */
 export function createReskontraClient(
   tables: () => ReskontraTables,
@@ -390,6 +410,7 @@ export function createReskontraClient(
     }),
     from: vi.fn((table: string) => {
       if (table === 'invoices') return creditedInvoiceRead(tables().invoices ?? [], failures().invoices)
+      if (table === 'fiscal_periods') return fiscalPeriodRead(tables().fiscal_periods ?? [], failures().fiscal_periods)
       throw new Error(`createReskontraClient: unexpected read of ${table}`)
     }),
   }

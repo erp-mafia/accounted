@@ -8,9 +8,10 @@ import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import {
   ReportEmptyState,
-  ReportErrorCard,
   ReportLoadingCard,
+  ReskontraErrorCard,
   ReskontraToolbar,
+  agingCell,
 } from '@/components/reports/report-view-shared'
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount, formatDate } from '@/lib/utils'
@@ -64,6 +65,7 @@ interface ARLedgerData {
   }
   reconciliation: {
     ar_ledger_total: number
+    as_of_date: string | null
     account_1510_balance: number
     difference: number
     is_reconciled: boolean
@@ -192,7 +194,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReskontraErrorCard message={error} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="ar-ledger-as-of" exportBase="/api/reports/ar-ledger" />
   }
 
   if (!data || !data.ledger) {
@@ -290,11 +292,11 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
                           )}
                         </td>
                         <td className="py-2">{entry.customer_name}</td>
-                        <td className="py-2 text-right">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
-                        <td className="py-2 text-right">{entry.days_1_30 > 0 ? formatAmount(entry.days_1_30) : ''}</td>
-                        <td className="py-2 text-right">{entry.days_31_60 > 0 ? formatAmount(entry.days_31_60) : ''}</td>
-                        <td className="py-2 text-right">{entry.days_61_90 > 0 ? formatAmount(entry.days_61_90) : ''}</td>
-                        <td className="py-2 text-right text-destructive">{entry.days_90_plus > 0 ? formatAmount(entry.days_90_plus) : ''}</td>
+                        <td className="py-2 text-right">{agingCell(entry.current)}</td>
+                        <td className="py-2 text-right">{agingCell(entry.days_1_30)}</td>
+                        <td className="py-2 text-right">{agingCell(entry.days_31_60)}</td>
+                        <td className="py-2 text-right">{agingCell(entry.days_61_90)}</td>
+                        <td className="py-2 text-right text-destructive">{agingCell(entry.days_90_plus)}</td>
                         <td className="py-2 text-right font-semibold">{formatAmount(entry.total_outstanding)}</td>
                       </tr>
                       {isExpanded && (
@@ -333,7 +335,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
           <CardContent>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span>Kundreskontra (summa utestående)</span>
+                <span>Kundreskontra (summa utestående){reconciliation.as_of_date && ` ${formatDate(reconciliation.as_of_date)}`}</span>
                 <span className="tabular-nums">{formatAmount(reconciliation.ar_ledger_total)} kr</span>
               </div>
               <div className="flex justify-between">
