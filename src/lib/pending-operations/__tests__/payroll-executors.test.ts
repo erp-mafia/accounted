@@ -43,6 +43,14 @@ vi.mock('@/lib/salary/create-run', async () => {
 
 import { commitPendingOperation } from '../commit'
 
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
     id: 'op-1',
@@ -352,14 +360,13 @@ describe('commitPendingOperation: update_salary_run', () => {
   })
 
   it('re-clears breakdowns when retried with the already-applied date (partial-failure retry)', async () => {
-    // After a partial failure (header committed, clear failed) a retry sees
-    // the new date as current. The clear must run anyway: it is gated on the
-    // date being SUPPLIED, never on it differing from the stored value.
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    // After a partial failure a retry sees the new date as current. The clear
+    // must run anyway: it is gated on the date being SUPPLIED, never on it
+    // differing from the stored value.
+    const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // run already carries the new date
     enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // header update no-ops successfully
-    enqueue({ data: null, error: null }) // roster calculation_breakdown clear
     enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
@@ -369,7 +376,7 @@ describe('commitPendingOperation: update_salary_run', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(findCall('salary_run_employees', 'update')).toEqual([{ calculation_breakdown: null }])
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, 'company-1', { salaryRunId: 'run-1' })
   })
 
   it('commits a payment_date in the month after the period (lön i efterskott, #2191)', async () => {
@@ -379,7 +386,6 @@ describe('commitPendingOperation: update_salary_run', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: RUN_ROW }) // draft gate passes; period is 2026-03
     enqueue({ data: { ...RUN_ROW, payment_date: '2026-04-05' } }) // optimistic-locked update
-    enqueue({ data: null, error: null }) // roster calculation_breakdown clear
     enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
@@ -393,11 +399,14 @@ describe('commitPendingOperation: update_salary_run', () => {
   })
 
   it('fails when the calculation-invalidation clear errors (guard is not best-effort)', async () => {
+    vi.mocked(invalidateRunCalculation).mockResolvedValueOnce({
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: 'connection reset' },
+    })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: RUN_ROW }) // service draft gate + current values
-    enqueue({ data: { ...RUN_ROW, payment_date: '2026-03-23' } }) // optimistic-locked update
-    enqueue({ data: null, error: { message: 'connection reset' } }) // breakdown clear fails
     enqueue({ data: null, error: null }) // finalize (failed)
 
     const op = makePendingOp({
@@ -535,6 +544,31 @@ describe('commitPendingOperation: register_absence', () => {
       absence_type: 'sick',
       day_count: 2,
     })
+  })
+
+  it('resolves a day without stated hours from the employee, not from the door', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'emp-1', hours_per_week: 20, workdays_per_week: 5 } }) // service assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // bulk upsert
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'register_absence',
+      params: {
+        employee_id: 'emp-1',
+        from: '2026-03-02',
+        to: '2026-03-02',
+        absence_type: 'sick',
+        hours_per_day: null,
+        notes: null,
+        include_weekends: false,
+      },
+    })
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(findCall('salary_absence_days', 'upsert')?.[0]).toEqual([expect.objectContaining({ hours: 4 })])
   })
 
   it('maps the 24h-cap trigger to a clean 409 failure', async () => {

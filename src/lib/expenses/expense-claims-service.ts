@@ -36,6 +36,7 @@ import {
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { roundOre, sumOre } from '@/lib/money'
 import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -763,6 +764,8 @@ export async function deleteExpenseClaim(
     }
   }
   if (payslip) {
+    const invalidated = await invalidateRunCalculation(supabase, companyId, { salaryRunId: payslip.salary_run_id })
+    if (invalidated) return { ok: false, code: 'DELETE_FAILED', detail: invalidated.details.message }
     const { error: lineError } = await supabase
       .from('salary_line_items')
       .delete()

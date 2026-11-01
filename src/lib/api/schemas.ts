@@ -5582,11 +5582,6 @@ export const CreateSalaryLineItemSchema = z.object({
   // (lib/salary/payslip-lines.ts) refuse a missing or 0 kr amount on any
   // other row, except a vacation row that carries days in quantity.
   amount: z.number().optional(),
-  is_taxable: z.boolean().default(true),
-  is_avgift_basis: z.boolean().default(true),
-  is_vacation_basis: z.boolean().default(true),
-  is_gross_deduction: z.boolean().default(false),
-  is_net_deduction: z.boolean().default(false),
   account_number: accountNumber.optional(),
   sort_order: z.number().int().default(0),
   // Engångsskatt (lib/salary/one-off-tax.ts): the verified Skatteverket
@@ -5634,7 +5629,8 @@ export const AbsenceTypeSchema = z.enum([
 export const UpsertAbsenceDaySchema = z.object({
   absence_date: isoDate,
   absence_type: AbsenceTypeSchema,
-  hours: z.number().positive().max(24).default(8),
+  // Omitted: one scheduled day of the employee (lib/salary/absence.ts).
+  hours: z.number().positive().max(24).optional(),
   notes: z.string().max(2000).optional(),
   salary_run_employee_id: uuid.optional(),
 })
@@ -5775,7 +5771,8 @@ export const OpeningBalancesBulkSchema = z.object({
 export const UpsertWorkedDaySchema = z
   .object({
     work_date: isoDate,
-    hours: z.number().positive().max(24).default(8),
+    // Omitted: one scheduled day of the employee (lib/salary/worked-days.ts).
+    hours: z.number().positive().max(24).optional(),
     notes: z.string().max(2000).optional(),
     salary_run_employee_id: uuid.optional(),
     // Optional shift window. Feeds the shift-premium engine: without explicit
@@ -5805,7 +5802,8 @@ export const BatchUpsertWorkedDaysSchema = z
     // 100-row sanity cap: typical use is one pay period (~22 weekdays). A larger
     // value usually indicates the caller is iterating wrong.
     dates: z.array(isoDate).min(1).max(100),
-    hours: z.number().positive().max(24).default(8),
+    // Omitted: one scheduled day of the employee.
+    hours: z.number().positive().max(24).optional(),
     notes: z.string().max(2000).optional(),
     salary_run_employee_id: uuid.optional(),
     // Optional shift window applied to every date in the batch. Pair both or

@@ -16,6 +16,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { invalidateRunCalculation } from './invalidate-calculation'
 
 export type OpeningBalancesResult<T> =
   | { ok: true; data: T }
@@ -317,6 +318,10 @@ export async function setOpeningBalancesBulk(
       (r) => [r.employee_id, r.created_by],
     ),
   )
+
+  // The karens adjustment and the YTD carry-in are inputs of a draft run.
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { employeeId: employeeIds })
+  if (invalidated) return invalidated
 
   // Single multi-row upsert on the natural key: atomic by construction.
   const { data: upserted, error } = await supabase

@@ -21,6 +21,12 @@ import { PATCH, DELETE } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 function authed() {
@@ -85,31 +91,13 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
     expect(body.data.id).toBe('line-1')
   })
 
-  it('returns 400 with the Swedish reason when the patch clears is_avgift_basis on a taxable addition (agent feedback seq 947288)', async () => {
-    const { enqueueMany } = authed()
-    enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } },
-      {
-        data: {
-          id: 'line-1',
-          item_type: 'bonus',
-          amount: 5000,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_gross_deduction: false,
-          is_net_deduction: false,
-          salary_run_employee: { salary_run_id: 'run-1' },
-        },
-      },
-    ])
+  it('has nothing to update in a patch of flags: they are the type\'s (agent feedback seq 947288)', async () => {
+    authed()
     const response = await PATCH(
       createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { is_avgift_basis: false } }),
       params(),
     )
-    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
-    expect(status).toBe(400)
-    expect(body.code).toBe('VALIDATION_ERROR')
-    expect(body.error).toMatch(/is_avgift_basis=false stöds ännu inte/)
+    expect(response.status).toBe(400)
   })
 })
 
@@ -240,19 +228,19 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
       { data: { ...TEXT_LINE, description: 'Ny text på två rader' } },
     ])
 
-    // Flags and an account in the patch are overridden, never stored.
+    // Flags and an account in the patch are never stored.
     const { status, body } = await patch({ description: ' Ny text\n på två rader ', is_taxable: true, account_number: '7210' })
 
     expect(status).toBe(200)
     expect(body.data?.id).toBe('line-1')
     expect(findCall('salary_line_items', 'update')?.[0]).toEqual({
       description: 'Ny text på två rader',
+      account_number: null,
       is_taxable: false,
       is_avgift_basis: false,
       is_vacation_basis: false,
       is_gross_deduction: false,
       is_net_deduction: false,
-      account_number: null,
     })
   })
 

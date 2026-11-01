@@ -1,0 +1,1 @@
+[2026-11-01] A positive nettolöneavdrag repays the employee in the engine and the voucher alike, with a calculation warning; a positive bruttolöneavdrag and a negative ersättning or förmån are refused at the door: only net money has no other row to come back on.

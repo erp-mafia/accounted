@@ -6779,7 +6779,7 @@ async function commitRegisterAbsence(
       from,
       to,
       absenceType,
-      hoursPerDay: (params.hours_per_day as number | undefined) ?? 8,
+      hoursPerDay: (params.hours_per_day as number | null | undefined) ?? undefined,
       notes: (params.notes as string | null | undefined) ?? null,
       includeWeekends: (params.include_weekends as boolean | undefined) ?? false,
     })

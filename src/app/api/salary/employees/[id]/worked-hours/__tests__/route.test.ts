@@ -54,6 +54,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { GET, POST } from '../route'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
 function post(body: unknown) {
@@ -143,6 +149,18 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
 
     expect(status).toBe(201)
     expect(body.data.id).toBe('wd-1')
+  })
+
+  it('takes one scheduled day of the employee when the hours are left out', async () => {
+    enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // loadEmployee
+    enqueueNoLockingRuns()
+    enqueue({ data: null }) // delete existing
+    enqueue({ data: { id: 'wd-1', work_date: '2026-07-01', hours: 10 } }) // insert
+
+    const response = await POST(post({ work_date: '2026-07-01' }), params)
+
+    expect(response.status).toBe(201)
+    expect(insertedRows()[0]).toMatchObject({ hours: 10 })
   })
 
   it('returns 404 when the employee is not in the company', async () => {

@@ -717,7 +717,7 @@ GET /companies/{companyId}/measures : The defined measures: id, name, precise de
 GET /companies/{companyId}/measures/{measureId} : One defined measure: the value, its definition, what it covers, caveats and an explain handle [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/measures/{measureId}/explain : What a defined measure adds: contributors and the journal lines or invoices behind it, paged [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/ar-ledger : AR ledger: unpaid customer invoices with aging [scope:reports:read risk:low idempotent]
-GET /companies/{companyId}/reports/avgifter-basis : Annual arbetsgivaravgifter basis per employee [scope:payroll:read risk:low idempotent]
+GET /companies/{companyId}/reports/avgifter-basis : The year's declared arbetsgivaravgifter per month and sats [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period or as of a custom date [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/balance-sheet/pdf : Balance sheet (balansräkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/behandlingshistorik : Behandlingshistorik (BFL 5 kap. 11 §): who changed what in the books, and when, for a räkenskapsår [scope:reports:read risk:low idempotent]

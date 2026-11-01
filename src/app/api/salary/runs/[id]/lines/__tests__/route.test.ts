@@ -21,17 +21,23 @@ import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const SRE_UUID = '22222222-2222-4222-8222-222222222222'
 
 function authed() {
-  const { supabase, enqueueMany } = createQueuedMockSupabase()
+  const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
   vi.mocked(requireAuth).mockResolvedValue({
     user: mockUser as never,
     supabase: supabase as never,
     error: null,
   })
-  return { supabase, enqueueMany }
+  return { supabase, enqueueMany, findCall }
 }
 
 const validBody = {
@@ -91,29 +97,8 @@ describe('POST /api/salary/runs/[id]/lines', () => {
     expect(body.data.id).toBe('li-1')
   })
 
-  it('returns 400 with the Swedish reason for is_avgift_basis=false on a taxable benefit (agent feedback seq 947288)', async () => {
-    const { enqueueMany } = authed()
-    enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
-      { data: { id: SRE_UUID, employee_id: 'emp-1' } }, // salary_run_employees membership
-    ])
-
-    const response = await POST(
-      createMockRequest('/api/salary/runs/run-1/lines', {
-        method: 'POST',
-        body: { ...validBody, item_type: 'benefit_meals', description: 'Kostförmån', amount: 500, is_avgift_basis: false },
-      }),
-      createMockRouteParams({ id: 'run-1' }),
-    )
-    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
-
-    expect(status).toBe(400)
-    expect(body.code).toBe('VALIDATION_ERROR')
-    expect(body.error).toMatch(/is_avgift_basis=false stöds ännu inte/)
-  })
-
-  it('creates the same benefit line when the flag is left at true', async () => {
-    const { enqueueMany } = authed()
+  it('stores the flags of the type, whatever the body says (agent feedback seq 947288)', async () => {
+    const { enqueueMany, findCall } = authed()
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } },
       { data: { id: SRE_UUID, employee_id: 'emp-1' } },
@@ -123,11 +108,16 @@ describe('POST /api/salary/runs/[id]/lines', () => {
     const response = await POST(
       createMockRequest('/api/salary/runs/run-1/lines', {
         method: 'POST',
-        body: { ...validBody, item_type: 'benefit_meals', description: 'Kostförmån', amount: 500 },
+        body: { ...validBody, item_type: 'benefit_meals', description: 'Kostförmån', amount: 500, is_avgift_basis: false },
       }),
       createMockRouteParams({ id: 'run-1' }),
     )
     expect(response.status).toBe(201)
+    expect(findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+    })
   })
 })
 
@@ -255,6 +245,24 @@ describe('POST /api/salary/runs/[id]/lines: text rows and 0 kr rows', () => {
       expect(status, `amount ${amount}`).toBe(400)
       expect(body.code).toBe('VALIDATION_ERROR')
       expect(body.error).toMatch(/inte är 0 kr/)
+      expect(findCall('salary_line_items', 'insert')).toBeUndefined()
+    }
+  })
+
+  it('returns 400 for a wrong sign, and writes nothing', async () => {
+    for (const [item_type, amount] of [
+      ['gross_deduction_other', 1000],
+      ['mileage_taxfree', -300],
+      ['benefit_other', -100],
+    ] as const) {
+      const { enqueueMany, findCall } = authedWithCalls()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'draft' } },
+        { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      ])
+      const { status, body } = await post({ ...validBody, item_type, amount })
+      expect(status, item_type).toBe(400)
+      expect(body.code).toBe('VALIDATION_ERROR')
       expect(findCall('salary_line_items', 'insert')).toBeUndefined()
     }
   })

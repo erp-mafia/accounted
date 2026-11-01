@@ -42,6 +42,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { POST } from '../route'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
@@ -129,6 +136,23 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
     expect(status).toBe(201)
     expect(body.data.inserted).toBe(2)
     expect(body.data.conflicts).toEqual([])
+  })
+
+  it('takes one scheduled day of the employee when the hours are left out, and clears the calculation', async () => {
+    enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // employee ownership check
+    enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // prefetch
+    enqueue({ data: null }) // upsert date 1
+    enqueue({ data: null }) // upsert date 2
+
+    const response = await POST(post({ dates: ['2026-07-02', '2026-07-01'] }), params)
+
+    expect(response.status).toBe(201)
+    expect(writtenRows().map((row) => row.hours)).toEqual([10, 10])
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      employeeId: 'emp-1',
+      workedDays: { from: '2026-07-01', to: '2026-07-02' },
+    })
   })
 
   it('returns 404 when the employee is not in the company', async () => {

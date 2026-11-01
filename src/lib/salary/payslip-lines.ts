@@ -20,9 +20,13 @@
  *     (SALARY_LINE_CALCULATED): the next calculation, which every run needs
  *     before booking, would silently undo it (#3185, calculated-line-items.ts).
  *   - A text row carries words and no money; every other row needs a non-zero
- *     amount, except a vacation row carrying days (text-rows.ts). A text row
- *     is forced to amount 0, every flag false and no account, and a row is
- *     never turned into or out of a text row.
+ *     amount of a sign its type can mean, except a vacation row carrying days
+ *     (text-rows.ts). A text row is forced to amount 0 and no account, and a
+ *     row is never turned into or out of a text row.
+ *   - The flags are the type's (line-item-roles.ts payslipLineFlags): no input
+ *     carries them, and they are written on every insert and retype.
+ *   - Every write clears the run's calculation first
+ *     (invalidate-calculation.ts): the figures must be recalculated.
  *   - The payslip's own Grundlön or Timlön is the calculation's (Step 1 prices
  *     it from the pay type): no row of that type is added or typed by hand.
  *     The other base type is pay on top, such as extra hours at timlön on a
@@ -43,12 +47,11 @@ import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
 import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
 import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-line-items'
-import { ADDITION_ITEM_TYPES } from '@/lib/salary/calculation-engine'
-import { isBenefitItemType } from '@/lib/salary/benefit-payments'
-import { isBaseSalaryDisplayLine, isBaseSalaryLineType } from '@/lib/salary/line-item-roles'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+import { isBaseSalaryDisplayLine, isBaseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
+import type { SalaryLineItemType } from '@/types'
 import {
-  TEXT_ROW_FLAGS,
   TEXT_ROW_RETYPE_MESSAGE,
   isTextRow,
   normalizeTextRow,
@@ -212,37 +215,6 @@ async function loadLineInRun(
   return { ok: true, data: { line: line as SalaryLineItemRow, calculated } }
 }
 
-export const AVGIFT_BASIS_FLAG_UNSUPPORTED =
-  'Raden ingår alltid i underlaget för arbetsgivaravgifter: is_avgift_basis=false stöds ännu inte för skattepliktiga tillägg och förmåner och skulle ignoreras vid beräkningen. ' +
-  'Spara raden med is_avgift_basis=true och justera arbetsgivaravgifterna i granskningssteget (avancerat läge) om underlaget ska vara lägre.'
-
-/**
- * is_avgift_basis=false on a line the engine always folds into the
- * avgiftsunderlag. The flag is stored but no calculation reads it: the
- * engine's avgifter basis is gross pay (taxable additions included) plus
- * every förmån (calculation-engine.ts), and the AGI and the booking follow
- * the engine. Accepting the flag told the caller the line was outside the
- * underlag while the run charged arbetsgivaravgifter on it (agent feedback
- * seq 947288). Refused until the engine and the AGI honour it (a domain
- * decision: which AGI field such a förmån is declared in).
- */
-export function validateAvgiftBasisLine(line: {
-  item_type?: string | null
-  is_avgift_basis?: boolean | null
-  is_taxable?: boolean | null
-  is_gross_deduction?: boolean | null
-  is_net_deduction?: boolean | null
-}): string | null {
-  if (line.is_avgift_basis !== false || !line.item_type) return null
-  if (line.is_taxable === false) return null
-  const benefit = isBenefitItemType(line.item_type)
-  const addition =
-    (ADDITION_ITEM_TYPES as readonly string[]).includes(line.item_type) &&
-    !line.is_gross_deduction &&
-    !line.is_net_deduction
-  return benefit || addition ? AVGIFT_BASIS_FLAG_UNSUPPORTED : null
-}
-
 /** The refusal for a line the calculation owns. */
 function calculatedLineRefusal(details: Record<string, unknown>): PayslipLineResult<never> {
   return { ok: false, code: 'SALARY_LINE_CALCULATED', details }
@@ -327,6 +299,7 @@ export async function createPayslipLine(
 
   const input = args.input
   const text = isTextRow(input)
+  const flags = payslipLineFlags(input.item_type as SalaryLineItemType)
   // Words and no money on a text row; a non-zero amount on any other row
   // (the dialog's rule, now every door's: a 0 kr row printed "0,00").
   // Judged on the amount as stored: 0,004 kr rounds to a 0 kr row.
@@ -340,7 +313,7 @@ export async function createPayslipLine(
   // Engångsskatt only on a positive taxable addition of an eligible type;
   // the same rule the DB CHECK enforces, answered here as a 400 with a
   // Swedish reason instead of a 23514.
-  const oneOffError = validateOneOffTaxLine({ ...input, amount: input.amount ?? 0 })
+  const oneOffError = validateOneOffTaxLine({ ...input, ...flags, amount: input.amount ?? 0 })
   if (oneOffError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'one_off_tax_percent', message: oneOffError } }
   }
@@ -350,26 +323,11 @@ export async function createPayslipLine(
   if (categoryError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
   }
-  const avgiftBasisError = validateAvgiftBasisLine(input)
-  if (avgiftBasisError) {
-    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
-  }
-  // A text row has no account and no flags to choose: the schema defaults
-  // (is_taxable true, ...) are overridden, never stored. Any other row's
-  // account is an override only; without one the booking resolves the
-  // default.
+  // A text row has no account to choose. Any other row's account is an
+  // override only; without one the booking resolves the default.
   const accountNumber = text ? null : input.account_number || null
   const taxAccount = taxAccountRefusal(accountNumber)
   if (taxAccount) return taxAccount
-  const flags = text
-    ? TEXT_ROW_FLAGS
-    : {
-        is_taxable: input.is_taxable,
-        is_avgift_basis: input.is_avgift_basis,
-        is_vacation_basis: input.is_vacation_basis,
-        is_gross_deduction: input.is_gross_deduction,
-        is_net_deduction: input.is_net_deduction,
-      }
 
   const row = {
     salary_run_employee_id: sre.data.id,
@@ -392,6 +350,9 @@ export async function createPayslipLine(
   if (args.dryRun) {
     return { ok: true, data: { ...row, id: null } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunEmployeeId: sre.data.id })
+  if (invalidated) return invalidated
 
   const { data: created, error } = await supabase
     .from('salary_line_items')
@@ -445,7 +406,11 @@ export async function updatePayslipLine(
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'item_type', message: TEXT_ROW_RETYPE_MESSAGE } }
   }
 
-  const updates: Record<string, unknown> = { ...args.patch }
+  // The flags are the type's whatever the patch holds; a retype brings its own.
+  const updates: Record<string, unknown> = {
+    ...args.patch,
+    ...payslipLineFlags((args.patch.item_type ?? existing.data.item_type) as SalaryLineItemType),
+  }
   // A stored account belonged to the old item type (a bonus turned into a
   // union deduction must not stay on 7210): a type change drops it so the
   // line books on its new type's default, unless the patch names one.
@@ -460,9 +425,9 @@ export async function updatePayslipLine(
     updates.amount = roundOre(updates.amount)
   }
   if (text) {
-    // A text row stays words only whatever the patch says about flags or
-    // account; an amount in the patch must be 0 (checked below).
-    Object.assign(updates, TEXT_ROW_FLAGS, { account_number: null })
+    // A text row stays words only whatever the patch says about its account;
+    // an amount in the patch must be 0 (checked below).
+    updates.account_number = null
     if (typeof updates.description === 'string') updates.description = normalizeTextRow(updates.description)
   }
   // Moving the category off 'saved' (null returns the line to paid days)
@@ -475,7 +440,7 @@ export async function updatePayslipLine(
     updates.vacation_saved_year = null
   }
   // Validate the row as it will read after the patch: a sparse update that
-  // flips a flag or the sign can invalidate a percentage set earlier.
+  // changes the type or the sign can invalidate a percentage set earlier.
   const merged = { ...existing.data, ...updates } as SalaryLineItemRow
   // The content rule on the merged row, but only when the patch touches what
   // decides it, so an unrelated edit of a 0 kr row stored before the rule
@@ -493,14 +458,6 @@ export async function updatePayslipLine(
   if (categoryError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
   }
-  // Only when the patch touches what decides it, so an unrelated edit of a
-  // row stored before the refusal existed still goes through.
-  const touchesAvgiftBasis = ['is_avgift_basis', 'item_type', 'is_taxable', 'is_gross_deduction', 'is_net_deduction']
-    .some((key) => key in updates)
-  const avgiftBasisError = touchesAvgiftBasis ? validateAvgiftBasisLine(merged) : null
-  if (avgiftBasisError) {
-    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
-  }
   // Only an account the patch names (a text row's is already forced null),
   // so an unrelated edit of a row stored before the refusal still goes
   // through.
@@ -510,6 +467,11 @@ export async function updatePayslipLine(
   if (args.dryRun) {
     return { ok: true, data: { ...existing.data, ...updates } as SalaryLineItemRow }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    salaryRunEmployeeId: existing.data.salary_run_employee_id,
+  })
+  if (invalidated) return invalidated
 
   const { data: updated, error } = await supabase
     .from('salary_line_items')
@@ -550,6 +512,11 @@ export async function deletePayslipLine(
   if (args.dryRun) {
     return { ok: true, data: { deleted: true, salary_line_item_id: args.lineId } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    salaryRunEmployeeId: existing.data.line.salary_run_employee_id,
+  })
+  if (invalidated) return invalidated
 
   const { error } = await supabase
     .from('salary_line_items')

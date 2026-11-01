@@ -17,11 +17,15 @@ import {
 import { SalaryLineItemTypeSchema } from '@/lib/api/schemas'
 import { isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
+import { isDeductionLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 
 const body = (r: ReturnType<typeof buildManualPayslipLine>): ManualLineBody => {
   if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
   return r.body
 }
+
+/** The flags a row of a catalogue entry is stored with: its stored type's. */
+const flagsOf = (type: keyof typeof MANUAL_PAYSLIP_LINE_SPECS) => payslipLineFlags(storedLineItemType(type))
 
 describe('manual payslip line catalogue', () => {
   it('stores only types the line schema accepts, and never offers a derived or claim-linked one', () => {
@@ -40,7 +44,7 @@ describe('manual payslip line catalogue', () => {
   it('tax-free reimbursements carry no gross flag at all: the engine pays them by type into net', () => {
     for (const type of ['mileage_taxfree', 'traktamente_taxfree', 'traktamente_night_taxfree', 'traktamente_foreign_taxfree'] as const) {
       expect(TAX_FREE_REIMBURSEMENT_TYPES).toContain(storedLineItemType(type))
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags).toEqual({
+      expect(flagsOf(type)).toEqual({
         is_taxable: false,
         is_avgift_basis: false,
         is_vacation_basis: false,
@@ -52,7 +56,7 @@ describe('manual payslip line catalogue', () => {
 
   it('the taxable excess of a reimbursement is taxed and avgift basis but not semestergrundande', () => {
     for (const type of ['mileage_taxable', 'traktamente_taxable', 'traktamente_foreign_taxable'] as const) {
-      const f = MANUAL_PAYSLIP_LINE_SPECS[type].flags
+      const f = flagsOf(type)
       expect(f.is_taxable).toBe(true)
       expect(f.is_avgift_basis).toBe(true)
       expect(f.is_vacation_basis).toBe(false)
@@ -64,7 +68,7 @@ describe('manual payslip line catalogue', () => {
     // (12 % on the variable part under sammalöneregeln, part of the base
     // under procentregeln), see the swedish-payroll vacation-pay reference.
     for (const type of ['bonus', 'commission', 'overtime', 'other'] as const) {
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags).toEqual({
+      expect(flagsOf(type)).toEqual({
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: true,
@@ -77,14 +81,15 @@ describe('manual payslip line catalogue', () => {
   it('kostförmån and övrig förmån carry the flags of the benefit row the employee derives: taxed, avgift basis, not semestergrundande (crm#1349)', () => {
     for (const type of ['benefit_meals', 'benefit_other'] as const) {
       expect(isBenefitItemType(type), type).toBe(true)
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags, type).toEqual({
+      expect(flagsOf(type), type).toEqual({
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: false,
         is_gross_deduction: false,
         is_net_deduction: false,
       })
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].sign, type).toBe('addition')
+      expect(MANUAL_PAYSLIP_LINE_SPECS[type].typedSign, type).toBeUndefined()
+      expect(isDeductionLineType(storedLineItemType(type)), type).toBe(false)
     }
   })
 
@@ -95,7 +100,7 @@ describe('manual payslip line catalogue', () => {
   })
 
   it('deductions are flagged the way the recurring lines are', () => {
-    expect(MANUAL_PAYSLIP_LINE_SPECS.gross_deduction_other.flags).toEqual({
+    expect(flagsOf('gross_deduction_other')).toEqual({
       is_taxable: true,
       is_avgift_basis: true,
       is_vacation_basis: false,
@@ -103,8 +108,8 @@ describe('manual payslip line catalogue', () => {
       is_net_deduction: false,
     })
     for (const type of ['net_deduction_advance', 'net_deduction_other'] as const) {
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags.is_net_deduction).toBe(true)
-      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags.is_taxable).toBe(false)
+      expect(flagsOf(type).is_net_deduction).toBe(true)
+      expect(flagsOf(type).is_taxable).toBe(false)
     }
   })
 })
@@ -117,18 +122,13 @@ describe('buildManualPayslipLine', () => {
       quantity: 12.5,
       unit_price: 25,
       amount: 312.5,
-      is_taxable: false,
-      is_avgift_basis: false,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
     })
   })
 
   it('traktamente: three days at the 2026 schablon', () => {
     const b = body(buildManualPayslipLine({ item_type: 'traktamente_taxfree', quantity: 3, unit_price: 300 }))
     expect(b.amount).toBe(900)
-    expect(b.is_taxable).toBe(false)
+    expect(flagsOf('traktamente_taxfree').is_taxable).toBe(false)
   })
 
   it('kostförmån: nine dinners at the 2026 schablon', () => {
@@ -136,7 +136,7 @@ describe('buildManualPayslipLine', () => {
     expect(b.item_type).toBe('benefit_meals')
     expect(b.description).toBe('Kostförmån')
     expect(b.amount).toBe(1116)
-    expect(b.is_taxable).toBe(true)
+    expect(flagsOf('benefit_meals').is_taxable).toBe(true)
   })
 
   it('kostförmån per meal: the meal names the default description, a typed one wins (crm#1349)', () => {
@@ -155,7 +155,7 @@ describe('buildManualPayslipLine', () => {
 
   it('övrig förmån: a one-off amount, added to the tax base and not paid out', () => {
     const b = body(buildManualPayslipLine({ item_type: 'benefit_other', amount: 1500 }))
-    expect(b).toMatchObject({ item_type: 'benefit_other', description: 'Övrig förmån', amount: 1500, is_taxable: true, is_avgift_basis: true })
+    expect(b).toMatchObject({ item_type: 'benefit_other', description: 'Övrig förmån', amount: 1500 })
   })
 
   it('quantity x unit price wins over a typed amount, and rounds to öre', () => {
@@ -249,11 +249,6 @@ describe('utlandstraktamente and nattraktamente (crm#1468, PH 218)', () => {
       unit_price: 600,
       amount: 1800,
       account_number: '7323',
-      is_taxable: false,
-      is_avgift_basis: false,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
     })
     const excess = body(
       buildManualPayslipLine({ item_type: 'traktamente_foreign_taxable', quantity: 3, unit_price: 100, country: 'Tyskland' }, caps),
@@ -263,9 +258,6 @@ describe('utlandstraktamente and nattraktamente (crm#1468, PH 218)', () => {
       description: 'Utlandstraktamente (skattepliktigt), Tyskland',
       amount: 300,
       account_number: '7324',
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
     })
   })
 
@@ -339,7 +331,6 @@ describe('utlandstraktamente and nattraktamente (crm#1468, PH 218)', () => {
       item_type: 'traktamente_taxfree',
       description: 'Nattraktamente (skattefritt)',
       amount: 300,
-      is_taxable: false,
     })
     expect(buildManualPayslipLine({ item_type: 'traktamente_night_taxfree', quantity: 1, unit_price: 151 }, caps)).toEqual({
       ok: false,
@@ -414,7 +405,6 @@ describe('mealBenefitSchablonFromRunParams (crm#1349)', () => {
 describe('Textrad', () => {
   it('is offered, takes only its words and carries no money and no flags', () => {
     expect(isManualPayslipLineType('text')).toBe(true)
-    expect(MANUAL_PAYSLIP_LINE_SPECS.text.sign).toBe('none')
     expect(
       body(
         buildManualPayslipLine({
@@ -429,11 +419,6 @@ describe('Textrad', () => {
       item_type: 'text',
       description: 'Lönen består av grundlön och personligt tillägg',
       amount: 0,
-      is_taxable: false,
-      is_avgift_basis: false,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
     })
   })
 
@@ -451,11 +436,11 @@ describe('Semester (vacation days taken, crm#1331)', () => {
   it('is offered with days as its unit, and is no calculated type', () => {
     expect(isManualPayslipLineType('vacation')).toBe(true)
     expect(isCalculatedLineType('vacation')).toBe(false)
-    expect(MANUAL_PAYSLIP_LINE_SPECS.vacation).toMatchObject({ label: 'Semester', unit: 'dagar', sign: 'signed' })
+    expect(MANUAL_PAYSLIP_LINE_SPECS.vacation).toMatchObject({ label: 'Semester', unit: 'dagar', typedSign: true })
   })
 
   it('its amount is gross pay, taxed and in the avgiftsunderlag, but not semestergrundande', () => {
-    expect(MANUAL_PAYSLIP_LINE_SPECS.vacation.flags).toEqual({
+    expect(flagsOf('vacation')).toEqual({
       is_taxable: true,
       is_avgift_basis: true,
       is_vacation_basis: false,
@@ -472,11 +457,6 @@ describe('Semester (vacation days taken, crm#1331)', () => {
       quantity: 5,
       amount: 0,
       vacation_category: 'saved',
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
     })
     expect(validatePayslipLineContent(b)).toBeNull()
   })

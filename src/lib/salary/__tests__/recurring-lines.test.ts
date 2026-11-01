@@ -3,16 +3,16 @@ import {
   RECURRING_LINE_ITEM_TYPES,
   RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
   RECURRING_LINE_LABELS,
-  recurringLineFlags,
   validateRecurringLineAmount,
 } from '../recurring-lines'
+import { payslipLineFlags } from '../line-item-roles'
 import { RecurringLineItemTypeSchema } from '@/lib/api/schemas'
 import { TEXT_ROW_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 
-describe('recurringLineFlags', () => {
+describe('the flags of a recurring line', () => {
   it('marks gross deductions as taxable, avgift-basis gross deductions', () => {
     for (const t of ['gross_deduction_pension', 'gross_deduction_other'] as const) {
-      expect(recurringLineFlags(t)).toEqual({
+      expect(payslipLineFlags(t)).toEqual({
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: false,
@@ -28,7 +28,7 @@ describe('recurringLineFlags', () => {
       'net_deduction_benefit_payment',
       'net_deduction_other',
     ] as const) {
-      expect(recurringLineFlags(t)).toEqual({
+      expect(payslipLineFlags(t)).toEqual({
         is_taxable: false,
         is_avgift_basis: false,
         is_vacation_basis: false,
@@ -44,14 +44,14 @@ describe('recurringLineFlags', () => {
     // recurring-lines.ts.
     expect(RECURRING_LINE_ITEM_TYPES).not.toContain('other')
     for (const t of RECURRING_LINE_ITEM_TYPES.filter((type) => type !== 'text')) {
-      const flags = recurringLineFlags(t)
+      const flags = payslipLineFlags(t)
       expect(flags.is_gross_deduction && flags.is_net_deduction).toBe(false)
       expect(flags.is_gross_deduction || flags.is_net_deduction).toBe(true)
     }
   })
 
   it('a text row carries no flag at all', () => {
-    expect(recurringLineFlags('text')).toEqual({
+    expect(payslipLineFlags('text')).toEqual({
       is_taxable: false,
       is_avgift_basis: false,
       is_vacation_basis: false,

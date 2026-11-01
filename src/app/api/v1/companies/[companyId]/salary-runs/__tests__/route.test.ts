@@ -510,7 +510,7 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     const updated = { ...SAMPLE_RUN, payment_date: '2026-05-23' }
     const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: [SAMPLE_RUN], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
     }).supabase
@@ -538,7 +538,7 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     const updated = { ...SAMPLE_RUN, payment_date: '2026-06-05' }
     const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: SAMPLE_RUN, error: null }, { data: [SAMPLE_RUN], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
     }).supabase
@@ -564,7 +564,7 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     const updated = { ...SAMPLE_RUN, payment_date: '2026-06-07' }
     const flex = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      salary_runs: [{ data: grandfathered, error: null }, { data: updated, error: null }],
+      salary_runs: [{ data: grandfathered, error: null }, { data: [grandfathered], error: null }, { data: updated, error: null }],
       salary_run_employees: { data: null, error: null },
       idempotency_keys: { data: null, error: null },
     }).supabase

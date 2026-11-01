@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
 import { runMonthlySalaryFor } from './base-salary-line'
+import { baseSalaryLineType, payslipLineFlags } from './line-item-roles'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
@@ -200,16 +201,14 @@ export async function createSalaryRunWithEmployees(
         throw new Error(`Failed to add employee ${emp.id}: ${sreErr?.message ?? 'unknown error'}`)
       }
 
-      const itemType = emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
+      const itemType = baseSalaryLineType(emp.salary_type)
       const { error: liErr } = await supabase.from('salary_line_items').insert({
         salary_run_employee_id: sre.id,
         company_id: companyId,
         item_type: itemType,
         description: emp.salary_type === 'monthly' ? 'Grundlön' : 'Timlön',
         amount: baseAmount,
-        is_taxable: true,
-        is_avgift_basis: true,
-        is_vacation_basis: true,
+        ...payslipLineFlags(itemType),
         account_number: null,
         sort_order: 0,
       })

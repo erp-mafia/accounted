@@ -546,11 +546,13 @@ export function calculateSalary(
   // booking split), so they must be excluded here or the same day is
   // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000
   // (reported by Frey, 2026-09-18).
+  // Signed, as the booking reads the row (line-item-roles.ts payslipLineSign):
+  // an absolute value turned a positive row into a deduction.
   const grossDeductionItems = input.lineItems.filter(
     li => li.isGrossDeduction && !ABSENCE_ITEM_TYPES.has(li.itemType),
   )
-  const totalGrossDeductions = r(Math.abs(grossDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
-  if (totalGrossDeductions > 0) {
+  const totalGrossDeductions = r(0 - grossDeductionItems.reduce((sum, li) => sum + li.amount, 0))
+  if (totalGrossDeductions !== 0) {
     steps.push({
       label: 'Bruttolöneavdrag',
       formula: 'summa bruttoavdrag',
@@ -735,8 +737,10 @@ export function calculateSalary(
     })
   }
 
+  // Signed, as the booking and the förmån resolver read the rows: a positive
+  // row repays the employee (line-item-roles.ts payslipLineSign).
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
-  const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
+  const totalNetDeductions = r(0 - netDeductionItems.reduce((sum, li) => sum + li.amount, 0))
 
   // ─── Step 6b: Förhöjt skatteavdrag (SFL 11 kap. 22 §) ───
   // The extra the employee asked for, on top of the statutory tax above, in
@@ -771,11 +775,9 @@ export function calculateSalary(
   // no semesterunderlag, not in the AGI gross (travel-expenses.md). They ride
   // on the payout only, after tax and net deductions and before the
   // öresavrundning of the final amount.
-  const reimbursementItems = input.lineItems.filter(
-    li => TAX_FREE_REIMBURSEMENT_TYPES.includes(li.itemType) && li.amount > 0
-  )
+  const reimbursementItems = input.lineItems.filter(li => TAX_FREE_REIMBURSEMENT_TYPES.includes(li.itemType))
   const taxFreeReimbursements = r(reimbursementItems.reduce((sum, li) => sum + li.amount, 0))
-  if (taxFreeReimbursements > 0) {
+  if (taxFreeReimbursements !== 0) {
     netSalary = r(netSalary + taxFreeReimbursements)
     steps.push({
       label: 'Kostnadsersättning (skattefri)',

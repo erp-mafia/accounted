@@ -3,6 +3,8 @@ import type { PayrollConfig } from './payroll-config'
 import { daysBetweenIso } from '@/lib/dates/iso'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { calendarLeaveDeduction } from './calendar-leave'
+import { payslipLineFlags, type PayslipLineFlags } from './line-item-roles'
+import { scheduledHoursPerDay } from './work-schedule'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSwedishHolidayISO } from '@/lib/tax/swedish-holidays'
 
@@ -113,15 +115,11 @@ export interface AbsenceDay {
   hours: number
 }
 
-export interface DerivedLineItem {
+export interface DerivedLineItem extends PayslipLineFlags {
   item_type: 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus' | 'vab' | 'parental_leave' | 'unpaid_leave'
   description: string
   quantity: number
   amount: number
-  is_taxable: boolean
-  is_avgift_basis: boolean
-  is_vacation_basis: boolean
-  is_gross_deduction: boolean
 }
 
 export interface AggregatedCounts {
@@ -446,7 +444,8 @@ export interface DeriveInput {
    *  taken as a full scheduled day. */
   lookbackSickDays?: AbsenceDay[]
   /** Scheduled hours per working day (hours_per_week / workdays_per_week).
-   *  Defaults to 8. Absence hours above it count as one full day. */
+   *  Omitted: scheduledHoursPerDay of hoursPerWeek and workdaysPerWeek. Absence
+   *  hours above it count as one full day. */
   hoursPerDay?: number
   /** VAB dates in the intjänandeår before the current period. */
   vabDaysYtd: number
@@ -493,7 +492,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   const hoursPerDay =
     typeof input.hoursPerDay === 'number' && Number.isFinite(input.hoursPerDay) && input.hoursPerDay > 0
       ? input.hoursPerDay
-      : 8
+      : scheduledHoursPerDay(input.hoursPerWeek, input.workdaysPerWeek)
   /** Fraction of a scheduled day one absence row represents, capped at a full day. */
   const dayShare = (d: AbsenceDay) =>
     Number.isFinite(d.hours) && d.hours > 0 ? Math.min(1, d.hours / hoursPerDay) : 1
@@ -713,10 +712,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
             : `Karensavdrag (${seg.startDate})`,
           quantity: 1,
           amount: -karensNow,
-          is_taxable: true,
-          is_avgift_basis: true,
-          is_vacation_basis: false,
-          is_gross_deduction: true,
+          ...payslipLineFlags('sick_karens'),
         })
       }
       // Suppressed by allmänt högriskskydd: the period still counts toward
@@ -750,12 +746,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         description: `Sjuklön dag 1-14 (${day2_14Dates} dagar, ${r(day2_14CountTotal)} tim)`,
         quantity: r(day2_14CountTotal),
         amount: sickPayFor(day2_14CountTotal),
-        is_taxable: true,
-        is_avgift_basis: true,
         // Pay for qualifying days stays out of the base, which gets the
         // hours at full timlön instead (qualifyingAbsenceHours).
-        is_vacation_basis: false,
-        is_gross_deduction: true,
+        ...payslipLineFlags('sick_day2_14'),
       })
     } else if (day2_14CountTotal > 0) {
       const lostPay = lostPayFor(day2_14CountTotal)
@@ -768,12 +761,9 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         quantity: r(day2_14CountTotal),
         // Net deduction vs full pay = lostPay - sjuklon (employer pays 80%).
         amount: -r(lostPay - sjuklon),
-        is_taxable: true,
-        is_avgift_basis: true,
         // Qualifying sick days: the base keeps the full monthly salary, the
         // income the employee would have had (SemL 16 b § tredje stycket).
-        is_vacation_basis: false,
-        is_gross_deduction: true,
+        ...payslipLineFlags('sick_day2_14'),
       })
     }
 
@@ -808,10 +798,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         quantity: r(day15PlusCountTotal),
         // Employer pays nothing: full daily rate deducted.
         amount: -lostPay,
-        is_taxable: true,
-        is_avgift_basis: false,
-        is_vacation_basis: false,
-        is_gross_deduction: true,
+        ...payslipLineFlags('sick_day15_plus'),
       })
     }
   }
@@ -837,10 +824,8 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         description: `VAB (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
         quantity: r(vabEquivalentDays),
         amount: -vab.deduction,
-        is_taxable: true,
-        is_avgift_basis: true,
+        ...payslipLineFlags('vab'),
         is_vacation_basis: !part.qualifies,
-        is_gross_deduction: true,
       })
     }
   }
@@ -871,10 +856,8 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         description: `Föräldraledighet (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
         quantity: r(parentalEquivalentDays),
         amount: -(calendarParental ? calendarParental[idx] : parental.deduction),
-        is_taxable: true,
-        is_avgift_basis: true,
+        ...payslipLineFlags('parental_leave'),
         is_vacation_basis: !part.qualifies,
-        is_gross_deduction: true,
       })
     }
   }
@@ -883,11 +866,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   // Each day reduces gross pay by one daily rate (monthlySalary / 21: same
   // convention used elsewhere in the engine). Not semesterlönegrundande (it is
   // none of the absence 17-17 b §§ list), so the pay never earned lowers the
-  // procentregeln base: is_vacation_basis true.
-  //
-  // is_gross_deduction is deliberately false: the engine's Step 3 absence
-  // sum already subtracts items whose item_type is 'unpaid_leave', so setting
-  // the flag would double-count the amount in Step 4's gross_deduction sum.
+  // procentregeln base.
   const unpaidLeaveCount = unpaidLeaveDays.length
   if (unpaidLeaveCount > 0) {
     const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
@@ -900,10 +879,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       description: `Tjänstledighet utan lön (${unpaidLeaveCount} dagar)`,
       quantity: r(unpaidEquivalentDays),
       amount: -deduction,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: true,
-      is_gross_deduction: false,
+      ...payslipLineFlags('unpaid_leave'),
     })
   }
 

@@ -1151,16 +1151,17 @@ Example response `200`:
 **Add a payslip line to an employee in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number is an override only: omit it and the line returns account_number null and books on the default the booking resolves from item_type, the employee's employment_type and personnel_category (an arbetare's wages on 7010, a tjänsteman's on 7210, an owner's on 7220). Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
+Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number is an override only: omit it and the line returns account_number null and books on the default the booking resolves from item_type, the employee's employment_type and personnel_category (an arbetare's wages on 7010, a tjänsteman's on 7210, an owner's on 7220). Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). The row's flags (is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction) follow from item_type and come back in the answer; flags in the body are ignored. A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
 
 **Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year's paid days, vacation_category. Words on this payslip without money (how the salary is built up): an item_type text line.
 **Do not use for:** Editing the base monthly salary (PATCH the run-employee via the internal surface; not on v1 yet). Absence: register absence days instead (PUT /employees/{id}/absence); the engine derives sick/VAB lines itself.
 
 **Pitfalls:**
 - Draft-only: returns 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.
-- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
+- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards. Until then the calculation is stale, and approve and book refuse the run.
+- A bruttolöneavdrag carries a negative amount; a positive one returns 400 VALIDATION_ERROR (details.field amount): pay handed back is a correction line. A nettolöneavdrag withholds at a negative amount and repays the employee at a positive one. A skattefri ersättning or a förmån is positive; a negative one returns 400 VALIDATION_ERROR.
 - A 0 kr line is refused with 400 VALIDATION_ERROR (details.field amount), also when the amount rounds to 0 at whole öre, and so is a line without amount: every line but a text row needs a non-zero amount, except a vacation line carrying its days in quantity. For words without money use item_type text.
-- A text row (item_type text): description is the whole row, at most 200 characters, line breaks become spaces. Omit amount (0 is accepted), quantity and unit_price, otherwise 400 VALIDATION_ERROR. The flags and account_number are ignored: the row is stored with every flag false and account_number null. A standing text on every payslip is a recurring line (POST /employees/{id}/recurring-lines).
+- A text row (item_type text): description is the whole row, at most 200 characters, line breaks become spaces. Omit amount (0 is accepted), quantity and unit_price, otherwise 400 VALIDATION_ERROR. account_number is ignored: the row is stored with account_number null. A standing text on every payslip is a recurring line (POST /employees/{id}/recurring-lines).
 - Engine-derived lines (absence, benefits, the semesterersättning row under vacation_rule semesterersattning) are regenerated on every :calculate; manual lines survive, including a semesterersattning line you add yourself.
 - The pay type prices the base salary itself: a monthly_salary line on a monthly-paid employee or an hourly_salary line on an hourly-paid one returns 400 VALIDATION_ERROR (details.field item_type). Extra hours at timlön on a monthly-paid employee are an hourly_salary line (quantity = hours, amount = hours × timlön), paid like an other line.
 - The calculation owns the absence types (sick_karens, sick_day2_14, sick_day15_plus, vab, parental_leave, unpaid_leave) and the shift-premium types (overtime_50, overtime_100, ob_weekday_evening, ob_weekend, ob_night, ob_holiday): a line of those types returns 400 SALARY_LINE_CALCULATED. Register absence or worked hours instead, or put a one-off övertid or OB amount on item_type overtime or other.
@@ -1182,11 +1183,6 @@ Request body:
   quantity?: number,
   unit_price?: number,
   amount?: number,
-  is_taxable?: boolean,
-  is_avgift_basis?: boolean,
-  is_vacation_basis?: boolean,
-  is_gross_deduction?: boolean,
-  is_net_deduction?: boolean,
   account_number?: string,
   sort_order?: number,
   one_off_tax_percent?: number | null,
@@ -1344,7 +1340,7 @@ Example response `200`:
 **Update a payslip line in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.
+Updates fields on a salary_line_items row (amount, description, quantity, unit_price, item_type, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. The flags follow from item_type: flags in the patch are ignored, and a changed item_type brings its own. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.
 
 **Use when:** You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.
 **Do not use for:** Post-calculation tax/avgifter adjustments (review-stage overrides are not on v1). Engine-derived lines (absence/benefits): they are regenerated by :calculate, so edits are overwritten.
@@ -1352,12 +1348,12 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 **Pitfalls:**
 - Draft-only: 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.
 - A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.
-- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
+- Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards. Until then the calculation is stale, and approve and book refuse the run.
 - A line the calculation owns (absence, Övertid 50/100 % and OB rows, förmån and recurring-line rows, the engine's semesterersättning and öresavrundning rows), or a patch changing item_type to such a type, returns 400 SALARY_LINE_CALCULATED: the next :calculate would overwrite the edit. Change the source (absence, worked hours, the förmån, the recurring line) instead.
-- The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.
+- The row is validated as it reads after the patch: changing item_type to one that cannot carry engångsskatt, or making the amount non-positive, on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.
 - vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.
-- A patch that sets amount, quantity or item_type is checked as the line will read: a 0 kr amount is refused with 400 VALIDATION_ERROR (details.field amount) on every line but a text row, except a vacation line carrying its days in quantity. For words without money use a text row.
-- A text row (item_type text) takes description and sort_order: a non-zero amount, a quantity or a unit_price is refused with 400 VALIDATION_ERROR, and flags or account_number in the patch are ignored (stored false and null). A line never changes into or out of a text row (400 VALIDATION_ERROR, details.field item_type): DELETE it and POST a new one.
+- A patch that sets amount, quantity or item_type is checked as the line will read: a 0 kr amount is refused with 400 VALIDATION_ERROR (details.field amount) on every line but a text row, except a vacation line carrying its days in quantity, and so is a sign the type cannot mean (a positive bruttolöneavdrag, a negative skattefri ersättning or förmån). For words without money use a text row.
+- A text row (item_type text) takes description and sort_order: a non-zero amount, a quantity or a unit_price is refused with 400 VALIDATION_ERROR, and account_number in the patch is ignored (stored null). A line never changes into or out of a text row (400 VALIDATION_ERROR, details.field item_type): DELETE it and POST a new one.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1374,11 +1370,6 @@ Request body:
   quantity?: number,
   unit_price?: number,
   amount?: number,
-  is_taxable?: boolean,
-  is_avgift_basis?: boolean,
-  is_vacation_basis?: boolean,
-  is_gross_deduction?: boolean,
-  is_net_deduction?: boolean,
   account_number?: string | null,
   sort_order?: number,
   one_off_tax_percent?: number | null,

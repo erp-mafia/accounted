@@ -29,8 +29,15 @@ import {
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { loadPayrollConfig } from '@/lib/salary/payroll-config'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const CONFIG = {
   milersattningEgenBil: 25,
@@ -187,6 +194,25 @@ describe('pushMileageToSalaryRun', () => {
     }
   }
 
+  it('reverts the claimed trips and inserts nothing when the calculation cannot be cleared', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1', employee_id: 'emp-1', distance_km: 100 })])
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+    vi.mocked(invalidateRunCalculation).mockResolvedValueOnce({
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: 'boom' },
+    })
+    const supabase = salarySupabase({
+      run: { id: 'run-1', status: 'draft' },
+      sre: { id: 'sre-1' },
+      claimIds: ['t1'],
+    })
+
+    await expect(pushMileageToSalaryRun(supabase as never, 'company-1', params)).rejects.toThrow('boom')
+    expect(supabase.insert).not.toHaveBeenCalled()
+    expect(supabase.tripChain.update).toHaveBeenCalledTimes(2)
+  })
+
   it('maps missing run / wrong status / missing employee to their codes', async () => {
     const missingRun = salarySupabase({ run: null })
     expect(
@@ -224,8 +250,15 @@ describe('pushMileageToSalaryRun', () => {
       is_taxable: false,
       is_avgift_basis: false,
       is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
       account_number: '7331',
     })
+    // A run in review takes mileage too: its figures are stale until recalculated.
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, 'company-1', { salaryRunEmployeeId: 'sre-1' })
+    expect(vi.mocked(invalidateRunCalculation).mock.invocationCallOrder[0]).toBeLessThan(
+      supabase.insert.mock.invocationCallOrder[0],
+    )
     // The claim ran before the insert (retry cannot double-pay).
     const claimOrder = (supabase.tripChain.update as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0]

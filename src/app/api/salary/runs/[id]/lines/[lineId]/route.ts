@@ -26,10 +26,8 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; lineId: st
     // sparsePatchBody, not the bare schema: UpdateSalaryLineItemSchema is
     // CreateSalaryLineItemSchema.partial(), and .partial() does NOT strip
     // .default(). Parsed bare, `{ amount: 5500 }` comes back carrying
-    // is_taxable/is_avgift_basis/is_vacation_basis=true,
-    // is_gross_deduction/is_net_deduction=false, sort_order=0, all of which
-    // updatePayslipLine spreads straight into .update(). Correcting the amount
-    // on a net deduction line would silently turn it into a taxable earning.
+    // sort_order=0, which updatePayslipLine spreads straight into .update().
+    // Correcting an amount would silently move the line to the top.
     const validation = await validateBody(request, sparsePatchBody(UpdateSalaryLineItemSchema))
     if (!validation.success) return validation.response
 

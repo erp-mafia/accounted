@@ -23,6 +23,7 @@ const setRunSalary = tools.find((t) => t.name === 'gnubok_set_run_salary')!
 const updateSalaryRun = tools.find((t) => t.name === 'gnubok_update_salary_run')!
 const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
 const bookSalaryRun = tools.find((t) => t.name === 'gnubok_book_salary_run')!
+const calculateSalaryRun = tools.find((t) => t.name === 'gnubok_calculate_salary_run')!
 const deleteAbsence = tools.find((t) => t.name === 'gnubok_delete_absence')!
 const createEmployee = tools.find((t) => t.name === 'gnubok_create_employee')!
 const updateEmployee = tools.find((t) => t.name === 'gnubok_update_employee')!
@@ -462,6 +463,24 @@ describe('gnubok_register_absence', () => {
     expect((result.preview.dates_sample as string[])[0]).toBe('2026-03-02')
   })
 
+  it('states one scheduled day of the employee when the call states no hours, and leaves the commit to resolve it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // service assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await registerAbsence.execute(
+      { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-03', absence_type: 'sick' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.hours_per_day).toBe(10)
+  })
+
   it('throws for a range beyond the cap', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1' } })
@@ -659,6 +678,32 @@ describe('gnubok_book_salary_run', () => {
 
     expect(error.code).toBe('SALARY_RUN_NOT_CALCULATED')
     expect(error.message).toContain('Anna Svensson')
+  })
+
+  it('names the way out of a stale run in review: only a draft calculates', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({ data: [{ ...ROSTER_ROW, calculation_breakdown: null }] })
+
+    const refused = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { tool?: string } }
+
+    expect(refused.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(refused.message).toContain('gnubok_revert_salary_run')
+    expect(refused.remediation).toMatchObject({ tool: 'gnubok_revert_salary_run', args: { salary_run_id: 'run-1' } })
+  })
+
+  it('the calculation of a run in review names the same way out', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+
+    const refused = (await calculateSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { tool?: string } }
+
+    expect(refused.code).toBe('SALARY_RUN_CALCULATE_FAILED')
+    expect(refused.remediation).toMatchObject({ tool: 'gnubok_revert_salary_run', args: { salary_run_id: 'run-1' } })
   })
 
   it('refuses a draft that was never calculated, the review step\'s rule, even with no employees', async () => {

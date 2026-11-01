@@ -1,12 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { MoneyLineItemType } from '@/lib/salary/account-mapping'
+import { baseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 
-const BASE_LINE_TYPES: MoneyLineItemType[] = ['monthly_salary', 'hourly_salary']
-
-/** The display line a pay type is shown with: Grundlön or Timlön. */
-export function baseSalaryLineType(salaryType: string): MoneyLineItemType {
-  return salaryType === 'monthly' ? 'monthly_salary' : 'hourly_salary'
-}
+const BASE_LINE_TYPES = ['monthly_salary', 'hourly_salary'] as const
 
 /**
  * The monthly salary a run row starts from: the employee's for monthly pay,
@@ -81,9 +76,7 @@ export async function refreshRunEmployeeSalaryType(
       quantity: args.quantity,
       unit_price: args.unitPrice,
       amount: args.amount,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: true,
+      ...payslipLineFlags(lineType),
       account_number: null,
       sort_order: 0,
     })

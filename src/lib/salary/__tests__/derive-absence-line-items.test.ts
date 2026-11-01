@@ -482,6 +482,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
       is_avgift_basis: true,
       is_vacation_basis: false,
       is_gross_deduction: true,
+      is_net_deduction: false,
     })
     expect(rows[1]).toEqual({
       item_type,
@@ -492,6 +493,7 @@ describe.each(capCases)('deriveAbsenceLineItems: 120-date cap split ($label)', (
       is_avgift_basis: true,
       is_vacation_basis: true,
       is_gross_deduction: true,
+      is_net_deduction: false,
     })
     const wholeRows = whole.lineItems.filter(li => li.item_type === item_type)
     expect(wholeRows).toHaveLength(1)

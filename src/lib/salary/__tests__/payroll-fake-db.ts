@@ -54,6 +54,14 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
     },
     salary_runs: { table: 'salary_runs', kind: 'one', localKey: 'salary_run_id', foreignKey: 'id' },
   },
+  salary_line_items: {
+    salary_run_employees: {
+      table: 'salary_run_employees',
+      kind: 'one',
+      localKey: 'salary_run_employee_id',
+      foreignKey: 'id',
+    },
+  },
 }
 
 /** NOT NULL columns without a default, checked on every proposed row. */
@@ -345,7 +353,7 @@ export function createPayrollFakeDb(seed: Record<string, Row[]>, options: Payrol
         if (removed.includes(store[i])) store.splice(i, 1)
       }
       queries.push({ table, op, rows: removed.length })
-      return { data: null, error: null }
+      return selectItems ? shape(removed.map((row) => wire(row))) : { data: null, error: null }
     }
 
     const builder: Record<string, unknown> = {

@@ -586,7 +586,6 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   'lib/reports/vat-settlement-match.ts',
   'lib/reports/vat-declaration.ts',
   'lib/reports/periodisk-sammanstallning.ts',
-  'lib/reports/avgifter-basis.ts',
   'lib/reports/salary-journal.ts',
   'lib/reports/vacation-liability.ts',
   // Classifies each equity verifikat by its counter-accounts (the kind of

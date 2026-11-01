@@ -168,7 +168,6 @@ function scenarioA(): Record<string, Row[]> {
         item_type: 'bonus',
         description: 'Bonus Q3',
         amount: 5000,
-        is_vacation_basis: false,
         sort_order: 10,
         one_off_tax_percent: 34,
       }),

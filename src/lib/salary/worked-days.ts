@@ -22,12 +22,16 @@
  * Every write first checks the register lock (lib/salary/register-locks.ts):
  * dates a run in review, approved, paid or booked has already read through
  * its deviation window are refused with SALARY_REGISTER_DATES_LOCKED_BY_RUN,
- * dry runs included. Draft runs and corrected originals never lock.
+ * dry runs included. Draft runs and corrected originals never lock. A write
+ * inside a draft run's window clears its calculation
+ * (invalidate-calculation.ts).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
+import { invalidateRunCalculation } from './invalidate-calculation'
 import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
+import { defaultDayHours } from './work-schedule'
 
 export type WorkedDaysResult<T> =
   | { ok: true; data: T }
@@ -142,10 +146,10 @@ export async function assertWorkedDaysEmployee(
   supabase: SupabaseClient,
   companyId: string,
   employeeId: string,
-): Promise<WorkedDaysResult<{ id: string }>> {
+): Promise<WorkedDaysResult<{ id: string; hours_per_week: number | null; workdays_per_week: number | null }>> {
   const { data, error } = await supabase
     .from('employees')
-    .select('id')
+    .select('id, hours_per_week, workdays_per_week')
     .eq('id', employeeId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -156,7 +160,7 @@ export async function assertWorkedDaysEmployee(
   if (!data) {
     return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
   }
-  return { ok: true, data: data as { id: string } }
+  return { ok: true, data: data as { id: string; hours_per_week: number | null; workdays_per_week: number | null } }
 }
 
 function dbDetails(error: { code?: string; message?: string }): Record<string, unknown> {
@@ -246,14 +250,15 @@ export async function listWorkedDays(
  * from scratch (new id, new created_at). Returns the full stored row.
  *
  * Not atomic: if the insert is rejected (24h cap) the old row is already
- * gone. API callers use upsertWorkedDays, which is.
+ * gone. API callers use upsertWorkedDays, which is. A day without hours is
+ * one scheduled day of the employee (defaultDayHours), the form's own default.
  */
 export async function replaceWorkedDay(
   supabase: SupabaseClient,
   args: {
     companyId: string
     employeeId: string
-    day: WorkedDayInput
+    day: Omit<WorkedDayInput, 'hours'> & { hours?: number }
   },
 ): Promise<WorkedDaysResult<WorkedDayRow & Record<string, unknown>>> {
   const emp = await assertWorkedDaysEmployee(supabase, args.companyId, args.employeeId)
@@ -261,6 +266,12 @@ export async function replaceWorkedDay(
 
   const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, [args.day.work_date])
   if (locked) return locked
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    workedDays: { from: args.day.work_date, to: args.day.work_date },
+  })
+  if (invalidated) return invalidated
 
   const { error: deleteError } = await supabase
     .from('salary_worked_days')
@@ -279,7 +290,7 @@ export async function replaceWorkedDay(
       company_id: args.companyId,
       employee_id: args.employeeId,
       work_date: args.day.work_date,
-      hours: args.day.hours,
+      hours: args.day.hours ?? defaultDayHours(emp.data.hours_per_week, emp.data.workdays_per_week),
       notes: args.day.notes ?? null,
       salary_run_employee_id: args.day.salary_run_employee_id ?? null,
       start_time: args.day.start_time ?? null,
@@ -374,6 +385,13 @@ export async function upsertWorkedDays(
     return { ok: true, data: { count: 0, days: [] } }
   }
 
+  const dates = args.days.map((day) => day.work_date).sort()
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    workedDays: { from: dates[0], to: dates[dates.length - 1] },
+  })
+  if (invalidated) return invalidated
+
   const { data, error } = await supabase
     .from('salary_worked_days')
     .upsert(rows, { onConflict: 'employee_id,work_date' })
@@ -420,6 +438,12 @@ export async function deleteWorkedDaysRange(
     }
     return { ok: true, data: { deleted_count: count ?? 0 } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    workedDays: { from: args.from, to: args.to },
+  })
+  if (invalidated) return invalidated
 
   const { count, error } = await supabase
     .from('salary_worked_days')

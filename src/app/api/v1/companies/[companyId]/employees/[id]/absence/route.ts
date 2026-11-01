@@ -149,7 +149,12 @@ const UpsertRangeBody = z
     from: isoDate,
     to: isoDate,
     absence_type: AbsenceTypeSchema,
-    hours_per_day: z.number().positive().max(24).default(8),
+    hours_per_day: z
+      .number()
+      .positive()
+      .max(24)
+      .optional()
+      .describe('Hours each day. Omitted: one scheduled day of the employee (hours_per_week / workdays_per_week).'),
     notes: z.string().max(2000).optional(),
     include_weekends: z.boolean().default(false),
   })

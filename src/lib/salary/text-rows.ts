@@ -17,8 +17,12 @@
  * The same validator closes the 0 kr loophole (crm#1076): a money row needs a
  * non-zero amount from every door, not only from the dialog, because a 0 kr
  * row printed "0,00" on the payslip. Vacation rows have their own rule:
- * they carry days in quantity and may have no amount (crm#1331).
+ * they carry days in quantity and may have no amount (crm#1331). And it
+ * refuses a sign the row's type cannot mean (line-item-roles.ts
+ * payslipLineSign).
  */
+import type { SalaryLineItemType } from '@/types'
+import { payslipLineSign } from './line-item-roles'
 
 export const TEXT_ROW_ITEM_TYPE = 'text'
 
@@ -40,15 +44,6 @@ export const PAYSLIP_LINE_BAND = {
   other: 3,
 } as const
 
-/** Every flag a text row carries: none. */
-export const TEXT_ROW_FLAGS = {
-  is_taxable: false,
-  is_avgift_basis: false,
-  is_vacation_basis: false,
-  is_gross_deduction: false,
-  is_net_deduction: false,
-} as const
-
 export const TEXT_ROW_AMOUNT_MESSAGE =
   'En textrad har inget belopp. Lägg beloppet på en egen rad.'
 export const TEXT_ROW_QUANTITY_MESSAGE =
@@ -59,6 +54,10 @@ export const TEXT_ROW_RETYPE_MESSAGE =
   'En rad kan inte göras om till eller från en textrad. Ta bort raden och lägg till en ny.'
 export const ZERO_AMOUNT_MESSAGE =
   'Raden behöver ett belopp som inte är 0 kr. Välj Textrad för en rad med bara text.'
+export const NEGATIVE_AMOUNT_MESSAGE =
+  'En förmån eller skattefri ersättning kan inte ha ett negativt belopp. Ett belopp som ska dras från lönen läggs som nettolöneavdrag.'
+export const POSITIVE_DEDUCTION_MESSAGE =
+  'Ett bruttolöneavdrag har ett negativt belopp. Lön som ska betalas tillbaka läggs som Korrigering.'
 
 export function isTextRow(line: { item_type?: unknown }): boolean {
   return line.item_type === TEXT_ROW_ITEM_TYPE
@@ -116,17 +115,21 @@ export const VACATION_ROW_MESSAGE =
  * The one content rule for a payslip row, run by the line commands for every
  * door. One rule per kind of row, each judged on its own fields: a text row
  * carries words and no amount, a vacation row carries its days, an amount or
- * both, and any other row needs a non-zero amount. The vacation rule used to
- * be an exception checked after the generic amount rule, so a vacation row
- * that left the amount out, as the docs allow, was refused before its days
- * were read (crm#1331).
+ * both, and any other row needs a non-zero amount of a sign its type can
+ * mean. The vacation rule used to be an exception checked after the generic
+ * amount rule, so a vacation row that left the amount out, as the docs allow,
+ * was refused before its days were read (crm#1331).
  */
 export function validatePayslipLineContent(
   line: TextRowShape & { item_type: string },
 ): LineContentIssue | null {
   if (isTextRow(line)) return validateTextRow(line)
   if (line.item_type === VACATION_ITEM_TYPE) return validateVacationRow(line)
-  return isNonZeroAmount(line.amount) ? null : { field: 'amount', message: ZERO_AMOUNT_MESSAGE }
+  if (!isNonZeroAmount(line.amount)) return { field: 'amount', message: ZERO_AMOUNT_MESSAGE }
+  const sign = payslipLineSign(line.item_type as SalaryLineItemType)
+  if (sign === 'positive' && line.amount < 0) return { field: 'amount', message: NEGATIVE_AMOUNT_MESSAGE }
+  if (sign === 'negative' && line.amount > 0) return { field: 'amount', message: POSITIVE_DEDUCTION_MESSAGE }
+  return null
 }
 
 /**
@@ -144,7 +147,7 @@ export function validateVacationRow(line: TextRowShape): LineContentIssue | null
   return { field: 'quantity', message: VACATION_ROW_MESSAGE }
 }
 
-function isNonZeroAmount(amount: number | null | undefined): boolean {
+function isNonZeroAmount(amount: number | null | undefined): amount is number {
   return typeof amount === 'number' && Number.isFinite(amount) && amount !== 0
 }
 

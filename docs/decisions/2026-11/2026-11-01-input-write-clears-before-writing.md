@@ -1,0 +1,1 @@
+[2026-11-01] Every engine input write clears the calculation first, for draft and review runs (invalidateRunCalculation), not by trigger: the calculation writes the same tables, and a failed clear must leave the input unwritten rather than a changed input under a run reading current.

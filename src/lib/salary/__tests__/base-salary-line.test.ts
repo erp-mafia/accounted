@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { baseSalaryLineType, refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '../base-salary-line'
+import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '../base-salary-line'
+import { baseSalaryLineType } from '../line-item-roles'
 
 const ARGS = {
   companyId: 'company-1',

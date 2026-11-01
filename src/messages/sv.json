@@ -11383,7 +11383,7 @@
     "calculation_computed_label": "Arbetsgivaravgifter, summa per anställd",
     "calculation_declared_label": "Deklarerad avgift (hela kronor)",
     "calculation_declared_formula": "avgiftsunderlag {underlag} × avgiftssats, öretal stryks",
-    "calculation_stale": "Beräkningen är inte aktuell: utbetalningsdag, lön eller anställda har ändrats sedan den gjordes. Beräkna om innan lönekörningen godkänns.",
+    "calculation_stale": "Beräkningen är inte aktuell: något den bygger på har ändrats sedan den gjordes, till exempel lönerader, frånvaro, utbetalningsdag, lön eller anställda. Beräkna om innan lönekörningen godkänns.",
     "journal_preview_title": "Verifikationer att bokföra",
     "journal_booked_title": "Bokförda verifikationer",
     "journal_preview_nollkorning": "Nollkörning — inga verifikat bokförs för den här körningen. Kontrollera att övriga lönekörningar för perioden täcker arbetsgivardeklarationen till Skatteverket.",

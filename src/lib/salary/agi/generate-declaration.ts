@@ -34,6 +34,7 @@ import {
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
+import { runCalculationState } from '../calculation-state'
 import { runDeviationWindow } from '../deviation-period'
 import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 import {
@@ -587,6 +588,12 @@ export async function generateAgiDeclaration(
   if (!runEmployees) {
     return { ok: false, code: 'SALARY_RUN_NO_EMPLOYEES' }
   }
+  // A run in review whose inputs moved after its calculation would declare
+  // figures the engine did not produce for them (calculation-state.ts). A filed
+  // declaration declares nothing new: it is answered from the stored XML below.
+  if (!run.agi_submitted_at && runCalculationState(run, runEmployees) === 'stale') {
+    return { ok: false, code: 'SALARY_RUN_NOT_CALCULATED' }
+  }
 
   // 4. Build AGI input shapes.
   const companyData: AGICompanyData = {
@@ -643,7 +650,7 @@ export async function generateAgiDeclaration(
       list.push({
         date: row.absence_date,
         type: row.absence_type,
-        hours: Number(row.hours ?? 8),
+        hours: Number(row.hours),
         specifikationsnummer: row.franvaro_specifikationsnummer,
       })
       absenceByEmployee.set(row.employee_id, list)
