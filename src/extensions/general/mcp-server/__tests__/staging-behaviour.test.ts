@@ -1101,6 +1101,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // The company's first year: no neighbours, nothing to overlap.
   gnubok_create_fiscal_period: {
     args: { name: 'Räkenskapsår 2027', period_start: '2027-01-01', period_end: '2027-12-31' },
+    rows: { companies: { entity_type: 'aktiebolag' } },
     empty: ['fiscal_periods'],
   },
   gnubok_update_fiscal_period: { args: { name: 'Räkenskapsår 2026' }, rows: { fiscal_periods: { is_closed: false, locked_at: null } } },

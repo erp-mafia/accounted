@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { fileOpeningBalanceByAccount, storedOpeningBalances } from '@/lib/import/sie-continuity'
 import type { AccountMapping } from '@/lib/import/types'
 import type { OpeningBalanceLine } from './execute-helpers'
@@ -76,22 +77,19 @@ export async function previousYearHasBookkeeping(
   companyId: string,
   periodStart: string,
 ): Promise<boolean> {
-  const { data: previous, error: previousError } = await supabase
-    .from('fiscal_periods')
-    .select('id')
-    .eq('company_id', companyId)
-    .lt('period_end', periodStart)
-    .order('period_end', { ascending: false })
-    .limit(1)
-  if (previousError) throw previousError
-  const previousId = (previous as { id: string }[] | null)?.[0]?.id
-  if (!previousId) return false
+  const previous = await resolvePreviousFiscalPeriod<{ id: string; period_end: string }>(
+    supabase,
+    companyId,
+    { period_start: periodStart },
+    'id, period_end',
+  )
+  if (!previous) return false
 
   const { data, error } = await supabase
     .from('journal_entries')
     .select('id')
     .eq('company_id', companyId)
-    .eq('fiscal_period_id', previousId)
+    .eq('fiscal_period_id', previous.id)
     .eq('status', 'posted')
     .neq('source_type', 'storno')
     .limit(1)

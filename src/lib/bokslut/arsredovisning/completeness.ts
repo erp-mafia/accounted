@@ -16,6 +16,7 @@ import { k3ArsredovisningEnabled } from './k3-release'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
 import { dividendExceedsFreeEquity } from './dividend-equity'
+import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -277,7 +278,7 @@ export function validateAnnualReportCompleteness(
       'Räkenskapsårets start- och slutdatum är ogiltiga.',
       'Korrigera räkenskapsåret i företagsinställningarna.',
     )
-  } else if (periodEnd >= addCalendarMonths(periodStart, 18)) {
+  } else if (exceedsFiscalYearCap(report.fiscal_period.period_start, report.fiscal_period.period_end)) {
     push(
       issues,
       'AR-FISCAL-PERIOD-TOO-LONG',

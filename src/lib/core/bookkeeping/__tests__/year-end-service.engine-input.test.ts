@@ -60,6 +60,7 @@ vi.mock('../period-service', () => ({
   countUnbookedInPeriod: vi.fn(async () => ({ untriaged: 0, businessUnbooked: 0 })),
   createNextPeriod: vi.fn(),
   findNextPeriod: vi.fn(),
+  fiscalYearInTheWay: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('../voucher-gaps', () => ({ listVoucherGaps: vi.fn(async () => ({ gaps: [], sequenceSeries: [] })) }))
 vi.mock('../prior-result-carry', async (importOriginal) => ({

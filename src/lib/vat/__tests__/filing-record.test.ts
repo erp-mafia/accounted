@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
+import { fiscalYearEndMonthIn, getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
 import {
   indexVatFilings,
   parseVatFilingReference,
   vatFilingDateProblem,
   vatFilingDeadlineType,
-  vatFilingFiscalYearEndMonth,
   vatFilingKey,
   vatFilingLabelFiscalYearEndMonth,
   vatFilingPeriodEnd,
@@ -55,20 +54,35 @@ describe('tax_period key mapping', () => {
         vat_has_eu_trade: false,
         vat_filing_method: 'electronic' as const,
       }
-      expect(vatFilingTaxPeriod('yearly', 2027, 1, vatFilingFiscalYearEndMonth(settings))).toBe(
+      expect(vatFilingTaxPeriod('yearly', 2027, 1, fiscalYearEndMonthIn(2027, settings))).toBe(
         getVatDeadlineForPeriod('yearly', 2027, 1, settings)?.period,
       )
     }
   })
 
-  it('places the räkenskapsår from the company settings, an enskild firma always on the calendar year', () => {
-    expect(vatFilingFiscalYearEndMonth({ entity_type: 'aktiebolag', fiscal_year_start_month: 7 })).toBe(6)
-    expect(vatFilingFiscalYearEndMonth({ entity_type: 'aktiebolag', fiscal_year_start_month: 1 })).toBe(12)
+  it('places the räkenskapsår from the company settings when nothing is recorded, an enskild firma always on the calendar year', () => {
+    expect(fiscalYearEndMonthIn(2026, { entity_type: 'aktiebolag', fiscal_year_start_month: 7 })).toBe(6)
+    expect(fiscalYearEndMonthIn(2026, { entity_type: 'aktiebolag', fiscal_year_start_month: 1 })).toBe(12)
     // BFL 3 kap 1 §: a fysisk person keeps the calendar year.
-    expect(vatFilingFiscalYearEndMonth({ entity_type: 'enskild_firma', fiscal_year_start_month: 7 })).toBe(12)
+    expect(fiscalYearEndMonthIn(2026, { entity_type: 'enskild_firma', fiscal_year_start_month: 7 })).toBe(12)
     // No settings, or no start month: the column's default (January).
-    expect(vatFilingFiscalYearEndMonth(null)).toBe(12)
-    expect(vatFilingFiscalYearEndMonth({ entity_type: 'aktiebolag', fiscal_year_start_month: null })).toBe(12)
+    expect(fiscalYearEndMonthIn(2026, {})).toBe(12)
+    expect(fiscalYearEndMonthIn(2026, { entity_type: 'aktiebolag', fiscal_year_start_month: null })).toBe(12)
+  })
+
+  it('places a yearly period on the recorded year, whatever the settings month says', () => {
+    const settings = {
+      entity_type: 'aktiebolag',
+      fiscal_year_start_month: 1,
+      fiscal_years: [{ start: '2025-07-01', end: '2026-06-30' }],
+    }
+    expect(vatFilingTaxPeriod('yearly', 2026, 1, fiscalYearEndMonthIn(2026, settings))).toBe('2025/2026')
+    expect(vatFilingPeriodRange('yearly', 2026, 1, fiscalYearEndMonthIn(2026, settings))).toEqual({
+      start: '2025-07-01',
+      end: '2026-06-30',
+    })
+    // The next year chains from it.
+    expect(vatFilingTaxPeriod('yearly', 2027, 1, fiscalYearEndMonthIn(2027, settings))).toBe('2026/2027')
   })
 
   it('parses every cadence and rejects everything else', () => {

@@ -34,7 +34,7 @@ describe('proposeLossCarryforward', () => {
     )
     mock.enqueue({ data: { entity_type: 'aktiebolag' } }) // gate
     mock.enqueue({ data: [P2026] }) // the year
-    mock.enqueue({ data: [P2025] }) // the year before
+    mock.enqueue({ data: P2025 }) // the year before
     mock.enqueue({ data: { entity_type: 'aktiebolag' } }) // gate (list)
     mock.enqueue({ data: [] }) // register rows
     mock.enqueue({ data: [{ id: 'notice-1', decision_date: '2026-08-15' }] }) // slutskattebesked
@@ -67,7 +67,7 @@ describe('proposeLossCarryforward', () => {
     vi.mocked(generateINK2Declaration).mockRejectedValue(new Error('Fiscal period not found'))
     mock.enqueue({ data: { entity_type: 'aktiebolag' } })
     mock.enqueue({ data: [P2026] })
-    mock.enqueue({ data: [] }) // no year before
+    mock.enqueue({ data: null }) // no year before
     mock.enqueue({ data: { entity_type: 'aktiebolag' } })
     mock.enqueue({ data: [] })
 

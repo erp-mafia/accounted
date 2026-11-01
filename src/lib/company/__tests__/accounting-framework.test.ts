@@ -4,7 +4,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   getFiscalPeriodFramework,
-  getPreviousYearFramework,
+  previousYearFrameworkOf,
   isReliableFrameworkSource,
   listFiscalYearFrameworks,
   pickCurrentFiscalYear,
@@ -106,32 +106,27 @@ describe('listFiscalYearFrameworks', () => {
   })
 })
 
-describe('getPreviousYearFramework', () => {
+describe('previousYearFrameworkOf', () => {
   it('treats a backfilled previous year as unreliable', async () => {
-    enqueue({ data: { id: 'fp-2025' } })
     enqueue({ data: { fiscal_period_id: 'fp-2025', framework: 'k3', source: 'company_default' } })
-    const previous = await getPreviousYearFramework(client, 'company-1', Y2026)
+    const previous = await previousYearFrameworkOf(client, 'company-1', 'fp-2025')
     expect(previous).toMatchObject({ fiscal_period_id: 'fp-2025', framework: 'k3', reliable: false })
-    expect(findCall('fiscal_periods', 'eq')).toEqual(['company_id', 'company-1'])
   })
 
   it('relies on an elected previous year', async () => {
-    enqueue({ data: { id: 'fp-2025' } })
     enqueue({ data: { fiscal_period_id: 'fp-2025', framework: 'k2', source: 'election' } })
-    const previous = await getPreviousYearFramework(client, 'company-1', Y2026)
+    const previous = await previousYearFrameworkOf(client, 'company-1', 'fp-2025')
     expect(previous).toMatchObject({ framework: 'k2', reliable: true })
   })
 
   it('relies on a previous year taken from its locked årsredovisning', async () => {
-    enqueue({ data: { id: 'fp-2025' } })
     enqueue({ data: { fiscal_period_id: 'fp-2025', framework: 'k2', source: 'annual_report' } })
-    const previous = await getPreviousYearFramework(client, 'company-1', Y2026)
+    const previous = await previousYearFrameworkOf(client, 'company-1', 'fp-2025')
     expect(previous).toMatchObject({ framework: 'k2', source: 'annual_report', reliable: true })
   })
 
   it('answers nulls when Accounted holds no previous year', async () => {
-    enqueue({ data: null })
-    const previous = await getPreviousYearFramework(client, 'company-1', Y2026)
+    const previous = await previousYearFrameworkOf(client, 'company-1', null)
     expect(previous).toEqual({ fiscal_period_id: null, framework: null, source: null, reliable: false })
   })
 })

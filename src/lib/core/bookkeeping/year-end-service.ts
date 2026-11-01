@@ -21,6 +21,7 @@ import {
   closePeriod,
   countUnbookedInPeriod,
   createNextPeriod,
+  fiscalYearInTheWay,
   findNextPeriod,
 } from './period-service'
 import { unfinishedSieImportMessage } from './sie-import-hold'
@@ -36,7 +37,14 @@ import {
   undatedSettlementsNote,
   type KontantmetodCutoffAssessment,
 } from './kontantmetod-cutoff'
-import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
+import {
+  ENTITY_TYPES,
+  fiscalYearLockedToCalendar,
+  resolveCompanyEntityType,
+  resultClosingAccounts,
+} from '@/lib/company/entity-type'
+import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
+import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
@@ -67,7 +75,7 @@ import type {
   VoucherGap,
   SequenceMismatch,
 } from '@/types'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 
 /** At most this many invoice references are named in one readiness message. */
 const CUTOFF_REFERENCES_NAMED = 10
@@ -148,6 +156,40 @@ export function kontantmetodCutoffBlockers(
  * Validate whether a fiscal period is ready for year-end closing.
  * Returns blocking errors and informational warnings.
  */
+/**
+ * Why the year after one ending on `periodEnd` cannot be created, or null. The
+ * closing entry is posted before that year is created, so a year that would be
+ * refused stops the close here instead of leaving it half done: an enskild firma
+ * imported on broken years has no lawful twelve months to chain, and a later
+ * year starting inside those twelve months leaves a shorter year in between,
+ * whose length a person decides (nextFiscalYearRange).
+ */
+async function nextYearBlocker(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodEnd: string,
+  entityTypeHint: unknown,
+): Promise<YearEndBlocker | null> {
+  const next = nextFiscalYearRange(periodEnd)
+  if (
+    checkPeriodDuration(next.start, next.end, { calendarYearOnly: true }) &&
+    fiscalYearLockedToCalendar(await resolveCompanyEntityType(supabase, companyId, entityTypeHint))
+  ) {
+    return {
+      code: 'NEXT_PERIOD_NOT_CALENDAR_YEAR',
+      message: 'Nästa räkenskapsår kan inte skapas: en enskild firma har räkenskapsår till 31 december, och det här året slutar inte där',
+    }
+  }
+  const later = await fiscalYearInTheWay(supabase, companyId, next)
+  if (!later) return null
+  return {
+    code: 'NEXT_PERIOD_OVERLAPS',
+    message:
+      `Nästa räkenskapsår kan inte skapas: tolv månader från ${next.start} går in i räkenskapsåret som börjar ${later.period_start}. ` +
+      'Lägg till året mellan dem under Inställningar → Bokföring → Räkenskapsår, så att det slutar dagen före.',
+  }
+}
+
 export async function validateYearEndReadiness(
   supabase: SupabaseClient,
   companyId: string,
@@ -192,8 +234,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check: period must have ended (BFNAR 2017:3 / ÅRL 2:1)
-  const today = todayIsoStockholm()
-  if (period.period_end > today) {
+  if (!hasEnded(period.period_end, todayIsoStockholm())) {
     blockers.push({
       code: 'PERIOD_NOT_ENDED',
       message: 'Perioden kan inte stängas: slutdatumet har inte passerat ännu',
@@ -575,6 +616,11 @@ export async function validateYearEndReadiness(
         .maybeSingle()
 
       if (settingsError) throw settingsError
+
+      if (!nextPeriod) {
+        const blocker = await nextYearBlocker(supabase, companyId, period.period_end, settings?.entity_type)
+        if (blocker) blockers.push(blocker)
+      }
 
       if (settings?.accounting_method === 'cash') {
         const assessment = await assessKontantmetodCutoff(

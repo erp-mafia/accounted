@@ -10,7 +10,7 @@
  * Reference: https://sie.se/format/
  */
 
-import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { exceedsFiscalYearCap, monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import {
@@ -714,13 +714,12 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          const rarMonths = monthsBetween(start, end)
-          if (rarMonths > 18) {
+          if (exceedsFiscalYearCap(start, end)) {
             addIssue(
               issues,
               'warning',
               lineNum,
-              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${rarMonths} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
+              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${monthsBetween(start, end)} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
               tag
             )
           }

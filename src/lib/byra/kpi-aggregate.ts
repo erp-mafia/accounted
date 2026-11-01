@@ -14,6 +14,7 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { hasEnded } from '@/lib/dates/iso'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -121,7 +122,7 @@ export function pickCurrentPeriod(
   if (containing.length > 0) return containing[0]
 
   const past = periods
-    .filter((p) => p.period_end < todayIso)
+    .filter((p) => hasEnded(p.period_end, todayIso))
     .sort((a, b) => b.period_end.localeCompare(a.period_end))
   if (past.length > 0) return past[0]
 

@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { fiscalPeriodForVatYear, resolveInitialVatPeriodSelection } from '../period-selection'
+import { describe, it, expect, vi } from 'vitest'
+import { createRowsMockSupabase } from '@/tests/helpers'
+import { fiscalPeriodForVatYear } from '@/lib/reports/period-dates'
+import { resolvePeriodDates } from '@/lib/reports/vat-declaration'
+import { resolveInitialVatPeriodSelection } from '../period-selection'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -171,5 +174,44 @@ describe('fiscalPeriodForVatYear', () => {
       { id: 'short', period_start: '2026-05-01', period_end: '2026-12-31' },
     ]
     expect(fiscalPeriodForVatYear(changed, 2026, '2027-01-10')?.id).toBe('short')
+  })
+
+  it('is the year the declaration reads, when an omläggning ends two in one calendar year', async () => {
+    const changed = [
+      { id: 'first', company_id: 'c', period_start: '2026-01-01', period_end: '2026-06-30' },
+      { id: 'second', company_id: 'c', period_start: '2026-07-01', period_end: '2026-12-31' },
+    ]
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      for (const today of ['2026-03-01', '2026-09-01', '2027-02-01']) {
+        vi.setSystemTime(new Date(`${today}T10:00:00Z`))
+        const { supabase } = createRowsMockSupabase({ fiscal_periods: changed })
+        const declared = await resolvePeriodDates(supabase as never, 'c', 'yearly', 2026, 1)
+        const picked = fiscalPeriodForVatYear(changed, 2026, today)
+        expect({ start: declared.start, end: declared.end }).toEqual({
+          start: picked?.period_start,
+          end: picked?.period_end,
+        })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('names a year not started when the declaration asks for it, but the picker does not list it', async () => {
+    const broken = [{ id: 'next', company_id: 'c', period_start: '2026-07-01', period_end: '2027-06-30' }]
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-03-01T10:00:00Z'))
+      const { supabase } = createRowsMockSupabase({ fiscal_periods: broken })
+      await expect(resolvePeriodDates(supabase as never, 'c', 'yearly', 2027, 1)).resolves.toMatchObject({
+        start: '2026-07-01',
+        end: '2027-06-30',
+        source: 'fiscal_period',
+      })
+      expect(fiscalPeriodForVatYear(broken, 2027, '2026-03-01')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

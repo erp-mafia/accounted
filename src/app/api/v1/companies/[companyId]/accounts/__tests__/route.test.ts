@@ -218,4 +218,44 @@ describe('GET /api/v1/companies/:companyId/fiscal-periods', () => {
     expect(body.data.fiscal_periods[0].duration_days).toBe(365) // 2026-01-01 → 2026-12-31
     expect(body.data.fiscal_periods[0].exceeds_18_months).toBe(false)
   })
+
+  it('answers 401 without a valid key', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    const res = await listPeriods(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/fiscal-periods`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it('answers 404 for a company the key does not reach', async () => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: null, error: null } }).supabase)
+    const res = await listPeriods(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/fiscal-periods`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(404)
+  })
+
+  it('flags a year past the cap the way every other door counts it, month-end starts included', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        fiscal_periods: {
+          data: [
+            { id: 'p1', name: 'A', period_start: '2024-01-31', period_end: '2025-07-31', is_closed: false, closed_at: null, locked_at: null, previous_period_id: null, created_at: '2024-01-31T00:00:00Z' },
+            { id: 'p2', name: 'B', period_start: '2024-03-01', period_end: '2025-08-31', is_closed: false, closed_at: null, locked_at: null, previous_period_id: null, created_at: '2024-03-01T00:00:00Z' },
+          ],
+          error: null,
+        },
+      }).supabase,
+    )
+    const res = await listPeriods(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/fiscal-periods`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    const body = await res.json()
+    expect(body.data.fiscal_periods.map((p: { exceeds_18_months: boolean }) => p.exceeds_18_months)).toEqual([true, false])
+  })
 })

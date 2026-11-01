@@ -1431,7 +1431,7 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     ])
 
     const result = await calculateVatDeclaration(
-      supabase, 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'fp-1' },
+      supabase, 'company-1', 'yearly', 2026, 1, { fiscalPeriodId: 'fp-1' },
     )
 
     expect(result.period.start).toBe('2025-07-03')
@@ -1448,7 +1448,7 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     seedLedger([])
 
     const result = await calculateVatDeclaration(
-      supabase, 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'missing' },
+      supabase, 'company-1', 'yearly', 2026, 1, { fiscalPeriodId: 'missing' },
     )
 
     expect(result.period.start).toBe('2026-01-01')
@@ -1461,7 +1461,7 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     // still target the actual räkenskapsår, not calendar 2026
     // (SFL 26 kap 10-11 §§).
     results = [
-      { data: { period_start: '2025-07-01', period_end: '2026-06-30' }, error: null },
+      { data: [{ period_start: '2025-07-01', period_end: '2026-06-30' }], error: null },
     ]
     seedLedger([])
 

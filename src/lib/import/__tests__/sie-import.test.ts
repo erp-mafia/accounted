@@ -392,6 +392,11 @@ describe('buildSIEOpeningBalanceEntry with a one öre difference', () => {
   })
 })
 
+/** The reads of the shape check: the company's other years, then its legal form. */
+const NO_OTHER_YEARS = { data: [], error: null }
+const A_YEAR_BEFORE = { data: [{ period_start: '2020-01-01' }], error: null }
+const AKTIEBOLAG = { data: { entity_type: 'aktiebolag' }, error: null }
+
 describe('ensureFiscalPeriod validation', () => {
   // Mirrors the `enforce_period_start_day` DB trigger so users get an
   // actionable Swedish error instead of a raw Postgres message.
@@ -402,7 +407,8 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null }, // containing check, no match
       { data: [], error: null },   // overlapping check, none
-      { data: [{ id: 'earlier' }], error: null }, // earlier period exists
+      A_YEAR_BEFORE,
+      AKTIEBOLAG,
     ])
 
     await expect(
@@ -420,7 +426,8 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [], error: null }, // no earlier period
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
     ])
 
     await expect(
@@ -438,8 +445,9 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [], error: null }, // no earlier period
-      { data: [], error: null }, // no predecessor in the continuity chain
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
+      { data: null, error: null }, // no predecessor in the continuity chain
       { data: { id: 'new-period-id' }, error: null }, // insert result
       { data: [], error: null }, // no successor to relink
     ])
@@ -463,8 +471,9 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null }, // containing check, no match
       { data: [], error: null },   // overlapping check, none (2017 vs 2026)
-      { data: [], error: null },   // no earlier period than 2017-07-28
-      { data: [], error: null },   // no predecessor in the continuity chain
+      { data: [{ period_start: '2026-01-01' }], error: null }, // no year starts before 2017-07-28
+      AKTIEBOLAG,
+      { data: null, error: null }, // no predecessor in the continuity chain
       { data: { id: 'retro-first-year-id' }, error: null }, // insert
       { data: [], error: null },   // no successor to relink
     ])
@@ -553,9 +562,10 @@ describe('ensureFiscalPeriod validation', () => {
         error: null,
       },
       { data: [], error: null }, // journal_entries: none
-      { data: [], error: null }, // earlier-period check, none (mid-month start)
+      { data: [{ period_start: '2026-01-01' }], error: null }, // no year starts before it
+      AKTIEBOLAG,
       { data: null, error: null }, // delete result
-      { data: [], error: null }, // no predecessor in the continuity chain
+      { data: null, error: null }, // no predecessor in the continuity chain
       { data: { id: 'replaced-id' }, error: null }, // insert result
       { data: [], error: null }, // no successor to relink
     ])
@@ -637,7 +647,9 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [], error: null },
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
+      { data: null, error: null }, // no predecessor
       { data: { id: 'fp-2025' }, error: null },
       { data: [{ id: 'fp-2026', period_start: '2026-01-01' }], error: null },
       { data: null, error: null },
@@ -665,7 +677,9 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [], error: null },
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
+      { data: null, error: null }, // no predecessor
       { data: { id: 'fp-2024-25' }, error: null },
       // Onboarding-seeded 2026/2027 exists; 2025/2026 is missing.
       { data: [{ id: 'fp-2026-27', period_start: '2026-05-01' }], error: null },
@@ -687,7 +701,9 @@ describe('ensureFiscalPeriod validation', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [{ id: 'fp-2022', period_end: '2022-12-31' }], error: null }, // nearest, but 2023-2024 missing
+      A_YEAR_BEFORE,
+      AKTIEBOLAG,
+      { data: null, error: null }, // the year ending the day before is missing
       { data: { id: 'fp-2025' }, error: null },
       { data: [], error: null },
     ])
@@ -701,12 +717,15 @@ describe('ensureFiscalPeriod validation', () => {
 
     const [insertPayload] = findCalls('fiscal_periods', 'insert')[0] as [{ previous_period_id: string | null }]
     expect(insertPayload.previous_period_id).toBeNull()
+    expect(findCalls('fiscal_periods', 'eq')).toContainEqual(['period_end', '2024-12-31'])
 
     const adjacent = createQueuedMockSupabase()
     adjacent.enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [{ id: 'fp-2024', period_end: '2024-12-31' }], error: null },
+      A_YEAR_BEFORE,
+      AKTIEBOLAG,
+      { data: { id: 'fp-2024', period_end: '2024-12-31' }, error: null },
       { data: { id: 'fp-2025' }, error: null },
       { data: [], error: null },
     ])
@@ -729,11 +748,13 @@ describe('ensureFiscalPeriod validation', () => {
   // now mirrors validatePeriodDuration(), which the fiscal-periods routes,
   // period-service and onboarding already enforce.
   describe('18-month cap (BFL 3 kap.)', () => {
-    /** Queue for the happy path: day-1 start, so the earlier-period lookup is skipped. */
+    /** Queue for the happy path. */
     const createQueue = (newId: string) => [
       { data: null, error: null }, // containing check, no match
       { data: [], error: null },   // overlapping check, none
-      { data: [], error: null },   // no predecessor in the continuity chain
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
+      { data: null, error: null }, // no predecessor in the continuity chain
       { data: { id: newId }, error: null }, // insert result
       { data: [], error: null },   // no successor to relink
     ]
@@ -771,6 +792,8 @@ describe('ensureFiscalPeriod validation', () => {
       enqueueMany([
         { data: null, error: null }, // containing check, no match
         { data: [], error: null },   // overlapping check, none
+        NO_OTHER_YEARS,
+        AKTIEBOLAG,
       ])
 
       await expect(
@@ -788,6 +811,8 @@ describe('ensureFiscalPeriod validation', () => {
       enqueueMany([
         { data: null, error: null },
         { data: [], error: null },
+        NO_OTHER_YEARS,
+        AKTIEBOLAG,
       ])
 
       await expect(
@@ -801,6 +826,12 @@ describe('ensureFiscalPeriod validation', () => {
 
       // The message has to tell an accountant who cannot edit the SIE file what
       // to do instead: re-export one räkenskapsår per file from the source system.
+      enqueueMany([
+        { data: null, error: null },
+        { data: [], error: null },
+        NO_OTHER_YEARS,
+        AKTIEBOLAG,
+      ])
       await expect(
         ensureFiscalPeriod(
           supabase as unknown as Supabase,
@@ -833,6 +864,8 @@ describe('ensureFiscalPeriod validation', () => {
           error: null,
         },
         { data: [], error: null }, // journal_entries: none, so the period is replaceable
+        { data: [{ period_start: '2026-01-01' }], error: null }, // no year starts before it
+        AKTIEBOLAG,
       ])
 
       await expect(
@@ -844,8 +877,8 @@ describe('ensureFiscalPeriod validation', () => {
         ),
       ).rejects.toThrow(/högst 18 månader/)
 
-      // containing + overlapping + journal_entries only: no delete, no insert.
-      expect(supabase.from).toHaveBeenCalledTimes(3)
+      // The reads only: no delete, no insert.
+      expect(supabase.from).toHaveBeenCalledTimes(5)
     })
 
     it('checks every #RAR range it is handed, not just the first', async () => {
@@ -867,6 +900,8 @@ describe('ensureFiscalPeriod validation', () => {
       enqueueMany([
         { data: null, error: null },
         { data: [], error: null },
+        NO_OTHER_YEARS,
+        AKTIEBOLAG,
       ])
 
       await expect(
@@ -1484,6 +1519,8 @@ describe('precheckFiscalPeriod', () => {
     enqueueMany([
       { data: null, error: null }, // containing check, no match
       { data: [], error: null }, // overlapping check, none
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
     ])
 
     const verdict = await precheckFiscalPeriod(
@@ -1501,6 +1538,8 @@ describe('precheckFiscalPeriod', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
     ])
 
     const verdict = await precheckFiscalPeriod(
@@ -1520,6 +1559,8 @@ describe('precheckFiscalPeriod', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
+      NO_OTHER_YEARS,
+      AKTIEBOLAG,
     ])
 
     const verdict = await precheckFiscalPeriod(
@@ -1539,7 +1580,8 @@ describe('precheckFiscalPeriod', () => {
     enqueueMany([
       { data: null, error: null },
       { data: [], error: null },
-      { data: [{ id: 'earlier' }], error: null }, // earlier period exists
+      A_YEAR_BEFORE,
+      AKTIEBOLAG,
     ])
 
     const verdict = await precheckFiscalPeriod(
@@ -1560,7 +1602,8 @@ describe('precheckFiscalPeriod', () => {
       { data: null, error: null },
       { data: [seededPeriod], error: null },
       { data: [], error: null }, // journal_entries: none
-      { data: [], error: null }, // earlier-period check, none (mid-month start)
+      { data: [{ period_start: '2026-01-01' }], error: null }, // no year starts before it
+      AKTIEBOLAG,
     ])
 
     const verdict = await precheckFiscalPeriod(

@@ -10,7 +10,7 @@
  */
 
 import type { FiscalPeriod } from '@/types'
-import { addDaysIso as addDays } from '@/lib/dates/iso'
+import { addDaysIso as addDays, addMonthsIso } from '@/lib/dates/iso'
 
 /** Minimal shape needed for the date math: `FiscalPeriod` satisfies it. */
 type PeriodRange = Pick<FiscalPeriod, 'period_start' | 'period_end'>
@@ -22,6 +22,12 @@ export interface SuggestedPeriod {
   name: string
   period_start: string
   period_end: string
+}
+
+/** A räkenskapsår's first and last day. */
+export interface FiscalYearRange {
+  start: string
+  end: string
 }
 
 /**
@@ -71,6 +77,29 @@ export function fiscalYearShortName(name: string): string {
 }
 
 /**
+ * The räkenskapsår after one ending on `latestPeriodEnd`: it starts the next
+ * day and runs twelve months. A year on record decides the next one, also
+ * after a broken or re-laid first year; fiscal_year_start_month only fills
+ * what nothing records. A first or re-laid year of another length is recorded
+ * by whoever decides it, never derived here.
+ */
+export function nextFiscalYearRange(latestPeriodEnd: string): FiscalYearRange {
+  const start = addDays(latestPeriodEnd, 1)
+  return { start, end: addDays(addMonthsIso(start, 12), -1) }
+}
+
+/**
+ * The twelve-month räkenskapsår holding `date` on a start month (1-12): the
+ * schedule for a company with no recorded year.
+ */
+export function scheduledFiscalYear(date: string, startMonth: number): FiscalYearRange {
+  const year = Number(date.slice(0, 4))
+  const startYear = Number(date.slice(5, 7)) >= startMonth ? year : year - 1
+  const start = `${startYear}-${String(startMonth).padStart(2, '0')}-01`
+  return { start, end: addDays(addMonthsIso(start, 12), -1) }
+}
+
+/**
  * Suggest a fiscal period for the create dialog, given the date the user is
  * trying to book and the company's existing periods. Three cases:
  *  - No periods yet → a calendar year around the entry date.
@@ -111,28 +140,40 @@ export function computeSuggestedPeriod(
     const leftNeighbour = [...sorted].reverse().find((p) => p.period_end < entryDate)!
     const rightNeighbour = sorted.find((p) => p.period_start > entryDate)!
 
-    const startStr = addDays(leftNeighbour.period_end, 1)
-
-    // Tentative end: 12 months after start, last day of the prior month.
-    const end = new Date(startStr + 'T00:00:00Z')
-    end.setUTCMonth(end.getUTCMonth() + 12)
-    end.setUTCDate(0)
-    let endStr = end.toISOString().split('T')[0]
+    const { start: startStr, end: yearEnd } = nextFiscalYearRange(leftNeighbour.period_end)
 
     // Cap at the day before the right neighbour starts so we never overlap it.
     const gapEnd = addDays(rightNeighbour.period_start, -1)
-    if (gapEnd < endStr) endStr = gapEnd
+    const endStr = gapEnd < yearEnd ? gapEnd : yearEnd
 
     return { name: periodName(startStr, endStr), period_start: startStr, period_end: endStr }
   }
 
-  // Forward: start = day after latest end, end = 12 months later (last day of month).
-  const startStr = addDays(latest.period_end, 1)
-  const end = new Date(startStr + 'T00:00:00Z')
-  end.setUTCMonth(end.getUTCMonth() + 12)
-  end.setUTCDate(0)
-  const endStr = end.toISOString().split('T')[0]
+  // Forward: the next year in the chain.
+  const { start: startStr, end: endStr } = nextFiscalYearRange(latest.period_end)
   return { name: periodName(startStr, endStr), period_start: startStr, period_end: endStr }
+}
+
+/**
+ * The räkenskapsår missing up to `entryDate`, oldest first: each chained from
+ * the one before, so the last one holds the date. For a date after the first
+ * recorded year and in no recorded year. `limit` caps the walk: more than that
+ * many years ahead is a mistyped date, answered with an empty list.
+ */
+export function missingFiscalYears(
+  entryDate: string,
+  periods: PeriodRange[],
+  limit: number,
+): FiscalYearRange[] {
+  const known = [...periods]
+  const missing: FiscalYearRange[] = []
+  while (missing.length < limit) {
+    const next = computeSuggestedPeriod(entryDate, known)
+    missing.push({ start: next.period_start, end: next.period_end })
+    if (entryDate <= next.period_end) return missing
+    known.push(next)
+  }
+  return []
 }
 
 /**

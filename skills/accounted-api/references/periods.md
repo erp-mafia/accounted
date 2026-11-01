@@ -2314,7 +2314,7 @@ Returns every fiscal period for the company ordered by period_start DESC. is_clo
 **Pitfalls:**
 - previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.
 - A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year: see BFL 5 kap 2 § for the löpande bokföring deadline).
-- BFL 3 kap caps a single fiscal period at 18 months. First-year exceptions are allowed.
+- BFL 3 kap caps a single fiscal period at 18 months, an extended first year included; exceeds_18_months flags one past it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2367,7 +2367,7 @@ Example response `200`:
 **Create a fiscal year (räkenskapsår).**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run`
 
-Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§). It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.
+Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§); for an enskild firma it ends on 31 December and only the earliest year may start after 1 January. It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.
 
 **Use when:** The company needs the next räkenskapsår to book in (e.g. January arrives), or an earlier year must exist before its SIE file or opening balances can be imported.
 **Do not use for:** Closing the prior year (run the year-end), or changing an existing year (PATCH /fiscal-periods/{id}).
@@ -2375,7 +2375,7 @@ Creates a räkenskapsår and links it into the continuity chain (previous_period
 **Pitfalls:**
 - A start that does not continue the preceding year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS with details.expected_start (or details.expected_end): retry with that date.
 - Overlapping an existing year answers 409 FISCAL_PERIOD_OVERLAP.
-- An enskild firma normally runs the calendar year; a brutet räkenskapsår needs Skatteverket's permission.
+- An enskild firma uses the calendar year: any other year answers 400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR, with details.rule end_31_december or start_1_january.
 - There is no delete: a wrong year can be re-dated with PATCH only while nothing is posted in it.
 
 | Parameter | In | Type | Required | Notes |

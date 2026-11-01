@@ -61,6 +61,8 @@ The opening balances of this year are the closing balances of the last one. Clos
 | \`period_not_ended\` | Balansdagen has not passed | Stop. You can read proposals and prepare questions, but the close waits. |
 | \`period_already_closed\`, \`closing_entry_exists\` | Already done | Verify with \`gnubok_list_fiscal_periods\` and go to Step 7. |
 | \`next_period_ib_posted\` | The next year already has opening balances (often from an import) | Stop and hand over. Removing them means reversing a posted entry: not yours to decide. |
+| \`next_period_not_calendar_year\` | An enskild firma whose year does not end on 31 December: the next year cannot be created | Stop and hand over. The year's dates need a person: never re-date or create a year to get past it. |
+| \`next_period_overlaps\` | A later year starts inside the twelve months after this one: the next year cannot be created | Stop and hand over. A person decides the shorter year between them and records it: never re-date or create a year to get past it. |
 | \`opening_balance_continuity\` | IB and last year's UB differ | See "If a prior year is not closed". |
 | \`trial_balance_unbalanced\`, \`sequence_mismatch\` | Integrity faults | Stop. Tell the user to contact Accounted support with the message text. Never try to post a balancing entry. |
 

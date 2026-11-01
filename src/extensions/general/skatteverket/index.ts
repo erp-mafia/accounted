@@ -47,11 +47,8 @@ import {
   type AgiStepFailure,
 } from './lib/agi-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
-import {
-  VAT_FILING_DEADLINE_TYPES,
-  vatFilingFiscalYearEndMonth,
-  vatFilingTaxPeriod,
-} from '@/lib/vat/filing-record'
+import { VAT_FILING_DEADLINE_TYPES } from '@/lib/vat/filing-record'
+import { vatPeriodTaxLabel } from '@/lib/vat/filing-record-store'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
 import {
   getConnection,
@@ -2578,26 +2575,6 @@ function parseQueryParams(
 }
 
 /**
- * The deadline generator's tax_period for the picker params, from the one
- * definition of a VAT period key (lib/vat/filing-record.ts). A yearly label
- * (`YYYY`, or `YYYY-1/YYYY` for a broken räkenskapsår; year = the year it
- * ends) depends on the company's fiscal year, hence the settings read.
- */
-async function vatTaxPeriod(
-  ctx: ExtensionContext,
-  periodType: VatPeriodType,
-  year: number,
-  period: number,
-): Promise<string> {
-  const { data } = await ctx.supabase
-    .from('company_settings')
-    .select('entity_type, fiscal_year_start_month')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  return vatFilingTaxPeriod(periodType, year, period, vatFilingFiscalYearEndMonth(data))
-}
-
-/**
  * Complete the moms deadline for the period identified by the request's
  * optional periodType/year/period query params. Every moms deadline type is
  * passed: the cadences' tax_period formats never overlap, so the label alone
@@ -2625,7 +2602,7 @@ async function completeVatDeadlineFromRequest(
     ctx.supabase,
     ctx.companyId,
     [...VAT_FILING_DEADLINE_TYPES],
-    await vatTaxPeriod(ctx, periodType, year, period),
+    await vatPeriodTaxLabel(ctx.supabase, ctx.companyId, { periodType, year, period }),
     newStatus
   )
 }

@@ -1226,6 +1226,34 @@ describe('findNextPeriod', () => {
 })
 
 describe('createNextPeriod chain healing', () => {
+  it('asks for the year starting the day after, whatever it was linked to', async () => {
+    const current = makeFiscalPeriod({ id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' })
+    const created = makeFiscalPeriod({ id: 'fp-2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+    results = [
+      { data: current, error: null },
+      { data: [], error: null },
+      { data: created, error: null },
+      { data: [], error: null },
+    ]
+
+    const client = makeClient()
+    const builders: Array<Record<string, unknown>> = []
+    const from = client.from
+    client.from = vi.fn().mockImplementation(() => {
+      const b = from()
+      builders.push(b)
+      return b
+    })
+
+    await createNextPeriod(client as never, 'company-1', 'user-1', 'fp-2025')
+
+    const successorRead = builders[3].eq as ReturnType<typeof vi.fn>
+    expect(successorRead.mock.calls).toEqual([
+      ['company_id', 'company-1'],
+      ['period_start', '2027-01-01'],
+    ])
+  })
+
   it('relinks a successor that was chained across the gap onto the new period', async () => {
     const current = makeFiscalPeriod({
       id: 'fp-2024-25',

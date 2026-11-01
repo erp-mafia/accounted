@@ -168,11 +168,11 @@ describe('POST batch-categorize', () => {
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -229,11 +229,11 @@ describe('POST batch-categorize', () => {
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -280,11 +280,9 @@ describe('POST batch-categorize', () => {
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
-        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
-        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+        // Per item: checkPeriodLock, and a refused item reads no more.
+        { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+        { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -338,11 +336,11 @@ describe('POST batch-categorize', () => {
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -392,11 +390,11 @@ describe('POST batch-categorize', () => {
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -436,11 +434,11 @@ describe('POST batch-categorize', () => {
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -500,11 +498,11 @@ describe('POST batch-categorize', () => {
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -570,11 +568,11 @@ describe('POST batch-categorize', () => {
           { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         ],
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -632,11 +630,11 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -691,11 +689,11 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -758,11 +756,11 @@ describe('POST batch-categorize', () => {
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -829,11 +827,11 @@ describe('POST batch-categorize', () => {
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       journal_entries: {
         data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
@@ -913,11 +911,11 @@ describe('POST batch-categorize', () => {
         ],
         company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       })
       mockServiceClient.mockReturnValue(supabase)
@@ -959,11 +957,11 @@ describe('POST batch-categorize reverse-charge basis pair', () => {
       ],
       company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       chart_of_accounts: { data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null },
     })
@@ -1004,7 +1002,7 @@ describe('POST batch-categorize reverse-charge basis pair', () => {
       company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
       fiscal_periods: [
         // ensureFiscalPeriod, then checkPeriodLock.
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       chart_of_accounts: { data: [], error: null },
     })
@@ -1106,11 +1104,11 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -1157,11 +1155,11 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -1193,11 +1191,11 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
         transactions: [txRow(TX_A), { data: [{ id: TX_A }], error: null }],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       }).supabase,
     )
@@ -1262,11 +1260,11 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
           error: null,
         },
         fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
       })
     categoryMappingOverride.current = () => ({
@@ -1328,11 +1326,11 @@ describe('POST batch-categorize already-booked guard', () => {
       journal_entries: { data: [{ id: 'je-samling', status: 'posted' }], error: null },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
       fiscal_periods: [
-        // Per item: ensureFiscalPeriod (an open period covers the date),
-        // then checkPeriodLock (the covering period's lock state).
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        // Per item: checkPeriodLock (the covering period's lock state),
+        // then ensureFiscalPeriod (an open period covers the date).
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
+        { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null }, { data: [{ id: 'period-1' }], error: null },
       ],
     })
     mockServiceClient.mockReturnValue(supabase)

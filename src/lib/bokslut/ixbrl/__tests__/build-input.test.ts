@@ -34,7 +34,7 @@ const PERIODS = [
   { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31', previous_period_id: null },
 ]
 
-function makeSupabase() {
+function makeSupabase(periods: Array<(typeof PERIODS)[number]> = PERIODS) {
   return {
     from: (table: string) => {
       if (table !== 'fiscal_periods') {
@@ -45,11 +45,11 @@ function makeSupabase() {
         select: () => ({
           eq: (_column: string, value: string) => ({
             eq: () => ({
-              single: () => Promise.resolve({ data: PERIODS.find((p) => p.id === value), error: null }),
+              single: () => Promise.resolve({ data: periods.find((p) => p.id === value), error: null }),
               maybeSingle: () =>
-                Promise.resolve({ data: PERIODS.find((p) => p.id === value), error: null }),
+                Promise.resolve({ data: periods.find((p) => p.id === value), error: null }),
             }),
-            order: () => Promise.resolve({ data: PERIODS, error: null }),
+            order: () => Promise.resolve({ data: periods, error: null }),
           }),
         }),
       }
@@ -213,6 +213,65 @@ describe('buildIxbrlInput: comparison year never closed in the books (crm#1080)'
     expect(preflight.errors.map((issue) => issue.code)).not.toEqual(
       expect.arrayContaining(['3005', 'ACC-2099']),
     )
+  })
+})
+
+describe('buildIxbrlInput: which year is the first', () => {
+  const twoYearsEarlier = [
+    PERIODS[0],
+    { id: 'fp-1', name: '2023', period_start: '2023-01-01', period_end: '2023-12-31', previous_period_id: null },
+  ]
+  const report = (comparison: { id: string; period_start: string; period_end: string; loaded: boolean } | null) => {
+    const mapping = mapTrialBalancesToK2(CURRENT, null)
+    return {
+      data: {
+        ...REPORT,
+        equity_specification: buildEquitySpecification({
+          posts: k2EquityPosts('aktiebolag'),
+          current: {
+            fiscal_period_id: 'fp1',
+            name: '2025',
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            tbRows: withOpening(CURRENT.full, {}),
+            entries: [],
+          },
+          previous: null,
+          balanceSheet: mapping,
+        }),
+      },
+      statements: { mapping, comparison },
+    }
+  }
+
+  const firstYearAnswer = (periods: Array<(typeof PERIODS)[number]>, built: ReturnType<typeof report>) =>
+    buildIxbrlInput(makeSupabase(periods) as never, 'co1', 'fp1', {
+      report: built as never,
+      signatureRequests: [],
+      profile: emptyAnnualReportProfile('co1', 'fp1'),
+      todayIso: '2026-03-20',
+    })
+
+  it('asks for comparatives in a year behind a gap, whose year before is missing', async () => {
+    const input = await firstYearAnswer(twoYearsEarlier, report(null))
+    expect(input.isFirstFiscalYear).toBe(false)
+    expect(runPreflightChecks(input, '2026-03-20').issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['3006', '3007']),
+    )
+  })
+
+  it('asks for comparatives when the year before failed to load', async () => {
+    const input = await firstYearAnswer(
+      PERIODS,
+      report({ id: 'fp0', period_start: '2024-01-01', period_end: '2024-12-31', loaded: false }),
+    )
+    expect(input.isFirstFiscalYear).toBe(false)
+  })
+
+  it('takes a lone year as the first: the app cannot know of years kept elsewhere', async () => {
+    const input = await firstYearAnswer([PERIODS[0]], report(null))
+    expect(input.isFirstFiscalYear).toBe(true)
+    expect(runPreflightChecks(input, '2026-03-20').issues.map((issue) => issue.code)).not.toContain('3006')
   })
 })
 

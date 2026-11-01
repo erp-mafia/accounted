@@ -4,6 +4,9 @@ import {
   fiscalYearName,
   fiscalYearShortName,
   isDerivedFiscalYearName,
+  missingFiscalYears,
+  nextFiscalYearRange,
+  scheduledFiscalYear,
   suggestSeedDate,
   resolveCurrentPeriodId,
 } from '../suggest-fiscal-period'
@@ -12,6 +15,45 @@ type Range = { period_start: string; period_end: string }
 
 const FY2024: Range = { period_start: '2024-01-01', period_end: '2024-12-31' }
 const FY2026: Range = { period_start: '2026-01-01', period_end: '2026-12-31' }
+
+describe('nextFiscalYearRange', () => {
+  it('runs twelve months from the day after', () => {
+    expect(nextFiscalYearRange('2026-12-31')).toEqual({ start: '2027-01-01', end: '2027-12-31' })
+    expect(nextFiscalYearRange('2026-06-30')).toEqual({ start: '2026-07-01', end: '2027-06-30' })
+  })
+
+  it('follows a short first year with a whole one, the February of a leap year included', () => {
+    expect(nextFiscalYearRange('2026-01-31')).toEqual({ start: '2026-02-01', end: '2027-01-31' })
+    expect(nextFiscalYearRange('2027-02-28')).toEqual({ start: '2027-03-01', end: '2028-02-29' })
+  })
+})
+
+describe('scheduledFiscalYear', () => {
+  it('is the twelve-month year holding the date', () => {
+    expect(scheduledFiscalYear('2026-03-05', 1)).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+    expect(scheduledFiscalYear('2026-03-05', 7)).toEqual({ start: '2025-07-01', end: '2026-06-30' })
+    expect(scheduledFiscalYear('2026-07-01', 7)).toEqual({ start: '2026-07-01', end: '2027-06-30' })
+  })
+})
+
+describe('missingFiscalYears', () => {
+  it('walks the chain up to the year holding the date', () => {
+    expect(missingFiscalYears('2028-03-10', [FY2026], 10)).toEqual([
+      { start: '2027-01-01', end: '2027-12-31' },
+      { start: '2028-01-01', end: '2028-12-31' },
+    ])
+  })
+
+  it('stops at the next recorded year', () => {
+    expect(
+      missingFiscalYears('2025-02-01', [FY2024, { period_start: '2025-07-01', period_end: '2026-06-30' }], 10),
+    ).toEqual([{ start: '2025-01-01', end: '2025-06-30' }])
+  })
+
+  it('answers nothing for a date further off than the limit', () => {
+    expect(missingFiscalYears('2099-03-10', [FY2026], 10)).toEqual([])
+  })
+})
 
 describe('fiscalYearName', () => {
   it('names a calendar year by its year', () => {

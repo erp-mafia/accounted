@@ -55,6 +55,7 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       const neqs: Array<[string, unknown]> = []
       const ins: Array<[string, unknown[]]> = []
       const ltes: Array<[string, string]> = []
+      const gtes: Array<[string, string]> = []
       const gts: Array<[string, string]> = []
       const notNull: string[] = []
       const notIns: Array<[string, string[]]> = []
@@ -73,6 +74,7 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
             neqs.every(([c, v]) => r[c] !== v) &&
             ins.every(([c, vs]) => vs.includes(r[c])) &&
             ltes.every(([c, v]) => String(r[c] ?? '') <= v) &&
+            gtes.every(([c, v]) => String(r[c] ?? '') >= v) &&
             gts.every(([c, v]) => String(r[c] ?? '') > v) &&
             notNull.every((c) => r[c] != null) &&
             notIns.every(([c, vs]) => !vs.includes(String(r[c])))
@@ -104,6 +106,7 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       b.neq = vi.fn((c: string, v: unknown) => { neqs.push([c, v]); return b })
       b.in = vi.fn((c: string, v: unknown[]) => { ins.push([c, v]); return b })
       b.lte = vi.fn((c: string, v: string) => { ltes.push([c, v]); return b })
+      b.gte = vi.fn((c: string, v: string) => { gtes.push([c, v]); return b })
       b.gt = vi.fn((c: string, v: string) => { gts.push([c, v]); return b })
       b.not = vi.fn((c: string, op: string, v: unknown) => {
         if (op === 'is' && v === null) notNull.push(c)
@@ -117,7 +120,7 @@ function makeFilteringClient(tables: SeededTables, failTable?: string) {
       })
       b.limit = vi.fn((n: number) => { limitN = n; return b })
       b.range = vi.fn((from: number, to: number) => { rangeFrom = from; rangeTo = to; return b })
-      for (const m of ['gte', 'is', 'or', 'insert', 'update', 'delete']) {
+      for (const m of ['is', 'or', 'insert', 'update', 'delete']) {
         b[m] = vi.fn().mockReturnValue(b)
       }
       b.single = vi.fn(async () => ({ data: matching()[0] ?? null, error: null }))
@@ -240,6 +243,7 @@ vi.mock('../period-service', () => ({
   countUnbookedInPeriod: vi.fn().mockResolvedValue({ untriaged: 0, businessUnbooked: 0 }),
   createNextPeriod: vi.fn(),
   findNextPeriod: vi.fn().mockResolvedValue(null),
+  fiscalYearInTheWay: vi.fn().mockResolvedValue(null),
 }))
 
 // Default: the next year has no IB. The one-IB-per-year tests override; the

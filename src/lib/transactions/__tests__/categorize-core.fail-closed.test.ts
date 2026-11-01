@@ -95,8 +95,7 @@ function enqueueUpToEngine(enqueue: (r: { data?: unknown; error?: unknown }) => 
   enqueue({ data: settingsRow }) // company_settings
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   enqueue({ data: [] }) // ensureFiscalPeriod: no OPEN period covers the date
-  enqueue({ data: [{ period_start: '2024-01-01' }] }) // earliest period start (pre-FY guard passes)
-  enqueue({ data: null }) // ensureFiscalPeriod upsert; its outcome is ignored by the caller
+  enqueue({ data: [{ id: 'fp-2024', period_start: '2024-01-01', period_end: '2024-12-31' }] }) // the recorded year, closed
 }
 
 beforeEach(() => {

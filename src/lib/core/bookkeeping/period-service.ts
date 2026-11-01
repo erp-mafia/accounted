@@ -3,8 +3,8 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
-import { fiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { fiscalYearName, nextFiscalYearRange, type FiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
 import { codedRefusal } from '@/lib/errors/refusal'
@@ -414,8 +414,7 @@ export async function assertPeriodExternallyClosable(
 
   assertNoUnfinishedSieImport(period, 'mark_closed')
 
-  const today = todayIsoStockholm()
-  if (period.period_end > today) {
+  if (!hasEnded(period.period_end, todayIsoStockholm())) {
     throw codedRefusal('FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED', 'Cannot mark a period that has not ended yet as closed')
   }
 
@@ -711,9 +710,9 @@ export async function reopenExternallyClosedPeriod(
 }
 
 /**
- * Create the next fiscal period following the current one.
- * Computes dates based on the current period's length (handles brutet räkenskapsår).
- * Sets previous_period_id for chain validation.
+ * Create the next fiscal period following the current one: the year
+ * nextFiscalYearRange chains from it, with previous_period_id set for chain
+ * validation.
  */
 export async function createNextPeriod(
   supabase: SupabaseClient,
@@ -733,46 +732,55 @@ export async function createNextPeriod(
     throw codedRefusal('PERIOD_NOT_FOUND', 'Current fiscal period not found')
   }
 
-  // Compute next period start (day after current end) in pure UTC, see
-  // findNextPeriod for the DST off-by-one rationale.
-  const nextStart = new Date(current.period_end + 'T00:00:00Z')
-  nextStart.setUTCDate(nextStart.getUTCDate() + 1)
+  return insertFiscalYearAfter(supabase, companyId, userId, currentPeriodId, nextFiscalYearRange(current.period_end))
+}
 
-  // After a broken first fiscal year, subsequent years should always be
-  // 12 months (standard fiscal year). The first year is the only one that
-  // can be longer/shorter than 12 months per BFL 3 kap.
-  const nextEnd = new Date(nextStart)
-  nextEnd.setUTCMonth(nextEnd.getUTCMonth() + 12)
-  // Go to last day of the previous month: setUTCDate(0) rolls back into
-  // the prior month's last day.
-  nextEnd.setUTCDate(0)
+/** The earliest recorded year overlapping a range: what stops a year from being created there. */
+export async function fiscalYearInTheWay(
+  supabase: SupabaseClient,
+  companyId: string,
+  { start, end }: FiscalYearRange,
+): Promise<{ period_start: string } | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .lte('period_start', end)
+    .gte('period_end', start)
+    .order('period_start')
+    .limit(1)
+  if (error) throw new Error(`Failed to read fiscal periods: ${error.message}`)
+  return (data as { period_start: string }[] | null)?.[0] ?? null
+}
 
-  const nextStartStr = nextStart.toISOString().slice(0, 10)
-  const nextEndStr = nextEnd.toISOString().slice(0, 10)
-
+/**
+ * Insert a räkenskapsår chained to the year before it (null for a company's
+ * only year), which the doors that create a year on their own account share:
+ * the year-end's next year and the bank door's missing ones. The fiscal_periods
+ * triggers keep the law (BFL 3 kap.), also for a form bound to the calendar
+ * year. Throws when the year cannot be created.
+ */
+export async function insertFiscalYearAfter(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  previousPeriodId: string | null,
+  { start, end }: { start: string; end: string },
+): Promise<FiscalPeriod> {
   // Validate period duration: subsequent periods always start on 1st of month
-  const durationError = validatePeriodDuration(nextStartStr, nextEndStr, { isFirstPeriod: false })
+  const durationError = validatePeriodDuration(start, end, { isFirstPeriod: false })
   if (durationError) {
     throw new Error(durationError)
   }
 
-  // Check for overlapping periods
-  const { data: overlapping } = await supabase
-    .from('fiscal_periods')
-    .select('id')
-    .eq('company_id', companyId)
-    .lte('period_start', nextEndStr)
-    .gte('period_end', nextStartStr)
-    .limit(1)
-
-  if (overlapping && overlapping.length > 0) {
+  if (await fiscalYearInTheWay(supabase, companyId, { start, end })) {
     throw new Error('Next fiscal period already exists or overlaps with an existing period')
   }
 
   // Same Swedish name as every other door that creates a year ("Räkenskapsår
   // 2025", "Räkenskapsår 2024/2025"): the name prints in the årsredovisning's
   // header and flerårsöversikt.
-  const name = fiscalYearName(nextStartStr, nextEndStr)
+  const name = fiscalYearName(start, end)
 
   const { data: newPeriod, error: insertError } = await supabase
     .from('fiscal_periods')
@@ -780,9 +788,9 @@ export async function createNextPeriod(
       company_id: companyId,
       user_id: userId,
       name,
-      period_start: nextStartStr,
-      period_end: nextEndStr,
-      previous_period_id: currentPeriodId,
+      period_start: start,
+      period_end: end,
+      previous_period_id: previousPeriodId,
     })
     .select()
     .single()
@@ -791,19 +799,17 @@ export async function createNextPeriod(
     throw new Error(`Failed to create next period: ${insertError?.message}`)
   }
 
-  // Heal a chain wired across the gap this period fills: a later period that
-  // claims the CURRENT period as predecessor but actually starts the day
-  // after the new one now follows the new period (findNextPeriod explains
-  // how such links arise). The new period's own row cannot match: it starts
-  // the day after current, not the day after itself. Best-effort: the period
-  // is created either way, and findNextPeriod no longer trusts a
+  // Heal the chain across the gap this period fills: the year starting the
+  // day after it now follows it, whatever it was linked to before
+  // (findNextPeriod explains how such links arise). The new period's own row
+  // cannot match: it does not start the day after itself. Best-effort: the
+  // period is created either way, and findNextPeriod no longer trusts a
   // non-adjacent link.
   const { data: mischained } = await supabase
     .from('fiscal_periods')
     .select('id')
     .eq('company_id', companyId)
-    .eq('previous_period_id', currentPeriodId)
-    .eq('period_start', addDaysIso(nextEndStr, 1))
+    .eq('period_start', addDaysIso(end, 1))
   if (mischained && mischained.length > 0) {
     const successorIds = mischained.map((row: { id: string }) => row.id)
     const { error: relinkError } = await supabase

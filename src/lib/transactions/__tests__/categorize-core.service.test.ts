@@ -139,6 +139,16 @@ describe('categorizeTransaction: dry run', () => {
     expect(matched).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH' })
   })
 
+  it('creates no year for a booking the lock refuses', async () => {
+    lock.mockResolvedValue({ locked: true, reason: 'company_lock_date_covers' })
+    const { supabase, payloads } = ledger({ fiscal_periods: { data: [], error: null } })
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PERIOD_LOCKED', details: { reason: 'company_lock_date_covers' } })
+    expect(payloads('fiscal_periods', 'insert')).toEqual([])
+  })
+
   it('hands the invoice-match intercept the row, the mapping\'s accounts and the override, and refuses with its code and details', async () => {
     const candidates = [{ supplier_invoice_id: 'si-1' }]
     intercept.mockResolvedValue({ code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH', details: { candidates } })

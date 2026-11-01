@@ -4,6 +4,7 @@ import {
   addMonthsIso,
   daysBetweenIso,
   endOfDayIsoStockholm,
+  hasEnded,
   stockholmWallTimeToUtc,
   todayIsoStockholm,
   toIsoDate,
@@ -12,6 +13,20 @@ import {
   previousMonthEndIso,
   stockholmYearMonth,
 } from '../iso'
+
+describe('hasEnded', () => {
+  it('is false on the last day: it is still running', () => {
+    expect(hasEnded('2026-12-31', '2026-12-31')).toBe(false)
+  })
+
+  it('is true the day after', () => {
+    expect(hasEnded('2026-12-31', '2027-01-01')).toBe(true)
+  })
+
+  it('is false before it', () => {
+    expect(hasEnded('2026-12-31', '2026-12-30')).toBe(false)
+  })
+})
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {

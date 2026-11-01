@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAmountInput, roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import type { Asset } from '@/types'
@@ -62,7 +62,7 @@ export function ImpairAssetDialog({ asset, open, onOpenChange, onPosted }: Impai
 
   const today = todayIsoStockholm()
   const selectedPeriodId =
-    periodId || (openYears.find((period) => period.period_end < today) ?? openYears[0])?.id || ''
+    periodId || (openYears.find((period) => hasEnded(period.period_end, today)) ?? openYears[0])?.id || ''
 
   // Any change makes the shown voucher stale.
   useEffect(() => {

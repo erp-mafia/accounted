@@ -59,6 +59,67 @@ describe('ensureFiscalPeriod (real PostgREST)', () => {
     ])
   })
 
+  it('chains from the recorded year when the settings month is out of step', async () => {
+    const supabase = createToolPgClient()
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fy = await insertFiscalPeriod({ userId, companyId, periodStart: '2025-07-01', periodEnd: '2026-06-30' })
+
+    await expect(ensureFiscalPeriod(supabase, userId, companyId, '2026-08-05', 1)).resolves.toBe(true)
+
+    expect((await periodsOf(companyId)).map((p) => [p.period_start, p.period_end])).toEqual([
+      ['2025-07-01', '2026-06-30'],
+      ['2026-07-01', '2027-06-30'],
+    ])
+    const { rows } = await getPool().query(
+      `SELECT previous_period_id FROM public.fiscal_periods WHERE company_id = $1 AND period_start = '2026-07-01'`,
+      [companyId],
+    )
+    expect(rows[0].previous_period_id).toBe(fy)
+  })
+
+  it('fills a hole wider than a year up to the date, year by year', async () => {
+    const supabase = createToolPgClient()
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    await insertFiscalPeriod({ userId, companyId, periodStart: '2022-01-01', periodEnd: '2022-12-31' })
+    await insertFiscalPeriod({ userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31' })
+
+    await expect(ensureFiscalPeriod(supabase, userId, companyId, '2024-05-05', 1)).resolves.toBe(true)
+
+    expect((await periodsOf(companyId)).map((p) => p.period_start)).toEqual([
+      '2022-01-01',
+      '2023-01-01',
+      '2024-01-01',
+      '2026-01-01',
+    ])
+  })
+
+  it('answers false for an enskild firma on broken years: the database refuses the next one', async () => {
+    const supabase = createToolPgClient()
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId, entityType: 'enskild_firma' })
+    await insertCompanyMember({ companyId, userId })
+    const client = await getPool().connect()
+    try {
+      await client.query(`SET session_replication_role = replica`)
+      await client.query(
+        `INSERT INTO public.fiscal_periods (user_id, company_id, name, period_start, period_end)
+         VALUES ($1, $2, 'old', '2024-09-01', '2025-08-31')`,
+        [userId, companyId],
+      )
+    } finally {
+      await client.query(`SET session_replication_role = DEFAULT`)
+      client.release()
+    }
+
+    await expect(ensureFiscalPeriod(supabase, userId, companyId, '2025-10-01', 1)).resolves.toBe(false)
+
+    expect(await periodsOf(companyId)).toHaveLength(1)
+  })
+
   it('leaves a closed year with the same dates untouched', async () => {
     const supabase = createToolPgClient()
     const { userId, companyId } = await seedCompany({ isClosed: true })

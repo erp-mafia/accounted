@@ -46,7 +46,10 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
 export { isBalanceSheetAccount } from './sie-parser'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { checkPeriodDuration, isFirstFiscalPeriod } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearLockedToCalendar, resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { userFacing } from '@/lib/errors/user-facing'
 
 /**
@@ -369,7 +372,7 @@ export async function precheckFiscalPeriod(
     }
   }
 
-  const invalid = await checkFiscalYearShape(supabase, companyId, startDate, endDate)
+  const invalid = await checkFiscalYearShape(supabase, companyId, startDate, endDate, existingPeriod.id)
   if (invalid) return invalid
 
   return { verdict: 'create', replacesEmptyPeriodId: existingPeriod.id }
@@ -380,77 +383,68 @@ export async function precheckFiscalPeriod(
  * import has always applied them. Returns the 'invalid' verdict with the
  * refusal text, or null when the dates are fine. Runs after the overlap
  * verdict so a conflict with an existing period is reported first, as before.
+ * `replacedPeriodId` is the empty year the import deletes first: it is gone
+ * when the new one is written, so it does not make the new one a later year.
  */
 async function checkFiscalYearShape(
   supabase: SupabaseClient,
   companyId: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  replacedPeriodId: string | null = null,
 ): Promise<Extract<FiscalYearPrecheck, { verdict: 'invalid' }> | null> {
-  const startParts = parseDateParts(startDate)
-  const endParts = parseDateParts(endDate)
+  const { data: recorded, error: othersError } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start')
+    .eq('company_id', companyId)
+  if (othersError) throw new Error(`Failed to read fiscal periods: ${othersError.message}`)
+  const others = ((recorded ?? []) as { id: string; period_start: string }[]).filter((p) => p.id !== replacedPeriodId)
+  const entityType = await resolveCompanyEntityType(supabase, companyId)
 
-  // Max 18 months per BFL 3 kap. Reuses monthsBetween() from
-  // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
-  // same threshold validatePeriodDuration() applies on every other
-  // period-creation path (fiscal-periods POST/PATCH, period-service's
-  // createNextPeriod, onboarding's computeFiscalPeriod),
-  // so an 18-month förlängt räkenskapsår imports exactly as it does there and
-  // a 19-month one does not. 18 is the ceiling for an extended or re-laid
-  // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.
-  //
-  // Refuse rather than warn: no reading of BFL 3 kap. permits a räkenskapsår
-  // longer than 18 months, so this is a malformed or merged #RAR, not
-  // historical data booked under different rules. Continuing would stamp every
-  // imported voucher with an illegal period that no UI path can repair
-  // afterwards (the fiscal-period editor rejects the very same span), leaving
-  // undo_sie_import as the only way out. Checked before the destructive delete
-  // in ensureFiscalPeriod so a refused import leaves the company untouched.
-  const months = monthsBetween(startDate, endDate)
-  if (months > 18) {
-    return {
-      verdict: 'invalid',
-      message:
-        `SIE-filens räkenskapsår (${startDate} till ${endDate}) omfattar ${months} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.). ` +
-        `Kontrollera #RAR-raden i filen och exportera om från källsystemet med ett räkenskapsår per fil.`,
-    }
-  }
+  // Refused rather than warned about, also for an extended or re-laid year:
+  // no reading of BFL 3 kap. permits these shapes, so this is a malformed or
+  // merged #RAR, not historical data booked under different rules. Continuing
+  // would stamp every imported voucher with an illegal period that no UI path
+  // can repair afterwards, leaving undo_sie_import as the only way out. Checked
+  // before the destructive delete in ensureFiscalPeriod so a refused import
+  // leaves the company untouched, and a user can retroactively import an old
+  // first fiscal year even after an onboarding-created period exists later.
+  const issue = checkPeriodDuration(startDate, endDate, {
+    isFirstPeriod: isFirstFiscalPeriod(startDate, others.map((p) => p.period_start)),
+    calendarYearOnly: fiscalYearLockedToCalendar(entityType),
+  })
+  if (!issue) return null
 
-  // Pre-validate against the DB-side enforce_period_start_day trigger so the
-  // user gets an actionable Swedish error instead of a raw Postgres message.
-  // Per BFL 3 kap., only the company's chronologically FIRST fiscal year may
-  // start mid-month (förlängt första räkenskapsår). Any period that comes
-  // after an earlier one must start on day 1. We check "is there a period
-  // that starts earlier?" rather than "does any period exist?" so a user can
-  // retroactively import an old first fiscal year via SIE even after an
-  // onboarding-created period already exists later in time.
-  if (startParts.day !== 1) {
-    const { data: earlier } = await supabase
-      .from('fiscal_periods')
-      .select('id')
-      .eq('company_id', companyId)
-      .lt('period_start', startDate)
-      .limit(1)
-
-    if (earlier && earlier.length > 0) {
+  const fileYear = `SIE-filens räkenskapsår (${startDate} till ${endDate})`
+  switch (issue.rule) {
+    case 'end_not_after_start':
+      return { verdict: 'invalid', message: `${fileYear} slutar inte efter att det börjar. Kontrollera #RAR-raden i filen.` }
+    case 'not_calendar_year_end':
+    case 'not_calendar_year_start':
+      return {
+        verdict: 'invalid',
+        message:
+          `${fileYear} är inte ett kalenderår: en enskild firma har räkenskapsår till 31 december, och bara det första får börja efter 1 januari (BFL 3 kap.). ` +
+          `Kontrollera #RAR-raden i filen.`,
+      }
+    case 'start_not_first_of_month':
       return {
         verdict: 'invalid',
         message: `SIE-filens räkenskapsår börjar ${startDate}: endast företagets kronologiskt första räkenskapsår får börja mitt i månaden. Efterföljande räkenskapsår måste börja den 1:a i en månad (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`,
       }
-    }
+    case 'end_not_month_end':
+      return {
+        verdict: 'invalid',
+        message: `SIE-filens räkenskapsår slutar ${endDate}: räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`,
+      }
+    case 'exceeds_18_months':
+      return {
+        verdict: 'invalid',
+        message:
+          `${fileYear} omfattar ${issue.months} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.). ` +
+          `Kontrollera #RAR-raden i filen och exportera om från källsystemet med ett räkenskapsår per fil.`,
+      }
   }
-
-  // Matches the fiscal_period_end_last_of_month CHECK constraint on prod;
-  // surface it as a clean message instead of a DB error.
-  const lastDayOfEndMonth = new Date(endParts.year, endParts.month, 0).getDate()
-  if (endParts.day !== lastDayOfEndMonth) {
-    return {
-      verdict: 'invalid',
-      message: `SIE-filens räkenskapsår slutar ${endDate}: räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`,
-    }
-  }
-
-  return null
 }
 
 /**
@@ -486,9 +480,6 @@ export async function ensureFiscalPeriod(
 
   const periodToReplaceId: string | null = precheck.replacesEmptyPeriodId
 
-  const startParts = parseDateParts(startDate)
-  const endParts = parseDateParts(endDate)
-
   // All date validation passed (checkFiscalYearShape, via the precheck). If we
   // identified an empty seeded period above,
   // delete it now, deferring the destructive step until after every check
@@ -510,11 +501,7 @@ export async function ensureFiscalPeriod(
   }
 
   // Create new fiscal period
-  const startYear = startParts.year
-  const endYear = endParts.year
-  const name = startYear === endYear
-    ? `Räkenskapsår ${startYear}`
-    : `Räkenskapsår ${startYear}/${endYear}`
+  const name = fiscalYearName(startDate, endDate)
 
   // Link the BFNAR 2013:2 continuity chain so the resultatrapport can find the
   // prior year for its comparison column. Mirrors the manual fiscal-periods
@@ -527,18 +514,12 @@ export async function ensureFiscalPeriod(
   // into whatever follows the chain: linking the NEAREST period across a gap
   // of missing years once sent a company's IB two years forward (feedback
   // seq 249297). A gap stays unlinked until the missing year is imported.
-  const { data: predecessors } = await supabase
-    .from('fiscal_periods')
-    .select('id, period_end')
-    .eq('company_id', companyId)
-    .lt('period_end', startDate)
-    .order('period_end', { ascending: false })
-    .limit(1)
-  const nearestPredecessor = predecessors && predecessors.length > 0 ? predecessors[0] : null
-  const previousPeriodId =
-    nearestPredecessor && nearestPredecessor.period_end === shiftIsoDate(startDate, -1)
-      ? nearestPredecessor.id
-      : null
+  const predecessor = await resolvePreviousFiscalPeriod<{ id: string; period_end: string }>(
+    supabase,
+    companyId,
+    { period_start: startDate },
+    'id, period_end',
+  )
 
   const { data: newPeriod, error } = await supabase
     .from('fiscal_periods')
@@ -549,7 +530,7 @@ export async function ensureFiscalPeriod(
       period_end: endDate,
       is_closed: false,
       opening_balances_set: false,
-      previous_period_id: previousPeriodId,
+      previous_period_id: predecessor?.id ?? null,
     })
     .select()
     .single()

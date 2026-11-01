@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { formatDate } from '@/lib/utils'
-import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   vatFilingPeriodEnd,
@@ -71,7 +71,7 @@ export function VatFilingStatusCard({
 
   const today = todayIsoStockholm()
   const periodEnd = vatFilingPeriodEnd(periodType, year, period, fiscalYearEndMonth)
-  if (periodEnd >= today) return null
+  if (!hasEnded(periodEnd, today)) return null
   // A declaration is filed after its period ends: the first selectable day is
   // the day after, matching the server's VAT_FILING_DATE_BEFORE_PERIOD_END rule.
   const earliestFilingDate = addDaysIso(periodEnd, 1)

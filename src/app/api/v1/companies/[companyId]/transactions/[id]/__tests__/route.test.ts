@@ -345,10 +345,10 @@ describe('POST :id/categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: [
-      // ensureFiscalPeriod: an open period covers the date
-      { data: [{ id: 'period-1' }], error: null },
       // checkPeriodLock: the covering period's lock state
       { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
     ],
       }).supabase,
     )

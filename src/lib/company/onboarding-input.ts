@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
+import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
+import { fiscalYearStartMonthFor } from '@/lib/company/fiscal-year'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 import {
@@ -96,9 +98,11 @@ export const CompanySetupSchema = z
       })
     }
     if (
-      value.entity_type === 'enskild_firma' &&
       value.first_fiscal_year &&
-      !value.first_fiscal_year.end.endsWith('-12-31')
+      checkPeriodDuration(value.first_fiscal_year.start, value.first_fiscal_year.end, {
+        isFirstPeriod: true,
+        calendarYearOnly: fiscalYearLockedToCalendar(value.entity_type),
+      })?.rule === 'not_calendar_year_end'
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -136,7 +140,7 @@ export type CompanySetupPlan =
 export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
   const calendarYearOnly = fiscalYearLockedToCalendar(setup.entity_type)
   const firstYear = setup.first_fiscal_year
-  const startMonth = calendarYearOnly ? 1 : (setup.fiscal_year_start_month ?? 1)
+  const startMonth = fiscalYearStartMonthFor(setup)
   const accountingMethod = setup.accounting_method ?? defaultAccountingMethod(setup.entity_type)
 
   const settings: Record<string, unknown> = {

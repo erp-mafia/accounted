@@ -958,6 +958,59 @@ export function createTableMockSupabase(
 }
 
 /**
+ * createTableMockSupabase answering from rows: every read applies the chain's
+ * eq/neq/lt/lte/gt/gte/is/order/limit to the table's rows, so a door gets what
+ * a real query would return whichever way it asks. For a test of a rule across
+ * doors, where a queue of answers would pin each door's reads instead of what
+ * it concludes. Writes are recorded in `writes` and answer with the row.
+ */
+export function createRowsMockSupabase(
+  tables: Record<string, Record<string, unknown>[]>,
+  writes: { table: string; method: string; row: unknown }[] = [],
+) {
+  type Row = Record<string, unknown>
+  const answer = (rows: Row[], chain: { method: string; args: unknown[] }[]) => {
+    let out = [...rows]
+    let one = false
+    let head = false
+    for (const { method, args } of chain) {
+      const [column, value] = args as [string, unknown]
+      if (method === 'eq') out = out.filter((row) => row[column] === value)
+      else if (method === 'neq') out = out.filter((row) => row[column] !== value)
+      else if (method === 'lt') out = out.filter((row) => String(row[column]) < String(value))
+      else if (method === 'lte') out = out.filter((row) => String(row[column]) <= String(value))
+      else if (method === 'gt') out = out.filter((row) => String(row[column]) > String(value))
+      else if (method === 'gte') out = out.filter((row) => String(row[column]) >= String(value))
+      else if (method === 'is') out = out.filter((row) => (row[column] ?? null) === value)
+      else if (method === 'order') {
+        const direction = (args[1] as { ascending?: boolean } | undefined)?.ascending === false ? -1 : 1
+        out.sort((a, b) => (String(a[column]) < String(b[column]) ? -1 : 1) * direction)
+      } else if (method === 'limit') out = out.slice(0, Number(args[0]))
+      else if (method === 'single' || method === 'maybeSingle') one = true
+      else if (method === 'select' && (args[1] as { head?: boolean } | undefined)?.head) head = true
+    }
+    if (head) return { data: null, error: null, count: out.length }
+    return one ? { data: out[0] ?? null, error: null } : { data: out, error: null, count: out.length }
+  }
+  const initial: Record<string, TableMockResolver> = {}
+  for (const [table, rows] of Object.entries(tables)) {
+    initial[table] = (chain) => {
+      const write = chain.find(({ method }) => ['insert', 'upsert', 'update', 'delete'].includes(method))
+      if (!write) return answer(rows, chain)
+      const row = write.args[0]
+      writes.push({ table, method: write.method, row })
+      if (write.method === 'insert' || write.method === 'upsert') {
+        const added = { id: `new-${writes.length}`, ...(row as Row) }
+        rows.push(added)
+        return { data: added, error: null }
+      }
+      return { data: row as Row, error: null }
+    }
+  }
+  return createTableMockSupabase(initial)
+}
+
+/**
  * The RPC withApiV1 (and the MCP retry key) makes to claim an Idempotency-Key
  * before the write runs (src/lib/api/idempotency.ts). It is the wrapper's
  * bookkeeping of the key, not a write of the route under test, so an

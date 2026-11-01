@@ -95,7 +95,7 @@ import {
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
-import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { hasEnded, invoiceDueDate, todayIsoStockholm } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
   assertNoDeviationOverlap,
@@ -4162,6 +4162,8 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
   CONTINUITY_MISMATCH: 'opening_balance_continuity',
   NEXT_PERIOD_HAS_IB: 'next_period_ib_posted',
+  NEXT_PERIOD_NOT_CALENDAR_YEAR: 'next_period_not_calendar_year',
+  NEXT_PERIOD_OVERLAPS: 'next_period_overlaps',
   KONTANTMETOD_CUTOFF_REQUIRED: 'kontantmetod_cutoff_required',
   KONTANTMETOD_CUTOFF_CHECK_FAILED: 'kontantmetod_cutoff_required',
   UNBOOKED_TRANSACTIONS: 'unbooked_transactions',
@@ -23065,7 +23067,7 @@ export const tools: McpTool[] = [
       if (period.is_closed || period.locked_at) {
         throw new Error('Räkenskapsperioden är stängd eller låst')
       }
-      if (period.period_end >= todayIsoStockholm()) {
+      if (!hasEnded(period.period_end, todayIsoStockholm())) {
         throw new Error('Kontantmetodens bokslutsavgränsning kan bokföras först efter periodens slut')
       }
       if (settings?.accounting_method !== 'cash') {

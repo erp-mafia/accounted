@@ -3923,7 +3923,7 @@
     "tax_contact_email_label": "E-post",
     "fiscal_year_start_label": "Räkenskapsårets startmånad",
     "fiscal_year_ef_help": "Enskild firma måste använda kalenderår (BFL 3 kap.).",
-    "fiscal_year_change_help": "Ändring påverkar framtida räkenskapsår.",
+    "fiscal_year_change_help": "Gäller tills ett räkenskapsår finns. Sedan följer varje nytt år det föregående.",
     "month_jan": "Januari",
     "month_feb": "Februari",
     "month_mar": "Mars",

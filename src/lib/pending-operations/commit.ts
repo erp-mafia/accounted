@@ -289,7 +289,7 @@ import type {
   JournalEntrySourceType,
   FiscalPeriod,
 } from '@/types'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import {
@@ -3850,7 +3850,7 @@ async function commitPostKontantmetodCutoff(
   if (period.is_closed || period.locked_at) {
     return { error: 'Räkenskapsperioden är stängd eller låst', status: 409 }
   }
-  if (period.period_end >= todayIsoStockholm()) {
+  if (!hasEnded(period.period_end, todayIsoStockholm())) {
     return { error: 'Bokslutsavgränsningen kan bokföras först efter periodens slut', status: 409 }
   }
   if (period.period_end !== stagedPeriodEnd || settings?.entity_type !== stagedEntityType) {
