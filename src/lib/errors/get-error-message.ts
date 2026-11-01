@@ -26,7 +26,7 @@ import {
   isInvoicePaymentAccountCurrency,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { conflictCode, getErrorEntry, hasErrorEntry, siCreateInvalidInputMessages } from './structured-errors'
-import { matchSiTxAlreadyBookedMessages } from './match-si-tx-already-booked'
+import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
@@ -712,12 +712,10 @@ export function getErrorMessage(
         if (reason) return locale === 'en' ? reason.message_en : reason.message_sv
       }
 
-      // A supplier match on a booked bank row: name the verifikat that books
-      // it, in the UI's locale (accounted#58).
-      if (structured.code === 'MATCH_SI_TX_ALREADY_BOOKED') {
-        const booked = matchSiTxAlreadyBookedMessages(structured.details)
-        if (booked) return locale === 'en' ? booked.message_en : booked.message_sv
-      }
+      // A match on a booked bank row: name the verifikat that books it, in
+      // the UI's locale (accounted#58).
+      const booked = typeof structured.code === 'string' ? bankRowAlreadyBookedMessages(structured.code, structured.details) : null
+      if (booked) return locale === 'en' ? booked.message_en : booked.message_sv
 
       // A refused re-date names each blocker (a verifikat, a lock date, a
       // filed declaration) in Swedish domain copy, and the blockers are what

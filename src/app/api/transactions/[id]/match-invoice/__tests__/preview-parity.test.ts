@@ -44,6 +44,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/invoices/match-log', () => ({ logMatchEvent: vi.fn() }))
+// Open: the gate has its own suites, and consumes no slot in the queued mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
 vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
@@ -171,8 +176,8 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -215,8 +220,8 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -260,9 +265,8 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
-    enqueue({ data: null, error: null }) // POST: invoice PDF lookup for the payment verifikat
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
-    enqueue({ data: null, error: null }) // POST: transaction link
     const booked = await book()
 
     expect(shown.status).toBe(200)
@@ -375,8 +379,8 @@ describe('a customer who paid a krona or more too much', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: settings, error: null })
     enqueue({ data: [], error: null }) // cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice update
-    enqueue({ data: null, error: null }) // transaction link
     const booked = await book({ overpayment_account: '3740', overpayment_amount: 1.25 })
 
     expect(shown.status).toBe(200)

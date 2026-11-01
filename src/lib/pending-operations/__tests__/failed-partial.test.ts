@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 import type { PendingOperation } from '@/types'
 
 const mockCreatePaymentEntry = vi.fn()
@@ -29,7 +28,7 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   }
 })
 
-const mockReverseEntry = vi.fn()
+const mockCancelOrphanedEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', async () => {
@@ -38,7 +37,7 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   )
   return {
     ...actual,
-    reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
+    cancelOrphanedEntry: (...args: unknown[]) => mockCancelOrphanedEntry(...args),
     findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
     createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   }
@@ -50,6 +49,23 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
 vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
+}))
+
+// Open: the gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts). Mocked with the
+// chart check so neither consumes a slot in the queued Supabase mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn(async () => []),
+}))
+// No invoice here needs its sale booked first; that rule has its own suites.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
 }))
 
 import { commitPendingOperation } from '../commit'
@@ -136,91 +152,82 @@ beforeEach(() => {
   mockCreatePaymentEntry.mockResolvedValue({ id: 'je-pay' })
   mockCreateCashEntry.mockResolvedValue({ id: 'je-pay' })
   mockCreateCreditNoteEntry.mockResolvedValue({ id: 'je-credit' })
-  mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
   // The accrual match path builds its clearing entry via findFiscalPeriod +
   // createJournalEntry (shared-builder parity with the dashboard/v1 routes).
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-pay' })
 })
 
-describe('match_transaction_invoice: partial commit after the storno', () => {
-  it('lands failed_partial with the reversal voucher id when the payment JE throws after the storno', async () => {
+describe('match_transaction_invoice: a failure after the payment verifikat posted', () => {
+  it('cancels the verifikat and rejects cleanly when the invoice CAS update matches zero rows', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const updates = recordUpdates(supabase)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { ...baseTransaction, journal_entry_id: 'je-old' }, error: null }) // transaction fetch
+    enqueue({ data: baseTransaction, error: null }) // transaction fetch
     enqueue({ data: baseInvoice, error: null }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
-    enqueue({ data: null, error: null }) // transactions unlink after storno
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [], error: null }) // invoice CAS update: zero rows (raced fully-paid)
+    enqueue({ data: null, error: null }) // bank row released
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
-
-    mockCreateJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(500, 400))
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-old')
-    expect(result.status).toBe('failed')
-    expect(result.http_status).toBe(500)
-    expect(result.code).toBe('partial_commit')
-    expect(result.data).toEqual({ posted_ids: { reversal_journal_entry_id: 'je-storno' } })
-
-    const opUpdates = pendingOpUpdates(updates)
-    // First write is the atomic claim, second is the terminal status.
-    expect(opUpdates[0]?.payload).toEqual({ status: 'committing' })
-    expect(opUpdates[1]?.payload).toMatchObject({
-      status: 'failed_partial',
-      result_data: {
-        threw: true,
-        posted_ids: { reversal_journal_entry_id: 'je-storno' },
-      },
-    })
-    expect(opUpdates[1]?.payload.resolved_at).toBeTruthy()
+    expect(mockCancelOrphanedEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-pay', expect.anything())
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('MATCH_INVOICE_ALREADY_PAID')
+    expect(result.operation_status).toBe('rejected')
+    expect(pendingOpUpdates(updates)[1]?.payload).toMatchObject({ status: 'rejected' })
   })
 
-  it('lands failed_partial with the payment JE id when the invoice CAS update matches zero rows', async () => {
+  it('lands failed_partial naming the verifikat when it could not be cancelled', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const updates = recordUpdates(supabase)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: baseTransaction, error: null }) // transaction fetch (no prior JE: no storno)
+    enqueue({ data: baseTransaction, error: null }) // transaction fetch
     enqueue({ data: baseInvoice, error: null }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [], error: null }) // invoice CAS update: zero rows (raced fully-paid)
+    enqueue({ data: null, error: null }) // bank row released
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
+    mockCancelOrphanedEntry.mockResolvedValue({ error: { message: 'refused' } })
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    // A 409 AFTER the payment voucher posted must NOT auto-reject: it is a
-    // partial commit and the posted JE id must be surfaced.
+    // A 409 with a verifikat standing must NOT auto-reject: it is a partial
+    // commit and the posted id must be surfaced.
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(409)
     expect(result.auto_rejected).toBeUndefined()
     expect(result.code).toBe('partial_commit')
     expect(result.data).toEqual({ posted_ids: { payment_journal_entry_id: 'je-pay' } })
-
-    const opUpdates = pendingOpUpdates(updates)
-    expect(opUpdates[1]?.payload).toMatchObject({
+    expect(pendingOpUpdates(updates)[1]?.payload).toMatchObject({
       status: 'failed_partial',
-      result_data: {
-        http_status: 409,
-        posted_ids: { payment_journal_entry_id: 'je-pay' },
-      },
+      result_data: { http_status: 409, posted_ids: { payment_journal_entry_id: 'je-pay' } },
     })
   })
 
   it('keeps the clean rejected path when the failure happens BEFORE anything is posted', async () => {
-    // The settlement-account lookup now runs before the storno: an infra
-    // failure there must reject the op with nothing posted and must NOT be
-    // labeled a partial commit.
+    // The settlement-account lookup runs before anything is posted: an infra
+    // failure there must reject the op and must NOT be labeled a partial commit.
     const { supabase, enqueue } = createQueuedMockSupabase()
     const updates = recordUpdates(supabase)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
-      data: { ...baseTransaction, journal_entry_id: 'je-old', cash_account_id: 'ca-broken' },
+      data: { ...baseTransaction, cash_account_id: 'ca-broken' },
       error: null,
     }) // transaction fetch
     enqueue({ data: baseInvoice, error: null }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
@@ -228,7 +235,6 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(result.status).toBe('failed')
     expect(result.code).toBeUndefined()
 
@@ -252,6 +258,7 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: baseTransaction, error: null }) // transaction fetch
     enqueue({ data: baseInvoice, error: null }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // cash_accounts fallback listing -> 1930
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
@@ -262,7 +269,7 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('failed')
-    expect(result.code).toBeUndefined()
+    expect(result.code).toBe('INVOICE_PAID_BOOK_FAILED')
     expect(result.http_status).toBe(500)
     expect(updates.some((u) => u.table === 'invoices')).toBe(false)
 

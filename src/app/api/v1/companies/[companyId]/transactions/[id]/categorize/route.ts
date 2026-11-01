@@ -69,7 +69,7 @@ registerEndpoint({
   useWhen:
     'You\'re categorizing a bank transaction. Pass `is_business: true` plus either `category`, `template_id` (booking template), `counterparty_template_id`, or `account_override`. For private transactions, `is_business: false` is enough.',
   doNotUseFor:
-    'Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, which storno any conflicting JE first. Uncategorizing: `:uncategorize`.',
+    'Matching a payment to an invoice: use `:match-invoice` or `:match-supplier-invoice`, on an unbooked transaction. Uncategorizing: `:uncategorize`.',
   pitfalls: [
     'A bank line the ledger already books (a booked sibling transaction, or a voucher booking the same amount on the bank account such as a supplier invoice marked paid) is refused with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and the candidate in `details.candidate`: link the transaction to that verifikat instead. Only if it is a genuinely separate event, resend with `force: true` plus `expected_duplicate_journal_entry_id` (or `expected_duplicate_transaction_id`) echoing the candidate; a stale id returns TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH.',
     'A plain 244x (supplier payment) or 151x (customer receipt) categorization that an open invoice covers is refused with 409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH: match the invoice via `:match-supplier-invoice` / `:match-invoice`, or pass `confirm_no_match: true` to keep the plain categorization.',

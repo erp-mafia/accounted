@@ -15,6 +15,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // The sale-first rule (defer_invoice_booking) has its own suites
 // (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
 // here no invoice needs its sale booked first.
+// The gate has its own door test (src/lib/transactions/__tests__/match-batch-booked-row.test.ts);
+// this suite queues what follows it.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebookingById: vi.fn(async () => ({ outcome: 'open' })),
+}))
+
 vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
   planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),

@@ -85,6 +85,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { isBankMovementEntry } from '@/lib/transactions/bank-link'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import {
   detectBookingDuplicate,
@@ -153,7 +154,7 @@ type SelectedTx = Pick<
   | 'bank_connection_id'
   | 'provider_transaction_id'
   | 'bank_file_import_id'
->
+> & { is_ignored?: boolean | null; transaction_voucher_links?: Array<{ journal_entry_id: string }> | null }
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -176,7 +177,7 @@ export async function bulkBookTransactions(
   // the amounts, every branch the currencies.
   const { data: txs, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, currency, description, merchant_name, original_description, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+    .select('id, amount, currency, description, merchant_name, original_description, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id, is_ignored, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id, transaction_voucher_links(journal_entry_id)')
     .in('id', body.tx_ids)
     .eq('company_id', companyId)
 
@@ -206,6 +207,11 @@ export async function bulkBookTransactions(
   // kronor and neither this path nor the RPC carries a rate. The FX-aware
   // single-row flows book those.
   if (currency !== 'SEK') return { ok: false, code: 'BULK_BOOK_FOREIGN_CURRENCY', details: { currency } }
+
+  // An ignored row can carry no verifikat: one row fails on the row's CHECK
+  // in the RPC, and several were booked through their links, still ignored.
+  const ignored = txTyped.find((t) => t.is_ignored)
+  if (ignored) return { ok: false, code: 'BANK_ROW_IGNORED', details: { tx_id: ignored.id } }
 
   // The RPC's own refusals the rows already show, answered on the dry run so
   // a staged booking never waits for an approval that cannot post. The RPC
@@ -435,7 +441,7 @@ export async function bulkBookTransactions(
     if (body.existing_journal_entry_id) {
       const { data: je, error: jeError } = await supabase
         .from('journal_entries')
-        .select('id, status, entry_date, journal_entry_lines(account_number, debit_amount, credit_amount)')
+        .select('id, status, entry_date, source_type, journal_entry_lines(account_number, debit_amount, credit_amount)')
         .eq('id', body.existing_journal_entry_id)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -444,10 +450,15 @@ export async function bulkBookTransactions(
       const entry = je as {
         status: string
         entry_date: string
+        source_type?: string | null
         journal_entry_lines?: Parameters<typeof bankNetMismatch>[1] | null
       }
       if (entry.status !== 'posted') {
         return { ok: false, code: 'BULK_BOOK_VOUCHER_NOT_POSTED', details: { status: entry.status } }
+      }
+      // As on the other link doors: the database refuses this write too.
+      if (!isBankMovementEntry(entry)) {
+        return { ok: false, code: 'LINK_TX_JE_NOT_BANK_MOVEMENT', details: { source_type: entry.source_type } }
       }
       existingEntryDate = entry.entry_date
       bankNetLines = entry.journal_entry_lines ?? []
@@ -669,6 +680,11 @@ function rowShapeRefusal(
   const ordered = txIds.map((id) => byId.get(id)).filter((t): t is SelectedTx => t !== undefined)
   const booked = ordered.find((t) => t.journal_entry_id)
   if (booked) return { ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: booked.id } }
+  // The RPC refuses a voucher link of any role, on a row with no pointer.
+  const linked = ordered.find((t) => (t.transaction_voucher_links?.length ?? 0) > 0)
+  if (linked) {
+    return { ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: linked.id, via: 'transaction_voucher_links' } }
+  }
   const zero = ordered.find((t) => t.amount === 0)
   if (zero) return { ok: false, code: 'BULK_BOOK_TX_ZERO_AMOUNT', details: { tx_id: zero.id } }
   const firstDate = ordered[0]?.date

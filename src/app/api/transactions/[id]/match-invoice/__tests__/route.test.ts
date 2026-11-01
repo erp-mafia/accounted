@@ -47,10 +47,21 @@ vi.mock('@/lib/bookkeeping/account-validation', () => ({
 const mockReverseEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
+const mockCancelOrphanedEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+  cancelOrphanedEntry: (...args: unknown[]) => mockCancelOrphanedEntry(...args),
+}))
+
+// The gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts): open here, so it
+// consumes no slot in the queued mock. The describe at the end refuses through it.
+const mockDecideRebooking = vi.fn()
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: (...args: unknown[]) => mockDecideRebooking(...args),
 }))
 
 const mockFetchExchangeRate = vi.fn()
@@ -113,6 +124,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // Default to no soft-duplicate detected: happy-path tests don't care.
     mockDetectDuplicate.mockResolvedValue(null)
+    mockDecideRebooking.mockResolvedValue({ outcome: 'open' })
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
     mockFindUnresolvableAccounts.mockResolvedValue([])
     // Clearing path delegates to findFiscalPeriod + createJournalEntry (FX fix
     // PR #614 round 6: see lib/bookkeeping/invoice-payment-lines.ts). Give
@@ -328,6 +341,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx' })
 
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
@@ -430,6 +445,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down: manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
 
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null })
@@ -490,6 +507,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Update invoice (optimistic lock returns updated row)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
     enqueue({ data: { id: 'ip-1' }, error: null })
@@ -612,6 +630,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
@@ -662,94 +681,6 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
   })
 
-  it('stornos conflicting journal entry before matching', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: 12500,
-      invoice_id: null,
-      journal_entry_id: 'je-conflict',
-      date: '2024-06-15',
-    })
-    const invoice = makeInvoice({
-      id: VALID_UUID,
-      status: 'sent',
-      total: 12500,
-      remaining_amount: 12500,
-    })
-
-    // Fetch transaction
-    enqueue({ data: tx, error: null })
-    // Fetch invoice
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check: no prior payment voucher for this invoice
-    enqueue({ data: [], error: null })
-
-    // Every read and refusal runs before the storno now: settings and the
-    // settlement account first.
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-
-    mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
-    // Clear journal_entry_id on transaction
-    enqueue({ data: null, error: null })
-    // (logMatchEvent does not consume a from() on the mocked route client)
-    mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
-
-    // Update invoice (optimistic lock)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: { id: 'ip-1' }, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
-    // logMatchEvent for match
-    enqueue({ data: null, error: null })
-
-    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
-      method: 'POST',
-      body: { invoice_id: VALID_UUID },
-    })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
-
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBe('je-payment')
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-conflict')
-  })
-
-  it('returns 500 when storno fails: no partial state change', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: 12500,
-      invoice_id: null,
-      journal_entry_id: 'je-conflict',
-    })
-    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', remaining_amount: 12500 })
-
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check: no prior payment voucher
-    enqueue({ data: [], error: null })
-    // Settings, read before the storno (an unreadable method refuses there)
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-
-    mockReverseEntry.mockRejectedValue(new Error('Period locked'))
-
-    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
-      method: 'POST',
-      body: { invoice_id: VALID_UUID },
-    })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
-
-    expect(status).toBe(500)
-    // Storno failures bubble up through the bookkeeping engine; the wrapper
-    // routes any non-typed error to INTERNAL_ERROR.
-    expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
-    // Invoice should NOT have been updated: no further DB calls after storno failure
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-  })
-
   it('supports partial payment (partially_paid status)', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({
@@ -769,6 +700,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial' })
 
     // Update invoice (optimistic lock)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
     enqueue({ data: { id: 'ip-1' }, error: null })
@@ -820,6 +752,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
@@ -935,6 +868,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
 
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
@@ -991,10 +926,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
-    // Route order: PDF re-attach (runs first when invoice.journal_entry_id is
-    // set; null result skips the attach insert) → optimistic invoice update →
-    // invoice_payments → update transaction → logMatchEvent.
-    enqueue({ data: null, error: null }) // document_attachments lookup
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update transaction
@@ -1046,6 +978,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
 
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-1940' })
+
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
 
       enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
       enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
@@ -1103,6 +1037,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
       mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash-1940' })
 
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+
       enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
       enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
       enqueue({ data: null, error: null }) // update transaction
@@ -1158,6 +1094,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
 
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-default' })
+
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
 
       enqueue({ data: [{ id: VALID_UUID }], error: null })
       enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
@@ -1283,9 +1221,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
-    // PDF re-attach lookup (invoice.journal_entry_id set; null result skips)
-    enqueue({ data: null, error: null })
     // Update invoice
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
     enqueue({ data: { id: 'ip-1' }, error: null })
@@ -1325,6 +1262,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     // Optimistic lock returns 0 rows (another request fully paid it)
     enqueue({ data: [], error: null })
 
@@ -1356,6 +1294,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock succeeds
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // invoice_payments insert fails with unique constraint violation
     enqueue({ data: null, error: { code: '23505', message: 'duplicate' } })
@@ -1400,7 +1339,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     }>(response)
 
     expect(status).toBe(500)
-    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
     // The raw English message never reaches the user (issue #337): the reason
     // detail carries the Swedish invoice-context fallback.
     expect(body.error.details?.reason).toBe('Kunde inte hantera fakturan. Försök igen.')
@@ -1430,7 +1369,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(500)
-    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
     expect(mockSupabase.from).toHaveBeenCalledTimes(5)
   })
 
@@ -1482,6 +1421,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
@@ -1562,6 +1502,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
@@ -1655,6 +1596,8 @@ describe('POST /api/transactions/[id]/match-invoice: user-edited lines', () => {
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
     mockDetectDuplicate.mockResolvedValue(null)
+    mockDecideRebooking.mockResolvedValue({ outcome: 'open' })
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
     mockFindUnresolvableAccounts.mockResolvedValue([])
     mockFindFiscalPeriod.mockResolvedValue('fp-1')
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -1677,6 +1620,7 @@ describe('POST /api/transactions/[id]/match-invoice: user-edited lines', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction update
@@ -1706,10 +1650,8 @@ describe('POST /api/transactions/[id]/match-invoice: user-edited lines', () => {
   })
 })
 
-describe('POST /api/transactions/[id]/match-invoice: refusals come before the storno', () => {
-  // A categorised bank row: matching it stornos its verifikat, so every
-  // refusal must happen before that storno or the refusal leaves it posted.
-  const CATEGORISED_TX = { id: 'tx-1', amount: 12500, invoice_id: null, journal_entry_id: 'je-conflict', date: '2024-06-15' }
+describe('POST /api/transactions/[id]/match-invoice: refusals come before anything is written', () => {
+  const OPEN_TX = { id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' }
   const SENT = { id: VALID_UUID, status: 'sent' as const, total: 12500, remaining_amount: 12500, subtotal: 10000, vat_amount: 2500, invoice_number: 'F-2024001' }
 
   beforeEach(() => {
@@ -1717,9 +1659,10 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
     mockDetectDuplicate.mockResolvedValue(null)
+    mockDecideRebooking.mockResolvedValue({ outcome: 'open' })
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
     mockFindUnresolvableAccounts.mockResolvedValue([])
     mockFindFiscalPeriod.mockResolvedValue('fp-1')
-    mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
   })
 
@@ -1728,7 +1671,7 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     invoice?: Record<string, unknown>
     accountingMethod?: string
   } = {}) {
-    enqueue({ data: makeTransaction({ ...CATEGORISED_TX, ...opts.tx }), error: null }) // transaction
+    enqueue({ data: makeTransaction({ ...OPEN_TX, ...opts.tx }), error: null }) // transaction
     enqueue({ data: makeInvoice({ ...SENT, customer: makeCustomer(), ...opts.invoice }), error: null }) // invoice
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual', entity_type: 'enskild_firma' }, error: null })
@@ -1752,8 +1695,8 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expect(findCalls('invoices', 'update')).toHaveLength(0)
   }
 
-  it('an overshoot refuses before the storno', async () => {
-    enqueue({ data: makeTransaction({ ...CATEGORISED_TX, amount: 20000 }), error: null })
+  it('an overshoot refuses before anything is written', async () => {
+    enqueue({ data: makeTransaction({ ...OPEN_TX, amount: 20000 }), error: null })
     enqueue({ data: makeInvoice({ ...SENT, customer: makeCustomer() }), error: null })
     enqueue({ data: [], error: null })
     const { status, body } = await post()
@@ -1762,7 +1705,7 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expectNothingWritten()
   })
 
-  it('a kontantmetod partial refuses before the storno', async () => {
+  it('a kontantmetod partial refuses before anything is written', async () => {
     enqueueUpToBooking({ tx: { amount: 5000 }, invoice: { journal_entry_id: null }, accountingMethod: 'cash' })
     const { status, body } = await post()
     expect(status).toBe(400)
@@ -1783,7 +1726,7 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expectNothingWritten()
   })
 
-  it('a payment date outside an open period refuses before the storno', async () => {
+  it('a payment date outside an open period refuses before anything is written', async () => {
     enqueueUpToBooking()
     mockFindFiscalPeriod.mockResolvedValue(null)
     const { status, body } = await post()
@@ -1792,7 +1735,7 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expectNothingWritten()
   })
 
-  it('an account the engine cannot resolve refuses before the storno', async () => {
+  it('an account the engine cannot resolve refuses before anything is written', async () => {
     enqueueUpToBooking()
     mockFindUnresolvableAccounts.mockResolvedValue(['1930'])
     const { status, body } = await post()
@@ -1802,7 +1745,7 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expectNothingWritten()
   })
 
-  it('a foreign invoice with no booking rate refuses before the storno', async () => {
+  it('a foreign invoice with no booking rate refuses before anything is written', async () => {
     enqueueUpToBooking({
       tx: { amount: 1000, currency: 'EUR', amount_sek: 11500 },
       invoice: { currency: 'EUR', exchange_rate: null, total: 1000, remaining_amount: 1000 },
@@ -1813,48 +1756,49 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before the st
     expectNothingWritten()
   })
 
-  it('names the posted storno when the payment verifikat then fails: a partial commit, not a clean refusal', async () => {
+  it('a failed payment verifikat writes nothing else', async () => {
     enqueueUpToBooking()
-    enqueue({ data: null, error: null }) // transaction unlink after the storno
     mockCreateJournalEntry.mockRejectedValue(new Error('boom'))
     const { status, body } = await post()
     expect(status).toBe(500)
-    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
-    expect(body.error.details?.posted_ids).toEqual({ reversal_journal_entry_id: 'je-storno' })
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
     expect(findCalls('invoices', 'update')).toHaveLength(0)
   })
 
-  it('names both vouchers when a concurrent settle wins the invoice update', async () => {
+  it('a concurrent booking of the row loses the verifikat, not the row: it is cancelled', async () => {
     enqueueUpToBooking()
-    enqueue({ data: null, error: null }) // transaction unlink after the storno
+    enqueue({ data: [], error: null }) // row claim: zero rows
+    const { status, body } = await post()
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_TX_ALREADY_BOOKED')
+    expect(body.error.details?.via).toBe('concurrent')
+    expect(mockCancelOrphanedEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-payment', expect.anything())
+    expect(findCalls('invoices', 'update')).toHaveLength(0)
+  })
+
+  it('a concurrent settle of the invoice releases the row and cancels the verifikat', async () => {
+    enqueueUpToBooking()
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [], error: null }) // invoice CAS update: zero rows
     const { status, body } = await post()
     expect(status).toBe(409)
     expect(body.error.code).toBe('MATCH_INVOICE_ALREADY_PAID')
-    expect(body.error.details?.posted_ids).toEqual({
-      reversal_journal_entry_id: 'je-storno',
-      payment_journal_entry_id: 'je-payment',
-    })
+    expect(findCalls('transactions', 'update').at(-1)?.[0]).toMatchObject({ invoice_id: null, journal_entry_id: null })
+    expect(mockCancelOrphanedEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-payment', expect.anything())
   })
 
-  it('happy path unchanged: storno, then the payment verifikat, then the invoice', async () => {
+  it('a payment row that cannot be recorded undoes the invoice, the row and the verifikat', async () => {
     enqueueUpToBooking()
-    enqueue({ data: null, error: null }) // transaction unlink after the storno
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice CAS update
-    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transaction link
-    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
-      method: 'POST',
-      body: { invoice_id: VALID_UUID },
-    })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
-    expect(status).toBe(200)
-    expect(body.journal_entry_id).toBe('je-payment')
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-conflict')
-    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(
-      mockCreateJournalEntry.mock.invocationCallOrder[0],
-    )
+    enqueue({ data: null, error: { message: 'boom' } }) // invoice_payments insert
+    const { status, body } = await post()
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({ status: 'sent', paid_at: null })
+    expect(findCalls('transactions', 'update').at(-1)?.[0]).toMatchObject({ invoice_id: null, journal_entry_id: null })
+    expect(mockCancelOrphanedEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-payment', expect.anything())
   })
 })
 
@@ -1868,6 +1812,8 @@ describe('POST /api/transactions/[id]/match-invoice: a customer overpayment (crm
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
     mockDetectDuplicate.mockResolvedValue(null)
+    mockDecideRebooking.mockResolvedValue({ outcome: 'open' })
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
     mockFindUnresolvableAccounts.mockResolvedValue([])
     mockFindFiscalPeriod.mockResolvedValue('fp-1')
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
@@ -1911,7 +1857,7 @@ describe('POST /api/transactions/[id]/match-invoice: a customer overpayment (crm
     enqueueUpToRefusal()
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
-    enqueue({ data: null, error: null }) // invoice PDF lookup for the payment verifikat
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link
@@ -1972,6 +1918,8 @@ describe('POST /api/transactions/[id]/match-invoice: a payment provider fee (crm
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
     mockDetectDuplicate.mockResolvedValue(null)
+    mockDecideRebooking.mockResolvedValue({ outcome: 'open' })
+    mockCancelOrphanedEntry.mockResolvedValue({ error: null })
     mockFindUnresolvableAccounts.mockResolvedValue([])
     mockFindFiscalPeriod.mockResolvedValue('fp-1')
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
@@ -2010,7 +1958,7 @@ describe('POST /api/transactions/[id]/match-invoice: a payment provider fee (crm
     enqueueUpToRefusal()
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
-    enqueue({ data: null, error: null }) // invoice PDF lookup for the payment verifikat
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link
@@ -2038,6 +1986,7 @@ describe('POST /api/transactions/[id]/match-invoice: a payment provider fee (crm
     enqueueUpToRefusal({}, { journal_entry_id: null })
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link
@@ -2072,5 +2021,57 @@ describe('POST /api/transactions/[id]/match-invoice: a payment provider fee (crm
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_PAYMENT_FEE_NOT_ALLOWED')
     expectNothingWritten()
+  })
+})
+
+// One 1500 kr row booked twice moved 1930 by 3000 kr. This door refuses through
+// the gate every door asks; the shapes are pinned where the gate lives.
+describe('POST /api/transactions/[id]/match-invoice: a bank row that is already booked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, journal_entry_id: 'je-own' }), error: null })
+    enqueue({ data: makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 }), error: null })
+  })
+
+  async function match() {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    return parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(
+      await POST(request, createMockRouteParams({ id: 'tx-1' })),
+    )
+  }
+
+  it('answers 409 naming the verifikat and how to undo it, and reverses and books nothing', async () => {
+    mockDecideRebooking.mockResolvedValue({
+      outcome: 'refuse', via: 'pointer', journalEntryId: 'je-own', voucher: 'A12', replaceable: true, undo: 'uncategorize',
+    })
+
+    const { status, body } = await match()
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-own', voucher: 'A12', via: 'pointer', undo: 'uncategorize' })
+    expect(body.error.message).toContain('återför A12')
+    expect(mockDecideRebooking).toHaveBeenCalledWith(mockSupabase, 'company-1', expect.objectContaining({ id: 'tx-1' }), { replace: false })
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
+  it('answers 409 BANK_ROW_IGNORED for an ignored row, with nothing posted', async () => {
+    mockDecideRebooking.mockResolvedValue({
+      outcome: 'refuse', via: 'ignored', journalEntryId: null, voucher: null, replaceable: false, undo: 'restore',
+    })
+
+    const { status, body } = await match()
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_ROW_IGNORED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })

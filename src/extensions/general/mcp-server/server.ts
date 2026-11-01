@@ -176,8 +176,7 @@ import {
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import { bankRowRefusalCode, decideBankRowRebooking, hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
@@ -645,6 +644,8 @@ import {
   planBookedSupplierInvoiceRegistration,
   toRegisterBookedSupplierInvoiceParams,
 } from '@/lib/supplier-invoices/register-booked'
+import { refuseCustomerBankMatch, type CustomerBankMatchRefusal } from '@/lib/invoices/book-customer-bank-match'
+import { bankRowAlreadyBookedMessages } from '@/lib/errors/match-si-tx-already-booked'
 import {
   planTransactionInvoiceMatch,
   type MatchInvoiceAmounts,
@@ -1266,6 +1267,15 @@ function duplicateCandidateRefusal(
     ),
     { code: 'MATCH_INVOICE_POSSIBLE_DUPLICATE' },
   )
+}
+
+/**
+ * A match refused on the row or the invoice alone, at staging as at approval
+ * (refuseCustomerBankMatch). A booked row's English says which tool opens it.
+ */
+function customerMatchRefusal(refusal: CustomerBankMatchRefusal): Error {
+  const booked = bankRowAlreadyBookedMessages(refusal.code, refusal.details)
+  return booked ? codedRefusal(refusal.code, booked.message_en) : registryError(refusal.code)
 }
 
 /**
@@ -14337,7 +14347,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_match_transaction_to_invoice',
     keywords: ['matcha betalning', 'kundfaktura', 'inbetalning'],
     title: 'Match Transaction to Invoice',
-    description: 'Match 1 bank tx (amount>0) to a customer invoice. Confirm tx date/amount and invoice number first. Partial payments and auto-storno of a prior booking supported. Stages.',
+    description: 'Match 1 unbooked bank tx (amount>0) to a customer invoice. Confirm tx date/amount and invoice number first. Partial payments supported. A booked row is refused: undo it first. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14392,7 +14402,7 @@ export const tools: McpTool[] = [
       // on the account cash_account_id says the money landed on.
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, invoice_id, cash_account_id')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, invoice_id, cash_account_id, journal_entry_id, reconciliation_method, is_ignored')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
@@ -14406,24 +14416,20 @@ export const tools: McpTool[] = [
           'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, or under kontantmetoden the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
         )
       }
-      if (transaction.invoice_id) throw new Error('Transaction is already linked to an invoice')
 
       const { data: invoice, error: invError } = await supabase
         .from('invoices')
-        .select('*, customer:customers(*)')
+        .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
 
       if (invError || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
-      // Parity with the dashboard match route: proformas, delivery notes and
-      // quotes carry no receivable to settle.
-      if (invoice.document_type && invoice.document_type !== 'invoice') {
-        throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
-      }
-      if (invoice.status !== 'sent' && invoice.status !== 'overdue' && invoice.status !== 'partially_paid') {
-        throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
-      }
+      // Every refusal the approval makes on the row and the invoice alone:
+      // a booked or ignored row, a document with no receivable to settle, a
+      // credit note against it, a paid invoice, a leaked status.
+      const refused = await refuseCustomerBankMatch({ supabase, companyId }, transaction, invoice)
+      if (refused) throw customerMatchRefusal(refused)
 
       // Soft-duplicate guard at stage time (parity with the dashboard match
       // route's MATCH_INVOICE_POSSIBLE_DUPLICATE): a manual verifikation that
@@ -15320,19 +15326,24 @@ export const tools: McpTool[] = [
       // out of scope for this tool.
       const { data: transactions, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, reference, journal_entry_id, invoice_id')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, reference, journal_entry_id, invoice_id, transaction_voucher_links(journal_entry_id, role)')
         .eq('company_id', companyId)
         .gte('date', dateFrom)
         .lte('date', dateTo)
         .gt('amount', 0)
         .is('journal_entry_id', null)
         .is('invoice_id', null)
+        .eq('is_ignored', false)
         .order('date', { ascending: true })
         .limit(maxTransactions + 1)
 
       if (txError) throw new Error(`Failed to fetch transactions: ${txError.message}`)
 
-      const txList = (transactions ?? []).slice(0, maxTransactions)
+      // A row booked through a voucher link has no pointer but is booked all
+      // the same: the approval would refuse it, so it is never proposed.
+      const txList = (transactions ?? [])
+        .slice(0, maxTransactions)
+        .filter((tx) => !hasBankLineJunctionRow(tx.transaction_voucher_links))
       const truncated = (transactions ?? []).length > maxTransactions
 
       type Proposal = {
@@ -22289,23 +22300,17 @@ export const tools: McpTool[] = [
 
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, date, journal_entry_id, transaction_voucher_links(journal_entry_id, role)')
+        .select('id, description, merchant_name, amount, currency, date, journal_entry_id, reconciliation_method, is_ignored, transaction_voucher_links(journal_entry_id, role)')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
       if (txError || !transaction) throw registryError('TX_CATEGORIZE_TX_NOT_FOUND')
       if (!(transaction.amount > 0)) throw registryError('ROT_RUT_MATCH_NOT_INCOME')
       if ((transaction.currency || 'SEK').toUpperCase() !== 'SEK') throw registryError('ROT_RUT_MATCH_CURRENCY')
-      // Same predicate as the commit writer: a live pointer OR a bank_line
-      // junction row (samlingsverifikat) means the row is already booked.
-      if (
-        hasBankLineJunctionRow(
-          (transaction as { transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null })
-            .transaction_voucher_links,
-        ) ||
-        (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
-      ) {
-        throw registryError('ROT_RUT_MATCH_TX_ALREADY_LINKED')
+      // The gate the commit writer asks: a posted pointer or bank_line link, or an ignored row.
+      const rebooking = await decideBankRowRebooking(supabase, companyId, transaction, { replace: false })
+      if (rebooking.outcome === 'refuse') {
+        throw registryError(bankRowRefusalCode(rebooking, 'ROT_RUT_MATCH_TX_ALREADY_LINKED'))
       }
 
       const { data: requestRows, error: reqError } = await supabase

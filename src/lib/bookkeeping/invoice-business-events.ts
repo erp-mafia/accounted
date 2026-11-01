@@ -10,9 +10,8 @@ import type { CreateJournalEntryInput, Invoice } from '@/types'
  * port (step 2f): its registration (sale.invoiced), booked when it is issued,
  * by the deferred Bokför step or when a received självfaktura is registered,
  * and its kreditfaktura (sale.credited); and (step 2f-2) its payments
- * (sale.payment_received) and the storno a bank match makes of the row's
- * earlier booking (ledger.storno). Pure: built only while POSTING_EVENTS is
- * shadow or strict, never while it is off.
+ * (sale.payment_received). Pure: built only while POSTING_EVENTS is shadow or
+ * strict, never while it is off.
  *
  * The subject is the invoices row the verifikat books (a kreditfaktura is a
  * row of its own, which names the original in credited_invoice_id), the
@@ -209,27 +208,4 @@ function paidInto(lines: CreateJournalEntryInput['lines'], paymentAccount: strin
       .reduce((sum, line) => sum + (line.debit_amount ?? 0) - (line.credit_amount ?? 0), 0),
   )
   return net > 0 ? net : null
-}
-
-/**
- * The event of the storno a bank match makes of the bank line's earlier
- * booking (a categorization the match replaces; kind ledger.storno, linked
- * with role reversal), dated the day it is made: the subject is the bank
- * line whose booking is reversed. No party, no amount and no rule version: a
- * storno mirrors its original's lines. No one chose it, so it records
- * system_derived (inside an approval the operation rides along as evidence).
- */
-export function matchedBankLineStornoBusinessEvent(
-  transactionId: string,
-  occurredOn: string,
-  linkBasis: LinkBasisColumns,
-): BusinessEventDraft {
-  return {
-    kind: 'ledger.storno',
-    occurredOn,
-    subject: { type: 'transaction', id: transactionId },
-    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
-    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
-    jurisdiction: 'SE',
-  }
 }

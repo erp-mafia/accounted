@@ -225,10 +225,28 @@ describe('bookSupplierBankMatch on a bank row that is already booked (accounted#
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('refuses when the booked-state read fails', async () => {
+  it('refuses an ignored row before a verifikat posts: the claim could not land on it', async () => {
+    const { supabase, calls } = world()
+
+    const outcome = await bookSupplierBankMatch(supabase as never, {
+      transaction: { ...row(), is_ignored: true },
+      invoice: INVOICE,
+      userId: USER,
+      companyId: COMPANY,
+      log,
+      match: { action: 'matched', method: 'manual_confirm', confidence: 1 },
+      linkBasis: { basis: 'user_confirmed' },
+    })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'BANK_ROW_IGNORED' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    expect(calls.filter((c) => c.method === 'update' || c.method === 'insert')).toEqual([])
+  })
+
+  it('refuses when the booked-state read fails, with a retry: the failed read says nothing about the row', async () => {
     const { supabase } = world({ linksError: true })
     const result = await match(supabase, {})
-    expect(result).toMatchObject({ ok: false, code: 'MATCH_SI_TX_ALREADY_BOOKED', details: { via: 'read_error', journal_entry_id: null } })
+    expect(result).toMatchObject({ ok: false, code: 'BANK_ROW_READ_FAILED', details: { via: 'read_error', journal_entry_id: null } })
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 

@@ -28,7 +28,7 @@ import {
   type StructuredErrorEntry,
   type StructuredErrorRemediation,
 } from './structured-errors'
-import { matchSiTxAlreadyBookedMessages } from './match-si-tx-already-booked'
+import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import {
   AccountsNotInChartError,
   AccruedCostPeriodInvalidError,
@@ -812,9 +812,9 @@ function buildResponse(
     body.error.message = invalidInput.message_sv
     body.error.message_en = invalidInput.message_en
   }
-  // A supplier match on a booked bank row names the verifikat that books it
+  // A match on a booked bank row names the verifikat that books it
   // (accounted#58), on every door that answers with the code.
-  const alreadyBooked = !authoredMessage && code === 'MATCH_SI_TX_ALREADY_BOOKED' ? matchSiTxAlreadyBookedMessages(details) : null
+  const alreadyBooked = !authoredMessage ? bankRowAlreadyBookedMessages(code, details) : null
   if (alreadyBooked) {
     body.error.message = alreadyBooked.message_sv
     body.error.message_en = alreadyBooked.message_en

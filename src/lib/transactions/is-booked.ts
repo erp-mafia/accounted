@@ -169,6 +169,12 @@ interface AnchoredTransaction {
   transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
 }
 
+/** What decideBankRowRebooking reads off a row: a door's select carries these columns. */
+export interface GatedBankRow extends AnchoredTransaction {
+  reconciliation_method?: string | null
+  is_ignored?: boolean | null
+}
+
 /** A posted verifikat that anchors a bank row, as the gates read it. */
 interface PostedAnchor {
   id: string
@@ -225,34 +231,80 @@ async function readPostedAnchors(
 }
 
 /**
+ * How a refused row can be opened again, one answer per shape, verified door
+ * by door in tests/pg/customer-bank-match-doors.pg.test.ts:
+ *
+ *   - uncategorize: the pointer's verifikat is undone by storno
+ *     (POST /transactions/{id}/uncategorize, gnubok_uncategorize_transaction,
+ *     or Återför on the verifikat), which also runs the payment mirror when
+ *     that verifikat is a payment.
+ *   - unlink: a link to a verifikat that stands on its own is taken off and
+ *     the verifikat stays posted (Koppla bort, gnubok_reconcile_unmatch).
+ *     Uncategorize would reverse that independent verifikat.
+ *   - reverse_voucher: a row with no pointer, booked inside a samlingsverifikat
+ *     or a verifikat of its own through a link. Uncategorize cannot reach it
+ *     and Koppla bort refuses it: only a storno of the verifikat releases it,
+ *     with every other row that verifikat explains (gnubok_reverse_journal_entry,
+ *     Återför on the verifikat).
+ *   - restore: an ignored row comes back with Återställ
+ *     (gnubok_ignore_transaction restore: true,
+ *     DELETE /transactions/{id}/ignore).
+ */
+export type BankRowUndo = 'uncategorize' | 'unlink' | 'reverse_voucher' | 'restore'
+
+/** The gate's refusal, as a door maps it. */
+export interface BankRowRefusal {
+  outcome: 'refuse'
+  /** The pointer, a bank_line link, a reconciliation link on the pointer, an ignored row, or a failed read. */
+  via: 'pointer' | 'link' | 'reconciliation' | 'ignored' | 'read_error'
+  /** The posted verifikat that books the row; null when none does or a read failed. */
+  journalEntryId: string | null
+  /** Its voucher label ("A12"), null when unnumbered or unread. */
+  voucher: string | null
+  replaceable: boolean
+  /** How the row opens again; null after a failed read, where a retry is the answer. */
+  undo: BankRowUndo | null
+}
+
+/**
  * What a door that books a NEW verifikat on a bank row may do with the row
  * (decideBankRowRebooking):
  *
  *   - open: nothing posted anchors the row; book.
  *   - replace: the row's own booking, which the caller asked to reverse:
  *     storno `journalEntryId`, then book.
- *   - refuse: the row is booked (or a read failed). `replaceable` says the
- *     booking is the row's own, so the door may offer to reverse it.
+ *   - refuse: the row is booked or ignored (or a read failed). `replaceable`
+ *     says the booking is the row's own, so the door may offer to reverse it.
  */
 export type BankRowRebooking =
   | { outcome: 'open' }
   | { outcome: 'replace'; journalEntryId: string }
-  | {
-      outcome: 'refuse'
-      /** The pointer, a bank_line link, a reconciliation link on the pointer, or a failed read. */
-      via: 'pointer' | 'link' | 'reconciliation' | 'read_error'
-      /** The posted verifikat that books the row; null when a read failed. */
-      journalEntryId: string | null
-      /** Its voucher label ("A12"), null when unnumbered or unread. */
-      voucher: string | null
-      replaceable: boolean
-    }
+  | BankRowRefusal
+
+/**
+ * The code a door answers a refusal with. An ignored row is one code on every
+ * door, and so is a failed read: it says nothing about the row, so the answer
+ * is a retry and an approval stays pending. A booked row is the door's own
+ * code, which its caller already reads.
+ */
+export function bankRowRefusalCode(refusal: BankRowRefusal, alreadyBookedCode: string): string {
+  if (refusal.via === 'ignored') return 'BANK_ROW_IGNORED'
+  if (refusal.via === 'read_error') return 'BANK_ROW_READ_FAILED'
+  return alreadyBookedCode
+}
 
 /**
  * The gate a door that books a new verifikat on a bank row asks first: is
  * the row already booked, and if so, may this request reverse that booking?
  * Same read as assertTransactionBookable (the pointer and the bank_line links
  * to a posted verifikat; a failed read refuses).
+ *
+ * An ignored row is refused here, by every door that passes its is_ignored:
+ * it can carry no verifikat (CHECK transactions_is_ignored_no_journal_entry),
+ * so the write after the posting failed and left a voucher behind it. The
+ * categorize and book doors ask assertTransactionBookable instead: booking an
+ * ignored row there is the person's way of taking it back, and they clear
+ * is_ignored in the same write.
  *
  * Only the row's OWN booking can be reversed, and only when the caller asks
  * (`replace`): the pointer names a posted verifikat booked from this row
@@ -271,26 +323,62 @@ export type BankRowRebooking =
 export async function decideBankRowRebooking(
   supabase: SupabaseClient,
   companyId: string,
-  tx: AnchoredTransaction & { reconciliation_method?: string | null },
+  tx: GatedBankRow,
   opts: { replace: boolean },
 ): Promise<BankRowRebooking> {
+  if (tx.is_ignored) {
+    return { outcome: 'refuse', via: 'ignored', journalEntryId: null, voucher: null, replaceable: false, undo: 'restore' }
+  }
   const anchors = await readPostedAnchors(supabase, companyId, tx)
   if (anchors === 'read_error') {
-    return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false }
+    return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null }
   }
   const { pointer, linked } = anchors
-  const refuse = (via: 'pointer' | 'link' | 'reconciliation', entry: PostedAnchor, replaceable = false): BankRowRebooking => ({
+  const refuse = (
+    via: 'pointer' | 'link' | 'reconciliation',
+    entry: PostedAnchor,
+    undo: BankRowUndo,
+    replaceable = false,
+  ): BankRowRebooking => ({
     outcome: 'refuse',
     via,
     journalEntryId: entry.id,
     voucher: anchorVoucherLabel(entry),
     replaceable,
+    undo,
   })
-  if (!pointer) return linked[0] ? refuse('link', linked[0]) : { outcome: 'open' }
-  if (tx.reconciliation_method) return refuse('reconciliation', pointer)
+  if (!pointer) {
+    if (!linked[0]) return { outcome: 'open' }
+    return refuse('link', linked[0], tx.reconciliation_method ? 'unlink' : 'reverse_voucher')
+  }
+  if (tx.reconciliation_method) return refuse('reconciliation', pointer, 'unlink')
   const own = isBookedFromRow(pointer, tx.id) && linked.length === 0
   if (own && opts.replace) return { outcome: 'replace', journalEntryId: pointer.id }
-  return refuse('pointer', pointer, own)
+  return refuse('pointer', pointer, 'uncategorize', own)
+}
+
+/**
+ * decideBankRowRebooking for a door that holds only the row's id. A row that
+ * is not there is open: the door's own write refuses it, as it always did. A
+ * failed read refuses, like every read behind this gate.
+ */
+export async function decideBankRowRebookingById(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionId: string,
+  opts: { replace: boolean },
+): Promise<BankRowRebooking> {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, journal_entry_id, reconciliation_method, is_ignored, transaction_voucher_links(journal_entry_id, role)')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null }
+  }
+  if (!data) return { outcome: 'open' }
+  return decideBankRowRebooking(supabase, companyId, data as GatedBankRow, opts)
 }
 
 /**

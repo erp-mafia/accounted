@@ -1319,6 +1319,37 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen är redan kopplad till en faktura.',
     message_en: 'Transaction is already linked to an invoice.',
   },
+  MATCH_INVOICE_TX_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Banktransaktionen är redan bokförd, så betalningen skulle bokföras två gånger. Inget har sparats.',
+    message_en: 'The bank transaction is already booked, so matching it would book the payment twice. Nothing was saved.',
+    remediation: {
+      description:
+        'Nothing is reversed here. details.undo says how the transaction opens again: uncategorize (gnubok_uncategorize_transaction), unlink (gnubok_reconcile_unmatch: the verifikat stays posted) or reverse_voucher (gnubok_reverse_journal_entry: every transaction on that verifikat returns to the worklist). If the verifikat already is this payment, link the invoice to it instead: gnubok_link_invoice_to_voucher.',
+    },
+  },
+  // One code on every door that refuses an ignored row before it posts
+  // (decideBankRowRebooking); the row can carry no verifikat
+  // (CHECK transactions_is_ignored_no_journal_entry).
+  BANK_ROW_IGNORED: {
+    httpStatus: 409,
+    message_sv: 'Banktransaktionen är ignorerad. Återställ den innan du bokför den.',
+    message_en: 'The bank transaction is ignored. Restore it before booking it.',
+    remediation: {
+      description:
+        'Restore the transaction first: gnubok_ignore_transaction with restore: true, or DELETE /transactions/{id}/ignore. Nothing was booked.',
+      tool: 'gnubok_ignore_transaction',
+    },
+  },
+  // A read behind decideBankRowRebooking failed. Nothing is known about the
+  // row, so it is no answer about the booking: the door stops, and a retry is
+  // the way on. An approval stays pending (the dispatcher in commit.ts).
+  BANK_ROW_READ_FAILED: {
+    httpStatus: 503,
+    message_sv: 'Banktransaktionen kunde inte läsas, så inget bokfördes. Försök igen om en stund.',
+    message_en: 'The bank transaction could not be read, so nothing was booked. Retry the same request after a short backoff.',
+    retryable: true,
+  },
   MATCH_INVOICE_NOT_OPEN: {
     httpStatus: 400,
     message_sv: 'Fakturan är inte i ett obetalt läge och kan inte matchas.',
@@ -1465,6 +1496,13 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Endast bokförda verifikationer kan kopplas till en banktransaktion.',
     message_en: 'Only posted journal entries can be linked to a transaction.',
+  },
+  // Neither can be a bank row's movement: an ingående balans predates the
+  // feed and a storno cancels a verifikat (prepareBankLink).
+  LINK_TX_JE_NOT_BANK_MOVEMENT: {
+    httpStatus: 400,
+    message_sv: 'Verifikationen är en ingående balans eller en storno och kan inte kopplas till en banktransaktion.',
+    message_en: 'The journal entry is an opening balance or a storno and cannot be linked to a transaction.',
   },
   LINK_TX_TX_ALREADY_LINKED: {
     httpStatus: 400,

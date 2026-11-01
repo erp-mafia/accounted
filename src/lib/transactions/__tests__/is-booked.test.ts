@@ -7,6 +7,9 @@ import {
   embeddedVoucherLabel,
   assertTransactionBookable,
   decideBankRowRebooking,
+  decideBankRowRebookingById,
+  bankRowRefusalCode,
+  type BankRowRefusal,
 } from '../is-booked'
 
 describe('isTransactionBooked', () => {
@@ -248,6 +251,7 @@ describe('decideBankRowRebooking', () => {
       journalEntryId: 'je-own',
       voucher: 'A12',
       replaceable: true,
+      undo: 'uncategorize',
     })
   })
 
@@ -280,7 +284,7 @@ describe('decideBankRowRebooking', () => {
         { id: 'tx-1', journal_entry_id: 'je-sie', reconciliation_method: 'manual' },
         { replace: true },
       ),
-    ).toEqual({ outcome: 'refuse', via: 'reconciliation', journalEntryId: 'je-sie', voucher: 'A7', replaceable: false })
+    ).toEqual({ outcome: 'refuse', via: 'reconciliation', journalEntryId: 'je-sie', voucher: 'A7', replaceable: false, undo: 'unlink' })
   })
 
   it('never replaces a link-only row (a samlingsverifikat with N>1), even when asked', async () => {
@@ -288,7 +292,7 @@ describe('decideBankRowRebooking', () => {
     enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] })
     enqueue({ data: [{ ...OWN, id: 'je-samling', source_type: 'manual', source_id: null, voucher_number: 40 }] })
     expect(await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null }, { replace: true }))
-      .toEqual({ outcome: 'refuse', via: 'link', journalEntryId: 'je-samling', voucher: 'A40', replaceable: false })
+      .toEqual({ outcome: 'refuse', via: 'link', journalEntryId: 'je-samling', voucher: 'A40', replaceable: false, undo: 'reverse_voucher' })
   })
 
   it('never replaces a pointer booked from another source (a customer payment, an utlägg payout)', async () => {
@@ -307,6 +311,35 @@ describe('decideBankRowRebooking', () => {
       .toMatchObject({ outcome: 'refuse', via: 'pointer', journalEntryId: 'je-own', replaceable: false })
   })
 
+  it('refuses an ignored row before it reads anything: the row can carry no verifikat', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    expect(
+      await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null, is_ignored: true }, { replace: true }),
+    ).toEqual({ outcome: 'refuse', via: 'ignored', journalEntryId: null, voucher: null, replaceable: false, undo: 'restore' })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('says how each refused shape opens again: only the pointer of a booking is undone by uncategorize', async () => {
+    const decide = async (row: { journal_entry_id: string | null; reconciliation_method: string | null }, links: unknown[], entries: unknown[]) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: links })
+      enqueue({ data: entries })
+      const decision = await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', ...row }, { replace: false })
+      return decision.outcome === 'refuse' ? [decision.via, decision.undo] : decision.outcome
+    }
+    const FOREIGN = { ...OWN, source_type: 'manual', source_id: null }
+    const LINK = { journal_entry_id: 'je-own', role: 'bank_line' }
+
+    expect(await decide({ journal_entry_id: 'je-own', reconciliation_method: null }, [], [OWN])).toEqual(['pointer', 'uncategorize'])
+    expect(await decide({ journal_entry_id: 'je-own', reconciliation_method: null }, [], [FOREIGN])).toEqual(['pointer', 'uncategorize'])
+    // Uncategorize would reverse the independent verifikat: the link comes off instead.
+    expect(await decide({ journal_entry_id: 'je-own', reconciliation_method: 'auto_exact' }, [], [FOREIGN])).toEqual(['reconciliation', 'unlink'])
+    expect(await decide({ journal_entry_id: null, reconciliation_method: 'manual' }, [LINK], [FOREIGN])).toEqual(['link', 'unlink'])
+    // A samlingsverifikat: no pointer to undo, no link to take off (LINK_IS_BOOKING).
+    expect(await decide({ journal_entry_id: null, reconciliation_method: null }, [LINK], [FOREIGN])).toEqual(['link', 'reverse_voucher'])
+  })
+
   it('lets a row through whose pointer names a reversed verifikat', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [] })
@@ -323,6 +356,62 @@ describe('decideBankRowRebooking', () => {
       journalEntryId: null,
       voucher: null,
       replaceable: false,
+      undo: null,
     })
+  })
+})
+
+describe('decideBankRowRebookingById', () => {
+  const ROW = { id: 'tx-1', journal_entry_id: null, reconciliation_method: null, is_ignored: false, transaction_voucher_links: [] }
+
+  it('reads the row with its links and asks the same gate', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW, transaction_voucher_links: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] } })
+    enqueue({ data: [{ id: 'je-samling', status: 'posted', source_type: 'manual', source_id: null, voucher_series: 'A', voucher_number: 40 }] })
+    expect(await decideBankRowRebookingById(supabase as never, 'company-1', 'tx-1', { replace: false }))
+      .toEqual({ outcome: 'refuse', via: 'link', journalEntryId: 'je-samling', voucher: 'A40', replaceable: false, undo: 'reverse_voucher' })
+  })
+
+  it('refuses an ignored row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW, is_ignored: true } })
+    expect(await decideBankRowRebookingById(supabase as never, 'company-1', 'tx-1', { replace: false }))
+      .toMatchObject({ outcome: 'refuse', via: 'ignored', undo: 'restore' })
+  })
+
+  it("answers open for a row that is not there: the door's own write refuses it", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    expect(await decideBankRowRebookingById(supabase as never, 'company-1', 'tx-1', { replace: false })).toEqual({ outcome: 'open' })
+  })
+
+  it('fails closed when the row cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'timeout' } })
+    expect(await decideBankRowRebookingById(supabase as never, 'company-1', 'tx-1', { replace: false }))
+      .toEqual({ outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null })
+  })
+})
+
+describe('bankRowRefusalCode', () => {
+  const refusal = (via: BankRowRefusal['via']): BankRowRefusal => ({
+    outcome: 'refuse',
+    via,
+    journalEntryId: null,
+    voucher: null,
+    replaceable: false,
+    undo: null,
+  })
+
+  it.each(['pointer', 'link', 'reconciliation'] as const)('answers the door\'s own code for a row booked by %s', (via) => {
+    expect(bankRowRefusalCode(refusal(via), 'DOOR_ALREADY_BOOKED')).toBe('DOOR_ALREADY_BOOKED')
+  })
+
+  it('answers one code for an ignored row on every door', () => {
+    expect(bankRowRefusalCode(refusal('ignored'), 'DOOR_ALREADY_BOOKED')).toBe('BANK_ROW_IGNORED')
+  })
+
+  it('never calls a failed read booked: the row may be free, and the answer is a retry', () => {
+    expect(bankRowRefusalCode(refusal('read_error'), 'DOOR_ALREADY_BOOKED')).toBe('BANK_ROW_READ_FAILED')
   })
 })

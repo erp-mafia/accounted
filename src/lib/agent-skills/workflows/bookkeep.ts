@@ -137,6 +137,7 @@ Every verifikat needs an underlag (BFL 5 kap). First look in Accounted (unmatche
 ### Duplicates
 
 - The categorize tool refuses with "Möjlig dubblettbokföring" and names a verifikat: the event already looks booked. Default: link the row to that verifikat (\`gnubok_link_transaction_to_journal_entry\`). Only if the user confirms it is a separate event (two identical subscriptions, two equal fuel purchases) retry with \`allow_duplicate: true\`.
+- \`gnubok_match_transaction_to_invoice\` refuses with MATCH_INVOICE_TX_ALREADY_BOOKED: the row is already booked and nothing was written. Show the named verifikat. If it already is this payment, link the invoice to it with \`gnubok_link_invoice_to_voucher\`. To replace the booking, with the user's approval, use the refusal's \`undo\`: \`gnubok_uncategorize_transaction\`, \`gnubok_reconcile_unmatch\` (the verifikat stays) or \`gnubok_reverse_journal_entry\` (every row on that verifikat comes back), then match again.
 - \`gnubok_match_transaction_to_invoice\` refuses with MATCH_INVOICE_POSSIBLE_DUPLICATE: the payment may already be booked on a manual verifikat. Show the named verifikat; only with the user's confirmation retry with \`force: true\` and \`expected_journal_entry_id\` set to the id the refusal named.
 - The same bank row appears twice (two feeds imported it): ignore the extra row with \`gnubok_ignore_transaction({ transaction_id })\` after the user agrees. Never ignore a row that is a real event.
 

@@ -19,10 +19,11 @@
  *     dashboard and v1 mark-paid and the MCP approval of
  *     gnubok_mark_invoice_as_paid; the v1 dry run and the MCP staging preview
  *     plan it too;
- *   - the bank match of one income row: the dashboard and v1 match-invoice
- *     routes, the dashboard match preview, and the MCP approval of
- *     gnubok_match_transaction_to_invoice (which gnubok_auto_match_period
- *     stages), with their stagings;
+ *   - the bank match of one income row: bookCustomerBankMatch
+ *     (./book-customer-bank-match.ts: the dashboard and v1 match-invoice
+ *     routes and the MCP approval of gnubok_match_transaction_to_invoice,
+ *     which gnubok_auto_match_period stages), the dashboard match preview,
+ *     and the stagings;
  *   - the samlingsbetalning (lib/transactions/match-batch.ts: dashboard, v1,
  *     MCP, and the Bankgirot/Open Payments splits that hand a row to it);
  *   - a link to an existing verifikat: linkInvoiceToVoucher

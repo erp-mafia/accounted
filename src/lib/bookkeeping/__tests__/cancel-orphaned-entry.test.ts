@@ -264,7 +264,7 @@ describe('cancelOrphanedPaymentEntry', () => {
 
     await expect(
       cancelOrphanedPaymentEntry(supabase as never, 'company-1', 'user-1', 'je-1', 'x'),
-    ).resolves.toBeUndefined()
+    ).resolves.toBe(false)
   })
 
   it('never throws, even when the helper rejects unexpectedly', async () => {
@@ -273,6 +273,6 @@ describe('cancelOrphanedPaymentEntry', () => {
 
     await expect(
       cancelOrphanedPaymentEntry(supabase as never, 'company-1', 'user-1', 'je-1', 'x'),
-    ).resolves.toBeUndefined()
+    ).resolves.toBe(false)
   })
 })

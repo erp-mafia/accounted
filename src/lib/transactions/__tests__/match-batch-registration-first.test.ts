@@ -16,6 +16,13 @@ const { mockCommitBatch, mockPlanBatch, mockBookBatch } = vi.hoisted(() => ({
   mockPlanBatch: vi.fn(),
   mockBookBatch: vi.fn(),
 }))
+// The gate has its own door test (src/lib/transactions/__tests__/match-batch-booked-row.test.ts);
+// this suite queues what follows it.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebookingById: vi.fn(async () => ({ outcome: 'open' })),
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   commitMatchBatchAllocation: mockCommitBatch,
 }))

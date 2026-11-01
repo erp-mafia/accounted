@@ -520,9 +520,10 @@ export default function TransactionsPage() {
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithInvoice | null>(null)
   const [isConfirmingMatch, setIsConfirmingMatch] = useState(false)
-  // The supplier match refused a booked row (MATCH_SI_TX_ALREADY_BOOKED): the
-  // dialog's soft block, for the row it was refused for.
-  const [siAlreadyBooked, setSiAlreadyBooked] = useState<(MatchAlreadyBooked & { transactionId: string }) | null>(null)
+  // The match refused a booked row (MATCH_SI_TX_ALREADY_BOOKED,
+  // MATCH_INVOICE_TX_ALREADY_BOOKED): the dialog's soft block, for the row it
+  // was refused for.
+  const [matchAlreadyBooked, setMatchAlreadyBooked] = useState<(MatchAlreadyBooked & { transactionId: string }) | null>(null)
   // ROT/RUT payout confirm (Skatteverkets utbetalning for an open begäran):
   // its own dialog, same selectedTransaction / isConfirmingMatch plumbing.
   const [rotRutMatchDialogOpen, setRotRutMatchDialogOpen] = useState(false)
@@ -2601,11 +2602,12 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         // A booked row is not a failure to toast: the dialog says which
-        // verifikat books it and offers to reverse the row's own booking.
-        const refusal = (result as { error?: { code?: unknown; details?: { voucher?: unknown; storno_allowed?: unknown } } })?.error
-        if (isSupplier && refusal?.code === 'MATCH_SI_TX_ALREADY_BOOKED') {
-          setSiAlreadyBooked({
+        // verifikat books it, and how the row opens again.
+        const refusal = (result as { error?: { code?: unknown; details?: { journal_entry_id?: unknown; voucher?: unknown; storno_allowed?: unknown } } })?.error
+        if (refusal?.code === (isSupplier ? 'MATCH_SI_TX_ALREADY_BOOKED' : 'MATCH_INVOICE_TX_ALREADY_BOOKED')) {
+          setMatchAlreadyBooked({
             transactionId: selectedTransaction.id,
+            journalEntryId: typeof refusal.details?.journal_entry_id === 'string' ? refusal.details.journal_entry_id : null,
             voucher: typeof refusal.details?.voucher === 'string' ? refusal.details.voucher : null,
             stornoAllowed: refusal.details?.storno_allowed === true,
             message: getErrorMessage(result, { locale: errorLocale }),
@@ -2630,7 +2632,7 @@ export default function TransactionsPage() {
         : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
       toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
       setMatchDialogOpen(false)
-      setSiAlreadyBooked(null)
+      setMatchAlreadyBooked(null)
 
       // Mark as exiting for animation
       setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
@@ -2652,7 +2654,7 @@ export default function TransactionsPage() {
                     potential_invoice_id: null,
                     potential_invoice: undefined,
                     is_business: true,
-                    category: 'income_services' as TransactionCategory,
+                    category: (result.category ?? t.category) as TransactionCategory,
                     journal_entry_id: result.journal_entry_id,
                   }
               : t
@@ -4891,14 +4893,14 @@ export default function TransactionsPage() {
           open
           onOpenChange={(open) => {
             setMatchDialogOpen(open)
-            if (!open) setSiAlreadyBooked(null)
+            if (!open) setMatchAlreadyBooked(null)
           }}
           transaction={selectedTransaction}
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmInvoiceMatch}
           onLinkToExisting={handleLinkToExistingVoucher}
           onSplitAcrossInvoices={handleSplitFromMatchDialog}
-          alreadyBooked={siAlreadyBooked && siAlreadyBooked.transactionId === selectedTransaction?.id ? siAlreadyBooked : null}
+          alreadyBooked={matchAlreadyBooked && matchAlreadyBooked.transactionId === selectedTransaction?.id ? matchAlreadyBooked : null}
         />
       )}
 

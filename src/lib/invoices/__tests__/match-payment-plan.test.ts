@@ -108,7 +108,7 @@ describe('planTransactionInvoiceMatch: cross-currency', () => {
     })
     expect(ok.ok).toBe(true)
     if (ok.ok) {
-      expect(ok.fx).toEqual({ required: true, rate: 11, paidInInvoiceCurrency: 100 })
+      expect(ok.fx).toEqual({ required: true, rate: 11, paidInInvoiceCurrency: 100, source: 'riksbanken' })
       expect(ok.paidAmount).toBe(100)
     }
     expect(mockFetchExchangeRate).toHaveBeenCalledWith('EUR', new Date('2026-09-30'), supabase)
@@ -122,6 +122,18 @@ describe('planTransactionInvoiceMatch: cross-currency', () => {
       remaining_amount: 100,
     })
     expect(over).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING', currency: 'EUR', absorbsOre: false })
+  })
+
+  it("takes the caller's manual rate over Riksbanken's and says where the rate came from", async () => {
+    const r = await planTransactionInvoiceMatch(
+      supabase,
+      sekTx(1100),
+      { currency: 'EUR', total: 100, paid_amount: 0, remaining_amount: 100 },
+      { manualExchangeRate: 11 },
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.fx).toEqual({ required: true, rate: 11, paidInInvoiceCurrency: 100, source: 'manual' })
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
   })
 
   // PH 227: a 8 800 EUR invoice booked at 11.1145 (97 807,60 kr) paid in full
@@ -138,7 +150,7 @@ describe('planTransactionInvoiceMatch: cross-currency', () => {
     })
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect(r.fx).toEqual({ required: true, rate: 11.1385, paidInInvoiceCurrency: 8800 })
+      expect(r.fx).toEqual({ required: true, rate: 11.1385, paidInInvoiceCurrency: 8800, source: 'riksbanken' })
       expect(r.paidAmount).toBe(8800)
       expect(r.plan).toMatchObject({ newStatus: 'paid', newRemaining: 0 })
     }

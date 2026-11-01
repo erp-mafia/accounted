@@ -4708,6 +4708,7 @@
     "duplicate_body_unverified": "There is already a posted journal entry {label} for {amount} close in time ({date}). The amount could not be verified because no exchange rate is stored. Have you already posted this payment manually?",
     "already_booked_title": "The transaction is already booked",
     "already_booked_storno_and_match": "Reverse {label} and match",
+    "already_booked_open_voucher": "Open {label}",
     "link_to_existing": "Link to {label}",
     "create_new_anyway": "Create new voucher anyway",
     "transaction_label": "Transaction",

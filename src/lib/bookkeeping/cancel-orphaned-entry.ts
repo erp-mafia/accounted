@@ -217,6 +217,9 @@ async function orphanStillStands(supabase: SupabaseClient, companyId: string, jo
  *
  * Best-effort by design: the CAS conflict response is already correct for
  * the caller, so failures here are logged loudly rather than thrown.
+ *
+ * @returns true when the voucher is cancelled, false when it stays posted: a
+ * caller that reports what stands (a partial commit) names it then.
  */
 export async function cancelOrphanedPaymentEntry(
   supabase: SupabaseClient,
@@ -224,7 +227,7 @@ export async function cancelOrphanedPaymentEntry(
   userId: string,
   journalEntryId: string,
   explanation: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { error } = await cancelOrphanedEntry(supabase, companyId, userId, journalEntryId, {
       gapExplanation: explanation,
@@ -237,7 +240,9 @@ export async function cancelOrphanedPaymentEntry(
         journalEntryId,
         explanation,
       })
+      return false
     }
+    return true
   } catch (err) {
     // Hard never-throw guarantee: the caller is about to return the correct
     // CAS-conflict response, and an unexpected rejection here must not
@@ -246,5 +251,6 @@ export async function cancelOrphanedPaymentEntry(
       companyId,
       journalEntryId,
     })
+    return false
   }
 }

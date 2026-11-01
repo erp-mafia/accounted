@@ -164,14 +164,19 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
   })
 
   it.each([
-    ['an incoming row', txRow({ amount: 1596 }), 'EXPENSE_PAYOUT_MATCH_NOT_EXPENSE'],
-    ['a EUR row', txRow({ currency: 'EUR' }), 'EXPENSE_PAYOUT_MATCH_CURRENCY'],
-    ['a row in a samlingsverifikat', txRow({ transaction_voucher_links: [{ journal_entry_id: JE_ID, role: 'bank_line' }] }), 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED'],
-  ])('400 for %s, writing nothing', async (_label, row, code) => {
-    const client = makeClient({ company_members: MEMBER, transactions: { data: row, error: null } })
+    ['an incoming row', txRow({ amount: 1596 }), 'EXPENSE_PAYOUT_MATCH_NOT_EXPENSE', 400],
+    ['a EUR row', txRow({ currency: 'EUR' }), 'EXPENSE_PAYOUT_MATCH_CURRENCY', 400],
+    ['a row in a samlingsverifikat', txRow({ transaction_voucher_links: [{ journal_entry_id: JE_ID, role: 'bank_line' }] }), 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED', 400],
+    ['an ignored row', txRow({ is_ignored: true }), 'BANK_ROW_IGNORED', 409],
+  ])('refuses %s, writing nothing', async (_label, row, code, status) => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: { data: row, error: null },
+      journal_entries: { data: [{ id: JE_ID, status: 'posted' }], error: null },
+    })
     mockServiceClient.mockReturnValue(client)
     const res = await matchPayout(request(), params)
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(status)
     expect((await res.json()).error.code).toBe(code)
     expect(wrote(client)).toBe(false)
   })

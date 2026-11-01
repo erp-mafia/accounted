@@ -93,6 +93,43 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(result).toEqual({ linkedTransactionId: 'tx-1' })
   })
 
+  it('skips a row booked through a bank_line link: it has no pointer, and one written here would anchor it to a second verifikat', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] }) // nobody holds the voucher
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: 1000, transaction_voucher_links: [{ role: 'bank_line' }] }] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it('still links a row whose only link is a supplementary one: a residual is not the booking of the bank line', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] })
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: 1000, transaction_voucher_links: [{ role: 'other' }] }] })
+    enqueueManualLinkSuccess(enqueue, 1000)
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toEqual({ linkedTransactionId: 'tx-1' })
+  })
+
   it("leaves the row's underlag on the row: a guessed link never makes its receipt that verifikat's for good (crm#1101)", async () => {
     // An anchored document stays the verifikat's underlag, and Koppla bort
     // only clears the row's pointer, so a wrong guess could not free it.

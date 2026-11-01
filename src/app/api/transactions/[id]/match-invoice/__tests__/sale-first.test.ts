@@ -1,9 +1,8 @@
 /**
  * The dashboard bank match of an invoice a deferring company has not booked
  * yet (defer_invoice_booking): the sale is booked first through the Bokför
- * step (lib/invoices/sale-first.ts), then the storno of a conflicting
- * categorisation and the payment verifikat. A refusal there refuses the match
- * with the Bokför code and nothing is written. The rule itself has its own
+ * step (lib/invoices/sale-first.ts), then the payment verifikat. A refusal
+ * there refuses the match with the Bokför code and nothing is written. The rule itself has its own
  * suite; here it is a controllable mock and the tests pin the route's wiring:
  * what it asks the plan, when it books, what it answers. The preview route
  * shows the same plan.
@@ -51,10 +50,18 @@ vi.mock('@/lib/bookkeeping/account-validation', () => ({
 const mockReverseEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
+const mockCancelOrphanedEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+  cancelOrphanedEntry: (...args: unknown[]) => mockCancelOrphanedEntry(...args),
+}))
+
+// Open: the gate has its own suites, and consumes no slot in the queued mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
 }))
 
 vi.mock('@/lib/currency/riksbanken', () => ({ fetchExchangeRate: vi.fn() }))
@@ -132,6 +139,9 @@ function enqueueReads(opts: { tx?: Record<string, unknown>; invoice?: Record<str
 
 /** The writes after the payment verifikat, when the sale was booked first. */
 function enqueueSettleWrites(opts: { invoicePdf?: boolean } = {}) {
+  enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+  enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice CAS update
+  enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
   // The invoice PDF lookup on the sale verifikat, re-attached to the payment.
   enqueue({
     data: opts.invoicePdf
@@ -140,9 +150,6 @@ function enqueueSettleWrites(opts: { invoicePdf?: boolean } = {}) {
     error: null,
   })
   if (opts.invoicePdf) enqueue({ data: null, error: null }) // document_attachments insert
-  enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice CAS update
-  enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-  enqueue({ data: null, error: null }) // transaction link
 }
 
 async function post(body: Record<string, unknown> = {}) {
@@ -164,7 +171,6 @@ async function post(body: Record<string, unknown> = {}) {
 
 function expectNothingWritten() {
   expect(mockBookSale).not.toHaveBeenCalled()
-  expect(mockReverseEntry).not.toHaveBeenCalled()
   expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   expect(findCalls('invoices', 'update')).toHaveLength(0)
@@ -178,8 +184,8 @@ beforeEach(() => {
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
   mockFindUnresolvableAccounts.mockResolvedValue([])
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
-  mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
+  mockCancelOrphanedEntry.mockResolvedValue({ error: null })
   mockPlanSale.mockResolvedValue(NOT_REQUIRED)
   mockBookSale.mockResolvedValue(NOTHING_BOOKED)
 })
@@ -218,22 +224,6 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
       ]),
     )
     expect(input.lines.some((l) => l.account_number.startsWith('30') || l.account_number.startsWith('26'))).toBe(false)
-  })
-
-  it('books the sale before the storno of a conflicting categorisation, then the payment', async () => {
-    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
-    mockBookSale.mockResolvedValue(BOOKED)
-    enqueueReads({ tx: { journal_entry_id: 'je-conflict' } })
-    enqueue({ data: null, error: null }) // transaction unlink after the storno
-    enqueueSettleWrites()
-
-    const { status, body } = await post()
-
-    expect(status).toBe(200)
-    expect(body.sale_journal_entry_id).toBe('je-sale')
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-conflict')
-    expect(mockBookSale.mock.invocationCallOrder[0]).toBeLessThan(mockReverseEntry.mock.invocationCallOrder[0])
-    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
   })
 
   it('re-attaches the invoice PDF from the sale verifikat booked first', async () => {
@@ -277,7 +267,7 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
 
   it('refuses with the Bokför code and writes nothing when the plan refuses', async () => {
     mockPlanSale.mockResolvedValue(INVOICE_DATE_LOCKED)
-    enqueueReads({ tx: { journal_entry_id: 'je-conflict' } })
+    enqueueReads()
 
     const { status, body } = await post()
 
@@ -294,7 +284,7 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
       code: 'INVOICE_BOOK_INVALID_STATUS',
       details: { currentStatus: 'partially_paid', sale_first: true, invoice_id: INVOICE_ID },
     })
-    enqueueReads({ tx: { journal_entry_id: 'je-conflict' } })
+    enqueueReads()
 
     const { status, body } = await post()
 
@@ -302,7 +292,6 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
     expect(body.error?.code).toBe('INVOICE_BOOK_INVALID_STATUS')
     expect(body.error?.details).toMatchObject({ sale_first: true })
     expect(mockBookSale).toHaveBeenCalledTimes(1)
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(findCalls('invoices', 'update')).toHaveLength(0)
     expect(findCalls('invoice_payments', 'insert')).toHaveLength(0)
@@ -318,30 +307,14 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
     const { status, body } = await post()
 
     expect(status).toBe(500)
-    expect(body.error?.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    expect(body.error?.code).toBe('INVOICE_PAID_BOOK_FAILED')
     expect(body.error?.details?.posted_ids).toEqual({ sale_journal_entry_id: 'je-sale' })
     expect(findCalls('invoices', 'update')).toHaveLength(0)
   })
 
-  it('names the sale and the storno when the payment verifikat then fails', async () => {
-    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
-    mockBookSale.mockResolvedValue(BOOKED)
-    mockCreateJournalEntry.mockRejectedValue(new Error('boom'))
-    enqueueReads({ tx: { journal_entry_id: 'je-conflict' } })
-    enqueue({ data: null, error: null }) // transaction unlink after the storno
-
-    const { status, body } = await post()
-
-    expect(status).toBe(500)
-    expect(body.error?.details?.posted_ids).toEqual({
-      sale_journal_entry_id: 'je-sale',
-      reversal_journal_entry_id: 'je-storno',
-    })
-  })
-
   it('an already booked invoice (plan: not required) pays as before, with no sale named', async () => {
     enqueueReads({ invoice: { journal_entry_id: 'je-invoice' } })
-    enqueue({ data: null, error: null }) // invoice PDF lookup on its own verifikat
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link
@@ -358,6 +331,7 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
   it('kontantmetoden (plan: not required) books the cash entry as before', async () => {
     mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
     enqueueReads({ method: 'cash' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link
@@ -373,6 +347,7 @@ describe('POST /api/transactions/[id]/match-invoice: the sale first (defer_invoi
 
   it('edited rows that book the revenue themselves (no 151x credit) skip the plan', async () => {
     enqueueReads()
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: null, error: null }) // transaction link

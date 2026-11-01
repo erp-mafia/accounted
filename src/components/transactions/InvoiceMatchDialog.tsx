@@ -111,12 +111,14 @@ export interface ConfirmOpts {
 }
 
 /**
- * The supplier match was refused because the bank row is already booked
- * (MATCH_SI_TX_ALREADY_BOOKED): the verifikat that books it, whether it is
- * the row's own categorization, which the match may reverse, and the
- * refusal's own sentence in the UI's language.
+ * The match was refused because the bank row is already booked
+ * (MATCH_SI_TX_ALREADY_BOOKED, MATCH_INVOICE_TX_ALREADY_BOOKED): the verifikat
+ * that books it, whether a supplier match may reverse the row's own
+ * categorization, and the refusal's own sentence in the UI's language, which
+ * says how the row opens again.
  */
 export interface MatchAlreadyBooked {
+  journalEntryId: string | null
   voucher: string | null
   stornoAllowed: boolean
   message: string
@@ -402,9 +404,10 @@ export default function InvoiceMatchDialog({
         {transaction && (isCustomerInvoice || isSupplierInvoice) && (
           <div className="space-y-4">
             {/* The row is already booked (accounted#58): matching it too would
-                book the payment twice. Only the row's own categorization can
-                be reversed here, and only by this explicit click. */}
-            {!targetBlocked && alreadyBooked && isSupplierInvoice && (
+                book the payment twice. A supplier match can reverse the row's
+                own categorization here, by this explicit click; a customer
+                match reverses nothing, so the verifikat opens from here. */}
+            {!targetBlocked && alreadyBooked && (
               <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                 <div className="flex items-start gap-2">
                   <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
@@ -421,6 +424,13 @@ export default function InvoiceMatchDialog({
                     disabled={isConfirming || !editor.validation.isValid}
                   >
                     {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
+                  </Button>
+                )}
+                {alreadyBooked.journalEntryId && alreadyBooked.voucher && !alreadyBooked.stornoAllowed && (
+                  <Button variant="outline" size="sm" asChild>
+                    <a href={`/bookkeeping/${alreadyBooked.journalEntryId}`} target="_blank" rel="noopener noreferrer">
+                      {t('already_booked_open_voucher', { label: alreadyBooked.voucher })}
+                    </a>
                   </Button>
                 )}
               </div>
@@ -1022,7 +1032,7 @@ export default function InvoiceMatchDialog({
               isCheckingDuplicate ||
               // A booked row: the plain match is refused again; the soft
               // block's own button is the only way on.
-              (isSupplierInvoice && !!alreadyBooked) ||
+              !!alreadyBooked ||
               // Blocked target: the route rejects this unconditionally, so the
               // button has no reachable success path.
               targetBlocked ||

@@ -73,6 +73,23 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
 }))
 
+// Open: the gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts). Mocked with the
+// chart check so neither consumes a slot in the queued Supabase mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn(async () => []),
+}))
+// No invoice here needs its sale booked first; that rule has its own suites.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -132,6 +149,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'credit-1' } })
@@ -178,11 +196,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -285,11 +304,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -334,14 +354,15 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     // With cash_account_id null, resolveSettlementAccount lists the company's
     // enabled cash accounts for the currency (issue #1722); no rows here, so
     // it keeps the 1930 fallback.
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -398,6 +419,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
     enqueue({ data: null, error: null }) // dispatcher marks the op 'rejected'
@@ -444,11 +466,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -517,11 +540,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -582,11 +606,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -658,11 +683,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -713,6 +739,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -759,6 +786,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -800,11 +828,12 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
       data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
   }
 
@@ -901,7 +930,7 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
     expect(result.code).toBe('MATCH_OVERPAYMENT_CHANGED')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
-    expect(rejected.result_data).toMatchObject({ details: { staged_excess: 500, current_excess: 812.4 } })
+    expect(rejected.result_data).toMatchObject({ details: { shown_excess: 500, current_excess: 812.4 } })
   })
 
   it('refuses 3740 for an excess at or above the cap at approval too', async () => {
@@ -915,6 +944,7 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
       data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', total: 812.4, paid_amount: 0, remaining_amount: 812.4, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' } },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({
@@ -946,11 +976,12 @@ describe('commitPendingOperation: match_transaction_invoice with fee_account (cr
       data: { id: 'inv-1', invoice_number: '001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
   }
 
@@ -1035,6 +1066,7 @@ describe('commitPendingOperation: match_transaction_invoice with fee_account (cr
       data: { id: 'inv-1', invoice_number: '001', status: 'sent', total: 10000, paid_amount: 0, remaining_amount: 9900, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-sent', customer: { name: 'Test AB' } },
       error: null,
     }) // invoice fetch: the remaining moved after staging
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({
@@ -1046,7 +1078,7 @@ describe('commitPendingOperation: match_transaction_invoice with fee_account (cr
     expect(result.code).toBe('MATCH_PAYMENT_FEE_CHANGED')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
-    expect(rejected.result_data).toMatchObject({ details: { staged_fee: 190.5, current_fee: 90.5 } })
+    expect(rejected.result_data).toMatchObject({ details: { shown_fee: 190.5, current_fee: 90.5 } })
   })
 
   it('without fee_account a kontantmetod payout short of the invoice stays refused at approval', async () => {
@@ -1060,6 +1092,7 @@ describe('commitPendingOperation: match_transaction_invoice with fee_account (cr
       data: { id: 'inv-1', invoice_number: '001', status: 'sent', currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, paid_amount: 0, ...cashInvoice },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
