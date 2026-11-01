@@ -28,6 +28,7 @@ import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
 import { matchSupplierByIdentity, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
 import type { SellerRegion } from '@/lib/vat/seller-country'
+import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import type { PairableRow } from '@/lib/inkorg/pairs-read'
 import { inkorgCompany } from '@/lib/inkorg/startable'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
@@ -55,7 +56,8 @@ export type OneClickRead =
   | { ok: false; code: 'INBOX_ITEM_NOT_FOUND' | 'INBOX_ITEM_ALREADY_BOOKED' | 'INBOX_ITEM_ALREADY_CONVERTED'; details?: Record<string, unknown> }
 
 type ItemRow = PairableRow &
-  BankMatchItemRow & {
+  BankMatchItemRow &
+  DocumentHoldRow & {
     matched_supplier_id: string | null
     email_subject: string | null
     extracted_data: InvoiceExtractionResult | null
@@ -119,7 +121,7 @@ export async function readOneClickInput(
 ): Promise<OneClickRead> {
   const { data, error } = await supabase
     .from('invoice_inbox_items')
-    .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key, email_subject')
+    .select(`id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_source_key, email_subject, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', itemId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -129,7 +131,9 @@ export async function readOneClickInput(
   if (row.created_supplier_invoice_id) {
     return { ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED', details: { supplier_invoice_id: row.created_supplier_invoice_id } }
   }
-  if (row.created_journal_entry_id) return { ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED', details: { inbox_item_id: itemId } }
+  if (row.created_journal_entry_id || withDocumentHold(row).document_journal_entry_id) {
+    return { ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED', details: { inbox_item_id: itemId } }
+  }
 
   // The document's reading stands in when the item has none, as on every read.
   let reading = row.extracted_data

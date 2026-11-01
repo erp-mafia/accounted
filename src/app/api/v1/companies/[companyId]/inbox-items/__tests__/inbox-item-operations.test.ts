@@ -657,7 +657,8 @@ describe('POST /inbox-items/:id/convert', () => {
       ],
       supplier_invoice_items: { data: [{ id: '55555555-5555-4555-8555-555555555555', sort_order: 0 }], error: null },
       company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
-      document_attachments: { data: null, error: null },
+      journal_entries: { data: { id: JE_ID }, error: null },
+      document_attachments: { data: { id: DOC_ID }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post(BODY)
@@ -682,7 +683,7 @@ describe('POST /inbox-items/:id/convert', () => {
         table: 'document_attachments',
         method: 'update',
         // Booked from the document by an API key: nobody approved it in Accounted.
-        args: [{ journal_entry_id: JE_ID, link_basis: 'client_asserted', link_evidence: null }],
+        args: [{ journal_entry_id: JE_ID, journal_entry_line_id: null, link_basis: 'client_asserted', link_evidence: null }],
       }),
     )
   })

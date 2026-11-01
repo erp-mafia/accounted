@@ -3,8 +3,8 @@
  *
  * An invoice_inbox_items row leaves the active inbox ("Att göra") only when a
  * journal entry consumes it: created_journal_entry_id (or
- * created_supplier_invoice_id) is what deriveInboxStatus and the count pills
- * read. Historically only categorizeTransactionCore stamped that column, so a
+ * created_supplier_invoice_id) is what itemStage (lib/documents/inbox-item-state.ts) and the
+ * count pills read. Historically only categorizeTransactionCore stamped that column, so a
  * matched item whose transaction was booked through any OTHER path (the /book
  * route, bulk-book, link-to-existing-voucher, or an attach that landed after
  * booking) stayed "linked" forever, pointing at a transaction that had left
@@ -279,10 +279,10 @@ export async function lockedJournalEntryIds(
  * Anchor one document to the verifikat, with the guard semantics every
  * booking path shares: a document already pointing at THIS verifikat is a
  * no-op (a same-value rewrite would trip the period-lock trigger), a document
- * anchored to ANOTHER verifikat is never stolen, and a failed link is
- * reported so the caller can withhold any consumed-stamp. Returns true when
- * the document ends up referencing the verifikat. `linkBasis` is why it does
- * (document_attachments.link_basis).
+ * anchored to ANOTHER verifikat is never stolen, a superseded version is
+ * never anchored, and a failed link is reported so the caller can withhold
+ * any consumed-stamp. Returns true when the document ends up referencing the
+ * verifikat. `linkBasis` is why it does (document_attachments.link_basis).
  */
 async function anchorDocumentToJournalEntry(
   supabase: SupabaseClient,
@@ -294,7 +294,7 @@ async function anchorDocumentToJournalEntry(
 ): Promise<boolean> {
   const { data: doc } = await supabase
     .from('document_attachments')
-    .select('journal_entry_id')
+    .select('journal_entry_id, is_current_version')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -306,6 +306,14 @@ async function anchorDocumentToJournalEntry(
       ...logContext,
       document_id: documentId,
       document_journal_entry_id: currentDocEntryId,
+      journal_entry_id: journalEntryId,
+    })
+    return false
+  }
+  if (doc?.is_current_version === false) {
+    log.warn('Document is a superseded version; leaving it off the verifikat', {
+      ...logContext,
+      document_id: documentId,
       journal_entry_id: journalEntryId,
     })
     return false

@@ -14,6 +14,8 @@ import type { PendingOperation, SupplierInvoice, SupplierInvoiceItem } from '@/t
 
 // suggestion_log records each inbox decision; its reads and writes are
 // covered in lib/suggestion-log, not by this file's queued client.
+// The pair guard's own reads have their suite (lib/operations/__tests__/inbox-pair-guard.test.ts).
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({ refuseWhenPairBooked: vi.fn(async () => null) }))
 // The hard-block gate reads the company's blocks before the claim; this company has none.
 vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
@@ -120,7 +122,6 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
   it.each([
     ['the item reads as a credit note', { documentKind: 'credit_note', totals: { total: 1250 } }, {}],
     ['the item has a negative net and VAT', { documentKind: 'supplier_invoice', totals: { subtotal: -1000, vatAmount: -250, total: 1250 } }, {}],
-    ['the staged amounts are negative', { documentKind: 'supplier_invoice', totals: { total: 1250 } }, { subtotal: -1000, vat_amount: -250, total: -1250 }],
   ])('refuses the commit when %s, and registers nothing', async (_label, extracted, paramOverrides) => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
@@ -144,6 +145,29 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses the commit when the staged amounts are negative, and registers nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready', extracted_data: { documentKind: 'supplier_invoice', totals: { total: 1250 } } }, error: null })
+    enqueue({ data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' }, error: null }) // supplier fetch
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
+    enqueue({ data: [], error: null }) // the invoices it could credit
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const base = makePendingOp()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, subtotal: -1000, vat_amount: -250, total: -1250 } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('INBOX_ITEM_IS_CREDIT_NOTE')
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
   it('happy path (accrual): inserts invoice + items + JE, links document, marks inbox confirmed', async () => {
     vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-100', voucher_number: 7, voucher_series: 'L' })
@@ -156,7 +180,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
     enqueue({
-      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      data: { id: 'inbox-1', document_id: 'doc-1', created_supplier_invoice_id: null, status: 'ready' },
       error: null,
     }) // inbox fetch
     enqueue({
@@ -166,7 +190,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
     enqueue({ data: 42, error: null }) // get_next_arrival_number RPC
     enqueue({
-      data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }),
+      data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100', arrival_number: 42 }),
       error: null,
     }) // supplier_invoices insert
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
@@ -365,7 +389,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(404)
-    expect(result.error).toMatch(/Inbox item not found/)
+    expect(result.code).toBe('INBOX_ITEM_NOT_FOUND')
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 
@@ -388,7 +412,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(404)
-    expect(result.error).toMatch(/Supplier not found/)
+    expect(result.code).toBe('SUPPLIER_NOT_FOUND')
   })
 
   it('returns 409 with Swedish message on duplicate invoice number (PG 23505)', async () => {
@@ -406,8 +430,9 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     enqueue({ data: 42, error: null }) // arrival number
     enqueue({
       data: null,
-      error: { code: '23505', message: 'duplicate key value violates unique constraint' },
+      error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"' },
     }) // invoice insert fails
+    enqueue({ data: { id: 'inv-existing', supplier_invoice_number: 'INV-100', status: 'registered' }, error: null }) // the invoice that holds the number
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const result = await commitPendingOperation(
@@ -419,7 +444,8 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
-    expect(result.error).toMatch(/finns redan registrerad/)
+    expect(result.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
+    expect(result.error).toMatch(/finns redan/)
   })
 
   it('skips the registration JE and document link for cash-method companies', async () => {
@@ -546,7 +572,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
-      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      data: { id: 'inbox-1', document_id: 'doc-1', created_supplier_invoice_id: null, status: 'ready' },
       error: null,
     }) // inbox fetch
     enqueue({
@@ -568,13 +594,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     )
 
     expect(result.status).toBe('committed')
-    // The inbox document id from the staged params must land on the row so
-    // mark-paid can attach it to the kontantmetoden cash verifikat.
+    // The item's document must land on the row so mark-paid can attach it to
+    // the kontantmetoden cash verifikat.
     expect(capturedInsert).toMatchObject({ document_id: 'doc-1' })
   })
 
   it('rolls back the parent invoice when item insert fails (no orphan supplier_invoices row)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
     enqueue({
       data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
@@ -603,7 +629,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(500)
-    expect(result.error).toMatch(/items/)
+    expect(findCall('supplier_invoices', 'delete')).toBeDefined()
     // JE should never have been attempted given items failed
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
@@ -655,7 +681,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
         return {
           insert: (rows: unknown) => {
             capturedItems = rows
-            return Promise.resolve({ data: null, error: null })
+            return { select: () => Promise.resolve({ data: [], error: null }) }
           },
         }
       }
@@ -956,7 +982,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
         return {
           insert: (rows: unknown) => {
             capturedItems = rows
-            return Promise.resolve({ data: null, error: null })
+            return { select: () => Promise.resolve({ data: [], error: null }) }
           },
         }
       }
@@ -1026,10 +1052,8 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(items[1].vat_rate).toBe(0)
   })
 
-  it('JE-failure rollback deletes items BEFORE the parent invoice (FK ordering)', async () => {
-    // The parent has line items at this point: the rollback must reverse
-    // insertion order or the FK on supplier_invoice_items blocks the parent
-    // delete and we're left with an orphan understating leverantörsskuld.
+  it('JE-failure rollback takes the invoice out, its items with it (ON DELETE CASCADE)', async () => {
+    // An orphan would understate leverantörsskuld on the momsdeklaration.
     vi.mocked(createSupplierInvoiceRegistrationEntry).mockRejectedValueOnce(
       new Error('engine error: balance check failed')
     )
@@ -1075,7 +1099,6 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     })
     enqueue({ data: null, error: null }) // items insert succeeds
     // JE throws: rollback path runs
-    enqueue({ data: null, error: null }) // items delete
     enqueue({ data: null, error: null }) // parent delete
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
@@ -1088,8 +1111,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(500)
-    // Critical assertion: items BEFORE the parent.
-    expect(deleteCalls).toEqual(['supplier_invoice_items', 'supplier_invoices'])
+    expect(deleteCalls).toEqual(['supplier_invoices'])
   })
 
   it('returns 400 when required staged params are missing', async () => {
@@ -1150,7 +1172,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: dimensions
         return {
           insert: (rows: Array<Record<string, unknown>>) => {
             captured.items = rows
-            return Promise.resolve({ data: null, error: null })
+            return { select: () => Promise.resolve({ data: [], error: null }) }
           },
         }
       }
@@ -1725,7 +1747,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox refuses a h
     expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1488)
   })
 
-  it('lets per-line VAT rounding through: 120 lines of 9.98 at 25 % against the document total 1 497.00', async () => {
+  it('lets per-line VAT rounding through, and the payable is what 2440 is credited: 120 lines of 9.98 at 25 % against the document total 1 497.00', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null })
@@ -1750,7 +1772,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox refuses a h
 
     expect(result.status).toBe('committed')
     const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
-    expect(row.total).toBe(1497)
+    expect(row.total).toBe(1497.6)
   })
 
   it('leaves reverse charge on its own path: the header is rebuilt from the items, so no mismatch is possible', async () => {

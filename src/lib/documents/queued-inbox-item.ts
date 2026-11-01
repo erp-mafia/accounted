@@ -19,6 +19,7 @@
  * item as before: a twin is a cosmetic fault, a lost upload is not.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isInboxItemTaken, whereInboxItemFree } from '@/lib/documents/inbox-item-state'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('documents/queued-inbox-item')
@@ -64,8 +65,6 @@ interface ItemRow {
   created_journal_entry_id: string | null
   channel_context: { intake_source?: unknown } | null
 }
-
-const handled = (row: ItemRow) => !!(row.created_supplier_invoice_id || row.created_journal_entry_id || row.matched_transaction_id)
 
 const asQueued = (row: Pick<ItemRow, 'id' | 'status' | 'extracted_data' | 'matched_supplier_id' | 'matched_transaction_id'>, adopted: boolean): QueuedInboxItem => ({
   id: row.id,
@@ -118,38 +117,36 @@ async function takeOver(
   }
   const queued = ((data ?? []) as ItemRow[])[0]
   if (!queued) return null
-  if (handled(queued)) return asQueued(queued, false)
+  if (isInboxItemTaken(queued)) return asQueued(queued, false)
   if (ownStamp && queued.channel_context?.intake_source === ownStamp) return asQueued(queued, false)
 
   // Guarded on the open-item predicate, as every write that settles an item: a booking or a match that lands between
   // the read above and this write wins, and the door files nothing.
-  const { data: updated, error: updateError } = await supabase
-    .from('invoice_inbox_items')
-    .update({
-      status: fields.status,
-      source: fields.source,
-      channel_context: fields.channel_context,
-      extracted_data: fields.extracted_data,
-      extraction_skipped: fields.extraction_skipped,
-      matched_supplier_id: fields.matched_supplier_id,
-      kind_hint: fields.kind_hint,
-      matched_transaction_id: fields.matched_transaction_id ?? null,
-      email_from: fields.email_from ?? null,
-      email_subject: fields.email_subject ?? null,
-      email_received_at: fields.email_received_at ?? null,
-      email_body_text: fields.email_body_text ?? null,
-      resend_email_id: fields.resend_email_id ?? null,
-      resend_attachment_id: fields.resend_attachment_id ?? null,
-      raw_email_payload: fields.raw_email_payload ?? null,
-      correlation_id: fields.correlation_id ?? null,
-      whatsapp_message_id: fields.whatsapp_message_id ?? null,
-    })
-    .eq('id', queued.id)
-    .eq('company_id', companyId)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id')
+  const { data: updated, error: updateError } = await whereInboxItemFree(
+    supabase
+      .from('invoice_inbox_items')
+      .update({
+        status: fields.status,
+        source: fields.source,
+        channel_context: fields.channel_context,
+        extracted_data: fields.extracted_data,
+        extraction_skipped: fields.extraction_skipped,
+        matched_supplier_id: fields.matched_supplier_id,
+        kind_hint: fields.kind_hint,
+        matched_transaction_id: fields.matched_transaction_id ?? null,
+        email_from: fields.email_from ?? null,
+        email_subject: fields.email_subject ?? null,
+        email_received_at: fields.email_received_at ?? null,
+        email_body_text: fields.email_body_text ?? null,
+        resend_email_id: fields.resend_email_id ?? null,
+        resend_attachment_id: fields.resend_attachment_id ?? null,
+        raw_email_payload: fields.raw_email_payload ?? null,
+        correlation_id: fields.correlation_id ?? null,
+        whatsapp_message_id: fields.whatsapp_message_id ?? null,
+      })
+      .eq('id', queued.id)
+      .eq('company_id', companyId),
+  ).select('id, status, extracted_data, matched_supplier_id, matched_transaction_id')
   if (updateError) {
     log.warn('queued inbox item takeover failed; the door files its own', { documentId, itemId: queued.id, error: updateError.message })
     return null

@@ -127,6 +127,27 @@ describe('followInvoiceWithReceipt', () => {
     expect(matchInboxItemTransaction).not.toHaveBeenCalled()
   })
 
+  it('a verifikat holds the invoice\'s document, no stamp: the receipt lands on the verifikat the list names', async () => {
+    const { ctx } = setup({ document_hold: { journal_entry_id: 'je-held', entry: { status: 'posted' } } })
+    expect(await followInvoiceWithReceipt(ctx, 'invoice', 'receipt')).toEqual({
+      ok: true,
+      data: { status: 'completed', journal_entry_id: 'je-held', transaction_id: null },
+    })
+    expect(completeInboxItemOnEntry).toHaveBeenCalledWith(
+      ctx.supabase,
+      COMPANY,
+      expect.objectContaining({ id: 'receipt' }),
+      'je-held',
+      { basis: 'user_confirmed', evidence: { rule_id: 'inbox_receipt_pair:invoice_number' } },
+    )
+  })
+
+  it('a reversed verifikat holds nothing: the invoice is not booked, and nothing is written', async () => {
+    const { ctx } = setup({ document_hold: { journal_entry_id: 'je-reversed', entry: { status: 'reversed' } } })
+    expect(await followInvoiceWithReceipt(ctx, 'invoice', 'receipt')).toEqual({ ok: true, data: { status: 'waiting', reason: 'invoice_not_booked' } })
+    expect(completeInboxItemOnEntry).not.toHaveBeenCalled()
+  })
+
   it('a link the period lock refuses leaves the receipt in the inbox, and says so', async () => {
     completeInboxItemOnEntry.mockResolvedValue('not_linked')
     const { ctx } = setup({ created_journal_entry_id: 'je-locked' })

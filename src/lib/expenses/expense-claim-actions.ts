@@ -34,6 +34,7 @@ import { bankRowRefusalCode, decideBankRowRebooking, type GatedBankRow } from '@
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { roundOre, sumOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -714,6 +715,9 @@ export async function matchExpensePayout(
       }
       return payoutFailure(ctx, result)
     }
+    // The bank row's own underlag, as on every booking of a row (BFL 5 kap 6-7 §):
+    // one row, one payout verifikat. Never throws, the payout stands either way.
+    await propagateUnderlagForBookedTransaction(supabase, companyId, input.transaction_id, result.journal_entry_id)
     txLog.info('expense payout matched from bank transaction', {
       userId: ctx.userId,
       journalEntryId: result.journal_entry_id,

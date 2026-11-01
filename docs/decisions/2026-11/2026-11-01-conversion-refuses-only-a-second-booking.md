@@ -1,0 +1,1 @@
+[2026-11-01] Converting an inbox item a live verifikat books is refused only when registering posts a verifikat: 1 of 1,495 in 180 days. One that posts nothing passes, and a later Bokför or bank match can still book it twice, as on main (0 on prod so far). A founder decides.

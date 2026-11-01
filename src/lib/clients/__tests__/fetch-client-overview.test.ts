@@ -53,6 +53,25 @@ describe('fetchOverviewRowsForCompanies: the byrå customer number', () => {
   })
 })
 
+describe('fetchOverviewRowsForCompanies: the inbox count', () => {
+  it('counts the open documents, each once, as the worklist does', async () => {
+    companiesTable({ data: [] })
+    db.setTable('invoice_inbox_items', {
+      data: [
+        { id: 'i-1', company_id: 'c-1', document_id: 'd-1' },
+        { id: 'i-2', company_id: 'c-1', document_id: 'd-1' },
+        { id: 'i-3', company_id: 'c-1', document_id: 'd-2', document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } } },
+        { id: 'i-4', company_id: 'c-2', document_id: 'd-3', document_hold: { journal_entry_id: 'je-2', entry: { status: 'reversed' } } },
+      ],
+    })
+
+    const rows = await fetchOverviewRowsForCompanies(supabase, companies)
+
+    expect(rows.map((row) => row.inboxCount)).toEqual([1, 1])
+    expect(db.findCalls('invoice_inbox_items', 'is').map(([column]) => column)).toContain('routed_to_arkiv_at')
+  })
+})
+
 describe('fetchOverviewRowsForCompanies: the attest queues', () => {
   beforeEach(() => {
     companiesTable({ data: [] })

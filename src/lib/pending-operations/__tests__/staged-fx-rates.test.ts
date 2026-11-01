@@ -28,6 +28,8 @@ import { eventBus } from '@/lib/events/bus'
 import { makeCustomer, makeJournalEntry, makeSupplierInvoice } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
 
+// The pair guard's own reads have their suite (lib/operations/__tests__/inbox-pair-guard.test.ts).
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({ refuseWhenPairBooked: vi.fn(async () => null) }))
 // The hard-block gate reads the company's blocks before the claim; this company has none.
 vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
@@ -615,6 +617,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox FX', () => 
       { data: { id: 'op-1' } },
       { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
       { data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' } },
+      { data: { accounting_method: 'accrual' } },
       { data: null }, // dispatcher fail update
     ])
 
@@ -643,6 +646,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox FX', () => 
       { data: { id: 'op-1' } },
       { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
       { data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' } },
+      { data: { accounting_method: 'accrual' } },
       { data: null }, // dispatcher release back to pending
     ])
 
@@ -669,6 +673,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox FX', () => 
       { data: { id: 'op-1' } },
       { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
       { data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' } },
+      { data: { accounting_method: 'accrual' } },
       { data: null }, // dispatcher fail update
     ])
 

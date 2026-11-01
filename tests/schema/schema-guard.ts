@@ -27,6 +27,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
+import { INBOX_ITEM_DOCUMENT_HOLD } from '@/lib/documents/inbox-item-state'
 
 // ---------------------------------------------------------------------------
 // Schema model
@@ -980,10 +981,37 @@ function spreadHelperColumns(expr: ts.Expression): readonly string[] | null {
   return SPREAD_COLUMN_HELPERS[expr.expression.text] ?? null
 }
 
+/**
+ * Select fragments a select string interpolates, by the name of their constant.
+ * One embed many selects share stays one definition and every column around it
+ * stays checked.
+ */
+const SELECT_FRAGMENTS: Record<string, string> = { INBOX_ITEM_DOCUMENT_HOLD }
+
+/** A `const NAME = '...'` at the top of the file the expression is in, else null. */
+function fileConstantText(name: string, from: ts.Node): string | null {
+  for (const statement of from.getSourceFile().statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === name) return literalText(declaration.initializer)
+    }
+  }
+  return null
+}
+
 function literalText(node: ts.Expression | undefined): string | null {
   if (!node) return null
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
-  return null
+  if (ts.isIdentifier(node)) return fileConstantText(node.text, node)
+  if (!ts.isTemplateExpression(node)) return null
+  let text = node.head.text
+  for (const span of node.templateSpans) {
+    if (!ts.isIdentifier(span.expression)) return null
+    const value = SELECT_FRAGMENTS[span.expression.text] ?? fileConstantText(span.expression.text, node)
+    if (value === null || value === undefined) return null
+    text += value + span.literal.text
+  }
+  return text
 }
 
 function receiverText(expr: ts.Expression): string {

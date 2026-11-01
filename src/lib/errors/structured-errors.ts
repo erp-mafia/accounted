@@ -6058,7 +6058,7 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en: 'The inbox item is already booked. Reload to see its verifikat.',
     remediation: {
       description:
-        'Nothing new stays in the books: either nothing was posted, or the verifikat this call posted was reversed with a storno because another call booked the item first. Read the item (created_journal_entry_id) to find the booking. Do not retry.',
+        'Nothing new stays in the books: either nothing was posted, or the verifikat this call posted was reversed with a storno because another call booked the item first. details.journal_entry_id names the booking when known, else read the item (created_journal_entry_id). Do not retry.',
     },
   },
   // The Inkorg's "Registrera och koppla till betalningen" settles against the

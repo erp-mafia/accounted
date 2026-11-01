@@ -127,6 +127,8 @@ describe('readOneClickInput', () => {
     expect(await read()).toEqual({ ok: false, code: 'INBOX_ITEM_NOT_FOUND' })
     enqueueMany([{ data: { ...ITEM, created_journal_entry_id: 'je-1' } }])
     expect((await read()).ok).toBe(false)
+    enqueueMany([{ data: { ...ITEM, document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } } } }])
+    expect(await read()).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_BOOKED' })
     enqueueMany([{ data: { ...ITEM, created_supplier_invoice_id: 'si-1' } }])
     expect(await read()).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED' })
   })

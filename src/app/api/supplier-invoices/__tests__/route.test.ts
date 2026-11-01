@@ -1057,6 +1057,29 @@ describe('POST /api/supplier-invoices', () => {
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 
+  it('refuses an utlägg of an inbox item whose document a live verifikat holds, stamp or not', async () => {
+    setTable('invoice_inbox_items', {
+      data: {
+        id: INBOX_UUID,
+        document_id: DOCUMENT_UUID,
+        created_supplier_invoice_id: null,
+        created_journal_entry_id: null,
+        document_hold: { journal_entry_id: 'je-1', entry: { status: 'posted' } },
+      },
+    })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ inbox_item_id: INBOX_UUID }),
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { reason?: string } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.details?.reason).toBe('inbox_item_already_booked')
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+  })
+
   it('refuses an utlägg of an inbox item whose other half is booked already, before anything is written', async () => {
     setTable('invoice_inbox_items', {
       data: { id: INBOX_UUID, document_id: DOCUMENT_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null },

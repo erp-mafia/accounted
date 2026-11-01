@@ -8,6 +8,7 @@
  */
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { INTAKE_SOURCE_IDS, intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { isInboxItemUnbooked, itemStage } from '@/lib/documents/inbox-item-state'
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { readableName } from './names'
@@ -46,6 +47,8 @@ export interface InkorgItem {
   created_journal_entry_id: string | null
   matched_transaction_journal_entry_id?: string | null
   underlag_status?: UnderlagStatus | null
+  /** The verifikat that holds its document and still books it (withDocumentHold). */
+  document_journal_entry_id?: string | null
   email_from: string | null
   email_subject: string | null
   error_message: string | null
@@ -67,46 +70,6 @@ export interface InkorgItem {
    * misread a digit (crm#1534): only true shows it as the card that paid.
    */
   payment_card_known?: boolean | null
-}
-
-/**
- * Where an item stands:
- *   - booked: it became a supplier invoice or a verifikat, or its matched
- *     transaction is booked with this item's underlag on the verifikat;
- *   - processing: the reading has not landed yet (seconds);
- *   - linked: matched to a bank transaction that still needs booking, or
- *     whose verifikat does not carry this underlag (a person decides);
- *   - error: the reading failed;
- *   - needs_action: everything else, waiting for its first decision.
- *
- * The same precedence as the Underlag workspace (deriveInboxStatus in
- * InvoiceInboxWorkspace.tsx), so an item never stands differently on the
- * two pages.
- */
-export type InkorgStage = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
-
-/** A booked matched transaction whose verifikat does not carry this item's underlag. */
-export function isUnderlagDivergent(item: { matched_transaction_journal_entry_id?: string | null; underlag_status?: string | null }): boolean {
-  return !!item.matched_transaction_journal_entry_id && !!item.underlag_status && item.underlag_status !== 'anchored'
-}
-
-/** The columns an item's stage is read from: a wire row, or the table row a server door reads. */
-export interface StageFields {
-  status?: string | null
-  matched_transaction_id?: string | null
-  created_supplier_invoice_id?: string | null
-  created_journal_entry_id?: string | null
-  matched_transaction_journal_entry_id?: string | null
-  underlag_status?: string | null
-}
-
-export function itemStage(item: StageFields): InkorgStage {
-  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
-  if (item.matched_transaction_journal_entry_id && !isUnderlagDivergent(item)) return 'booked'
-  if (item.status === 'processing') return 'processing'
-  if (item.matched_transaction_id) return 'linked'
-  if (item.status === 'error') return 'error'
-  return 'needs_action'
 }
 
 /** Arkiv took it: classified as something not booked from the inbox. It left the queue for its own page. */
@@ -156,7 +119,7 @@ export function needsYou(item: InkorgItem): boolean {
  * its invoice's row.
  */
 export function stillInInbox(item: InkorgItem): boolean {
-  return !routedAway(item) && !isCompanionReceipt(item) && itemStage(item) !== 'booked'
+  return isInboxItemUnbooked(item) && !isCompanionReceipt(item)
 }
 
 /** The door the item came through, by the one vocabulary (lib/intake/sources.ts). */

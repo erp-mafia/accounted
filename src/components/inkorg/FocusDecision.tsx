@@ -459,12 +459,14 @@ export function FocusDecision({
             {t('action_retry_reading')}
           </Button>
         )
-      case 'open_entry':
-        return item.created_journal_entry_id ? (
+      case 'open_entry': {
+        const entryId = item.created_journal_entry_id ?? item.document_journal_entry_id
+        return entryId ? (
           <Button key={action} asChild variant={variant} className={width}>
-            <Link href={`/bookkeeping/${item.created_journal_entry_id}`}>{t('action_open_entry')}</Link>
+            <Link href={`/bookkeeping/${entryId}`}>{t('action_open_entry')}</Link>
           </Button>
         ) : null
+      }
       case 'attach_to_booking': {
         const voucher = item.pairing?.role === 'booked_companion' ? (item.pairing.voucher ?? null) : null
         return (

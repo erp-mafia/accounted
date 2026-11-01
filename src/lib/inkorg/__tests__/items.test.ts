@@ -1,22 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import {
-  DEFAULT_VIEW,
-  companionOf,
-  doorOf,
-  doorsInUse,
-  itemHeadline,
-  isCompanionReceipt,
-  itemStage,
-  needCount,
-  needsYou,
-  orderByArrival,
-  parseViewKey,
-  queueFor,
-  recentlyRoutedAway,
-  ROUTED_AWAY_NOTICE_MS,
-  stillInInbox,
-  viewKey,
-} from '../items'
+import { isInboxItemTaken, isInboxItemUnbooked, isOpenInboxItem, itemStage, whereInboxItemFree, whereInboxItemOpen, withDocumentHold } from '@/lib/documents/inbox-item-state'
+import { DEFAULT_VIEW, companionOf, doorOf, doorsInUse, itemHeadline, isCompanionReceipt, needCount, needsYou, orderByArrival, parseViewKey, queueFor, recentlyRoutedAway, ROUTED_AWAY_NOTICE_MS, stillInInbox, viewKey } from '../items'
 import { makeItem, reading } from './fixtures'
 
 describe('itemStage: where an item stands, by the workspace precedence', () => {
@@ -230,5 +214,74 @@ describe('recentlyRoutedAway: what left the inbox for Dokument lately (PH 225)',
     const item = routed('mail-1', 'email', '2026-10-27T15:12:00Z')
     expect(queueFor([item], { kind: 'need' })).toEqual([])
     expect(queueFor([item], { kind: 'door', door: doorOf(item) })).toEqual([])
+  })
+})
+
+describe('the one reading of an open item', () => {
+  const shapes = {
+    nothing: {},
+    'a supplier invoice': { created_supplier_invoice_id: 'si-1' },
+    'a stamp': { created_journal_entry_id: 'je-1' },
+    'a matched bank row': { matched_transaction_id: 'tx-1' },
+    'a booked match': { matched_transaction_id: 'tx-1', matched_transaction_journal_entry_id: 'je-1', underlag_status: 'anchored' },
+    'a verifikat on its document, no stamp': { document_journal_entry_id: 'je-1' },
+    Arkiv: { routed_to_arkiv_at: '2026-10-01T10:00:00Z' },
+    'Arkiv and a stamp': { routed_to_arkiv_at: '2026-10-01T10:00:00Z', created_journal_entry_id: 'je-1' },
+  } as const
+
+  it.each([
+    ['nothing', true, false, true],
+    ['a supplier invoice', false, true, false],
+    ['a stamp', false, true, false],
+    ['a matched bank row', false, true, true],
+    ['a booked match', false, true, false],
+    ['a verifikat on its document, no stamp', false, true, false],
+    ['Arkiv', false, false, false],
+    ['Arkiv and a stamp', false, true, false],
+  ] as const)('%s: open %s, taken %s, unbooked %s', (shape, open, taken, unbooked) => {
+    expect(isOpenInboxItem(shapes[shape])).toBe(open)
+    expect(isInboxItemTaken(shapes[shape])).toBe(taken)
+    expect(isInboxItemUnbooked(shapes[shape])).toBe(unbooked)
+  })
+
+  it('the stage says booked for a document on a verifikat with no stamp, the bug: the Inkorg offered it for booking', () => {
+    expect(itemStage({ document_journal_entry_id: 'je-1' })).toBe('booked')
+  })
+
+  it('matched to a row, a document on another verifikat stays a decision, never a silent booked', () => {
+    const elsewhere = { matched_transaction_id: 'tx-1', matched_transaction_journal_entry_id: 'je-2', underlag_status: 'anchored_elsewhere', document_journal_entry_id: 'je-1' }
+    expect(itemStage(elsewhere)).toBe('linked')
+  })
+
+  it('a row read without its document answers from its own columns', () => {
+    expect(isOpenInboxItem({ status: 'received' })).toBe(true)
+    expect(isOpenInboxItem({ status: 'processing' })).toBe(true)
+    expect(isOpenInboxItem({ status: 'error' })).toBe(true)
+    expect(isOpenInboxItem({ status: 'processing', matched_transaction_id: 'tx-1' })).toBe(false)
+  })
+
+  it('the two filters are the same reading over the columns', () => {
+    const calls: string[] = []
+    const query = { is(column: string) { calls.push(column); return query } }
+    whereInboxItemFree(query)
+    expect(calls).toEqual(['created_supplier_invoice_id', 'created_journal_entry_id', 'matched_transaction_id'])
+    calls.length = 0
+    whereInboxItemOpen(query)
+    expect(calls).toEqual(['created_supplier_invoice_id', 'created_journal_entry_id', 'matched_transaction_id', 'routed_to_arkiv_at'])
+  })
+})
+
+describe('withDocumentHold', () => {
+  it.each([
+    ['a posted verifikat holds it', { journal_entry_id: 'je-1', entry: { status: 'posted' } }, 'je-1'],
+    ['a draft does', { journal_entry_id: 'je-1', entry: { status: 'draft' } }, 'je-1'],
+    ['a verifikat whose status could not be read does: never open on a guess', { journal_entry_id: 'je-1', entry: null }, 'je-1'],
+    ['a reversed one no longer books it', { journal_entry_id: 'je-1', entry: { status: 'reversed' } }, null],
+    ['nor a cancelled one', { journal_entry_id: 'je-1', entry: { status: 'cancelled' } }, null],
+    ['a document on nothing', { journal_entry_id: null, entry: null }, null],
+    ['no document', null, null],
+    ['the array shape of a to-one embed', [{ journal_entry_id: 'je-1', entry: [{ status: 'posted' }] }], 'je-1'],
+  ])('%s', (_label, hold, expected) => {
+    expect(withDocumentHold({ id: 'item-1', document_hold: hold as never })).toEqual({ id: 'item-1', document_journal_entry_id: expected })
   })
 })

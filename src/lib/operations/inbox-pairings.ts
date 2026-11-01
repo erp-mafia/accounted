@@ -48,7 +48,7 @@ function deliveryKeysOf(item: PairableItem): string[] {
 
 /** The verifikat a booked half is on: its own, its matched row's, or its supplier invoice's payment. */
 function entryOfBookedHalf(item: ListedItem & { matched_transaction_journal_entry_id?: string | null }, paymentEntry: ReadonlyMap<string, string>): string | null {
-  return item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? paymentEntry.get(item.id) ?? null
+  return item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? item.document_journal_entry_id ?? paymentEntry.get(item.id) ?? null
 }
 
 /** Voucher labels and period locks of the verifikat booked halves are on. */

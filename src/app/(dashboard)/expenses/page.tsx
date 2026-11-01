@@ -55,6 +55,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { isInboxItemUnbooked } from '@/lib/documents/inbox-item-state'
 import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -263,9 +264,7 @@ export default function ExpenseClaimsPage() {
       }>
       setInboxOptions(
         items
-          .filter(
-            (i) => i.document_id && !i.created_journal_entry_id && !i.created_supplier_invoice_id,
-          )
+          .filter((i) => i.document_id && isInboxItemUnbooked(i))
           .map((i) => ({
             id: i.id,
             document_id: i.document_id,

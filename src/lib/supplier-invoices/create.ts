@@ -67,6 +67,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { SiCreateInvalidInputReason } from '@/lib/errors/structured-errors'
+import { INBOX_ITEM_DOCUMENT_HOLD, itemStage, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import {
   backfillSupplierPaymentDetails,
   inboxStatedPaymentDetails,
@@ -406,14 +407,14 @@ export async function createSupplierInvoice(
     }
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data')
+      .select(`id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data, ${INBOX_ITEM_DOCUMENT_HOLD}`)
       .eq('id', body.inbox_item_id)
       .eq('company_id', companyId)
       .maybeSingle()
     if (itemError || !item) {
       return invalid('inbox_item_not_found')
     }
-    if (item.created_supplier_invoice_id || item.created_journal_entry_id) {
+    if (itemStage(withDocumentHold(item as DocumentHoldRow)) === 'booked') {
       return invalid('inbox_item_already_booked')
     }
     // The other half of this purchase is booked already: an utlägg of this one books it twice.

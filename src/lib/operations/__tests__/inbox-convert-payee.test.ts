@@ -71,6 +71,15 @@ describe('inbox convert: the account the document states', () => {
     expect(db.payloads('suppliers', 'update')).toEqual([{ bankgiro: '9020-0007', plusgiro: null, iban: null, bic: null }])
   })
 
+  it('a refused conversion leaves the card as it was: it takes the details once the invoice exists', async () => {
+    setUp({})
+    db.setTable('supplier_invoices', { error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"' } })
+    const outcome = await convert()
+
+    expect(outcome).toMatchObject({ ok: false, code: 'SI_CREATE_DUPLICATE_INVOICE_NUMBER' })
+    expect(db.payloads('suppliers', 'update')).toEqual([])
+  })
+
   it('touches nothing on a dry run', async () => {
     setUp({ bankgiro: '5050-1055' })
     const outcome = await convertInboxItemToSupplierInvoice(

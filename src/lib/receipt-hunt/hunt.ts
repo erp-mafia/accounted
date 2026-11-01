@@ -19,6 +19,7 @@ import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { adjudicate } from './adjudicate'
 import { attachSekTotals } from './fx'
 import { extractMailDocuments } from './mail-intelligence'
@@ -252,14 +253,13 @@ async function fetchPool(
   for (const a of attachments) fileNames.set(a.id, a.file_name ?? 'underlag')
 
   const items = await fetchAllRows<HuntPoolItem>((range) =>
-    supabase
-      .from('invoice_inbox_items')
-      .select('id, document_id, extracted_data, channel_context')
-      .eq('company_id', companyId)
-      .is('matched_transaction_id', null)
-      .is('created_journal_entry_id', null)
-      .is('created_supplier_invoice_id', null)
-      .not('document_id', 'is', null)
+    whereInboxItemOpen(
+      supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id, extracted_data, channel_context')
+        .eq('company_id', companyId)
+        .not('document_id', 'is', null),
+    )
       .order('id', { ascending: true })
       .range(range.from, range.to),
   )

@@ -20,6 +20,7 @@ import { createLogger } from '@/lib/logger'
 import { toError } from '@/lib/errors/to-error'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import {
   groupExpenseClaimsByPerson,
   matchTransactionsToExpensePayouts,
@@ -171,37 +172,32 @@ export async function countUnbookedSkattekontoRows(
 }
 
 /**
- * Unconsumed inbox documents. Mirrors /api/documents/inbox-available:
- * items with a file that have not become a supplier invoice, a journal
- * entry, or a transaction match, and whose document is still unlinked
- * (the stale-column backstop). A receipt that rides on its invoice (an
- * invoice and its receipt are one purchase, lib/inkorg/pairs.ts), and an
- * open half whose other half is booked already, are not counted when the
- * caller passes `companionIds` (./inbox-companions.ts, server only: this
- * module is reachable from the browser through its constants): the Inkorg's
- * Behöver dig leaves them out the same way. A pairing that cannot be read
- * counts every item.
+ * The documents of the open inbox items (isOpenInboxItem, lib/documents/inbox-item-state.ts),
+ * each counted once. A receipt that rides on its invoice (an invoice and its
+ * receipt are one purchase, lib/inkorg/pairs.ts), and an open half whose other
+ * half is booked already, are not counted when the caller passes
+ * `companionIds` (./inbox-companions.ts, server only: this module is reachable
+ * from the browser through its constants): the Inkorg's Behöver dig leaves them
+ * out the same way. A pairing that cannot be read counts every item.
  */
 export async function countInboxDocuments(
   supabase: SupabaseClient,
   companyId: string,
   options: { companionIds?: (rows: readonly Record<string, unknown>[]) => Promise<ReadonlySet<string>> } = {},
 ): Promise<number> {
-  const { data: rows, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id')
-    .eq('company_id', companyId)
-    .not('document_id', 'is', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
-    .limit(INBOX_SCAN_CAP)
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select(`id, status, source, document_id, resend_email_id, channel_context, kind_hint, extracted_data, routed_to_arkiv_at, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+      .eq('company_id', companyId)
+      .not('document_id', 'is', null),
+  ).limit(INBOX_SCAN_CAP)
   if (error) return logAndZero('inbox_document', companyId, error)
+  const rows = ((data ?? []) as unknown as Array<DocumentHoldRow & { id: string; document_id: string }>).map(withDocumentHold).filter(isOpenInboxItem)
 
   let companions: ReadonlySet<string> = new Set<string>()
   try {
-    if (options.companionIds) companions = await options.companionIds((rows ?? []) as unknown as Record<string, unknown>[])
+    if (options.companionIds) companions = await options.companionIds(rows as unknown as Record<string, unknown>[])
   } catch (pairingError) {
     log.warn('inbox_document pairing read failed; counting every item', {
       companyId,
@@ -209,39 +205,7 @@ export async function countInboxDocuments(
     })
   }
 
-  const docIds = [
-    ...new Set(
-      (rows ?? [])
-        .filter((r) => !companions.has(r.id as string))
-        .map((r) => r.document_id as string | null)
-        .filter((id): id is string => !!id),
-    ),
-  ]
-  if (docIds.length === 0) return 0
-
-  // PostgREST serialises .in() into the GET query string: chunk the id list
-  // so a large inbox can't push the URL past proxy limits (HTTP 414, which
-  // would silently zero the badge via the error branch).
-  // The chunks are independent: one wave instead of N sequential round trips.
-  const chunks: string[][] = []
-  for (let i = 0; i < docIds.length; i += IN_CLAUSE_CHUNK) chunks.push(docIds.slice(i, i + IN_CLAUSE_CHUNK))
-  const results = await Promise.all(
-    chunks.map((ids) =>
-      supabase
-        .from('document_attachments')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .in('id', ids)
-        .is('journal_entry_id', null)
-        .eq('is_current_version', true),
-    ),
-  )
-  let total = 0
-  for (const { count, error: docError } of results) {
-    if (docError) return logAndZero('inbox_document', companyId, docError)
-    total += count ?? 0
-  }
-  return total
+  return new Set(rows.filter((r) => !companions.has(r.id)).map((r) => r.document_id)).size
 }
 
 /** Shared predicate for transactions carrying a match hint. */

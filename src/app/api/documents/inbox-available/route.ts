@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import type { InvoiceExtractionResult } from '@/types'
 
 /**
@@ -42,15 +43,13 @@ export const GET = withRouteContext('document.inbox_available', async (_request,
 
   // 1) Eligible inbox items: company-scoped (defense in depth alongside RLS),
   //    unconsumed, with a document.
-  const { data: inboxRows, error: inboxError } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, source, created_at, extracted_data')
-    .eq('company_id', companyId)
-    .not('document_id', 'is', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
+  const { data: inboxRows, error: inboxError } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id, source, created_at, extracted_data')
+      .eq('company_id', companyId)
+      .not('document_id', 'is', null),
+  )
     .order('created_at', { ascending: false })
     .limit(100)
 

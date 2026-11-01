@@ -102,6 +102,12 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async (importOriginal) => 
 const mockCreateJournalEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockReverseEntry = vi.fn()
+const mockPropagateUnderlag = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: mockPropagateUnderlag,
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
@@ -989,50 +995,19 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: cash method + FX',
   })
 })
 
-describe('POST /api/transactions/[id]/match-supplier-invoice: transaction document propagation', () => {
-  const DOC_UUID = '33333333-3333-4333-8333-333333333333'
-
-  it('links a pinned transaction document to the payment JE after the match', async () => {
+describe('POST /api/transactions/[id]/match-supplier-invoice: the row\'s underlag', () => {
+  it('runs the one underlag step on the payment verifikat', async () => {
     enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK', document_id: DOC_UUID },
+      transaction: { amount: -1000, currency: 'SEK', document_id: '33333333-3333-4333-8333-333333333333' },
       invoice: { currency: 'SEK', remaining_amount: 1000 },
     })
-    // 8. document_attachments update (the propagation)
-    enqueue({ data: null, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{ journal_entry_id: string }>(res)
+
     expect(res.status).toBe(200)
-    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
-    expect(tables).toContain('document_attachments')
-  })
-
-  it('does not touch document_attachments when the transaction has no pinned doc', async () => {
-    enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK' },
-      invoice: { currency: 'SEK', remaining_amount: 1000 },
-    })
-    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    expect(res.status).toBe(200)
-    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
-    expect(tables).not.toContain('document_attachments')
-  })
-
-  it('propagation failure is non-fatal: the committed match still returns 200', async () => {
-    enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK', document_id: DOC_UUID },
-      invoice: { currency: 'SEK', remaining_amount: 1000 },
-    })
-    // Propagation update errors (e.g. period locked between commit and link).
-    enqueue({ data: null, error: { message: 'BFL period lock' } })
-
-    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(mockLoggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining('failed to link transaction document'),
-      expect.anything(),
-    )
+    expect(mockPropagateUnderlag).toHaveBeenCalledTimes(1)
+    expect(mockPropagateUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', TX_UUID, body.journal_entry_id)
   })
 })
 

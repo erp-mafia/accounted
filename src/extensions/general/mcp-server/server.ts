@@ -450,6 +450,8 @@ import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { loadSuggestedMatches, SUGGESTION_POINTER_COLUMNS, type SuggestionPointerRow } from './match-suggestions'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
+import { bookingStateOfItem, type InboxItemBookingRow } from '@/lib/documents/inbox-item-claim'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { inboxAddressCarriesName, resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
@@ -1787,12 +1789,6 @@ interface DocumentInboxResult {
 function embeddedDocumentFileName(embed: unknown): string | null {
   const attachment = (Array.isArray(embed) ? embed[0] : embed) as { file_name?: string | null } | null | undefined
   return attachment?.file_name ?? null
-}
-
-/** The verifikat holding the embedded document, read the same way as its file_name. */
-function embeddedDocumentJournalEntryId(embed: unknown): string | null {
-  const attachment = (Array.isArray(embed) ? embed[0] : embed) as { journal_entry_id?: string | null } | null | undefined
-  return attachment?.journal_entry_id ?? null
 }
 
 /**
@@ -16919,13 +16915,13 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_inbox_items',
     keywords: ['inkorg', 'kvitto', 'kvitton', 'underlag'],
     title: 'List Inbox Items',
-    description: 'Inbox items only (mail, uploads), each with file_name; archived documents, incl. generated customer invoices, are in gnubok_list_records. `processed` = any terminal link (transaction, supplier invoice, journal entry). unprocessed_only=true: only what still needs handling.',
+    description: 'Inbox items only (mail, uploads), each with file_name; archived documents, incl. generated customer invoices, are in gnubok_list_records. `processed` = no longer open (a link, Arkiv, or its document on a verifikat). unprocessed_only=true: only open items.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         status: { type: 'string', enum: ['received', 'error'], description: 'Filter by status' },
-        unprocessed_only: { type: 'boolean', description: 'When true, only return items with no terminal link yet (not matched to a transaction, supplier invoice, or journal entry), i.e. documents that still need handling. Default false.' },
+        unprocessed_only: { type: 'boolean', description: 'When true, only return open items: no link to a transaction, supplier invoice or journal entry, not in Arkiv, and no verifikat holds the document. Default false.' },
         limit: { type: 'number', description: 'Max results (default 20, max 50)' },
         cursor: {
           type: 'string',
@@ -16990,8 +16986,8 @@ export const tools: McpTool[] = [
         .select(`
           id, status, source, created_at, extracted_data, matched_supplier_id,
           matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id,
-          email_from, email_subject, error_message, document_attachments(file_name, journal_entry_id, upload_source),
-          intake_stamp:channel_context->>intake_source, intake_channel:channel_context->>channel
+          routed_to_arkiv_at, email_from, email_subject, error_message, document_attachments(file_name, upload_source),
+          intake_stamp:channel_context->>intake_source, intake_channel:channel_context->>channel, ${INBOX_ITEM_DOCUMENT_HOLD}
         `)
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
@@ -17030,19 +17026,10 @@ export const tools: McpTool[] = [
           invoiceDate = (invoice?.invoiceDate as string) || null
         }
 
-        // An item is "processed" once it has ANY terminal link: matched to a
-        // bank transaction, converted to a supplier invoice, or booked
-        // directly to a journal entry. Surfacing only the supplier fields
-        // (as before) made receipts booked against bank transactions look
-        // loose: and risked the agent flagging them as duplicates. A document
-        // a verifikat already holds is processed too, stamp or not, as in
-        // gnubok_list_unmatched_documents (agent feedback seq 1003926).
-        const processed = !!(
-          item.matched_transaction_id ||
-          item.created_supplier_invoice_id ||
-          item.created_journal_entry_id ||
-          embeddedDocumentJournalEntryId(item.document_attachments)
-        )
+        // Processed = not open, the one reading (lib/documents/inbox-item-state.ts): a link,
+        // Arkiv, or a verifikat that holds the document, stamp or not (agent
+        // feedback seq 1003926).
+        const processed = !isOpenInboxItem(withDocumentHold(item as DocumentHoldRow & Parameters<typeof isOpenInboxItem>[0]))
 
         return {
           id: item.id,
@@ -17211,7 +17198,7 @@ export const tools: McpTool[] = [
       // Fetch the inbox item with the attached source document
       const { data: inbox, error: inboxErr } = await supabase
         .from('invoice_inbox_items')
-        .select('id, status, extracted_data, matched_supplier_id, created_supplier_invoice_id, document_id, kind_hint')
+        .select(`id, status, extracted_data, matched_supplier_id, created_supplier_invoice_id, created_journal_entry_id, document_id, kind_hint, ${INBOX_ITEM_DOCUMENT_HOLD}`)
         .eq('id', inboxItemId)
         .eq('company_id', companyId)
         .single()
@@ -17619,6 +17606,17 @@ export const tools: McpTool[] = [
         { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
         supplierType,
       )
+      // What the approval refuses (convertInboxItemToSupplierInvoice): a
+      // verifikat of its own next to the one that books the purchase already.
+      if (bookingMoment === 'issue') {
+        const booking = await bookingStateOfItem(supabase, companyId, withDocumentHold(inbox as unknown as InboxItemBookingRow))
+        if (booking.state === 'booked') {
+          throw codedRefusal(
+            'INBOX_ITEM_ALREADY_BOOKED',
+            `A verifikat books this item already (${booking.journal_entry_id}): registering it would book the purchase twice. To put an invoice booked already into the reskontra use gnubok_register_booked_supplier_invoice.`,
+          )
+        }
+      }
       // A Swedish supplier's document with no VAT on it and no word from the
       // caller: standard_25 was a guess, and so would exempt be (the
       // dashboard form's default, where a person sees the reverse charge
@@ -18256,11 +18254,10 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Pull recent inbox items with a document, no supplier invoice and no
-      // direct journal entry yet (both are terminal links per the same
-      // "processed" semantics gnubok_list_inbox_items uses), whose document
-      // no verifikat holds, then filter out those whose document is already
-      // pinned to a transaction. The document's own link is what
+      // Pull recent open inbox items with a document (the one reading,
+      // lib/documents/inbox-item-state.ts) whose document no verifikat holds, then filter
+      // out those whose document is already pinned to a transaction. The
+      // document's own link is what
       // gnubok_link_document_to_voucher reads (document_already_linked): an
       // item the inbox never stamped listed a document already on its
       // verifikat as unmatched, and the agent staged a no-op link to find out
@@ -18269,13 +18266,13 @@ export const tools: McpTool[] = [
       // matched to anything else either.
       // Two-step query because PostgREST doesn't expose anti-joins.
       const fetchSize = limit * 2
-      let inboxQuery = supabase
-        .from('invoice_inbox_items')
-        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments!inner(file_name, journal_entry_id)')
-        .eq('company_id', companyId)
-        .not('document_id', 'is', null)
-        .is('created_supplier_invoice_id', null)
-        .is('created_journal_entry_id', null)
+      let inboxQuery = whereInboxItemOpen(
+        supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments!inner(file_name, journal_entry_id)')
+          .eq('company_id', companyId)
+          .not('document_id', 'is', null),
+      )
         .is('document_attachments.journal_entry_id', null)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -25559,7 +25556,7 @@ export const tools: McpTool[] = [
       if (inboxItemId) {
         const { data: inbox, error: inboxErr } = await supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, created_journal_entry_id, created_supplier_invoice_id')
+          .select(`id, document_id, created_journal_entry_id, created_supplier_invoice_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
           .eq('id', inboxItemId)
           .eq('company_id', companyId)
           .single()
@@ -25577,6 +25574,10 @@ export const tools: McpTool[] = [
             `Inbox item is already converted to supplier invoice ${inbox.created_supplier_invoice_id}. ` +
             'Cancel that path before booking it as a verifikat.'
           )
+        }
+        const heldBy = withDocumentHold(inbox as unknown as DocumentHoldRow).document_journal_entry_id
+        if (heldBy) {
+          throw codedRefusal('INBOX_ITEM_ALREADY_BOOKED', `Verifikat ${heldBy} already holds this item's document. Leave inbox_item_id out to book a verifikat of its own.`)
         }
         inboxDocumentId = (inbox.document_id as string | null) ?? null
       }

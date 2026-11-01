@@ -471,7 +471,7 @@ Example response `200`:
 **List invoice-inbox items (Underlag) with a summary of what was read from each.**
 `scope:documents:read · risk:low · idempotent`
 
-Returns inbox items newest first: how each arrived, the document, the vendor, total, currency and date read from it, and its links (transaction match, supplier invoice, verifikat). processed is true once any link exists; unprocessed_only=true returns only the items still needing handling. Cursor pagination: pass next_cursor back as cursor; null on the last page. The full reading and the e-mail text are on GET /inbox-items/{id}.
+Returns inbox items newest first: how each arrived, the document, the vendor, total, currency and date read from it, and its links (transaction match, supplier invoice, verifikat). processed is true once the item is not open: any link, Arkiv took it, or a verifikat holds its document; unprocessed_only=true returns only the open items, so a page can run short with a next_cursor. Cursor pagination: pass next_cursor back as cursor; null on the last page. The full reading and the e-mail text are on GET /inbox-items/{id}.
 
 **Use when:** You work the inbox: receipts and invoices waiting to be matched, converted or booked.
 **Do not use for:** The document archive as a whole (GET /documents) or supplier invoices already registered (GET /supplier-invoices).
@@ -485,7 +485,7 @@ Returns inbox items newest first: how each arrived, the document, the vendor, to
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `status` | query | `"received" \| "error"` | no | error = extraction failed. |
-| `unprocessed_only` | query | `"true" \| "false"` | no | true = only items with no transaction match, supplier invoice or verifikat yet. |
+| `unprocessed_only` | query | `"true" \| "false"` | no | true = only open items: no link, not in Arkiv, and no verifikat holds the document. |
 | `cursor` | query | `string` | no | next_cursor from the previous page. Omit for the first page. |
 | `limit` | query | `number` | no | Page size, 1-100 (default 50). |
 
@@ -922,6 +922,7 @@ Registers a supplier invoice (status registered, next ankomstnummer) from the gi
 
 **Pitfalls:**
 - An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.
+- Where registering posts a verifikat, an item a live verifikat books already, by its stamp or because that verifikat holds its document, returns 409 INBOX_ITEM_ALREADY_BOOKED with details.journal_entry_id: a second verifikat would book the purchase twice.
 - A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.
 - amount is per line EXCLUDING VAT. VAT is booked per rate as the document states it: on the summed base of each rate, or the figure in vat_breakdown when it is within half an öre per line of that (else 400 VAT_BREAKDOWN_MISMATCH), spread over the lines. items[].vat_amount books a line's own VAT as given. Private-payment fields are not accepted here.
 - Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT. Goods from an EU supplier take reverse_charge_kind: "eu_goods" (basis 4515, ruta 20); omitted books services (4535, ruta 21).

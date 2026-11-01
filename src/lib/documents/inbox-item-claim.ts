@@ -23,6 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { INBOX_ITEM_DOCUMENT_HOLD, SPENT_ENTRY_STATUSES, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import { createLogger } from '@/lib/logger'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 
@@ -31,9 +32,6 @@ const log = createLogger('documents/inbox-item-claim')
 /** Gap note used only when the storno itself fails after its number was allocated. */
 const LOSER_GAP_EXPLANATION =
   'Verifikation för ett underlag som redan var bokfört; automatisk storno misslyckades. Manuell avstämning krävs.'
-
-/** Verifikat statuses that no longer book anything: a pointer at one is stale. */
-const SPENT_ENTRY_STATUSES = new Set(['reversed', 'cancelled'])
 
 export type InboxItemClaim =
   | { status: 'claimed' }
@@ -175,10 +173,11 @@ export type InboxItemBookingState =
 
 /**
  * Whether the item may be booked, read before posting. Booked means a
- * supplier invoice holds it, or its pointer names a verifikat that still
- * books it (anything but reversed or cancelled). A pointer at a reversed
- * verifikat is stale: the door may replace exactly that value, as a bank row
- * whose pointer names a reversed verifikat may be booked again (!128).
+ * supplier invoice holds it, or a verifikat that still books it (anything but
+ * reversed or cancelled) does: its pointer's, or the one its document sits on,
+ * stamp or not (lib/documents/inbox-item-state.ts). A pointer at a reversed verifikat is
+ * stale: the door may replace exactly that value, as a bank row whose pointer
+ * names a reversed verifikat may be booked again (!128).
  */
 export async function readInboxItemBookingState(
   supabase: SupabaseClient,
@@ -187,18 +186,35 @@ export async function readInboxItemBookingState(
 ): Promise<InboxItemBookingState> {
   const { data: item, error } = await supabase
     .from('invoice_inbox_items')
-    .select('created_journal_entry_id, created_supplier_invoice_id')
+    .select(`created_journal_entry_id, created_supplier_invoice_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) return { state: 'error', error }
   if (!item) return { state: 'missing' }
-  const pointer = (item.created_journal_entry_id as string | null) ?? null
-  const supplierInvoiceId = (item.created_supplier_invoice_id as string | null) ?? null
+  return bookingStateOfItem(supabase, companyId, withDocumentHold(item as unknown as InboxItemBookingRow))
+}
+
+export interface InboxItemBookingRow extends DocumentHoldRow {
+  created_journal_entry_id: string | null
+  created_supplier_invoice_id: string | null
+}
+
+/** readInboxItemBookingState for a door that read the row itself, INBOX_ITEM_DOCUMENT_HOLD included. */
+export async function bookingStateOfItem(
+  supabase: SupabaseClient,
+  companyId: string,
+  item: Omit<InboxItemBookingRow, 'document_hold'> & { document_journal_entry_id: string | null },
+): Promise<InboxItemBookingState> {
+  const pointer = item.created_journal_entry_id ?? null
+  const supplierInvoiceId = item.created_supplier_invoice_id ?? null
   if (supplierInvoiceId) {
     return { state: 'booked', journal_entry_id: pointer, supplier_invoice_id: supplierInvoiceId }
   }
-  if (!pointer) return { state: 'open', replaces: null }
+  const heldBy = item.document_journal_entry_id
+  const openOrHeld = (replaces: string | null): InboxItemBookingState =>
+    heldBy ? { state: 'booked', journal_entry_id: heldBy, supplier_invoice_id: null } : { state: 'open', replaces }
+  if (!pointer) return openOrHeld(null)
 
   const { data: entry, error: entryError } = await supabase
     .from('journal_entries')
@@ -208,6 +224,6 @@ export async function readInboxItemBookingState(
     .maybeSingle()
   if (entryError) return { state: 'error', error: entryError }
   const status = (entry?.status as string | undefined) ?? null
-  if (status && SPENT_ENTRY_STATUSES.has(status)) return { state: 'open', replaces: pointer }
+  if (status && SPENT_ENTRY_STATUSES.has(status)) return openOrHeld(pointer)
   return { state: 'booked', journal_entry_id: pointer, supplier_invoice_id: null }
 }

@@ -16,6 +16,7 @@ import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
+import { isInboxItemTaken, itemStage, whereInboxItemFree } from '@/lib/documents/inbox-item-state'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import path from 'node:path'
@@ -263,7 +264,7 @@ export function duplicateItemState(item: {
   created_journal_entry_id: string | null
   routed_to_arkiv_at?: string | null
 }): DuplicateItemState {
-  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (itemStage(item) === 'booked') return 'booked'
   if (item.routed_to_arkiv_at) return 'arkiv'
   return 'inbox'
 }
@@ -427,23 +428,17 @@ async function processArchivedDocumentInner(
       let hintAfter = hintBefore
       let hintSkipped: 'consumed' | 'write_failed' | null = null
       const incomingHint = emailMeta?.kindHint ?? null
-      const stillOpen =
-        adopted.created_supplier_invoice_id == null &&
-        adopted.created_journal_entry_id == null &&
-        adopted.matched_transaction_id == null
       if (incomingHint !== null && incomingHint !== hintBefore) {
-        if (!stillOpen) {
+        if (isInboxItemTaken(adopted)) {
           hintSkipped = 'consumed'
         } else {
-          const { data: updatedRows, error: hintError } = await supabase
-            .from('invoice_inbox_items')
-            .update({ kind_hint: incomingHint })
-            .eq('id', adopted.id)
-            .eq('company_id', companyId)
-            .is('created_supplier_invoice_id', null)
-            .is('created_journal_entry_id', null)
-            .is('matched_transaction_id', null)
-            .select('id')
+          const { data: updatedRows, error: hintError } = await whereInboxItemFree(
+            supabase
+              .from('invoice_inbox_items')
+              .update({ kind_hint: incomingHint })
+              .eq('id', adopted.id)
+              .eq('company_id', companyId),
+          ).select('id')
           const changed = ((updatedRows as Array<{ id: string }> | null) ?? []).length > 0
           if (hintError) {
             // Non-fatal: the document is already archived and visible. Losing
