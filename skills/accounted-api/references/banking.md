@@ -948,8 +948,11 @@ Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel wo
 - `format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.
 - Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.
 - Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.
+- Rows bind to the cash account the file names when the company already has it. A file covering a period a completed SIE import booked is matched against the imported vouchers and never auto-categorized.
+- A row the parser cannot read is skipped and the rest are imported. The operation still ends succeeded, so read its result: `import_complete: false` means rows are missing, `transactions_skipped` counts them and `skipped_rows` names each with its row and reason. Correct the file and import it again: rows already in are recognised.
+- A generic CSV whose amounts read a thousand apart under the two decimal marks ("349.000"), with no other amount settling which, is refused with 400 VALIDATION_ERROR and imports nothing. Write the amounts with two decimals.
 - BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn't discharged. A successful import here means the data is ingested: not booked.
-- A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.
+- A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts and whether the file was read to its last row (`import_complete`).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

@@ -25,6 +25,7 @@
 import type { BankFileAccountIdentity, BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { parseSwedishAmount } from '@/lib/money'
 import { accountIdentity, sharedAccountIdentity } from '../account-identity'
 
 /** Markers of a camt.053 statement: its namespace, root element or long name. */
@@ -103,8 +104,9 @@ export const camt053Format: BankFileFormat = {
           continue
         }
 
-        let amount = parseFloat(amountStr)
-        if (isNaN(amount)) {
+        // ISO 20022 amounts are xs:decimal: a dot, whatever the country.
+        let amount = parseSwedishAmount(amountStr, '.')
+        if (amount === null) {
           issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
           continue
         }
@@ -161,12 +163,12 @@ export const camt053Format: BankFileFormat = {
         // Balance after entry
         const balanceStr = extractTextContent(entry, 'ClsgAvlblAmt') ||
           extractTextContent(entry, 'ClsgBookdAmt')
-        const balance = balanceStr ? parseFloat(balanceStr) : null
+        const balance = balanceStr ? parseSwedishAmount(balanceStr, '.') : null
 
         transactions.push({
           date,
           description: description.trim(),
-          amount: Math.round(amount * 100) / 100,
+          amount,
           currency,
           balance: balance !== null && !isNaN(balance) ? balance : null,
           reference,

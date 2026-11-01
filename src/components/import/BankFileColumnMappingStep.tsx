@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,7 +23,8 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeftIcon, ArrowRightIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
-import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
+import { genericDecimalMark, getCSVPreview, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
+import { parseSwedishAmount } from '@/lib/money'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 
 const HEADER_KEYWORDS = [
@@ -56,6 +58,7 @@ export default function BankFileColumnMappingStep({
   onConfirm,
   onBack,
 }: BankFileColumnMappingStepProps) {
+  const t = useTranslations('transactions')
   const [dateCol, setDateCol] = useState<number>(-1)
   const [descCol, setDescCol] = useState<number>(-1)
   const [amountCol, setAmountCol] = useState<number>(-1)
@@ -76,7 +79,9 @@ export default function BankFileColumnMappingStep({
   }, [rawFileContent])
 
   const [delimiter, setDelimiter] = useState<string>(detectedDelimiter)
-  const [decimalSep, setDecimalSep] = useState<',' | '.'>(',')
+  // Null until someone chooses: the file settles the mark, and when it cannot
+  // the step asks instead of a default deciding the amounts (see below).
+  const [decimalSep, setDecimalSep] = useState<',' | '.' | null>(null)
   const [dateFormat, setDateFormat] = useState<string>('YYYY-MM-DD')
 
   // Re-parse headers and preview whenever delimiter or file content changes.
@@ -154,7 +159,22 @@ export default function BankFileColumnMappingStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataRows, hasHeader, columnHeaders])
 
-  const isValid = dateCol >= 0 && descCol >= 0 && amountCol >= 0
+  // What the import will read, over the whole file: the preview below shows it,
+  // and an amount two marks read a thousand apart is asked about, never guessed.
+  const amountReading = useMemo(
+    () => amountCol < 0
+      ? { mark: decimalSep, undecided: null }
+      : genericDecimalMark(rawFileContent, {
+          amount: amountCol,
+          ...(balanceCol >= 0 && { balance: balanceCol }),
+          decimal_separator: decimalSep,
+          delimiter,
+          skip_rows: skipRows,
+        }),
+    [rawFileContent, amountCol, balanceCol, decimalSep, delimiter, skipRows],
+  )
+
+  const isValid = dateCol >= 0 && descCol >= 0 && amountCol >= 0 && !amountReading.undecided
 
   const handleConfirm = () => {
     const mapping: GenericCSVColumnMapping = {
@@ -196,6 +216,16 @@ export default function BankFileColumnMappingStep({
             <Switch id="has-header" checked={hasHeader} onCheckedChange={setHasHeaderOverride} />
           </div>
 
+          {amountReading.undecided && (
+            <p role="alert" className="text-sm text-destructive">
+              {t('bank_file_decimal_mark_undecided', {
+                cell: amountReading.undecided.cell,
+                dot: formatCurrency(parseSwedishAmount(amountReading.undecided.cell, '.') ?? 0),
+                comma: formatCurrency(parseSwedishAmount(amountReading.undecided.cell, ',') ?? 0),
+              })}
+            </p>
+          )}
+
           {/* Delimiter, decimal, and date format settings */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
@@ -213,9 +243,9 @@ export default function BankFileColumnMappingStep({
             </div>
             <div className="space-y-2">
               <Label>Decimalavgränsare</Label>
-              <Select value={decimalSep} onValueChange={(v) => { if (v) setDecimalSep(v as ',' | '.') }}>
+              <Select value={decimalSep ?? amountReading.mark ?? ''} onValueChange={(v) => { if (v) setDecimalSep(v as ',' | '.') }}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder={t('bank_file_decimal_mark_placeholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value=",">Komma (1 234,56)</SelectItem>
@@ -392,10 +422,9 @@ export default function BankFileColumnMappingStep({
                 <TableBody>
                     {dataRows.slice(0, 5).map((row, i) => {
                     const amountStr = row[amountCol] || '0'
-                    const normalizedAmountStr = normalizeMinusSign(amountStr)
-                    const amount = decimalSep === ','
-                      ? parseFloat(normalizedAmountStr.replace(/\s/g, '').replace(',', '.'))
-                      : parseFloat(normalizedAmountStr.replace(/\s/g, ''))
+                    const amount = amountReading.undecided
+                      ? null
+                      : parseSwedishAmount(amountStr, amountReading.mark ?? undefined)
 
                     return (
                       <TableRow key={i}>
@@ -403,13 +432,13 @@ export default function BankFileColumnMappingStep({
                         <TableCell className="text-sm">{row[descCol] || '-'}</TableCell>
                         <TableCell
                           className={`text-right font-mono text-sm ${
-                            !isNaN(amount) && amount >= 0 ? 'text-success' : 'text-destructive'
+                            amount !== null && amount >= 0 ? 'text-success' : 'text-destructive'
                           }`}
                         >
                           {/* SEK is safe here ONLY because generic-csv hardcodes
                               currency: 'SEK' (formats/generic-csv.ts). If the
                               mapper ever gains a currency column, pass it. */}
-                          {!isNaN(amount) ? formatCurrency(amount) : amountStr}
+                          {amount !== null ? formatCurrency(amount) : amountStr}
                         </TableCell>
                       </TableRow>
                     )

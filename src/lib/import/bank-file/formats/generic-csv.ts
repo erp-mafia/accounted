@@ -9,14 +9,67 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { parseCSVLine } from './nordea'
 import { normalizeDate } from '../date-utils'
+import { inferDecimalMark, parseSwedishAmount, type DecimalMark } from '@/lib/money'
 
 /**
  * Normalize Unicode minus variants (U+2212 "−", U+2013 "–", U+2014 "—", U+2010 "‐")
- * to ASCII hyphen-minus so parseFloat can read them. Northmill and some other
- * banks export negatives with U+2212; parseFloat returns NaN for those.
+ * to ASCII hyphen-minus, for telling a column of numbers apart. Northmill and
+ * some other banks export negatives with U+2212.
  */
 export function normalizeMinusSign(value: string): string {
   return value.replace(/[\u2212\u2013\u2014\u2010]/g, '-')
+}
+
+type AmountColumns = Pick<GenericCSVColumnMapping, 'amount' | 'balance' | 'decimal_separator' | 'delimiter' | 'skip_rows'>
+
+/** The file's lines, and the cells of each from the first row of data on. */
+function mappedRows(content: string, mapping: AmountColumns): { lines: string[]; rowFields: string[][] } {
+  const lines = prepareContent(content).split('\n').filter((line) => line.trim() !== '')
+  const rowFields = lines.map((line, i) => i < mapping.skip_rows
+    ? []
+    : parseCSVLine(line.trim(), mapping.delimiter).map((f) => f.trim().replace(/^"|"$/g, '')))
+  return { lines, rowFields }
+}
+
+/**
+ * Whether the file's decimal mark decides what a cell is: "349.000" is 349 or
+ * 349 000, "1,234" is 1,23 or 1 234, and one cell cannot say which. The parser
+ * is the judge, so this cannot drift from what an import reads, and a cell
+ * both marks read alike ("0.000") needs no answer.
+ */
+function isAmbiguousAmount(cell: string | undefined): boolean {
+  const dot = parseSwedishAmount(cell, '.')
+  const comma = parseSwedishAmount(cell, ',')
+  return dot !== null && comma !== null && dot !== comma
+}
+
+export interface GenericDecimalMark {
+  /** What the amounts read under. Null: neither the file nor a person says, and no cell needs it to. */
+  mark: DecimalMark | null
+  /** The first cell two marks read a thousand apart while nothing settles the mark. */
+  undecided: { row: number; cell: string } | null
+}
+
+/**
+ * The file decides its decimal mark, never one cell: every amount and balance
+ * cell votes, and only when none can decide does the mark a person chose
+ * apply. With no such mark a cell like "349.000" is never guessed: it is 349
+ * or 349 000, and the wizard asks while a door without a person refuses.
+ */
+function readDecimalMark(rowFields: string[][], mapping: AmountColumns): GenericDecimalMark {
+  const columns = [mapping.amount, ...(mapping.balance !== undefined ? [mapping.balance] : [])]
+  const mark = inferDecimalMark(rowFields.flatMap((fields) => columns.map((idx) => fields[idx]))) ?? mapping.decimal_separator
+  if (mark !== null) return { mark, undecided: null }
+  for (const [i, fields] of rowFields.entries()) {
+    const cell = columns.map((idx) => fields[idx]).find(isAmbiguousAmount)
+    if (cell) return { mark, undecided: { row: i + 1, cell } }
+  }
+  return { mark, undecided: null }
+}
+
+/** The mark a mapped file reads under, over the whole file, as parseGenericCSV reads it. */
+export function genericDecimalMark(content: string, mapping: AmountColumns): GenericDecimalMark {
+  return readDecimalMark(mappedRows(content, mapping).rowFields, mapping)
 }
 
 /**
@@ -26,8 +79,7 @@ export function parseGenericCSV(
   content: string,
   mapping: GenericCSVColumnMapping
 ): BankFileParseResult {
-  const prepared = prepareContent(content)
-  const lines = prepared.split('\n').filter((line) => line.trim() !== '')
+  const { lines, rowFields } = mappedRows(content, mapping)
 
   const transactions: ParsedBankTransaction[] = []
   const issues: BankFileParseIssue[] = []
@@ -62,13 +114,35 @@ export function parseGenericCSV(
     })
   }
 
+  const { mark: decimalMark, undecided } = readDecimalMark(rowFields, mapping)
+  if (undecided) {
+    const { row, cell } = undecided
+    return {
+      format: 'generic_csv',
+      format_name: 'CSV (manuell mappning)',
+      transactions: [],
+      date_from: null,
+      date_to: null,
+      issues: [{
+        row,
+        message: `Beloppet ${cell} kan betyda ${parseSwedishAmount(cell, '.')} eller ${parseSwedishAmount(cell, ',')} beroende på decimaltecken, och inget annat belopp i filen avgör vilket. Inget importerades. Skriv beloppen med två decimaler, eller importera filen i Accounted och välj decimaltecken i kolumnmappningen.`,
+        severity: 'error',
+      }],
+      stats: {
+        total_rows: lines.length - startRow,
+        parsed_rows: 0,
+        skipped_rows: lines.length - startRow,
+        total_income: 0,
+        total_expenses: 0,
+      },
+    }
+  }
+
   for (let i = startRow; i < lines.length; i++) {
     const line = lines[i].trim()
     if (!line) continue
 
-    const fields = parseCSVLine(line, mapping.delimiter).map((f) =>
-      f.trim().replace(/^"|"$/g, '')
-    )
+    const fields = rowFields[i]
 
     // Validate required column indices are within bounds
     const maxRequired = Math.max(mapping.date, mapping.description, mapping.amount)
@@ -98,18 +172,8 @@ export function parseGenericCSV(
       continue
     }
 
-    // Parse amount based on configured decimal separator.
-    // Normalize Unicode minus first — some banks (e.g. Northmill) use U+2212
-    // instead of ASCII hyphen, which parseFloat treats as NaN.
-    const normalizedAmount = normalizeMinusSign(amountStr)
-    let amount: number
-    if (mapping.decimal_separator === ',') {
-      amount = parseFloat(normalizedAmount.replace(/\s/g, '').replace(',', '.'))
-    } else {
-      amount = parseFloat(normalizedAmount.replace(/\s/g, ''))
-    }
-
-    if (isNaN(amount)) {
+    const amount = parseSwedishAmount(amountStr, decimalMark ?? undefined)
+    if (amount === null) {
       issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
       skippedRows++
       continue
@@ -123,16 +187,7 @@ export function parseGenericCSV(
       continue
     }
 
-    let balance: number | null = null
-    if (balanceStr) {
-      const normalizedBalance = normalizeMinusSign(balanceStr)
-      if (mapping.decimal_separator === ',') {
-        balance = parseFloat(normalizedBalance.replace(/\s/g, '').replace(',', '.'))
-      } else {
-        balance = parseFloat(normalizedBalance.replace(/\s/g, ''))
-      }
-      if (isNaN(balance)) balance = null
-    }
+    const balance = balanceStr ? parseSwedishAmount(balanceStr, decimalMark ?? undefined) : null
 
     transactions.push({
       date,
@@ -413,13 +468,14 @@ export const genericCSVFormat: BankFileFormat = {
   },
 
   parse(content: string): BankFileParseResult {
-    // Default mapping for a basic CSV: date, description, amount
+    // Default mapping for a basic CSV: date, description, amount. Nobody is
+    // here to choose a decimal mark, so the file has to settle it.
     const defaultMapping: GenericCSVColumnMapping = {
       date: 0,
       description: 1,
       amount: 2,
       delimiter: ',',
-      decimal_separator: ',',
+      decimal_separator: null,
       skip_rows: 1,
       date_format: 'YYYY-MM-DD',
     }

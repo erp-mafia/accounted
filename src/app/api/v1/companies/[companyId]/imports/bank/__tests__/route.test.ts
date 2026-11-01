@@ -85,20 +85,21 @@ type RecordedCall = { table: string; method: string; args: unknown[] }
 
 /**
  * Per-table Supabase double that also records every chained call, so a test
- * can assert on the exact payload handed to `.update()` / `.upsert()`.
+ * can assert on the exact payload handed to `.update()` / `.upsert()`. A key
+ * `<table>.update` answers that table's updates alone.
  */
 function makeSupabase(byTable: Record<string, MockResult>) {
   const calls: RecordedCall[] = []
-  const buildChain = (table: string): unknown => {
+  const buildChain = (table: string, updating = false): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
+            resolve(byTable[updating ? `${table}.update` : table] ?? byTable[table] ?? { data: null, error: null })
         }
         return (...args: unknown[]) => {
           calls.push({ table, method: String(prop), args })
-          return buildChain(table)
+          return buildChain(table, updating || prop === 'update')
         }
       },
     }
@@ -176,7 +177,7 @@ beforeEach(() => {
   })
   supabase = makeSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    bank_file_imports: { data: null, error: null },
+    bank_file_imports: { data: { id: 'import-1' }, error: null },
   })
   mockServiceClient.mockReturnValue(supabase)
 })
@@ -293,12 +294,18 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(ingestMock.mock.calls[0][4]).toEqual({ bankFileImportId: 'import-1' })
   })
 
-  it('still ingests (rows unlinked) when the upsert returns no batch id', async () => {
-    // Default beforeEach supabase: bank_file_imports resolves { data: null }.
-    await callRoute()
+  it('fails the operation when the import cannot be recorded: no batch lands outside undo', async () => {
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: null, error: { message: 'connection reset' } },
+    })
+    mockServiceClient.mockReturnValue(supabase)
 
-    expect(ingestMock).toHaveBeenCalledTimes(1)
-    expect(ingestMock.mock.calls[0][4]).toBeUndefined()
+    const res = await callRoute()
+
+    expect((await res.json()).error.code).toBe('BANK_IMPORT_FAILED')
+    expect(ingestMock).not.toHaveBeenCalled()
+    expect(failOperationMock).toHaveBeenCalledTimes(1)
   })
 
   it('stamps ids and provenance with the fallback format when an explicit override parses nothing', async () => {
@@ -372,6 +379,7 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
       imported_count: 3,
       duplicate_count: 1,
       matched_count: 2,
+      error_message: null,
     })
     // `imported_at` exists on sie_imports, NOT on bank_file_imports. Writing it
     // made PostgREST reject the statement, leaving status 'processing' forever.
@@ -384,7 +392,8 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
   it('still returns 202 when the completion status write fails', async () => {
     supabase = makeSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      bank_file_imports: { data: null, error: { message: 'permission denied' } },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+      'bank_file_imports.update': { data: null, error: { message: 'permission denied' } },
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -427,8 +436,10 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(arrival.source_meta).toMatchObject({ via: 'partner_api', bank_file_import_id: 'import-1', format: 'seb', imported_count: 3 })
   })
 
-  it('records no arrival without a bank_file_imports row to point at', async () => {
-    // Default beforeEach supabase: the upsert returns no row.
+  it('records no arrival when every row failed', async () => {
+    ingestMock.mockResolvedValue({
+      imported: 0, duplicates: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, errors: 3, transaction_ids: [],
+    })
     const res = await callRoute()
     expect(res.status).toBe(202)
     expect(supabase.from).not.toHaveBeenCalledWith('arrivals')

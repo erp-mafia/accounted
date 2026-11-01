@@ -11,16 +11,14 @@
  *      Nordea Business / Wise / generic CSV), or honors the optional `format`
  *      override.
  *   3. Parses transactions.
- *   4. Records a `bank_file_imports` row and ingests transactions via
- *      `ingestTransactions()`.
- *   5. Emits `transaction.synced` per ingested transaction.
- *   6. Records the result on the `operations` table for consistent
+ *   4. Imports it with `importBankFile()`, the service behind the dashboard's
+ *      /api/import/bank-file/execute too, so a v1 import has the same effects.
+ *      The caller chooses no ledger, so the rows bind to the cash account the
+ *      file names and nothing about the account can refuse the file.
+ *   5. Records the result on the `operations` table for consistent
  *      polling-shape with SIE imports.
- *   7. Keeps the file as it came and records the import's arrival
- *      (lib/import/bank-file/arrival.ts).
  *
- * Runs INLINE today. The dashboard's /api/import/bank-file/execute backs
- * the same `ingestTransactions` helper, so a v1 import is byte-equivalent.
+ * Runs INLINE today.
  */
 
 import { z } from 'zod'
@@ -37,15 +35,18 @@ import {
   parseBankFile,
   detectFileFormat,
   generateFileHash,
-  toRawTransaction,
+  unreadRows,
 } from '@/lib/import/bank-file/parser'
-import { ingestTransactions } from '@/lib/transactions/ingest'
+import { importBankFile } from '@/lib/import/bank-file/import-file'
 import { decodeBankFile } from '@/lib/import/bank-file/workbook'
 import { headerLikeCells, unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
-import { archiveBankFileOriginal, recordBankFileArrival } from '@/lib/import/bank-file/arrival'
+import { archiveBankFileOriginal } from '@/lib/import/bank-file/arrival'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
+
+// The same per-row ingest and budget as the dashboard's execute route.
+export const maxDuration = 300
 
 const BankImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -98,8 +99,11 @@ registerEndpoint({
     '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.',
     'Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.',
     'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
+    'Rows bind to the cash account the file names when the company already has it. A file covering a period a completed SIE import booked is matched against the imported vouchers and never auto-categorized.',
+    'A row the parser cannot read is skipped and the rest are imported. The operation still ends succeeded, so read its result: `import_complete: false` means rows are missing, `transactions_skipped` counts them and `skipped_rows` names each with its row and reason. Correct the file and import it again: rows already in are recognised.',
+    'A generic CSV whose amounts read a thousand apart under the two decimal marks ("349.000"), with no other amount settling which, is refused with 400 VALIDATION_ERROR and imports nothing. Write the amounts with two decimals.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
-    'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
+    'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts and whether the file was read to its last row (`import_complete`).',
   ],
   example: {
     response: {
@@ -262,97 +266,44 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ctx.log,
     )
 
-    try {
-      // Record the import row so the dashboard's "bank file imports" tab
-      // shows v1 imports too. The unique constraint is (company_id,
-      // file_hash) since 20260707130000, so the same user importing the
-      // same statement into two companies is two independent rows, and the
-      // upsert gives duplicate-rerun protection within one company. The
-      // old (user_id, file_hash) key and its cross-company pre-check
-      // (BANK_IMPORT_DUPLICATE_OTHER_COMPANY) are gone.
-      // `.select('id')` so the inserted transactions can be stamped with the
-      // batch id (transactions.bank_file_import_id): the scope key for the
-      // owner/admin "undo this import" action. A missing id (upsert error) is
-      // non-fatal BY DESIGN: the import proceeds, its rows just stay
-      // unlinked, exactly like a pre-20260820071500 import. Without the row
-      // the batch never appears in the undo history, so nothing falsely
-      // advertises undo for it — but the failure is logged loudly, since an
-      // unattributed batch is permanently exempt from bulk undo.
-      const { data: importRow, error: importRowError } = await ctx.supabase
-        .from('bank_file_imports')
-        .upsert(
-          {
-            user_id: ctx.userId,
-            company_id: ctx.companyId!,
-            filename: file.name,
-            file_hash: fileHash,
-            file_format: effectiveFormat,
-            transaction_count: parseResult.transactions.length,
-            status: 'processing',
-            date_from: parseResult.date_from,
-            date_to: parseResult.date_to,
-          },
-          { onConflict: 'company_id,file_hash' },
-        )
-        .select('id')
-        .maybeSingle()
+    // A lost bank row is a hole in the books: the rows that read are imported
+    // and the answer names every row that did not.
+    const unread = unreadRows(parseResult)
 
-      if (importRowError || !importRow?.id) {
-        ctx.log.warn('bank_file_imports upsert failed: batch will import without undo attribution', {
+    const failed = async (reason: string) => {
+      await failOperation(
+        ctx.supabase,
+        { id: op.id, error: { code: 'BANK_IMPORT_FAILED', message: reason } },
+        ctx.log,
+      )
+      return v1ErrorResponseFromCode('BANK_IMPORT_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { operation_id: op.id, reason },
+      })
+    }
+
+    try {
+      const outcome = await importBankFile(
+        { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+        {
+          transactions: parseResult.transactions,
+          format: effectiveFormat,
           filename: file.name,
           fileHash,
-          error: importRowError?.message ?? 'no row returned',
-        })
-      }
-
-      // One mapping with the dashboard path (toRawTransaction). external_id
-      // stays stable so re-imports are deduplicated server-side.
-      const raw = parseResult.transactions.map((t, idx) => toRawTransaction(t, effectiveFormat, idx))
-
-      const ingestResult = await ingestTransactions(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        raw,
-        importRow?.id ? { bankFileImportId: importRow.id as string } : undefined,
+          account: parseResult.account,
+          unreadRows: unread,
+          arrival: {
+            fetchedBy: apiKeyArrivalActor(ctx),
+            via: 'partner_api',
+            keepOriginal: () => archiveBankFileOriginal(ctx.supabase, {
+              companyId: ctx.companyId!, fileHash, filename: file.name, bytes: buffer, mime: file.type,
+            }),
+          },
+        },
       )
+      if (!outcome.ok) return await failed(String(outcome.details?.reason ?? 'unknown'))
 
-      // Mark the bank_file_imports row complete. The unique constraint is
-      // `(company_id, file_hash)` since 20260707130000; scoping the update by
-      // user_id as well is defense in depth so a concurrent same-hash import
-      // can never overwrite the wrong company's status row.
-      //
-      // Completion is recorded exactly like the dashboard path: `status` plus
-      // the three outcome counters. There is no `imported_at` column on
-      // bank_file_imports (that column lives on sie_imports); writing it made
-      // PostgREST reject the whole statement with PGRST204, and because the
-      // result was never inspected the row stayed `status: 'processing'` with
-      // zeroed counters forever. `transaction_count` keeps the parsed row count
-      // set by the upsert above and is not overwritten with the imported count.
-      const { error: completionError } = await ctx.supabase
-        .from('bank_file_imports')
-        .update({
-          status: 'completed',
-          imported_count: ingestResult.imported,
-          duplicate_count: ingestResult.duplicates,
-          matched_count: ingestResult.auto_matched_invoices,
-        })
-        .eq('file_hash', fileHash)
-        .eq('user_id', ctx.userId)
-        .eq('company_id', ctx.companyId!)
-
-      // Non-fatal: the transactions are already ingested, so a failed status
-      // write must not fail the request. It must not be silent either: an
-      // unchecked error here is what hid the phantom column.
-      if (completionError) {
-        ctx.log.warn('failed to mark bank_file_imports row completed', {
-          operationId: op.id,
-          companyId: ctx.companyId,
-          fileHash,
-          error: completionError.message,
-        })
-      }
-
+      const { ingest } = outcome.data
       await completeOperation(
         ctx.supabase,
         {
@@ -360,44 +311,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           result: {
             format: effectiveFormat,
             file_hash: fileHash,
-            transactions_imported: ingestResult.imported,
-            transactions_duplicates: ingestResult.duplicates,
+            import_complete: unread.length === 0,
+            transactions_imported: ingest.imported,
+            transactions_skipped: unread.length,
+            skipped_rows: unread.map(({ row, message }) => ({ row, reason: message })),
+            transactions_duplicates: ingest.duplicates,
             // Split by reason, so rows skipped on content (a judgement call)
             // are told apart from exact external_id matches.
-            transactions_duplicates_by_reason: ingestResult.duplicates_by_reason ?? null,
-            transactions_reconciled: ingestResult.reconciled,
-            transactions_auto_categorized: ingestResult.auto_categorized,
-            transactions_errors: ingestResult.errors,
+            transactions_duplicates_by_reason: ingest.duplicates_by_reason ?? null,
+            transactions_reconciled: ingest.reconciled,
+            transactions_auto_categorized: ingest.auto_categorized,
+            transactions_errors: ingest.errors,
             date_from: parseResult.date_from,
             date_to: parseResult.date_to,
           },
         },
         ctx.log,
       )
-
-      // How the file came in: the statement as it came, and the arrival of
-      // this import, whose reference is the bank_file_imports row (so none
-      // without one). Not for an import where every row failed. Best effort:
-      // never fails the import.
-      if (importRow?.id && !(ingestResult.errors > 0 && ingestResult.imported === 0)) {
-        const original = await archiveBankFileOriginal(ctx.supabase, {
-          companyId: ctx.companyId!, fileHash, filename: file.name, bytes: buffer, mime: file.type,
-        })
-        await recordBankFileArrival(ctx.supabase, {
-          companyId: ctx.companyId!,
-          importId: importRow.id as string,
-          fileHash,
-          filename: file.name,
-          format: effectiveFormat,
-          transactionCount: parseResult.transactions.length,
-          importedCount: ingestResult.imported,
-          dateFrom: parseResult.date_from ?? null,
-          dateTo: parseResult.date_to ?? null,
-          fetchedBy: apiKeyArrivalActor(ctx),
-          via: 'partner_api',
-          original,
-        })
-      }
     } catch (err) {
       ctx.log.error('bank file import failed', err as Error, {
         operationId: op.id,
@@ -406,21 +336,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         filename: file.name,
         fileHash,
       })
-      await failOperation(
-        ctx.supabase,
-        {
-          id: op.id,
-          error: {
-            code: 'BANK_IMPORT_FAILED',
-            message: err instanceof Error ? getUserErrorMessage(err) : 'Unknown failure during bank import.',
-          },
-        },
-        ctx.log,
-      )
-      return v1ErrorResponseFromCode('BANK_IMPORT_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { operation_id: op.id, reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
-      })
+      return failed(err instanceof Error ? getUserErrorMessage(err) : 'Unknown failure during bank import.')
     }
 
     return accepted(op.id, 'import.bank', { requestId: ctx.requestId })

@@ -264,7 +264,7 @@ export type DecimalMark = '.' | ','
  * with, rounded to the öre. Returns null when the cell is not one amount.
  *
  * The same grammar as parseAmountInput, plus what files carry and a person
- * does not type: a Unicode minus or dash lookalike (U+2212, U+2010-U+2013) or
+ * does not type: a Unicode minus or dash lookalike (U+2212, U+2010-U+2014) or
  * a leading plus as the sign, a trailing "kr", and dot-grouped thousands
  * without a decimal ("1.234", "1.234.567"), which a Swedish export means as
  * thousands. A number (a spreadsheet cell) is rounded as is.
@@ -316,7 +316,7 @@ function compactAmountText(value: string): string {
   return value
     .replace(/\s/g, '')
     .replace(/kr$/i, '')
-    .replace(/^[\u2212\u2010-\u2013]/, '-')
+    .replace(/^[\u2212\u2010-\u2014]/, '-')
     .replace(/^\+/, '')
 }
 
