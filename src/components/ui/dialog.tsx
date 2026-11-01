@@ -153,12 +153,68 @@ const useDashShellInert = (open: boolean) => {
  * companion panel is open (a portaled combobox list or help popover, marked
  * data-dialog-companion): that Escape is meant for the panel, which closes
  * itself. Nested Radix layers (a select, a confirm dialog) never reach this
- * handler: Radix hands Escape to the topmost layer only.
+ * handler: Radix hands Escape to the topmost layer only. An Escape pressed in
+ * the assistant beside a non-modal dialog (data-agent-ui) is the assistant's,
+ * as a click there is (see onInteractOutside above).
  */
 function holdEscapeWhileUnsaved(event: KeyboardEvent, hasUnsavedInput: boolean): void {
-  if (hasUnsavedInput || document.querySelector('[data-dialog-companion]')) {
+  const inAssistant = !!(event.target as Element | null)?.closest?.('[data-agent-ui]')
+  if (hasUnsavedInput || inAssistant || document.querySelector('[data-dialog-companion]')) {
     event.preventDefault()
   }
+}
+
+// A press that edits without a change event: a button (add or remove a row,
+// a checkbox, a combobox's option), a list option or a menu item.
+const EDITING_CONTROL = 'button, [role="option"], [role^="menuitem"], [role="radio"], [role="checkbox"], [role="switch"]'
+
+/**
+ * "Has the person changed anything since the dialog opened", for a form
+ * dialog where "has content" cannot tell: it opens filled (a bank row's
+ * proposal, a saved employee), keeps input outside one form state, or reads
+ * uncontrolled fields only on submit. Spread `editProps` on an element around
+ * the form that mounts and unmounts with the dialog content (so each open
+ * starts untouched; className "contents" adds no box) and pass `edited()` to
+ * holdEscapeWhileUnsaved.
+ *
+ * It turns on at the first typed or picked value (a trusted change event;
+ * the change events Radix dispatches to sync its hidden inputs are not the
+ * person's), the first press of a control or list option, Enter or Space, a
+ * double click (fill balance) or a drop, and stays on: erring towards holding
+ * is the safe side, the header X always closes. React events bubble through
+ * portals, so a pick in a portaled combobox list counts.
+ */
+function createEditTracker() {
+  let edited = false
+  const mark = () => {
+    edited = true
+  }
+  return {
+    edited: () => edited,
+    editProps: {
+      // Called with the element on mount and with null on unmount.
+      ref: () => {
+        edited = false
+      },
+      onChange: (event: { nativeEvent: Event }) => {
+        if (event.nativeEvent.isTrusted) mark()
+      },
+      onPointerDown: (event: { target: EventTarget | null }) => {
+        if ((event.target as Element | null)?.closest?.(EDITING_CONTROL)) mark()
+      },
+      onKeyDown: (event: { key: string }) => {
+        if (event.key === 'Enter' || event.key === ' ') mark()
+      },
+      onDoubleClick: mark,
+      onDrop: mark,
+    },
+  }
+}
+
+/** createEditTracker for one dialog host, stable across renders. */
+function useEditedSinceOpen() {
+  const [tracker] = React.useState(createEditTracker)
+  return tracker
 }
 
 const DialogHeader = ({
@@ -232,6 +288,8 @@ export {
   DialogVeil,
   useDashShellInert,
   holdEscapeWhileUnsaved,
+  createEditTracker,
+  useEditedSinceOpen,
   DialogHeader,
   DialogFooter,
   DialogTitle,

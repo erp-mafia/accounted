@@ -128,14 +128,62 @@ describe('GET /api/v1/companies/:companyId/dimensions', () => {
     expect(body.data.dimensions[1].values).toEqual([])
   })
 
-  it('rejects keys without reports:read scope (403)', async () => {
+  // crm#1548: tagging invoice lines needs the registry, not the books.
+  it.each([['invoices:read'], ['dimensions:read']])('lists the registry for a key holding only %s', async (scope) => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      scopes: [scope],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        'rpc:ensure_company_dimensions': { data: null, error: null },
+        dimensions: { data: SAMPLE_DIMS, error: null },
+        dimension_values: { data: [SAMPLE_VALUE], error: null },
+      }).supabase,
+    )
+
+    const res = await listDimensions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.dimensions).toHaveLength(2)
+  })
+
+  it('rejects a key without reports:read, invoices:read or dimensions:read (403)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      scopes: ['customers:read', 'suppliers:read', 'invoices:draft'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+
+    const res = await listDimensions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.details.required_scope).toBe('dimensions:read')
+  })
+
+  it('refuses an invoicer membership, whose area has no dimension page (403)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
       companyId: COMPANY_ID,
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'invoicer' }, error: null },
+      }).supabase,
+    )
 
     const res = await listDimensions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),

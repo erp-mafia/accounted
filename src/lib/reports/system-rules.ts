@@ -170,7 +170,7 @@ export const ANNUAL_REPORT_RULES = {
 /** BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced. */
 export const BEHANDLINGSHISTORIK_RULES = {
   beskrivning:
-    'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
+    'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, anställdas lönegrunder, kopplingar och ignoreringar av skattekontohändelser, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
   rapport: 'Rapporter > Export & arkiv > Behandlingshistorik: per räkenskapsår eller datumintervall, som PDF, CSV eller Excel',
   arkivfil: 'revision/behandlingshistorik.json i detta arkiv (råa loggrader)',
   tidszon: 'Europe/Stockholm i rapporten, UTC i JSON-filen',

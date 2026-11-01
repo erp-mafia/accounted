@@ -591,7 +591,7 @@ describe('gnubok_stage_tool bridge', () => {
 
     expect(isError).toBe(true)
     const text = JSON.stringify(payload)
-    expect(text).toContain('invoices:write')
+    expect(text).toContain('invoices:draft')
     expect(text).not.toMatch(/call it directly/)
   })
 

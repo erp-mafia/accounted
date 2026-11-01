@@ -332,7 +332,7 @@ describe('MCP company routing', () => {
 
   it('limits an invoicer to the customer, invoice and article scopes, read or write', () => {
     const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'invoicer' as const, isDefault: false, keyAccess: 'write' as const }
-    const allowed = ['customers:read', 'customers:write', 'invoices:read', 'invoices:write', 'articles:read', 'articles:write']
+    const allowed = ['customers:read', 'customers:write', 'invoices:read', 'invoices:draft', 'invoices:write', 'articles:read', 'articles:write']
     for (const scope of ALL_SCOPES) {
       if (allowed.includes(scope)) {
         expect(() => assertMcpCompanyWriteAccess(context, scope), scope).not.toThrow()

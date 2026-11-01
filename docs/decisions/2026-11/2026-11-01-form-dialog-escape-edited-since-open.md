@@ -1,0 +1,1 @@
+[2026-11-01] Form dialogs that open filled or keep input outside one form state hold Escape on "changed since open" (useEditedSinceOpen), not on has-content or RHF isDirty, which cannot tell untouched from edited there; an Escape typed in the assistant is the assistant's.

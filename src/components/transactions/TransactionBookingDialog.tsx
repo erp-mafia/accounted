@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, holdEscapeWhileUnsaved, useDashShellInert, useEditedSinceOpen } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -196,6 +196,9 @@ export default function TransactionBookingDialog({
   // Non-modal dialog (see below): page modality is restored by hand so the
   // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
   useDashShellInert(open)
+  // The form opens filled with the bank row's lines, so "has content" is
+  // always true: Escape follows "changed since open" instead.
+  const { edited, editProps } = useEditedSinceOpen()
 
   if (!transaction) return null
 
@@ -335,12 +338,15 @@ export default function TransactionBookingDialog({
         className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
         // Non-modal so the agent sheet (fixed z-[60], portaled outside this
         // dialog) stays interactive beside a booking in progress; a click in
-        // its text field must not count as outside-dismissal. A half-booked
-        // transaction must also survive a stray Escape or backdrop click.
-        // Closing is explicit: the header X. Same convention as
-        // NewInvoiceDialog (which pairs non-modality with the inert effect
-        // above).
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // its text field must not count as outside-dismissal. Same convention
+        // as NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above). Escape closes the dialog while nothing has changed since it
+        // opened; a half-booked transaction, or underlag held here that only
+        // the booking links, survives a stray Escape: then closing is
+        // explicit, the header X. A backdrop click never closes it.
+        onEscapeKeyDown={(e) =>
+          holdEscapeWhileUnsaved(e, edited() || held.files.length > 0 || held.inboxDocs.length > 0)
+        }
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
@@ -440,7 +446,7 @@ export default function TransactionBookingDialog({
           </div>
 
           {/* Booking form */}
-          <div className="space-y-4">
+          <div className="space-y-4" {...editProps}>
             {bankAccount !== null && (
               <JournalEntryForm
                 key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${preselectedAccount ?? 'none'}-${bankAccount}`}

@@ -1351,7 +1351,7 @@ Example response `200`:
 ### `GET /api/v1/companies/{companyId}/dimensions`
 
 **List dimensions (kostnadsställe/projekt) with their values.**
-`scope:reports:read · risk:low · idempotent`
+`scope:dimensions:read · risk:low · idempotent`
 
 Returns the company's dimension registry: SIE #DIM entries keyed by sie_dim_no (1 = Kostnadsställe, 6 = Projekt; both always exist): with the registered values (#OBJEKT) nested under each dimension. Dimensions are ordered by sort_order, values by code. Line-level tags on journal entries reference these values as {"<sie_dim_no>":"<code>"} in the `dimensions` map.
 

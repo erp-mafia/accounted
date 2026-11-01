@@ -1362,4 +1362,17 @@ describe('recommended_tools callability (feedback seq 372962)', () => {
     const granted = annotateLoadoutTools(['write_scoped'], classify, new Set(['x:write']))
     expect(granted[0]).toMatchObject({ callable: false, blocked_by: 'catalog' })
   })
+
+  it('annotateLoadoutTools: a narrow scope is met by the broader grant including it (crm#1548)', () => {
+    const classify = () => ({ required_scope: 'invoices:draft', callable_via: 'tools_list' as const })
+    expect(annotateLoadoutTools(['gnubok_create_invoice'], classify, new Set(['invoices:write']))[0]).toEqual({
+      name: 'gnubok_create_invoice',
+      callable: true,
+    })
+    expect(annotateLoadoutTools(['gnubok_create_invoice'], classify, new Set(['invoices:draft']))[0].callable).toBe(true)
+    expect(annotateLoadoutTools(['gnubok_create_invoice'], classify, new Set(['invoices:read']))[0]).toMatchObject({
+      callable: false,
+      blocked_by: 'scope',
+    })
+  })
 })

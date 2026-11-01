@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, holdEscapeWhileUnsaved, useEditedSinceOpen } from '@/components/ui/dialog'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ArrowDownOnSquareIcon } from '@/components/icons'
@@ -92,6 +92,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [deactivating, setDeactivating] = useState(false)
   const [reactivating, setReactivating] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
+  const { edited: editFormEdited, editProps: editFormProps } = useEditedSinceOpen()
   const [employmentType, setEmploymentType] = useState('employee')
   const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
@@ -714,20 +715,22 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       <DestructiveConfirmDialog {...dialogProps} />
 
       {/* Edit dialog: the employee form, sectioned by hairline dividers like
-          NewEmployeeDialog. Closing is explicit (header X or Avbryt): the
-          municipality combobox and dimension pickers portal outside the
-          dialog, so a backdrop click or stray Escape must not discard edits. */}
+          NewEmployeeDialog. Escape closes it while nothing has been changed
+          since it opened (it opens filled with the saved row, so "changed
+          since open" decides: useEditedSinceOpen); after a change, closing is
+          explicit (header X or Avbryt), so a stray Escape never discards
+          edits. A backdrop click never closes it. */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
         <DialogContent
           className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
-          onEscapeKeyDown={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, editFormEdited())}
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
         >
           <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
             <DialogTitle>{t('detail_edit_dialog_title')}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
+          <form {...editFormProps} onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <div className="divide-y divide-border">
                 {/* Person & kontakt - name, contact, and address */}

@@ -7,7 +7,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogVeil,
+  holdEscapeWhileUnsaved,
   useDashShellInert,
+  useEditedSinceOpen,
 } from '@/components/ui/dialog'
 import NewSupplierInvoiceForm, { type SettleWithBankRow } from '@/components/supplier-invoices/NewSupplierInvoiceForm'
 
@@ -53,6 +55,7 @@ export default function NewSupplierInvoiceDialog({
   // Non-modal dialog (see below): page modality is restored by hand so the
   // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
   useDashShellInert(open)
+  const { edited, editProps } = useEditedSinceOpen()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
@@ -71,26 +74,32 @@ export default function NewSupplierInvoiceDialog({
         // Same convention as TransactionBookingDialog and NewInvoiceDialog
         // (which pair non-modality with the inert effect above).
         //
-        // A half-typed invoice must survive an accidental backdrop click or a
-        // stray Escape (nested comboboxes and date pickers portal outside the
-        // dialog). Closing is explicit: the header X or Avbryt.
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        // Escape closes an untouched dialog, like every other overlay, but a
+        // half-typed invoice must survive a stray Escape (nested comboboxes
+        // and date pickers portal outside the dialog): then closing is
+        // explicit, the header X or Avbryt. The form opens prefilled from an
+        // inbox item and keeps the underlag and totals outside its form
+        // state, so "changed since open" decides (useEditedSinceOpen). A
+        // backdrop click never closes it.
+        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>{t('page_title')}</DialogTitle>
         </DialogHeader>
-        <NewSupplierInvoiceForm
-          // A new bank row is a new form: the payer starts from it.
-          key={`${inboxItemId ?? 'fresh'}:${settleWith?.transactionId ?? ''}`}
-          bare
-          inboxItemId={inboxItemId}
-          settleWith={settleWith}
-          prefillAccount={prefillAccount}
-          onCreated={onCreated}
-          onCancel={() => onOpenChange(false)}
-        />
+        <div className="contents" {...editProps}>
+          <NewSupplierInvoiceForm
+            // A new bank row is a new form: the payer starts from it.
+            key={`${inboxItemId ?? 'fresh'}:${settleWith?.transactionId ?? ''}`}
+            bare
+            inboxItemId={inboxItemId}
+            settleWith={settleWith}
+            prefillAccount={prefillAccount}
+            onCreated={onCreated}
+            onCancel={() => onOpenChange(false)}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   )

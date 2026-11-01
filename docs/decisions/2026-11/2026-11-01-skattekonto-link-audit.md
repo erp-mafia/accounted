@@ -1,0 +1,1 @@
+[2026-11-01] Skattekonto links and ignores are audited by write_audit_log behind a WHEN on journal_entry_id and is_ignored, not a new function: the sync rewrites every row on each run, and only those two columns are a step in the books.

@@ -23,6 +23,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { supplierInvoicesDelete } from '@/lib/operations/supplier-invoice-actions'
@@ -221,7 +222,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'suppliers:write',
+  // suppliers:register (included in suppliers:write) edits only an invoice
+  // that posted nothing and nobody approved (checked in the handler).
+  scope: 'suppliers:register',
   risk: 'low',
   idempotent: true,
   reversible: true,
@@ -288,6 +291,29 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         requestId: ctx.requestId,
         details: { current_status: (existing as { status: string }).status },
       })
+    }
+
+    // A register-only key (suppliers:register, crm#1548) edits what it could
+    // have registered: no verifikat, not approved or bank-entered, not a
+    // självfaktura. Anything further on needs suppliers:write.
+    if (!scopeSatisfied(ctx.scopes, 'suppliers:write')) {
+      const held = existing as {
+        registration_journal_entry_id: string | null
+        approved_at: string | null
+        bank_entered_at: string | null
+        is_self_billed: boolean | null
+      }
+      if (held.registration_journal_entry_id || held.approved_at || held.bank_entered_at || held.is_self_billed) {
+        return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            required_scope: 'suppliers:write',
+            granted_scopes: ctx.scopes,
+            message:
+              'This supplier invoice has a verifikat, is approved or bank-entered, or is a self-billing invoice: editing it needs suppliers:write.',
+          },
+        })
+      }
     }
 
     // An issued self-billing invoice keeps its number and date (crm#1367).

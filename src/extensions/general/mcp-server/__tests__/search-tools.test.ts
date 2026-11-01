@@ -137,6 +137,23 @@ describe('gnubok_search_tools', () => {
     }
   })
 
+  // crm#1548: invoices:write includes invoices:draft, so a write key still
+  // finds the draft tools; a draft-only key finds them and no exit from draft.
+  it('a narrow scope\'s tools stay visible to the broader grant that includes it', async () => {
+    const write = (await call({ query: 'invoice', limit: 100 }, ['invoices:read', 'invoices:write'])).tools.map(
+      (t: { name: string }) => t.name,
+    )
+    expect(write).toContain('gnubok_create_invoice')
+    expect(write).toContain('gnubok_send_invoice')
+
+    const draft = (await call({ query: 'invoice', limit: 100 }, ['invoices:read', 'invoices:draft'])).tools.map(
+      (t: { name: string }) => t.name,
+    )
+    expect(draft).toContain('gnubok_create_invoice')
+    expect(draft).not.toContain('gnubok_send_invoice')
+    expect(draft).not.toContain('gnubok_credit_invoice')
+  })
+
   it('total_matched reflects pre-limit candidates', async () => {
     const limited = await call({ query: '', limit: 3 })
     expect(limited.tools.length).toBe(3)

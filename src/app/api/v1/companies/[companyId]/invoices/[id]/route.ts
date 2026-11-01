@@ -287,7 +287,9 @@ registerEndpoint({
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
-  scope: 'invoices:write',
+  // Drafts only (isEditableInvoiceDraft below, and the update's status
+  // guard): invoices:draft, which invoices:write includes.
+  scope: 'invoices:draft',
   risk: 'low',
   idempotent: true,
   reversible: true,
