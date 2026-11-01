@@ -1058,7 +1058,7 @@ describe('manualLink', () => {
     enqueue({ data: tx }) // tx fetch
     enqueue({ data: { status: 'reversed' } }) // hasLiveJournalEntryLink: stale link
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } }) // target JE fetch
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] }) // line on 1930
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] }) // line on 1930
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] }) // UPDATE .eq(stale id) → 1 row overwritten
 
@@ -1116,7 +1116,7 @@ describe('manualLink', () => {
     // Journal entry found
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Line exists on the selected account
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
@@ -1132,7 +1132,7 @@ describe('manualLink', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1154,7 +1154,7 @@ describe('manualLink', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1168,7 +1168,7 @@ describe('manualLink', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     // A concurrent linker won: the optimistic-lock UPDATE matched nothing.
     enqueue({ data: [] })
@@ -1207,7 +1207,7 @@ describe('manualLink', () => {
     }
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1222,7 +1222,7 @@ describe('manualLink', () => {
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     // The .is('journal_entry_id', null) optimistic-lock filter matched nothing:
     // another session linked the transaction between our read and this write.
@@ -1235,13 +1235,13 @@ describe('manualLink', () => {
     expect(result.code).toBe('LINK_RACE')
   })
 
-  it('names a wrong-direction link the bank-anchor guard refused instead of "Försök igen"', async () => {
+  it('names a link the bank-anchor guard refused at the write (a verifikat changed since the read) instead of "Försök igen"', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
 
@@ -1258,7 +1258,7 @@ describe('manualLink', () => {
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
 
@@ -1286,7 +1286,7 @@ describe('manualLink', () => {
     // Sibling-ledger scan (#1643): a row without an IBAN has no siblings.
     enqueue({ data: [{ id: 'ca-1930', iban: null, ledger_account: '1930', currency: 'SEK', enabled: true, bank_connection_id: null }] })
     // Line exists on 1930
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
     // Update succeeds: .select('id') returns the updated row
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
@@ -1323,7 +1323,7 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // The voucher's bank leg sits on the sibling ledger, not on 1931.
-    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 217.04, account_number: '1940' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1354,7 +1354,7 @@ describe('manualLink', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
     // Bank leg on 1931 itself: an ordinary same-ledger link.
-    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1931' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 217.04, account_number: '1931' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1490,8 +1490,8 @@ describe('manualLink', () => {
     })
     enqueue({
       data: [
-        { debit_amount: 0, credit_amount: 1000, account_number: '1931' },
-        { debit_amount: 1000, credit_amount: 0, account_number: '1940' },
+        { debit_amount: 1000, credit_amount: 0, account_number: '1931' },
+        { debit_amount: 0, credit_amount: 1000, account_number: '1940' },
       ],
     })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
@@ -1552,7 +1552,7 @@ describe('manualLink', () => {
       ],
     })
     // No bank_connection ids: the status lookup is skipped.
-    enqueue({ data: [{ debit_amount: 217.04, credit_amount: 0, account_number: '1940' }] })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 217.04, account_number: '1940' }] })
     enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat (#3507)
     enqueue({ data: [{ id: 'tx-1' }] })
 
@@ -1669,6 +1669,17 @@ describe('manualLink: the verifikat must have room for the row on its bank leg (
     expect(result).toMatchObject({ success: false, code: 'VOUCHER_BANK_LEG_CONSUMED' })
     expect(result.error).toContain('Verifikat A17 bokför 2800 på 1930')
     expect(result.error).toContain('bokför den som ett eget verifikat')
+    expect(m.findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('refuses a payout on a verifikat that books nothing in kredit on the account, before the write, naming the way through (crm#1583)', async () => {
+    const m = createQueuedMockSupabase()
+    enqueueLink(m.enqueue, { amount: -64.5, lines: sale })
+
+    const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
+
+    expect(result).toMatchObject({ success: false, code: 'BANK_ANCHOR_REFUSED' })
+    expect(result.error).toContain('Verifikat A17 bokför inget uttag (kredit) på 1930')
     expect(m.findCalls('transactions', 'update')).toEqual([])
   })
 

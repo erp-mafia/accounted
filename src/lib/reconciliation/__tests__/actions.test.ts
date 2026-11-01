@@ -704,6 +704,40 @@ describe('matchPairs dry run: every pair is checked against the ledger before an
     expect(manualLinkMock).not.toHaveBeenCalled()
   })
 
+  it('refuses a row the verifikat books nothing for in its direction, as the bank-anchor guard refuses it at approval (crm#1583)', async () => {
+    // The reported shape: eight Stripe rows on 1686 (two deposits, six fees
+    // and a refund) against A2, which moves the balance over net: 639.31 in
+    // debet on 1686, nothing in kredit. The approval linked 595 and the
+    // guard refused all six fee rows the preview had staged.
+    const fees = [-64.5, -10.73, -4.17, -3.74, -0.9, -0.65]
+    const F = fees.map((_, i) => `aaaaaaa${i}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [bankRow(R1, { amount: 595 }), bankRow(R2, { amount: 129 }), ...F.map((id, i) => bankRow(id, { amount: fees[i] }))] })
+    enqueue({ data: [posted(E1, 2)] })
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' } })
+    enqueue({ data: [{ debit_amount: 639.31, credit_amount: 0, currency: null, amount_in_currency: null }] }) // A2 on 1686
+    enqueue({ data: [] }) // bank_line slices
+    enqueue({ data: [] }) // pointers
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      { pairs: [{ external_ids: [R1, R2, ...F], journal_entry_ids: [E1] }] },
+      { dryRun: true },
+    )
+
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1 }])
+    expect(result?.skipped.map((s) => [s.pair.external_ids[0], s.code])).toEqual([
+      [R2, 'VOUCHER_BANK_LEG_CONSUMED'],
+      ...F.map((id) => [id, 'BANK_ANCHOR_REFUSED']),
+    ])
+    expect(result?.skipped[1].message).toContain('Verifikat A2 bokför inget uttag (kredit) på 1686')
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(manualLinkMock).not.toHaveBeenCalled()
+  })
+
   it('skips a pair whose verifikat is not in the company with ENTRY_NOT_FOUND naming the id, and keeps the rest', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [bankRow(R1), bankRow(R2)] }) // transactions

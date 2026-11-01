@@ -1,0 +1,1 @@
+[2026-11-01] An N:1 bank pair stays judged row by row, not on its net (crm#1583): a row the verifikat books nothing for in its direction is refused before the write, a dry run too (BANK_ANCHOR_REFUSED); a payout booked net of its fees links once it books deposits in debet, fees in kredit.

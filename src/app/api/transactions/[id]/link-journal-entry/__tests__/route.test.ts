@@ -390,7 +390,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {
     enqueue({
-      data: makeTransaction({ id: TX_UUID, journal_entry_id: null }),
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
       error: null,
     })
     enqueue({
@@ -418,7 +418,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
 
   it('returns 400 when supplied invoice is not in an open state', async () => {
     enqueue({
-      data: makeTransaction({ id: TX_UUID, journal_entry_id: null }),
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
       error: null,
     })
     enqueue({

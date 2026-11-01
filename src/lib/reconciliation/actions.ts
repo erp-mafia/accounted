@@ -7,6 +7,8 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import {
   bankLegConsumedMessage,
+  bankLegDirectionMessage,
+  booksDirection,
   bankLegRoom,
   fitsBankLeg,
   holdersOnAccount,
@@ -642,9 +644,22 @@ export async function matchPairs(
     if (typeof amount !== 'number' || !Number.isFinite(amount)) return null
     const room = await bankLegFor(journalEntryId)
     if (!room) return null
+    const entry = facts?.entries.get(journalEntryId)
+    // The bank-anchor guard refuses a row the verifikat books nothing for in
+    // its direction, whatever the room: refused here too, so a staged row is
+    // not refused only at approval (crm#1583).
+    if (!booksDirection(room, amount)) {
+      return {
+        code: 'BANK_ANCHOR_REFUSED',
+        message: bankLegDirectionMessage({
+          voucherLabel: entry ? formatVoucher(entry) : journalEntryId,
+          accountNumber: await resolveLedgerAccount(),
+          amount,
+        }),
+      }
+    }
     const verdict = fitsBankLeg(room, amount)
     if (!verdict.fits) {
-      const entry = facts?.entries.get(journalEntryId)
       return {
         code: 'VOUCHER_BANK_LEG_CONSUMED',
         message: bankLegConsumedMessage({

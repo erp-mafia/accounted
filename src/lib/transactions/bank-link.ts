@@ -23,6 +23,8 @@ import {
 import { hasBankLineJunctionRow, isBookedFromRow } from '@/lib/transactions/is-booked'
 import {
   bankLegConsumedMessage,
+  bankLegDirectionMessage,
+  booksDirection,
   bankLegRoom,
   fitsBankLeg,
   holdersOnAccount,
@@ -430,10 +432,18 @@ export async function prepareBankLink(
     currency,
   )
   const amount = Number(tx.amount)
+  const voucherLabel = entry.voucher_number != null ? formatVoucher(entry) : journalEntryId
+  // The bank-anchor guard's question, asked before the write so the refusal
+  // names the verifikat and the way through, and so a dry run of this door
+  // says what the write would (crm#1583).
+  if (!booksDirection(room, amount)) {
+    return refusal(
+      'BANK_ANCHOR_REFUSED',
+      bankLegDirectionMessage({ voucherLabel, accountNumber: settlingLedger, amount }),
+    )
+  }
   const verdict = fitsBankLeg(room, amount, params.bankLegOverrun ?? 0)
   if (!verdict.fits) {
-    const voucherLabel =
-      entry.voucher_number != null ? formatVoucher(entry) : journalEntryId
     log.warn('refused a link to a verifikat whose bank leg other rows already hold', {
       companyId,
       transactionId,
