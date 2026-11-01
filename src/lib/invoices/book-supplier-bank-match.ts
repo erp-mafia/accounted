@@ -44,6 +44,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { buildSupplierBankMatchLines, createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
 import { actorUnattendedCeiling, debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
@@ -248,9 +249,8 @@ export async function bookSupplierBankMatch(
   // both refused before the registration and the storno below, which the
   // engine's own account refusal at posting would otherwise leave standing.
   if (customLines) {
-    const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-    const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+    const { balanced, totalDebit, totalCredit } = lineBalance(customLines)
+    if (!balanced) {
       return {
         ok: false,
         code: 'INVOICE_PAID_LINES_UNBALANCED',

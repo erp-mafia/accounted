@@ -189,6 +189,7 @@ describe('bookCollectedPayment', () => {
       Object.assign(mem.rows('invoices')[0]!, {
         subtotal: 800,
         vat_amount: 200,
+        vat_treatment: 'standard_25',
         remaining_amount: 1000,
         journal_entry_id: null,
         invoice_number: 'F-1',

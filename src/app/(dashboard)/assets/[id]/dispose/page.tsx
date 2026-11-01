@@ -27,7 +27,8 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Asset, AssetDisposalType, VatTreatment } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { parseAmountInput, roundOre } from '@/lib/money'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
+import { parseAmountInput } from '@/lib/money'
 
 interface PeriodOption {
   id: string
@@ -126,11 +127,10 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const proceedsNumber = parsedProceeds ?? 0
   const proceedsInvalid =
     disposalType !== 'scrap' && proceeds.trim() !== '' && parsedProceeds === null
-  const vatAmount =
-    disposalType === 'sale' && vatTreatment === 'standard_25'
-      ? roundOre(proceedsNumber * (0.25 / 1.25))
-      : 0
-  const netProceeds = roundOre(proceedsNumber - vatAmount)
+  const { vat: vatAmount, net: netProceeds } = splitGrossVat(
+    proceedsNumber,
+    disposalType === 'sale' && vatTreatment === 'standard_25' ? 0.25 : 0,
+  )
   const selectedPeriod = periods.find((period) => period.id === periodId)
   const periodLocked = Boolean(
     selectedPeriod && (selectedPeriod.is_closed || selectedPeriod.locked_at !== null),

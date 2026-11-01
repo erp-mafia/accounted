@@ -114,6 +114,22 @@ describe('bankNetMismatch: the RPC bank net', () => {
 })
 
 describe('bulk booking dry run (what staging runs)', () => {
+  it('refuses manual lines that balance only before each line is rounded', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null }) // transactions
+
+    const outcome = await run(supabase, {
+      entry_description: 'Tre decimaler',
+      manual_lines: [line('6570', 100.004, 0), line('6571', 100.004, 0), line('1930', 0, 200.01)],
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'BULK_BOOK_UNBALANCED',
+      details: { total_debit: 200, total_credit: 200.01 },
+    })
+  })
+
   it('refuses the crm#1501 transfer at staging and names the doors that book it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null }) // transactions

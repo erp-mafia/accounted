@@ -15,24 +15,6 @@ vi.mock('../engine', () => ({
   ),
 }))
 
-// Mock vat-entries to avoid indirect dependency issues
-vi.mock('../vat-entries', () => ({
-  generateSalesVatLines: vi.fn().mockImplementation(({ vatTreatment, baseAmount }: { vatTreatment: string; baseAmount: number }) => {
-    const rate = vatTreatment === 'standard_25' ? 0.25
-      : vatTreatment === 'reduced_12' ? 0.12
-      : vatTreatment === 'reduced_6' ? 0.06 : 0
-    if (rate === 0) return []
-    const account = vatTreatment === 'standard_25' ? '2611'
-      : vatTreatment === 'reduced_12' ? '2621' : '2631'
-    return [{
-      account_number: account,
-      debit_amount: 0,
-      credit_amount: Math.round(baseAmount * rate * 100) / 100,
-      line_description: `Utgående moms`,
-    }]
-  }),
-}))
-
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 
@@ -1322,8 +1304,8 @@ describe('paymentAccount parameter (settlement-account resolution)', () => {
   it('createInvoiceCashEntry books the bank leg to the resolved account, leaving revenue/VAT credits untouched', async () => {
     const invoice = makeInvoice({
       subtotal: 1000,
-      vat_amount: 198,
-      total: 1198,
+      vat_amount: 250,
+      total: 1250,
       vat_treatment: 'standard_25',
     })
 
@@ -1333,10 +1315,10 @@ describe('paymentAccount parameter (settlement-account resolution)', () => {
     )
 
     const input = mockedCreateEntry.mock.calls[0][3]
-    expect(input.lines.find((l) => l.account_number === '1940')?.debit_amount).toBe(1198)
+    expect(input.lines.find((l) => l.account_number === '1940')?.debit_amount).toBe(1250)
     expect(input.lines.find((l) => l.account_number === '1930')).toBeUndefined()
     expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(1000)
-    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(198)
+    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(250)
   })
 })
 

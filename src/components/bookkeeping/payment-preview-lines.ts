@@ -14,6 +14,7 @@
  * document's bag, and what the grid holds is what gets booked.
  */
 import { parseAmountInput, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { withLineDimensions, type LineDimensions } from './payment-line-dimensions'
 
 /** A row as the preview route returns it; amounts are SEK. */
@@ -97,17 +98,15 @@ function amountOf(line: EditablePaymentLine): number {
  * four-digit account. A dialog keeps its confirm disabled until this holds.
  */
 export function validateEditableLines(lines: readonly EditablePaymentLine[]): PaymentLinesValidation {
-  const sum = (side: EditablePaymentLine['side']) =>
-    roundOre(lines.filter((l) => l.side === side).reduce((s, l) => s + amountOf(l), 0))
-  const totalDebit = sum('debit')
-  const totalCredit = sum('credit')
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0
+  const { totalDebit, totalCredit, difference, balanced: isBalanced } = lineBalance(
+    lines.map((l) => (l.side === 'debit' ? { debit_amount: amountOf(l) } : { credit_amount: amountOf(l) })),
+  )
   const accountInvalid = lines.some((l) => !/^\d{4}$/.test(l.account_number.trim()))
   return {
     isBalanced,
     accountInvalid,
     isValid: isBalanced && !accountInvalid,
-    diff: roundOre(totalDebit - totalCredit),
+    diff: difference,
     totalDebit,
     totalCredit,
   }

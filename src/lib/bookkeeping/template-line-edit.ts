@@ -1,4 +1,5 @@
 import { formatAmountInput, parseAmountInput, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
  * Editing the lines a mall produced before they are booked (crm#1351).
@@ -152,8 +153,6 @@ export interface TemplateLinesCheck {
 
 /** Balance and bookability of the lines, in öre-safe steps. */
 export function checkTemplateLines(lines: readonly TemplateEditLine[]): TemplateLinesCheck {
-  let totalDebit = 0
-  let totalCredit = 0
   let incomplete = 0
   const postLines: TemplatePostLine[] = []
 
@@ -170,8 +169,6 @@ export function checkTemplateLines(lines: readonly TemplateEditLine[]): Template
       incomplete++
       continue
     }
-    totalDebit = roundOre(totalDebit + debit)
-    totalCredit = roundOre(totalCredit + credit)
     postLines.push({
       account_number: account,
       debit_amount: debit,
@@ -180,13 +177,13 @@ export function checkTemplateLines(lines: readonly TemplateEditLine[]): Template
     })
   }
 
-  const difference = roundOre(totalDebit - totalCredit)
+  const { balanced, totalDebit, totalCredit, difference } = lineBalance(postLines)
   return {
     totalDebit,
     totalCredit,
     difference,
     incomplete,
     postLines,
-    bookable: difference === 0 && totalDebit > 0 && postLines.length >= 2 && incomplete === 0,
+    bookable: balanced && postLines.length >= 2 && incomplete === 0,
   }
 }

@@ -234,6 +234,23 @@ describe('POST /journal-entries: lines[].vat_code', () => {
     expect(chartReads()).toBe(0)
   })
 
+  it('400 JOURNAL_ENTRY_NOT_BALANCED for lines that balance only before each line is rounded', async () => {
+    const res = await POST(
+      makeRequest(makeBody([
+        { account_number: '4531', debit_amount: 100.004 },
+        { account_number: '6540', debit_amount: 100.004 },
+        { account_number: '1930', credit_amount: 200.01 },
+      ])),
+      routeParams,
+    )
+    const body = (await res.json()) as V1ErrorBody
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_BALANCED')
+    expect(body.error.details).toEqual({ total_debit: 200, total_credit: 200.01 })
+    expect(mockCreateDraft).not.toHaveBeenCalled()
+  })
+
   it('400 VALIDATION_ERROR for a percent-shaped rate, before any read', async () => {
     const res = await POST(
       makeRequest(makeBody([

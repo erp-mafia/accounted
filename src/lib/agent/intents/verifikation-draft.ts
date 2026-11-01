@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { renderAgentGroundRules } from './shared-rules'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 
@@ -248,8 +249,9 @@ export const verifikationDraft = defineAgentIntent<
         lines.push(`  ${r.account_number ?? '????'}  ${dStr.padStart(12)}  ${cStr.padStart(12)}  ${r.description ?? ''}`)
       }
       lines.push(`  SUMMA          ${debits.toLocaleString('sv-SE').padStart(12)}  ${credits.toLocaleString('sv-SE').padStart(12)}`)
-      if (Math.abs(debits - credits) > 0.005) {
-        lines.push(`  ⚠ Diff: ${(debits - credits).toLocaleString('sv-SE')}: debet ≠ kredit`)
+      const { difference } = lineBalance(captured.current_lines)
+      if (difference !== 0) {
+        lines.push(`  ⚠ Diff: ${difference.toLocaleString('sv-SE')}: debet ≠ kredit`)
       }
     }
 

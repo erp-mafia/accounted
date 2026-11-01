@@ -26,6 +26,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency, formatAmount } from '@/lib/utils'
 import { roundOre, formatAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import {
   applyCostAccountSuggestion,
   bankRowSekAmount,
@@ -392,16 +393,8 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   }, [filteredTransactions, selectedTransactionId])
 
   const totals = useMemo(() => {
-    const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-    const credit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-    const roundedDebit = Math.round(debit * 100) / 100
-    const roundedCredit = Math.round(credit * 100) / 100
-    return {
-      debit: roundedDebit,
-      credit: roundedCredit,
-      balanced: roundedDebit === roundedCredit && roundedDebit > 0,
-      diff: Math.round((roundedDebit - roundedCredit) * 100) / 100,
-    }
+    const { totalDebit, totalCredit, balanced, difference } = lineBalance(lines)
+    return { debit: totalDebit, credit: totalCredit, balanced, diff: difference }
   }, [lines])
 
   // Account number → BAS name, so derived template lines get meaningful labels.

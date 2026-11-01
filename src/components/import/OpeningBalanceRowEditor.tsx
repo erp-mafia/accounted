@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import Fuse, { type IFuseOptions } from 'fuse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -136,14 +137,8 @@ export default function OpeningBalanceRowEditor({
   })
 
   const totals = useMemo(() => {
-    let debit = 0
-    let credit = 0
-    for (const row of rows) {
-      debit = Math.round((debit + row.debit_amount) * 100) / 100
-      credit = Math.round((credit + row.credit_amount) * 100) / 100
-    }
-    const diff = Math.round((debit - credit) * 100) / 100
-    return { debit, credit, diff, isBalanced: Math.abs(diff) < 0.01 }
+    const { totalDebit: debit, totalCredit: credit, difference: diff } = lineBalance(rows)
+    return { debit, credit, diff, isBalanced: diff === 0 }
   }, [rows])
 
   const hasErrors = useMemo(() => {

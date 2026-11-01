@@ -65,6 +65,7 @@ import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { statedVatFitsRate } from '@/lib/bookkeeping/gross-split'
 import { ledgerLineAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import { FOREIGN_CURRENCIES, type VatTreatment } from '@/types'
@@ -123,14 +124,6 @@ const PURCHASE_SIDE_VAT_DIGITS = new Set(['4', '5'])
 const VILANDE_VAT_DIGIT = '8'
 const MARGIN_SCHEME_VAT_DIGIT = '6'
 const TREATMENT_BY_RATE = { 25: 'standard_25', 12: 'reduced_12', 6: 'reduced_6' } as const satisfies Record<25 | 12 | 6, VatTreatment>
-
-/**
- * How far the booked VAT may sit from its rate of the rest of the sale, in
- * kronor: the per-line öre rounding of a long invoice and an öresavrundning
- * on 3740 stay well inside it. Beyond it part of the sale carries no VAT (or
- * another rate's), which a header-only kreditfaktura would reverse as taxed.
- */
-const VAT_OF_SUBTOTAL_TOLERANCE_SEK = 1
 
 /**
  * The momsfri revenue accounts of ruta 42 (3004, 3100, 3404, 3980, 3994),
@@ -378,8 +371,7 @@ export function deriveInvoiceVatFromVoucher(
     // the VAT must be that rate of it. Further off, part of the sale carried
     // no VAT, and the reversal would take it out of ruta 05 although it was
     // never declared there.
-    const expectedVat = roundOre((subtotal * rate) / 100)
-    if (roundOre(Math.abs(vatAmount - expectedVat)) > VAT_OF_SUBTOTAL_TOLERANCE_SEK) {
+    if (!statedVatFitsRate(vatAmount, subtotal, rate / 100)) {
       return { ok: false, reason: 'vat_not_rate_of_subtotal' }
     }
     return {

@@ -1,3 +1,4 @@
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import { formatPdfAmount, formatPdfCurrency, type PdfLang } from '@/lib/invoices/pdf/format'
 import { quoteInvoicingProgress, type QuoteInvoicingProgress } from './quote-status'
@@ -267,7 +268,7 @@ export function buildQuotePartLines(params: {
       discount_percent: 0,
       line_total: share,
       vat_rate: vatRate,
-      vat_amount: roundOre((share * vatRate) / 100),
+      vat_amount: computeLineVat(share, vatRate),
       revenue_account: line.revenue_account ?? null,
       article_id: line.article_id ?? null,
       article_number: line.article_number ?? null,

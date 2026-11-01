@@ -14,7 +14,8 @@ import {
   releaseBankRowsOfReversedEntry,
 } from '@/lib/bookkeeping/engine'
 import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
-import { amountInCurrencyToStore, buildStornoLines } from '@/lib/bookkeeping/line-side'
+import { buildStornoLines } from '@/lib/bookkeeping/line-side'
+import { storedLineValues } from '@/lib/bookkeeping/line-balance'
 import { roundOre } from '@/lib/money'
 import {
   dimensionsBagKey,
@@ -571,25 +572,10 @@ export async function correctEntry(
     }
 
     // Insert corrected lines
-    const correctedLineInserts = correctedLines.map((line, index) => {
-      const dimensions = normalizeLineDimensions(line)
-      const amountInCurrency = amountInCurrencyToStore(line.currency, line.amount_in_currency)
-      return {
-        journal_entry_id: correctedEntry.id,
-        account_number: line.account_number,
-        account_id: accountIdMap.get(line.account_number) || null,
-        debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-        credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-        currency: line.currency || 'SEK',
-        amount_in_currency:
-          amountInCurrency === null ? null : Math.round(amountInCurrency * 100) / 100,
-        exchange_rate: line.exchange_rate || null,
-        line_description: line.line_description || null,
-        tax_code: line.tax_code || null,
-        dimensions,
-        sort_order: index,
-      }
-    })
+    const correctedLineInserts = storedLineValues(correctedLines, accountIdMap).map((line) => ({
+      journal_entry_id: correctedEntry.id,
+      ...line,
+    }))
 
     const { error: correctedLinesError } = await supabase
       .from('journal_entry_lines')

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -42,18 +43,8 @@ export default function OpeningBalancePeriodStep({
   // on a background refresh of the list (that would override a user pick).
   const autoSelectedRef = useRef(false)
 
-  // Compute totals
-  let totalDebit = 0
-  let totalCredit = 0
-  for (const row of rows) {
-    totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
-    totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
-  }
-  // Compare in whole öre, mirroring the engine's validateBalance: a float
-  // epsilon like (< 0.01) would misclassify exact 1-öre imbalances as
-  // balanced, since e.g. 0.03 - 0.02 evaluates to just under 0.01.
-  const balanceDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-  const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0
+  const { totalDebit, totalCredit, difference: balanceDiff } = lineBalance(rows)
+  const isBalanced = balanceDiff === 0
 
   useEffect(() => {
     if (loadingPeriods || autoSelectedRef.current) return

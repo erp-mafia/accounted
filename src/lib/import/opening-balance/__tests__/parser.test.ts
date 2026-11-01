@@ -259,6 +259,25 @@ describe('parseOpeningBalanceFile', () => {
     expect(result.total_debit).toBe(50000)
     expect(result.total_credit).toBe(40000)
   })
+
+  it('judges the rows on what they book, each row in whole öre', async () => {
+    const XLSX = await import('xlsx')
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const wb = XLSX.utils.book_new()
+    const data = [
+      ['Kontonr', 'Debet', 'Kredit'],
+      ['1930', 100, 0],
+      ['2099', 0, 100.0075],
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    const result = await parseOpeningBalanceFile(buffer, 'test.xlsx')
+
+    expect(result).toMatchObject({ is_balanced: false, total_debit: 100, total_credit: 100.01 })
+  })
 })
 
 describe('bank statement detection (issue #918)', () => {

@@ -33,6 +33,7 @@ import {
 } from '@/lib/bookkeeping/rot-rut-rules'
 import { UNIT_MAX_LENGTH } from '@/lib/invoices/units'
 import UnitPicker from '@/components/invoices/UnitPicker'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 
 // A row from the currencies reference table (lib migration
@@ -211,7 +212,7 @@ export default function ArticleForm({
   // impossible to miss here.
   const price = Number.isFinite(watchedPrice) ? Number(watchedPrice) : 0
   const effectiveVat = vatRegistered ? Number(watchedVat) || 0 : 0
-  const vatAmount = roundOre((price * effectiveVat) / 100)
+  const vatAmount = computeLineVat(price, effectiveVat)
   const totalInclVat = roundOre(price + vatAmount)
   const currency = watchedCurrency || 'SEK'
 

@@ -11,6 +11,7 @@ import type {
   OpeningBalanceParseResult,
 } from './types'
 import { parseSwedishAmount } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
  * A cell's amount, through the importers' one parser (parseSwedishAmount in
@@ -211,15 +212,8 @@ export async function parseOpeningBalanceFile(
   const mergedRows = Array.from(mergedMap.values())
 
   // Compute totals
-  let totalDebit = 0
-  let totalCredit = 0
-  for (const row of mergedRows) {
-    totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
-    totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
-  }
-
-  const diff = Math.round((totalDebit - totalCredit) * 100) / 100
-  const isBalanced = Math.abs(diff) < 0.01
+  const { totalDebit, totalCredit, difference: diff } = lineBalance(mergedRows)
+  const isBalanced = diff === 0
 
   if (!isBalanced) {
     warnings.push(`Debet (${totalDebit.toFixed(2)}) och kredit (${totalCredit.toFixed(2)}) balanserar inte: differens: ${diff.toFixed(2)} SEK`)

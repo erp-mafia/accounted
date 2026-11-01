@@ -566,7 +566,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     .map(([rate, group]) => ({
       rate,
       taxableAmount: group.taxableAmount,
-      taxAmount: roundMoney(group.taxableAmount * rate / 100),
+      taxAmount: computeLineVat(group.taxableAmount, rate),
     }))
   // Sweden permits rounding VAT per invoice line; EN 16931 does not represent
   // it, so the two stages legitimately disagree by öre. BR-CO-17 stays

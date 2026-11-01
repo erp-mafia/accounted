@@ -11,7 +11,7 @@ import {
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
 import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
-import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
 
@@ -108,10 +108,8 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // an unbalanced voucher at booking time, the preview never had a check.
     const toEntry = (description: string, lines: CreateJournalEntryLineInput[]) => {
       if (lines.every((l) => l.debit_amount === 0 && l.credit_amount === 0)) return null
-      const totalDebit = roundOre(lines.reduce((sum, l) => sum + l.debit_amount, 0))
-      const totalCredit = roundOre(lines.reduce((sum, l) => sum + l.credit_amount, 0))
-      const difference = roundOre(totalDebit - totalCredit)
-      return { description, lines, balanced: difference === 0, difference }
+      const { balanced, difference } = lineBalance(lines)
+      return { description, lines, balanced, difference }
     }
 
     const salaryEntry = toEntry(desc, built.salaryLines)

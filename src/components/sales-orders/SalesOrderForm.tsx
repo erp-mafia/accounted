@@ -26,7 +26,7 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 import { sortArticles } from '@/lib/articles/sort'
 import { articleLineName, documentLanguageOf, planArticleNameSwap } from '@/lib/articles/line-name'
-import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -297,7 +297,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
         l.discount_percent ? parseNumber(l.discount_percent) : null,
       )
       subtotal = roundOre(subtotal + net)
-      vat = roundOre(vat + roundOre((net * l.vat_rate) / 100))
+      vat = roundOre(vat + computeLineVat(net, l.vat_rate))
     }
     return { subtotal, vat, total: roundOre(subtotal + vat) }
   }, [lines])

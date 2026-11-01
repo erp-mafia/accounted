@@ -11,6 +11,7 @@ import type {
 import { creditNoteTypeCode } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split';
 import { ORE_TOLERANCE, roundOre } from '@/lib/money';
 
 /**
@@ -19,7 +20,7 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money';
  * Fortnox prices an invoice either excluding or including VAT, and says which
  * with the invoice-level `VATIncluded` flag: when it is true the row `Price`
  * and `Total` are the amounts the customer saw, VAT inside, and the net is
- * the amount divided by (1 + rate). Newer payloads also carry the net on the
+ * what splitGrossVat leaves beside the VAT. Newer payloads also carry the net on the
  * row (`TotalExcludingVAT`, `PriceExcludingVAT`), which callers prefer when
  * present; this is the fallback for the ones that do not. Without a stated
  * rate the amount cannot be split and is returned as it is, and the
@@ -32,7 +33,7 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money';
 function netOfVat(amount: number, vatIncluded: boolean, ratePercent: number | undefined): number {
   if (!vatIncluded || ratePercent === undefined) return amount;
   const rate = ratePercent > 1 ? ratePercent / 100 : ratePercent;
-  return roundOre(amount / (1 + rate));
+  return splitGrossVat(amount, rate).net;
 }
 
 /**

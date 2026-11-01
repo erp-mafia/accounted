@@ -42,6 +42,36 @@ function sale(overrides: Partial<ZettlePurchase> = {}): ZettlePurchase {
 }
 
 describe('zettle order-sync mapping', () => {
+  describe('a service charge', () => {
+    const withCharge = (grossMinor: number, rate: number): ZettlePurchase => ({
+      amount: grossMinor,
+      products: [],
+      groupedVatAmounts: {},
+      serviceCharge: { title: 'Serviceavgift', amount: grossMinor, vatPercentage: rate, quantity: '1' },
+    } as unknown as ZettlePurchase)
+
+    it('splits as every other gross amount does, VAT first', () => {
+      // 1,26 kr at 12 % holds 0,135 kr of VAT: 0,14 kr VAT, 1,12 kr net.
+      expect(mapLineItems(withCharge(126, 12))).toEqual([
+        expect.objectContaining({ total: 1.12, total_tax: 0.14, vat_rate: 12 }),
+      ])
+    })
+
+    it('keeps its whole gross at no rate', () => {
+      expect(mapLineItems(withCharge(126, 0))).toEqual([
+        expect.objectContaining({ total: 1.26, total_tax: 0, vat_rate: 0 }),
+      ])
+    })
+  })
+
+  it('a product row\'s VAT is the exact VAT on its net: 2,75 kr at 6 % is 0,17 kr', () => {
+    const purchase = {
+      amount: 292,
+      products: [{ name: 'Bok', quantity: '1', rowTaxableAmount: 275, vatPercentage: 6 }],
+    } as unknown as ZettlePurchase
+    expect(mapLineItems(purchase)).toEqual([expect.objectContaining({ total: 2.75, total_tax: 0.17 })])
+  })
+
   it('freezes the external_id template', () => {
     expect(zettleStoreScope('org-abc')).toBe('org-abc')
     expect(zettlePurchaseExternalId('org-abc', 'p-1')).toBe('zettle_org-abc_purchase_p-1')

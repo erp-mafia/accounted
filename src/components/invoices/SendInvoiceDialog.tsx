@@ -28,7 +28,7 @@ import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntry
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
@@ -365,24 +365,12 @@ export default function SendInvoiceDialog({
 
   const activeLines = editable ? editLines : proposedLines
 
-  const { totalDebit, totalCredit, isBalanced, hasOrphanAmounts } = useMemo(() => {
-    let totalDebit = 0
-    let totalCredit = 0
-    // A row carrying an amount but no account would be silently dropped from
-    // the POST while staying visible in the grid; block submit instead.
-    let hasOrphanAmounts = false
-    for (const line of activeLines) {
-      // Round per line like the server does, so a payload the badge calls
-      // balanced can never be rejected by the route's rounded check.
-      const debit = roundOre(parseFloat(line.debit_amount) || 0)
-      const credit = roundOre(parseFloat(line.credit_amount) || 0)
-      if ((debit || credit) && !line.account_number) hasOrphanAmounts = true
-      totalDebit += debit
-      totalCredit += credit
-    }
-    const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0 && totalDebit > 0
-    return { totalDebit, totalCredit, isBalanced, hasOrphanAmounts }
-  }, [activeLines])
+  const { totalDebit, totalCredit, balanced: isBalanced } = useMemo(() => lineBalance(activeLines), [activeLines])
+  // A row carrying an amount but no account would be silently dropped from
+  // the POST while staying visible in the grid; block submit instead.
+  const hasOrphanAmounts = activeLines.some(
+    (line) => !line.account_number && (storedLineAmount(line.debit_amount) || storedLineAmount(line.credit_amount)),
+  )
 
   const updateLine = (index: number, field: keyof FormLine, value: string) => {
     setHasEdited(true)

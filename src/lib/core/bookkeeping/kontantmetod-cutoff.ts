@@ -104,6 +104,7 @@ import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/bookkeep
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
@@ -1401,9 +1402,7 @@ export function buildKontantmetodCarryPlan(
   const finite = built.lines.every(
     (line) => Number.isFinite(line.debit_amount) && Number.isFinite(line.credit_amount),
   )
-  const debitOre = built.lines.reduce((sum, line) => sum + toOre(line.debit_amount), 0)
-  const creditOre = built.lines.reduce((sum, line) => sum + toOre(line.credit_amount), 0)
-  if (!finite || debitOre !== creditOre || debitOre <= 0 || built.anchorSek <= 0) {
+  if (!finite || !lineBalance(built.lines).balanced || built.anchorSek <= 0) {
     throw new Error(`Årsomföringen för faktura ${doc.reference} balanserar inte`)
   }
   return {
@@ -1522,9 +1521,7 @@ export function buildKontantmetodManualCarryPlan(
     lines
       .filter((line) => accept(line.account_number))
       .reduce((sum, line) => sum + toOre(line.debit_amount) - toOre(line.credit_amount), 0)
-  const debitOre = lines.reduce((sum, line) => sum + toOre(line.debit_amount), 0)
-  const creditOre = lines.reduce((sum, line) => sum + toOre(line.credit_amount), 0)
-  if (debitOre !== creditOre || debitOre <= 0) fail('raderna balanserar inte')
+  if (!lineBalance(lines).balanced) fail('raderna balanserar inte')
 
   // The invoice's own side: a kundfordran is a debit, a credit note's a credit.
   const sign = target.creditNote ? -1 : 1
@@ -3514,7 +3511,7 @@ interface LinkRpcResult {
   code?: string
 }
 
-/** The ordinary utgående moms accounts per treatment, as generateSalesVatLines books them. */
+/** The ordinary utgående moms accounts per treatment, as getOutputVatAccount books them. */
 const CARRY_OUTPUT_VAT_TREATMENTS: ReadonlyMap<string, VatTreatment> = new Map([
   ['2611', 'standard_25'],
   ['2621', 'reduced_12'],

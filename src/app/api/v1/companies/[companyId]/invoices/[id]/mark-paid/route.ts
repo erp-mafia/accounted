@@ -58,6 +58,7 @@ import {
 import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { EntityType, Invoice } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -292,9 +293,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Validate custom lines balance (if supplied).
     if (customLines) {
-      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+      const { balanced, totalDebit, totalCredit } = lineBalance(customLines)
+      if (!balanced) {
         return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
           requestId: ctx.requestId,
           details: { total_debit: totalDebit, total_credit: totalCredit },

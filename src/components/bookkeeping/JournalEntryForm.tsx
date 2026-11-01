@@ -58,6 +58,7 @@ import {
 import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { bookedEntryOf, type BookedEntry } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
@@ -816,13 +817,8 @@ export default function JournalEntryForm({
     // Row counts as incomplete if exactly one of (account, amount) is present.
     return hasAccount !== hasAmount
   }).length
-  const totalDebit = submittableLines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const totalCredit = submittableLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const isBalanced =
-    Math.round((totalDebit - totalCredit) * 100) === 0
-    && totalDebit > 0
-    && submittableLines.length >= 2
-    && incompleteLineCount === 0
+  const { totalDebit, totalCredit, balanced } = lineBalance(submittableLines)
+  const isBalanced = balanced && submittableLines.length >= 2 && incompleteLineCount === 0
 
   // Each line with the lines its momskod generates (crm#1096). Derived on every
   // render, never stored, so they follow the line's amount, account and code.

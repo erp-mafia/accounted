@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
@@ -52,15 +53,8 @@ export function validateOpeningBalanceLines(
     return { ok: false, code: 'OB_PNL_ACCOUNT', accounts: pnlAccounts.slice(0, 5) }
   }
 
-  let totalDebit = 0
-  let totalCredit = 0
-  for (const line of validLines) {
-    totalDebit = Math.round((totalDebit + line.debit_amount) * 100) / 100
-    totalCredit = Math.round((totalCredit + line.credit_amount) * 100) / 100
-  }
-
-  const diff = Math.round((totalDebit - totalCredit) * 100) / 100
-  if (Math.abs(diff) >= 0.01) {
+  const { totalDebit, totalCredit, difference: diff } = lineBalance(validLines)
+  if (diff !== 0) {
     return { ok: false, code: 'OB_UNBALANCED', totalDebit, totalCredit, diff }
   }
 

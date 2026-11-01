@@ -396,6 +396,31 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(calls.some((c) => c.table === 'transactions')).toBe(false)
   })
 
+  it('400 INVOICE_PAID_LINES_UNBALANCED for custom lines that balance only before each line is rounded', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: hi3gSI, error: null },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest({
+        payment_date: '2026-05-12',
+        lines: [
+          { account_number: '2440', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 200.01 },
+        ],
+      }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+
   describe('payment_account (issue #2550)', () => {
     // Never registered under faktureringsmetoden, so mark-paid takes the
     // kontantmetoden branch and books expense + ingående moms here.

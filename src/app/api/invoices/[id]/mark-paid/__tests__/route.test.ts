@@ -651,6 +651,30 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('returns 400 when custom lines balance only before each line is rounded', async () => {
+    const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500 })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        payment_date: '2025-03-17',
+        lines: [
+          { account_number: '1920', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 200.01 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when body has invalid schema (e.g. bad account number)', async () => {
     const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500 })
 

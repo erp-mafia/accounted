@@ -480,6 +480,26 @@ describe('registerExpenseClaim', () => {
     expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
+  it('rejects custom lines that balance only before each line is rounded', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'x',
+      expense_date: '2026-09-01',
+      amount: 200.01,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      lines: [
+        { account_number: '5410', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '5420', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 200.01 },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   it('rejects custom lines whose liability credit does not match the gross', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {

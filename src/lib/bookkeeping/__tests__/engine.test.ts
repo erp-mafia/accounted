@@ -476,6 +476,15 @@ describe('createDraftEntry: amount_in_currency 0 on a foreign line is kept (#351
     expect(byAccount['1932']).toMatchObject({ currency: 'USD', amount_in_currency: 100 })
     expect(byAccount['1930']).toMatchObject({ amount_in_currency: null })
   })
+
+  it('stores each line as the balance check read it: a half öre up', async () => {
+    const byAccount = await draft([
+      { account_number: '1932', debit_amount: 1.005, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1.01 },
+    ])
+    expect(byAccount['1932']).toMatchObject({ debit_amount: 1.01, credit_amount: 0 })
+    expect(byAccount['1930']).toMatchObject({ debit_amount: 0, credit_amount: 1.01 })
+  })
 })
 
 describe('reverseEntry: a kept 0 in amount_in_currency reverses to 0 (#3517)', () => {

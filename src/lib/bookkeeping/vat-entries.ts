@@ -7,7 +7,7 @@ import {
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 import { reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
-import { grossVat } from '@/lib/bookkeeping/gross-split'
+import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -20,12 +20,6 @@ import { grossVat } from '@/lib/bookkeeping/gross-split'
  * - EU reverse charge (fiktiv moms): Debit 2645, Credit 2614 (offsetting)
  * - Export (non-EU): No VAT lines
  */
-
-interface VatEntryConfig {
-  vatTreatment: VatTreatment
-  baseAmount: number // Amount before VAT
-  direction: 'sales' | 'purchase'
-}
 
 /**
  * Get VAT rate from treatment
@@ -142,46 +136,6 @@ export function resolveReverseChargeRate(
   if (explicit != null && explicit > 0) return explicit
   if (item.vat_rate != null && item.vat_rate > 0) return item.vat_rate
   return 0.25
-}
-
-/**
- * Generate output VAT lines for sales invoices
- * Debit 1510 Kundfordringar [total incl VAT]
- * Credit 30xx Försäljning [subtotal]
- * Credit 26xx Utgående moms [vat_amount]
- */
-export function generateSalesVatLines(config: VatEntryConfig): CreateJournalEntryLineInput[] {
-  const lines: CreateJournalEntryLineInput[] = []
-  const vatRate = getVatRate(config.vatTreatment)
-
-  if (vatRate === 0) return lines
-
-  const vatAmount = Math.round(config.baseAmount * vatRate * 100) / 100
-
-  // Determine the output VAT account
-  let vatAccount: string
-  switch (config.vatTreatment) {
-    case 'standard_25':
-      vatAccount = '2611' // Utgående moms försäljning 25%
-      break
-    case 'reduced_12':
-      vatAccount = '2621' // Utgående moms försäljning 12%
-      break
-    case 'reduced_6':
-      vatAccount = '2631' // Utgående moms försäljning 6%
-      break
-    default:
-      return lines
-  }
-
-  lines.push({
-    account_number: vatAccount,
-    debit_amount: 0,
-    credit_amount: vatAmount,
-    line_description: `Utgående moms ${vatRate * 100}%`,
-  })
-
-  return lines
 }
 
 /**
@@ -490,7 +444,7 @@ function basisPairLines(
   const basisAccount = pickBasisAccount(vatRate, kind)
   if (!basisAccount) return []
 
-  const amount = Math.round(baseAmount * 100) / 100
+  const amount = roundOre(baseAmount)
   const rateLabel = `${Math.round(vatRate * 100)}%`
 
   return [
@@ -537,7 +491,7 @@ function fiktivMomsLines(
   vatRate: number,
   isDomestic: boolean,
 ): CreateJournalEntryLineInput[] {
-  const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
+  const vatAmount = netVat(baseAmount, vatRate)
 
   // Determine output account based on rate
   let outputAccount: string

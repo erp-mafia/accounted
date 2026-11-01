@@ -568,6 +568,23 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
     expect(writes).toEqual([])
   })
+
+  it('refuses custom lines that balance only before each line is rounded', async () => {
+    const { response, body, writes } = await match({
+      transaction: { journal_entry_id: 'je-categorised' },
+      lines: [
+        { account_number: '2440', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 200.01 },
+      ],
+    })
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
 })
 
 describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice: a deferred invoice paid before Bokför', () => {

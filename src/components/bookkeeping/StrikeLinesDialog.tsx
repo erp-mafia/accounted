@@ -18,6 +18,7 @@ import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { changeCorrectionLineAccount, getSelectableCorrectionCatalog } from '@/lib/bookkeeping/correction-line-account'
@@ -161,13 +162,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
   // Effective verifikat after the rättelse: remaining original lines + new lines.
   const remaining = originalLines.filter((l) => !strikeIds.has(l.id))
-  const remainingDebit = remaining.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-  const remainingCredit = remaining.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0)
-  const newDebit = newLines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const newCredit = newLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const totalDebit = Math.round((remainingDebit + newDebit) * 100) / 100
-  const totalCredit = Math.round((remainingCredit + newCredit) * 100) / 100
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0
+  const { totalDebit, totalCredit, balanced: isBalanced } = lineBalance([...remaining, ...newLines])
 
   const newLinesValid = newLines.every((l) => {
     const debit = parseFloat(l.debit_amount) || 0

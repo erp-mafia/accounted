@@ -324,6 +324,23 @@ describe('correctEntry', () => {
     expect(Object.is(storno[0].amount_in_currency, 0)).toBe(true)
   })
 
+  it('stores the corrected lines as the balance check read them: a half öre up', async () => {
+    setupResults()
+    const lines = [
+      { account_number: '5420', debit_amount: 1.005, credit_amount: 0, currency: 'USD', amount_in_currency: 10.075 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1.01 },
+    ]
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', lines)
+
+    const [, corrected] = inserts
+      .filter((i) => i.table === 'journal_entry_lines')
+      .map((i) => i.payload as Array<{ debit_amount: number; credit_amount: number; amount_in_currency: number | null }>)
+    expect(corrected.map((l) => [l.debit_amount, l.credit_amount, l.amount_in_currency])).toEqual([
+      [1.01, 0, 10.08],
+      [0, 1.01, null],
+    ])
+  })
+
   it('links original ↔ reversal ↔ corrected via IDs', async () => {
     setupResults()
     const supabase = makeClient()

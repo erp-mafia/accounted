@@ -4,7 +4,6 @@ import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import {
   getVatRate,
-  generateSalesVatLines,
   generateReverseChargePurchaseLines,
   costAccountRcBasisRate,
   chartVatTreatmentsOf,
@@ -41,81 +40,6 @@ describe('getVatRate', () => {
 
   it('returns 0 for exempt', () => {
     expect(getVatRate('exempt')).toBe(0)
-  })
-})
-
-describe('generateSalesVatLines', () => {
-  it('credits 2611 (Utgående moms 25%) at standard rate', () => {
-    const lines = generateSalesVatLines({
-      vatTreatment: 'standard_25',
-      baseAmount: 1000,
-      direction: 'sales',
-    })
-    expect(lines).toHaveLength(1)
-    expect(lines[0].account_number).toBe('2611')
-    expect(lines[0].debit_amount).toBe(0)
-    expect(lines[0].credit_amount).toBe(250)
-  })
-
-  it('credits 2621 (Utgående moms 12%) at reduced rate', () => {
-    const lines = generateSalesVatLines({
-      vatTreatment: 'reduced_12',
-      baseAmount: 1000,
-      direction: 'sales',
-    })
-    expect(lines).toHaveLength(1)
-    expect(lines[0].account_number).toBe('2621')
-    expect(lines[0].credit_amount).toBe(120)
-  })
-
-  it('credits 2631 (Utgående moms 6%) at reduced rate', () => {
-    const lines = generateSalesVatLines({
-      vatTreatment: 'reduced_6',
-      baseAmount: 1000,
-      direction: 'sales',
-    })
-    expect(lines).toHaveLength(1)
-    expect(lines[0].account_number).toBe('2631')
-    expect(lines[0].credit_amount).toBe(60)
-  })
-
-  it('returns empty array for reverse_charge (no domestic VAT line)', () => {
-    expect(
-      generateSalesVatLines({
-        vatTreatment: 'reverse_charge',
-        baseAmount: 1000,
-        direction: 'sales',
-      })
-    ).toEqual([])
-  })
-
-  it('returns empty array for export', () => {
-    expect(
-      generateSalesVatLines({
-        vatTreatment: 'export',
-        baseAmount: 1000,
-        direction: 'sales',
-      })
-    ).toEqual([])
-  })
-
-  it('returns empty array for exempt', () => {
-    expect(
-      generateSalesVatLines({
-        vatTreatment: 'exempt',
-        baseAmount: 1000,
-        direction: 'sales',
-      })
-    ).toEqual([])
-  })
-
-  it('rounds VAT to 2 decimals (333.33 * 0.25 = 83.3325 → 83.33)', () => {
-    const lines = generateSalesVatLines({
-      vatTreatment: 'standard_25',
-      baseAmount: 333.33,
-      direction: 'sales',
-    })
-    expect(lines[0].credit_amount).toBe(83.33)
   })
 })
 

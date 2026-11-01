@@ -1726,6 +1726,20 @@ describe('POST /api/transactions/[id]/match-invoice: refusals come before anythi
     expectNothingWritten()
   })
 
+  it('edited rows that balance only before each line is rounded refuse before anything is written', async () => {
+    enqueueUpToBooking()
+    const { status, body } = await post({
+      lines: [
+        { account_number: '1930', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 200.01 },
+      ],
+    })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expectNothingWritten()
+  })
+
   it('a payment date outside an open period refuses before anything is written', async () => {
     enqueueUpToBooking()
     mockFindFiscalPeriod.mockResolvedValue(null)

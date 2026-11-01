@@ -67,6 +67,7 @@ import {
 } from '@/lib/invoices/sale-first'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { postingPort } from '@/lib/posting/port'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
@@ -355,9 +356,8 @@ export async function bookCustomerBankMatch(
   }
 
   if (customLines) {
-    const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-    const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+    const { balanced, totalDebit, totalCredit } = lineBalance(customLines)
+    if (!balanced) {
       return { ok: false, code: 'INVOICE_PAID_LINES_UNBALANCED', details: { totalDebit, totalCredit } }
     }
   }

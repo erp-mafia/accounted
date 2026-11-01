@@ -354,6 +354,15 @@ describe('planOneClick: the form', () => {
     expect(pairs(plan)).toEqual([['6550', 1000.03, 0], ['2641', 250, 0], ['2440', 0, 1250.03]])
   })
 
+  it('reads the stated VAT against the exact VAT on the net: 9,25 kr at 6 % is 0,56 kr', () => {
+    // A seller's 0,57 kr is within the öre rounding allows of 0,56 kr; against
+    // the float product's 0,55 kr it read as a mismatch and opened the editor.
+    const reading = { ...invoice, totals: { subtotal: 9.25, vatAmount: 0.57, total: 9.82 }, vatBreakdown: [{ rate: 6, base: 9.25, amount: 0.57 }] }
+    const plan = planOneClick(input({ ...consulting, reading, bank: { ...BANK, date: '2026-09-28', amountSek: -9.82 } }))
+    expect(plan.reason).toBe('paid_later')
+    expect(pairs(plan)).toEqual([['6550', 9.25, 0], ['2641', 0.57, 0], ['2440', 0, 9.82]])
+  })
+
   it('books it like a receipt when Leverantörsfakturor is off', () => {
     const plan = planOneClick(input({ ...consulting, bank: { ...BANK, date: '2026-09-28', amountSek: -1250 }, company: { vatRegistered: true, cashMethod: false, supplierInvoices: false } }))
     expect(plan.form).toBe('direct')

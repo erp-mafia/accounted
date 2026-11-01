@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -246,16 +247,7 @@ export default function PaymentBookingDialog({
   }, [open, sourceType, paymentDate])
 
   // Balance computation
-  const { totalDebit, totalCredit, isBalanced } = useMemo(() => {
-    let totalDebit = 0
-    let totalCredit = 0
-    for (const line of lines) {
-      totalDebit += parseFloat(line.debit_amount) || 0
-      totalCredit += parseFloat(line.credit_amount) || 0
-    }
-    const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0 && totalDebit > 0
-    return { totalDebit, totalCredit, isBalanced }
-  }, [lines])
+  const { totalDebit, totalCredit, balanced: isBalanced } = useMemo(() => lineBalance(lines), [lines])
 
   const updateLine = (index: number, field: keyof FormLine, value: string) => {
     setLines((prev) => {

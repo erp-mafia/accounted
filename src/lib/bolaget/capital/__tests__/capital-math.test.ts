@@ -149,5 +149,11 @@ describe('capital postings', () => {
 
   it('refuses an empty posting as unbalanced', () => {
     expect(linesBalance(dividendDecisionLines('2098', 0))).toBe(false)
+    // On the amounts the lines store, each line in whole öre.
+    expect(linesBalance([
+      { account_number: '2098', debit_amount: 100.004, credit_amount: 0 },
+      { account_number: '2097', debit_amount: 100.004, credit_amount: 0 },
+      { account_number: '2898', debit_amount: 0, credit_amount: 200.01 },
+    ] as never)).toBe(false)
   })
 })

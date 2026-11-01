@@ -39,6 +39,7 @@
  */
 
 import { swedishMonthName } from '@/lib/dates/swedish-months'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 import { lastDayOfMonth } from './date-utils'
 
@@ -176,10 +177,6 @@ function dateStr(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
-function vatOf(net: number, vatRate: number): number {
-  return roundOre((net * vatRate) / 100)
-}
-
 /**
  * Deterministic per-month variation. `(month * factor) % cycle` walks the cycle
  * in a non-obvious order, so the amounts look hand-entered without any
@@ -251,7 +248,7 @@ export function buildSandboxLedgerHistory({
 
   /** Dr cost (+ Dr 2641), Cr 1930. The bank pays it the day it happens. */
   function addBankPaidCost(entryDate: string, cost: PeriodicCost): void {
-    const vat = vatOf(cost.net, cost.vatRate)
+    const vat = computeLineVat(cost.net, cost.vatRate)
     const gross = roundOre(cost.net + vat)
     const lines: LineSpec[] = [
       { accountNumber: cost.accountNumber, debit: cost.net, lineDescription: cost.description },
@@ -334,7 +331,7 @@ export function buildSandboxLedgerHistory({
     const monthName = swedishMonthName(month)
     const hours = CONSULTING_HOURS[month - 1]
     const revenueNet = hours * HOURLY_RATE
-    const revenueVat = vatOf(revenueNet, 25)
+    const revenueVat = computeLineVat(revenueNet, 25)
     const revenueGross = roundOre(revenueNet + revenueVat)
 
     // ── day 2, January only: owner funds the business ────────────────────
@@ -379,7 +376,7 @@ export function buildSandboxLedgerHistory({
     if (month > 1) {
       const previousMonthName = swedishMonthName(month - 1)
       const previousNet = CONSULTING_HOURS[month - 2] * HOURLY_RATE
-      const previousGross = roundOre(previousNet + vatOf(previousNet, 25))
+      const previousGross = roundOre(previousNet + computeLineVat(previousNet, 25))
       addEntry(
         dateStr(year, month, 20),
         `Kundinbetalning, konsultarvode ${previousMonthName}`,

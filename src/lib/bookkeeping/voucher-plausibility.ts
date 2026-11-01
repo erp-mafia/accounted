@@ -24,6 +24,7 @@
  * (VAT_ACCOUNT_TABLE), so a check and the declaration read an account the same
  * way. Pure: lines in, warnings out.
  */
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import { formatAmount } from '@/lib/utils'
 import { isAccountNumber } from '@/lib/invariants/account-number'
@@ -143,7 +144,7 @@ export function checkVoucherPlausibility(lines: readonly PlausibilityLine[]): Vo
     (l) => isReverseChargeOutputVat(l.account_number) || isImportOutputVat(l.account_number) || isReverseChargeInputVat(l.account_number),
   )
 
-  if (!hasReverseChargeOrImport && domesticInputVat > 0 && costBase > 0 && domesticInputVat > roundOre(costBase * MAX_VAT_RATE) + RATIO_TOLERANCE_KR) {
+  if (!hasReverseChargeOrImport && domesticInputVat > 0 && costBase > 0 && domesticInputVat > netVat(costBase, MAX_VAT_RATE) + RATIO_TOLERANCE_KR) {
     const share = percent(domesticInputVat, costBase)
     warnings.push({
       code: 'INPUT_VAT_ABOVE_RATE',
@@ -153,7 +154,7 @@ export function checkVoucherPlausibility(lines: readonly PlausibilityLine[]): Vo
     })
   }
 
-  if (domesticOutputVat > 0 && revenueBase > 0 && domesticOutputVat > roundOre(revenueBase * MAX_VAT_RATE) + RATIO_TOLERANCE_KR) {
+  if (domesticOutputVat > 0 && revenueBase > 0 && domesticOutputVat > netVat(revenueBase, MAX_VAT_RATE) + RATIO_TOLERANCE_KR) {
     const share = percent(domesticOutputVat, revenueBase)
     warnings.push({
       code: 'OUTPUT_VAT_ABOVE_RATE',

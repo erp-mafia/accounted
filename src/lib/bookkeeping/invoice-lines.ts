@@ -21,7 +21,8 @@ import {
   mergeDimensionBags,
   type LineDimensions,
 } from './dimension-resolver'
-import { generateSalesVatLines } from './vat-entries'
+import { splitGrossVat, statedVatFitsRate, treatmentForRate } from './gross-split'
+import { getVatRate } from './vat-entries'
 import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from './invoice-line-vat-treatment'
 import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { creditNatural } from './line-side'
@@ -113,6 +114,31 @@ export function buildInvoiceDescription(
 }
 
 /**
+ * Whether the VAT an invoice states without per-line rates gets a moms line.
+ * The line books the stated figure and never a rate applied to the subtotal:
+ * per-line rounding puts the stated VAT öre away from subtotal × rate, the 1510
+ * debit takes the stated total, and a recomputed line could not balance.
+ *
+ * A SEK invoice gets the line only when its VAT fits its one treatment. VAT
+ * under a treatment without Swedish VAT, or with none, or further from the
+ * treatment's rate than rounding explains (several rates or a momsfri part on
+ * one header) would land in the wrong ruta, and the items that could split it
+ * are not there. It gets no line: the debit stays above the credits and the
+ * engine refuses the entry, as registration always has.
+ */
+function booksStatedVat(
+  statedVat: number,
+  subtotal: number,
+  treatment: VatTreatment,
+  currency: string | null | undefined,
+): boolean {
+  if (!(statedVat > 0)) return false
+  if (!isLedgerCurrency(currency)) return true
+  const rate = getVatRate(treatment)
+  return treatmentForRate(rate) === treatment && statedVatFitsRate(statedVat, subtotal, rate)
+}
+
+/**
  * Group invoice items by VAT rate and generate per-rate revenue + VAT lines.
  * Returns credit lines only (revenue + VAT). The caller adds the debit side.
  *
@@ -145,7 +171,6 @@ export function generatePerRateLines(
 ): CreateJournalEntryLineInput[] {
   const goodsDeliveryCountry = options?.goodsDeliveryCountry ?? null
   const lines: CreateJournalEntryLineInput[] = []
-  const isForeign = currency != null && currency !== 'SEK'
 
   // Free-text / blank rows carry no amounts and never book: drop them before
   // grouping so they can't produce a zero-amount revenue line.
@@ -176,29 +201,14 @@ export function generatePerRateLines(
     })
 
     const totalVat = items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
-    if (totalVat > 0) {
-      if (isForeign) {
-        // For foreign currency, compute VAT in SEK directly
-        const vatSek = toSek(totalVat)
-        const vatAccount = getOutputVatAccount(invoiceVatTreatment)
-        lines.push({
-          account_number: vatAccount,
-          debit_amount: 0,
-          credit_amount: vatSek,
-          line_description: `Utgående moms faktura ${invoiceTagText}`,
-          dimensions: options?.defaultDimensions,
-        })
-      } else {
-        const vatLines = generateSalesVatLines({
-          vatTreatment: invoiceVatTreatment,
-          baseAmount: subtotal,
-          direction: 'sales',
-        })
-        lines.push(...vatLines.map((line) => ({
-          ...line,
-          dimensions: options?.defaultDimensions,
-        })))
-      }
+    if (booksStatedVat(totalVat, subtotal, invoiceVatTreatment, currency)) {
+      lines.push({
+        account_number: getOutputVatAccount(invoiceVatTreatment),
+        debit_amount: 0,
+        credit_amount: roundOre(toSek(totalVat)),
+        line_description: `Utgående moms faktura ${invoiceTagText}`,
+        dimensions: options?.defaultDimensions,
+      })
     }
     return lines
   }
@@ -413,9 +423,9 @@ export function generateRotRutLines(
  * with it.
  *
  * Each deduction line's share is its deduction (kronor, exactly as the 1513
- * leg books it) split at the line's own momssats: moms = deduction * sats /
- * (100 + sats) rounded to the öre, revenue the rest, as Skatteverket computes
- * the moms on the deduction (3 750 kr at 25 % holds 750 kr moms).
+ * leg books it) split at the line's own momssats (splitGrossVat), as
+ * Skatteverket computes the moms on the deduction (3 750 kr at 25 % holds
+ * 750 kr moms).
  * customerItems are the items with that share taken out, deductionItems one
  * item per deduction line holding only the share. The per-rate builder books
  * both exactly as it books the whole invoice, so per account the two add up,
@@ -435,15 +445,9 @@ export interface DeductionShareSplit {
   deductionSek: number
 }
 
-/** The revenue and moms inside a deduction (a magnitude) at a momssats. */
-function deductionShareParts(amount: number, vatRate: number): { revenue: number; vat: number } {
-  const vat = roundOre((amount * vatRate) / (100 + vatRate))
-  return { revenue: roundOre(amount - vat), vat }
-}
-
 /** The item holding only `amount` (a magnitude) of a deduction line's price. */
 function deductionShareItem(item: InvoiceItem, amount: number, sign: 1 | -1): InvoiceItem {
-  const { revenue, vat } = deductionShareParts(amount, item.vat_rate)
+  const { net: revenue, vat } = splitGrossVat(amount, item.vat_rate / 100)
   return {
     ...item,
     quantity: sign,
@@ -642,43 +646,7 @@ export function buildInvoiceRegistrationLines(
       { deferAccruals: options.deferAccruals ?? true, defaultDimensions, goodsDeliveryCountry: invoice.delivery_country }
     ))
   } else {
-    // Fallback: no items available, use invoice-level amounts. Strict
-    // conversion: a rate-less foreign header must refuse exactly like the
-    // item-driven path, not post the raw foreign number as kronor.
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
-    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
-
-    creditLines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${tag}`,
-      dimensions: defaultDimensions,
-    })
-
-    if (invoice.vat_amount > 0) {
-      if (isForeign) {
-        const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-        const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-        creditLines.push({
-          account_number: vatAccount,
-          debit_amount: 0,
-          credit_amount: vatSek,
-          line_description: `Utgående moms faktura ${tag}`,
-          dimensions: defaultDimensions,
-        })
-      } else {
-        const vatLines = generateSalesVatLines({
-          vatTreatment: invoice.vat_treatment,
-          baseAmount: invoice.subtotal,
-          direction: 'sales',
-        })
-        creditLines.push(...vatLines.map((line) => ({
-          ...line,
-          dimensions: defaultDimensions,
-        })))
-      }
-    }
+    creditLines.push(...headerRecognitionLines(invoice, entityType, tag, defaultDimensions))
   }
 
   // ROT/RUT-avdrag debit lines (1513 Skatteverket). When present, they
@@ -940,33 +908,41 @@ function cashRecognitionLines(
     )
   }
 
-  // Fallback: invoice-level amounts. Strict conversion, same rationale as
-  // the createInvoiceJournalEntry fallback above.
-  const creditLines: CreateJournalEntryLineInput[] = []
-  const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country)
-  const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
+  return headerRecognitionLines(invoice, entityType, tag, defaultDimensions)
+}
 
-  creditLines.push({
-    account_number: revenueAccount,
+/**
+ * The revenue and moms lines of an invoice booked from its header, when no
+ * items are loaded: the amounts the invoice states, the registration and the
+ * kontantmetoden entry alike. Strict conversion: a rate-less foreign header
+ * refuses exactly like the item-driven path, it never posts the raw foreign
+ * number as kronor.
+ */
+function headerRecognitionLines(
+  invoice: InvoiceCashLinesSource,
+  entityType: EntityType,
+  tag: string,
+  defaultDimensions: LineDimensions | undefined,
+): CreateJournalEntryLineInput[] {
+  const lines: CreateJournalEntryLineInput[] = [{
+    account_number: getRevenueAccount(invoice.vat_treatment, entityType, invoice.delivery_country),
     debit_amount: 0,
-    credit_amount: subtotalSek,
+    credit_amount: headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate),
     line_description: `Försäljning faktura ${tag}`,
     dimensions: defaultDimensions,
-  })
+  }]
 
-  if (invoice.vat_amount > 0) {
-    const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
-    const vatAccount = getOutputVatAccount(invoice.vat_treatment)
-    creditLines.push({
-      account_number: vatAccount,
+  if (booksStatedVat(invoice.vat_amount, invoice.subtotal, invoice.vat_treatment, invoice.currency)) {
+    lines.push({
+      account_number: getOutputVatAccount(invoice.vat_treatment),
       debit_amount: 0,
-      credit_amount: vatSek,
+      credit_amount: headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate),
       line_description: `Utgående moms faktura ${tag}`,
       dimensions: defaultDimensions,
     })
   }
 
-  return creditLines
+  return lines
 }
 
 /**

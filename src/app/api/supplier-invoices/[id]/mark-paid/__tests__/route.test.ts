@@ -1350,6 +1350,31 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: a deferred invoice paid be
     expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
   })
 
+  it('refuses edited rows that balance only before each line is rounded', async () => {
+    enqueue({ data: unbooked(), error: null })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {
+        payment_date: '2026-05-12',
+        lines: [
+          { account_number: '2440', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 200.01 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+  })
+
   it('refuses edited rows naming an account the engine cannot resolve, before the registration is booked', async () => {
     enqueue({ data: unbooked(), error: null })
     enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })

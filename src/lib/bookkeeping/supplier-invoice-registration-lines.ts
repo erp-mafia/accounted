@@ -32,6 +32,7 @@ import {
   mergeDimensionBags,
   type LineDimensions,
 } from './dimension-resolver'
+import { netVat } from './gross-split'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
 import { isSupplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
@@ -171,7 +172,7 @@ function rowInputVat(item: Pick<SupplierInvoiceBookingItem, 'line_total' | 'vat_
   const rate = item.vat_rate ?? 0.25
   const storedVat = item.vat_amount ?? 0
   if (storedVat !== 0) return storedVat
-  return rate > 0 ? roundOre((item.line_total ?? 0) * rate) : 0
+  return netVat(item.line_total ?? 0, rate)
 }
 
 /**

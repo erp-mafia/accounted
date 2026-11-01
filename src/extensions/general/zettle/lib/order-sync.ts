@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
+import { netVat, splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre as round } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
@@ -197,8 +198,7 @@ function netByRateFromProducts(purchase: ZettlePurchase): Map<number, number> | 
   if (charge && typeof charge.amount === 'number') {
     const rate = typeof charge.vatPercentage === 'number' ? charge.vatPercentage : 0
     const gross = fromMinor(charge.amount)
-    const net = rate > 0 ? round(gross / (1 + rate / 100)) : gross
-    netByRate.set(rate, round((netByRate.get(rate) ?? 0) + net))
+    netByRate.set(rate, round((netByRate.get(rate) ?? 0) + splitGrossVat(gross, rate / 100).net))
   }
   return netByRate.size > 0 ? netByRate : null
 }
@@ -254,8 +254,7 @@ export function mapLineItems(purchase: ZettlePurchase): WebshopOrderLineItem[] {
     // rowTaxableAmount is the row's net in minor units (signed with refunds).
     const rowNet = fromMinor(netMinor)
     const rate = typeof product.vatPercentage === 'number' ? product.vatPercentage : null
-    const tax =
-      rate !== null && rate > 0 ? round(rowNet * (rate / 100)) : 0
+    const tax = netVat(rowNet, (rate ?? 0) / 100)
     const nameParts = [product.name, product.variantName].filter(Boolean)
     items.push({
       name: nameParts.join(' / ') || product.type || 'Artikel',
@@ -272,12 +271,7 @@ export function mapLineItems(purchase: ZettlePurchase): WebshopOrderLineItem[] {
       typeof purchase.serviceCharge.vatPercentage === 'number'
         ? purchase.serviceCharge.vatPercentage
         : null
-    let net = gross
-    let tax = 0
-    if (rate !== null && rate > 0) {
-      net = round(gross / (1 + rate / 100))
-      tax = round(gross - net)
-    }
+    const { net, vat: tax } = splitGrossVat(gross, (rate ?? 0) / 100)
     items.push({
       name: purchase.serviceCharge.title || 'Serviceavgift',
       quantity: Number.parseFloat(purchase.serviceCharge.quantity ?? '1') || 1,

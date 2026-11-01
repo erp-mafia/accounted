@@ -55,6 +55,7 @@ import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre, sumOre } from '@/lib/money'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
@@ -560,7 +561,7 @@ export async function createSupplierInvoice(
     // A manual VAT override (partial deduction, foreign-currency rounding,
     // supplier-side POS rounding) wins; the other lines get their share of
     // the document's VAT per rate below (allocateDocumentVat).
-    const vatAmount = item.vat_amount != null ? roundOre(item.vat_amount) : roundOre(lineTotal * vatRate)
+    const vatAmount = item.vat_amount != null ? roundOre(item.vat_amount) : netVat(lineTotal, vatRate)
     const hasAccrual = Boolean(item.accrual_period_start && item.accrual_period_end)
     return {
       sort_order: index,

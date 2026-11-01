@@ -7,6 +7,7 @@
  * deducted at acquisition.
  */
 
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import type { AssetCategory, AssetJamkningDirection, VatTreatment } from '@/types'
 
@@ -98,7 +99,7 @@ export function assessJamkning(input: JamkningAssessmentInput): JamkningAssessme
   let capped = false
 
   if (!realProperty && change > 0 && treatmentRetainsDeduction(input.vatTreatment)) {
-    const cap = roundOre(Math.max(0, Number(input.netProceeds ?? 0)) * 0.25)
+    const cap = netVat(Math.max(0, Number(input.netProceeds ?? 0)), 0.25)
     if (amount > cap) {
       amount = cap
       capped = true

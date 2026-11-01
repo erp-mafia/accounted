@@ -2,6 +2,51 @@ import { roundOre } from '@/lib/money'
 import type { VatTreatment } from '@/types'
 
 const BASIS_POINTS = 10000
+/** Above float noise on rate * 10000, below any rate a document states. */
+const FINER_THAN_A_BASIS_POINT = 1e-6
+
+/**
+ * How far a stated VAT may sit from its rate of the net and still be that
+ * rate, in kronor: the per-line öre rounding of a long invoice and an
+ * öresavrundning on 3740 stay well inside it. Beyond it part of the sale
+ * carries no VAT or another rate's, and one treatment cannot book it.
+ */
+const STATED_VAT_TOLERANCE_SEK = 1
+
+/** Whether a stated VAT is this rate of the net, within rounding (STATED_VAT_TOLERANCE_SEK). */
+export function statedVatFitsRate(statedVat: number, net: number, rate: number): boolean {
+  return roundOre(Math.abs(statedVat - netVat(net, rate))) <= STATED_VAT_TOLERANCE_SEK
+}
+
+/**
+ * The VAT on a net amount, a beskattningsunderlag: the one VAT-on-net rule
+ * every invoice line, import, reverse-charge purchase and prefill uses.
+ * `rate` is a fraction (0.25).
+ *
+ *   vat = net × rate, to the nearest öre, an exact half öre up
+ *
+ * The arithmetic is in whole öre and basis points, so the rounding decides on
+ * the exact amount. In floating point 2,75 kr at 6 % is 0,16499… instead of
+ * 16,5 öre, and 0,58 kr at 25 % comes back from `× 100` below 14,5 öre: the
+ * copies this replaced answered roundOre(net * rate) or
+ * Math.round(net * rate * 100) / 100 and booked those amounts 1 öre apart
+ * depending on the path.
+ *
+ * The net is taken to the öre first. A negative net rounds as roundOre does,
+ * half toward plus infinity (-0,50 kr at 25 % is -0,12 kr), the rule every
+ * rabatt row has been stored by. A rate of 0 or less has no VAT. A rate finer
+ * than a basis point (a foreign seller's 9,975 %) has no whole-number form
+ * here and stays on the float product: rounding it to 9,98 % would move the
+ * VAT by far more than an öre.
+ */
+export function netVat(net: number, rate: number): number {
+  const netOre = Math.round(roundOre(net) * 100)
+  const bp = Math.round(rate * BASIS_POINTS)
+  if (!(bp > 0) || netOre === 0) return 0
+  if (Math.abs(rate * BASIS_POINTS - bp) > FINER_THAN_A_BASIS_POINT) return roundOre((netOre / 100) * rate)
+  // round(net × bp / 10000), half up, in integers (net × bp stays far below 2^53).
+  return Math.floor((netOre * bp + BASIS_POINTS / 2) / BASIS_POINTS) / 100
+}
 
 /**
  * The VAT inside a VAT-inclusive amount, and the net beside it: the one
@@ -17,6 +62,10 @@ const BASIS_POINTS = 10000
  * apart depending on the path. Only 12 % has exact half-öre splits (gross ×
  * 3/28): at 25 % (gross / 5) and 6 % (gross × 3/53) none exist, so those
  * rates book exactly as before.
+ *
+ * VAT first, net as what is left: rounding the net instead (gross / (1 + rate))
+ * lands 1 öre on the other side of the VAT on those same 12 % halves, 1,26 kr
+ * as 1,13 + 0,13 instead of 1,12 + 0,14.
  *
  * The gross is taken to the öre first. A negative gross splits as the mirror
  * image of the positive one, so a refund takes back exactly the VAT of its

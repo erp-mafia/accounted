@@ -37,6 +37,7 @@ import {
 } from '@/lib/invoices/supplier-invoice-payment-row'
 import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { postingPort } from '@/lib/posting/port'
@@ -164,9 +165,8 @@ function payableRefusal(invoice: SettleableSupplierInvoice): Failure | null {
 }
 
 function editedRowsRefusal(lines: SupplierPaymentLine[]): Failure | null {
-  const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
-  const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
-  if (Math.round((totalDebit - totalCredit) * 100) === 0 && totalDebit > 0) return null
+  const { balanced, totalDebit, totalCredit } = lineBalance(lines)
+  if (balanced) return null
   return { ok: false, code: 'INVOICE_PAID_LINES_UNBALANCED', details: { totalDebit, totalCredit } }
 }
 

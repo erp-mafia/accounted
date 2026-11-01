@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { BookkeepingDatabaseError, UnattendedCommitLimitExceededError } from '@/lib/bookkeeping/errors'
 import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { postingPort } from '@/lib/posting/port'
@@ -912,15 +913,10 @@ export async function executeYearEndClosing(
   // This guards against rounding drift in previewYearEndClosing: the DB
   // balance trigger would catch it too, but we want a clear Swedish error
   // surfaced to the user, not a generic Postgres exception.
-  const preCommitDebit = roundOre(
-    preview.closingLines.reduce((s, l) => s + l.debit_amount, 0)
-  )
-  const preCommitCredit = roundOre(
-    preview.closingLines.reduce((s, l) => s + l.credit_amount, 0)
-  )
-  if (Math.abs(preCommitDebit - preCommitCredit) > ORE_TOLERANCE) {
+  const closingBalance = lineBalance(preview.closingLines)
+  if (closingBalance.difference !== 0) {
     throw new Error(
-      `Bokslutsverifikationen balanserar inte: debet=${preCommitDebit}, kredit=${preCommitCredit}`
+      `Bokslutsverifikationen balanserar inte: debet=${closingBalance.totalDebit}, kredit=${closingBalance.totalCredit}`
     )
   }
 
@@ -1207,12 +1203,10 @@ export async function generateOpeningBalances(
   }
 
   // Verify balance before creating
-  const totalDebit = openingLines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredit = openingLines.reduce((sum, l) => sum + l.credit_amount, 0)
-
-  if (Math.abs(totalDebit - totalCredit) > ORE_TOLERANCE) {
+  const openingBalance = lineBalance(openingLines)
+  if (openingBalance.difference !== 0) {
     throw new Error(
-      `Ingående balanser balanserar inte: debet=${roundOre(totalDebit)}, kredit=${roundOre(totalCredit)}`
+      `Ingående balanser balanserar inte: debet=${openingBalance.totalDebit}, kredit=${openingBalance.totalCredit}`
     )
   }
 
