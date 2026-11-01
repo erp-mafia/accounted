@@ -58,7 +58,8 @@ import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { roundOre, sumOre, formatAmountInput } from '@/lib/money'
+import { formatAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -406,10 +407,11 @@ export default function ExpenseClaimsPage() {
   }, [sellerCountry, reverseChargeBooked, reverseChargePreview.lines, expenseAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
-  const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))
-  const totalDebit = rowSum('debit')
-  const totalCredit = roundOre(rowSum('credit') + parsedAmount)
-  const bookingBalanced = Math.abs(totalDebit - totalCredit) <= 0.005
+  const { totalDebit, totalCredit, difference: bookingDifference } = lineBalance([
+    ...editorRows.map((r) => ({ debit_amount: r.debit, credit_amount: r.credit })),
+    { credit_amount: parsedAmount },
+  ])
+  const bookingBalanced = bookingDifference === 0
   const bookingRowsValid = editorRows.every((r) => {
     const d = parseFloat(r.debit) || 0
     const c = parseFloat(r.credit) || 0

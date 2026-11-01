@@ -74,6 +74,7 @@ import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim
 import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
 import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
@@ -1933,7 +1934,7 @@ export const CreateSupplierInvoiceItemSchema = z.object({
     if (Math.sign(item.vat_amount) !== Math.sign(lineTotal)) return false
     // 1-öre tolerance covers POS rounding; anything beyond is an upstream bug
     // or a client trying to inflate 2641 debit beyond the statutory ceiling.
-    return roundOre(Math.abs(item.vat_amount)) <= roundOre(Math.abs(roundOre(lineTotal * vatRate)) + 0.01)
+    return roundOre(Math.abs(item.vat_amount)) <= roundOre(Math.abs(netVat(lineTotal, vatRate)) + 0.01)
   },
   {
     message: 'vat_amount must have the sign of the line and cannot exceed line_total × vat_rate',
@@ -2111,7 +2112,7 @@ export const CreateSupplierInvoiceSchema = z.object({
     //    on a reduced_12 invoice the item-level check would otherwise wave
     //    through a 25 % override.
     if (item.vat_amount == null || item.vat_rate != null) return
-    const maxVat = Math.abs(roundOre(lineTotal * treatmentRate))
+    const maxVat = Math.abs(netVat(lineTotal, treatmentRate))
     // Same 1-öre POS tolerance as the item-level refine.
     if (roundOre(Math.abs(item.vat_amount)) > roundOre(maxVat + 0.01)) {
       ctx.addIssue({

@@ -1,0 +1,1 @@
+[2026-11-01] VAT on a net amount is netVat in gross-split.ts, whole öre x basis points, exact half up; computeLineVat is it in percent. Fiktiv moms, templates and imports move one öre on exact halves at 25 and 6 %, invoices never; a negative half keeps roundOre's rule, not the gross split's mirror.

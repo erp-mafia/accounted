@@ -22,6 +22,7 @@ import { postingPort } from '@/lib/posting/port'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import type { CreateJournalEntryLineInput, JournalEntry } from '@/types'
 import {
   CONTRIBUTION_ACCOUNT,
@@ -90,9 +91,7 @@ export function minskningLines(targetAccount: string, shareCapital: number): Cap
 
 /** Whether lines balance with both sides above zero (CLAUDE.md hard rule 3). */
 export function linesBalance(lines: readonly CapitalLine[]): boolean {
-  const debits = roundOre(lines.reduce((n, l) => n + l.debit_amount, 0))
-  const credits = roundOre(lines.reduce((n, l) => n + l.credit_amount, 0))
-  return debits > 0 && debits === credits
+  return lineBalance(lines).balanced
 }
 
 export class CapitalPostingPeriodError extends Error {

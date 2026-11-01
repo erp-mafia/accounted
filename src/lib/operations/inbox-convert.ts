@@ -53,6 +53,7 @@ import {
 import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
 import { allocateDocumentVat } from '@/lib/vat/document-vat'
 import { suggestExpenseBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { booksInvoicesOnIssue, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
@@ -242,7 +243,7 @@ export async function convertInboxItemToSupplierInvoice(
       : roundOre((line.quantity ?? 1) * (line.unit_price ?? 0))
     // A line's own VAT (items[].vat_amount) is kept as given; the others get
     // their share of the document's VAT per rate below.
-    const vatAmount = line.vat_amount != null ? roundOre(line.vat_amount) : roundOre(lineTotal * vatRate)
+    const vatAmount = line.vat_amount != null ? roundOre(line.vat_amount) : netVat(lineTotal, vatRate)
     const accrues = Boolean(line.accrual_period_start && line.accrual_period_end)
     return {
       sort_order: index,

@@ -10,7 +10,8 @@ import { invoicePaymentBusinessEvent } from '@/lib/bookkeeping/invoice-business-
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { equalOre, ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
+import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
@@ -283,9 +284,8 @@ export function buildCreditNoteRefundLines(
     }
   }
 
-  const totalDebit = sumOre(customLines.map((line) => line.debit_amount))
-  const totalCredit = sumOre(customLines.map((line) => line.credit_amount))
-  if (!equalOre(totalDebit, totalCredit) || totalDebit <= 0) {
+  const { balanced, totalDebit, totalCredit } = lineBalance(customLines)
+  if (!balanced) {
     return { ok: false, code: 'INVOICE_PAID_LINES_UNBALANCED', details: { total_debit: totalDebit, total_credit: totalCredit } }
   }
   // The refund clears the customer's credit on 1510 and nothing else: a

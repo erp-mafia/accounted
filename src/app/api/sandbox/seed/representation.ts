@@ -30,6 +30,7 @@
  */
 
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput } from '@/types'
@@ -85,7 +86,7 @@ export function deductibleRepresentationVat(line: {
   participants: number
 }): number {
   const cappedBase = Math.min(line.net, line.participants * VAT_BASE_CAP_PER_PERSON)
-  return Math.min(line.vat, roundOre((cappedBase * line.vatRatePercent) / 100))
+  return Math.min(line.vat, computeLineVat(cappedBase, line.vatRatePercent))
 }
 
 export interface SandboxRepresentationVoucherInput {

@@ -24,29 +24,6 @@ vi.mock('../engine', () => ({
   ),
 }))
 
-vi.mock('../vat-entries', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../vat-entries')>()
-  return {
-    ...actual,
-    generateSalesVatLines: vi.fn().mockImplementation(
-      ({ vatTreatment, baseAmount }: { vatTreatment: string; baseAmount: number }) => {
-        const rate = vatTreatment === 'standard_25' ? 0.25
-          : vatTreatment === 'reduced_12' ? 0.12
-          : vatTreatment === 'reduced_6' ? 0.06 : 0
-        if (rate === 0) return []
-        const account = vatTreatment === 'standard_25' ? '2611'
-          : vatTreatment === 'reduced_12' ? '2621' : '2631'
-        return [{
-          account_number: account,
-          debit_amount: 0,
-          credit_amount: roundOre(baseAmount * rate),
-          line_description: 'Utgående moms',
-        }]
-      },
-    ),
-  }
-})
-
 // The upplupen kostnad guard reads each month-end's lock state.
 vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: vi.fn().mockResolvedValue({ locked: false, fiscal_period_id: 'period-1' }),

@@ -94,7 +94,7 @@ import {
 } from '@/lib/invoices/sale-first'
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
-import { grossVat } from '@/lib/bookkeeping/gross-split'
+import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
@@ -14303,9 +14303,9 @@ export const tools: McpTool[] = [
         amount_filter_applied_post_fetch: amountFilterApplied,
         db_matched_pre_amount_filter: amountFilterApplied ? fullRows.length : null,
         totals: {
-          debit: Math.round(totalDebit * 100) / 100,
-          credit: Math.round(totalCredit * 100) / 100,
-          net: Math.round((totalDebit - totalCredit) * 100) / 100,
+          debit: roundOre(totalDebit),
+          credit: roundOre(totalCredit),
+          net: roundOre(totalDebit - totalCredit),
         },
         totals_scope: 'full_match',
         ...(totalsNote ? { totals_note: totalsNote } : {}),
@@ -17789,12 +17789,12 @@ export const tools: McpTool[] = [
         const foreignVat = foreignRate === 0
           ? 0
           : rawVatAmount == null
-            ? roundOre(lineTotal * foreignRate)
+            ? netVat(lineTotal, foreignRate)
             : Number(rawVatAmount) || 0
         const vatAmount = foreignRate > 0
           ? 0
           : rawVatAmount == null
-            ? roundOre(lineTotal * vatRate)
+            ? netVat(lineTotal, vatRate)
             : Number(rawVatAmount) || 0
         const pricedLineTotal = foreignVat === 0 ? lineTotal : roundOre(lineTotal + foreignVat)
         const unitPrice = Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0

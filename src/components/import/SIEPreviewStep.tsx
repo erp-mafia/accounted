@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DefList, DefRow } from '@/components/arkiv/DefList'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { ArrowRightIcon } from '@/components/icons'
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -69,7 +70,7 @@ export default function SIEPreviewStep({
   // imbalance (incomplete export: missing liabilities / unappropriated prior-year
   // result) that would silently book a bogus amount to 2099. Mirrors the importer's
   // own `fileImbalance > 1.00` "serious" threshold (lib/import/sie-import.ts).
-  const ibDiff = Math.round((preview.trialBalance.totalDebit - preview.trialBalance.totalCredit) * 100) / 100
+  const ibDiff = roundOre(preview.trialBalance.totalDebit - preview.trialBalance.totalCredit)
   const [ackImbalance, setAckImbalance] = useState(false)
 
   // crm#1099: a year imported on top of earlier bookkeeping opens on the

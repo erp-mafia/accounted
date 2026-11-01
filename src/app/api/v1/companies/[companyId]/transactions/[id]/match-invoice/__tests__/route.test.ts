@@ -694,6 +694,39 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kont
     expect(businessWrites(calls)).toEqual([])
   })
 
+  it('refuses custom lines that balance only before each line is rounded', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        {
+          invoice_id: INVOICE_ID,
+          lines: [
+            { account_number: '1930', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '6570', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 200.01 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses an inactive settlement account before anything is written', async () => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

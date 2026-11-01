@@ -21,7 +21,8 @@ import type {
 } from './types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import type { SIEPreparedEntry } from './sie-job-contract'
-import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { getMappingStats } from './account-mapper'
 import {
   calculateFileHash,
@@ -70,16 +71,12 @@ export function generateImportPreview(
   // openingBalanceTotal > 0) reflects what the import will actually book.
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
     getEffectiveOpeningBalances(parsed)
-  let totalDebit = 0
-  let totalCredit = 0
-
-  for (const balance of currentYearBalances) {
-    if (balance.amount > 0) {
-      totalDebit += balance.amount
-    } else {
-      totalCredit += Math.abs(balance.amount)
-    }
-  }
+  const { totalDebit, totalCredit, difference } = lineBalance(
+    currentYearBalances.map((balance) => ({
+      debit_amount: Math.max(balance.amount, 0),
+      credit_amount: Math.max(-balance.amount, 0),
+    })),
+  )
 
   const mappingStats = getMappingStats(mappings)
 
@@ -97,7 +94,7 @@ export function generateImportPreview(
     trialBalance: {
       totalDebit,
       totalCredit,
-      isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+      isBalanced: difference === 0,
     },
     mappingStatus: {
       total: mappingStats.total,
@@ -647,17 +644,13 @@ export function validateIBBalance(
     }
   }
 
-  const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-  const mappedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-
-  // Already rounded to öre, so anything left is real and gets booked, one
-  // öre included: import_sie_chunk rejects any nonzero difference at two
-  // decimals, and a stricter threshold here let a 1 öre file pass
-  // preparation and fail at commit. Consumers test `!== 0`, never a tolerance.
+  // Anything left is real and gets booked, one öre included:
+  // import_sie_chunk rejects any nonzero difference at two decimals, and a
+  // stricter threshold here let a 1 öre file pass preparation and fail at
+  // commit. Consumers test `!== 0`, never a tolerance.
   return {
     lines,
-    roundingAdjustment: Math.abs(mappedDiff) >= 0.01 ? mappedDiff : 0,
+    roundingAdjustment: lineBalance(lines).difference,
     fileImbalance,
     excludedAccountsTotal: Math.round(excludedTotal * 100) / 100,
   }
@@ -900,8 +893,8 @@ export function prepareSIEVouchers(
       .filter((line) => line.amount !== 0)
       .map((line, index) => ({
         account_number: accountMap.get(line.account) ?? line.account,
-        debit_amount: line.amount > 0 ? Math.round(line.amount * 100) / 100 : 0,
-        credit_amount: line.amount < 0 ? Math.round(Math.abs(line.amount) * 100) / 100 : 0,
+        debit_amount: line.amount > 0 ? roundOre(line.amount) : 0,
+        credit_amount: line.amount < 0 ? roundOre(Math.abs(line.amount)) : 0,
         line_description: line.description || null,
         sort_order: index,
         signature: line.signature?.trim() || null,
@@ -949,7 +942,7 @@ export function prepareSIEVouchers(
       if (line.amount > 0) {
         lines.push({
           account_number: targetAccount,
-          debit_amount: Math.round(line.amount * 100) / 100,
+          debit_amount: roundOre(line.amount),
           credit_amount: 0,
           line_description: line.description || null,
           ...(line.dimensions ? { dimensions: line.dimensions } : {}),
@@ -958,7 +951,7 @@ export function prepareSIEVouchers(
         lines.push({
           account_number: targetAccount,
           debit_amount: 0,
-          credit_amount: Math.round(Math.abs(line.amount) * 100) / 100,
+          credit_amount: roundOre(Math.abs(line.amount)),
           line_description: line.description || null,
           ...(line.dimensions ? { dimensions: line.dimensions } : {}),
         })
@@ -1023,9 +1016,8 @@ export function prepareSIEVouchers(
     }
 
     // Validate balance, Fix 2: Tiered rounding with öresutjämning (ORE_ROUNDING_ACCOUNT, BAS 3740)
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
+    const { totalDebit, totalCredit, difference } = lineBalance(lines)
+    const balanceDiff = Math.abs(difference)
     if (balanceDiff > 1.00) {
       // More than 1 SEK off: incomplete voucher in source system, skip
       results.skippedDetails.push({
@@ -1034,31 +1026,21 @@ export function prepareSIEVouchers(
         description: voucher.description,
         reason: 'unbalanced',
         balanceDiff,
-        totalDebit: Math.round(totalDebit * 100) / 100,
-        totalCredit: Math.round(totalCredit * 100) / 100,
+        totalDebit,
+        totalCredit,
         mappedLineCount: lines.length,
         originalLineCount: voucher.lines.length,
         sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
       })
       continue
-    } else if (balanceDiff > 0.005) {
+    } else if (difference !== 0) {
       // Rounding difference <= 1 SEK: add explicit öresutjämning line (never modify existing lines)
-      const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-      if (roundedDiff > 0) {
-        lines.push({
-          account_number: ORE_ROUNDING_ACCOUNT,
-          debit_amount: 0,
-          credit_amount: Math.abs(roundedDiff),
-          line_description: 'Öresutjämning',
-        })
-      } else {
-        lines.push({
-          account_number: ORE_ROUNDING_ACCOUNT,
-          debit_amount: Math.abs(roundedDiff),
-          credit_amount: 0,
-          line_description: 'Öresutjämning',
-        })
-      }
+      lines.push({
+        account_number: ORE_ROUNDING_ACCOUNT,
+        debit_amount: difference < 0 ? balanceDiff : 0,
+        credit_amount: difference > 0 ? balanceDiff : 0,
+        line_description: 'Öresutjämning',
+      })
     }
 
     // Resolve per-voucher series from the parsed SIE record. Fall back to the
@@ -1247,7 +1229,7 @@ export function buildSIEMigrationAdjustmentEntry(
   for (const account of allAccounts) {
     const expected = expectedMovements.get(account) || 0
     const imported = importedMovements.get(account) || 0
-    const delta = Math.round((expected - imported) * 100) / 100
+    const delta = roundOre(expected - imported)
 
     if (Math.abs(delta) < 0.01) continue
     deltaAccountCount++
@@ -1277,27 +1259,14 @@ export function buildSIEMigrationAdjustmentEntry(
   }
 
   // The entry must balance. It should by construction, but verify and handle rounding.
-  const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-  const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
-
-  if (balanceDiff > 0.005) {
-    const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-    if (roundedDiff > 0) {
-      lines.push({
-        account_number: ORE_ROUNDING_ACCOUNT,
-        debit_amount: 0,
-        credit_amount: Math.abs(roundedDiff),
-        line_description: 'Öresutjämning omföringsverifikation',
-      })
-    } else {
-      lines.push({
-        account_number: ORE_ROUNDING_ACCOUNT,
-        debit_amount: Math.abs(roundedDiff),
-        credit_amount: 0,
-        line_description: 'Öresutjämning omföringsverifikation',
-      })
-    }
+  const { difference } = lineBalance(lines)
+  if (difference !== 0) {
+    lines.push({
+      account_number: ORE_ROUNDING_ACCOUNT,
+      debit_amount: difference < 0 ? -difference : 0,
+      credit_amount: difference > 0 ? difference : 0,
+      line_description: 'Öresutjämning omföringsverifikation',
+    })
   }
 
   // Date the adjustment at fiscal year end

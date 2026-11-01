@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 
 /**
@@ -24,7 +25,7 @@ export function rowNetFromInvoiceTotals(input: {
   const { total, vat, rate, reverseCharge } = input
   if (reverseCharge || !(rate > 0) || vat === 0) return total
   if (vat != null) return roundOre(vat / rate)
-  return roundOre(total / (1 + rate))
+  return splitGrossVat(total, rate).net
 }
 
 /**

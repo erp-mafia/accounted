@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -46,7 +47,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
   // derived and the skeleton shows.
   const previousYearBooked = file?.previous_year_booked === true
   const derived = !period.opening_balance_entry_id && !previousYearBooked
-  const balanced = !!file && file.lines.length > 0 && file.total_debit === file.total_credit
+  const balanced = !!file && lineBalance(file.lines).balanced
   const canBook = derived && canManage && balanced
   const busy = saving || booking
 

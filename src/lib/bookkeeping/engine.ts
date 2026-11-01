@@ -4,6 +4,7 @@ import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { lineBalance, storedLineValues } from './line-balance'
 import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   AccountsNotInChartError,
@@ -41,10 +42,7 @@ import {
 } from '@/lib/core/bookkeeping/correction-chain'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
-import {
-  normalizeLineDimensions,
-  validateEntryDimensions,
-} from '@/lib/bookkeeping/dimension-resolver'
+import { validateEntryDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import {
   applyDimensionRules,
   assertMandatoryDimensions,
@@ -53,7 +51,7 @@ import {
   isDimensionValidationExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { amountInCurrencyToStore, buildStornoLines } from '@/lib/bookkeeping/line-side'
+import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { selectReversalHooks, type ReversalHookAfterContext, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
@@ -136,18 +134,8 @@ export function validateBalance(lines: CreateJournalEntryLineInput[]): {
   totalDebit: number
   totalCredit: number
 } {
-  const totalDebit = lines.reduce((sum, l) => sum + (l.debit_amount || 0), 0)
-  const totalCredit = lines.reduce((sum, l) => sum + (l.credit_amount || 0), 0)
-
-  // Round to avoid floating point issues (2 decimal places for SEK)
-  const roundedDebit = Math.round(totalDebit * 100) / 100
-  const roundedCredit = Math.round(totalCredit * 100) / 100
-
-  return {
-    valid: roundedDebit === roundedCredit && roundedDebit > 0,
-    totalDebit: roundedDebit,
-    totalCredit: roundedCredit,
-  }
+  const { balanced, totalDebit, totalCredit } = lineBalance(lines)
+  return { valid: balanced, totalDebit, totalCredit }
 }
 
 /**
@@ -337,42 +325,12 @@ export async function findFiscalPeriod(
   return data[0].id
 }
 
-/**
- * Build line insert objects from input lines, resolving account IDs and
- * including tax_code and the dimensions bag
- */
-function buildLineValues(
-  lines: CreateJournalEntryLineInput[],
-  accountIdMap: Map<string, string>
-) {
-  return lines.map((line, index) => {
-    // dimensions JSONB is the single source of truth; cost_center/project
-    // are GENERATED columns derived from keys '1'/'6' since the PR9 cutover
-    // (20260702230000): writing them explicitly would error.
-    const dimensions = normalizeLineDimensions(line)
-    const amountInCurrency = amountInCurrencyToStore(line.currency, line.amount_in_currency)
-    return {
-      account_number: line.account_number,
-      account_id: accountIdMap.get(line.account_number) || null,
-      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-      currency: line.currency || 'SEK',
-      amount_in_currency: amountInCurrency === null ? null : Math.round(amountInCurrency * 100) / 100,
-      exchange_rate: line.exchange_rate || null,
-      line_description: line.line_description || null,
-      tax_code: line.tax_code || null,
-      dimensions,
-      sort_order: index,
-    }
-  })
-}
-
 function buildLineInserts(
   entryId: string,
   lines: CreateJournalEntryLineInput[],
   accountIdMap: Map<string, string>
 ) {
-  return buildLineValues(lines, accountIdMap).map((line) => ({
+  return storedLineValues(lines, accountIdMap).map((line) => ({
     journal_entry_id: entryId,
     ...line,
   }))
@@ -1902,7 +1860,7 @@ export async function replaceOpeningBalanceEntry(
 
   const voucherSeries = input.voucher_series
     ?? await resolveSeriesFromSettings(supabase, companyId, 'opening_balance')
-  const preparedLines = buildLineValues(input.lines, accountIdMap)
+  const preparedLines = storedLineValues(input.lines, accountIdMap)
   const actor = getActor()
 
   const { data, error } = await callWithBusinessEvents('commit_opening_balance_replacement', options.businessEvents, (events) =>

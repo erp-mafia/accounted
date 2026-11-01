@@ -35,6 +35,7 @@ import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { roundOre, sumOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import {
@@ -277,9 +278,8 @@ export async function createExpenseClaim(
       const planned = await planExpenseClaim(supabase, companyId, input, { dryRun: true })
       if (!planned.ok) return registerFailure(ctx, planned)
       const { plan } = planned
-      const totalDebit = sumOre(plan.lines.map((l) => l.debit_amount))
-      const totalCredit = sumOre(plan.lines.map((l) => l.credit_amount))
-      if (totalDebit !== totalCredit || totalDebit <= 0) {
+      const { balanced, totalDebit, totalCredit } = lineBalance(plan.lines)
+      if (!balanced) {
         return { ok: false, code: 'EXPENSE_CLAIM_INVALID_LINES', details: { reason: 'unbalanced' } }
       }
       // The engine resolves the lines' accounts only when the commit posts;

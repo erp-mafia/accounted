@@ -23,6 +23,7 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
@@ -514,15 +515,14 @@ async function previewLineRattelse(
   const remaining = lines.filter((l) => !struckSet.has(l.id)).map(toPreviewLine)
   const struck = struckRows.map(toPreviewLine)
   const resulting: PreviewLine[] = [...remaining, ...added]
-  const totalDebit = sumSide(resulting, 'debit_amount')
-  const totalCredit = sumSide(resulting, 'credit_amount')
+  const { totalDebit, totalCredit, difference } = lineBalance(resulting)
 
   if (resulting.length < 2) {
     return refused(
       'Verifikationen måste ha minst två rader efter rättelsen. Använd "Återför (storno)" för att makulera hela verifikationen.',
     )
   }
-  if (totalDebit !== totalCredit) {
+  if (difference !== 0) {
     return { ok: false, code: 'JOURNAL_ENTRY_NOT_BALANCED', details: { total_debit: totalDebit, total_credit: totalCredit } }
   }
   if (totalDebit === 0) {

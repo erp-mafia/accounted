@@ -325,6 +325,14 @@ describe('buildCreditNoteRefundLines', () => {
         { account_number: '1930', debit_amount: 0, credit_amount: 90 },
       ]),
     ).toMatchObject({ code: 'INVOICE_PAID_LINES_UNBALANCED' })
+    // Raw sums that balance, stored amounts that do not.
+    expect(
+      buildCreditNoteRefundLines(note, 300, '1930', [
+        { account_number: '1510', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 200.01 },
+      ]),
+    ).toMatchObject({ code: 'INVOICE_PAID_LINES_UNBALANCED' })
   })
 
   it('carries the credit note\'s dimensions onto the generated pair', () => {

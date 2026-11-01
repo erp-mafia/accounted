@@ -38,6 +38,7 @@ import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { roundOre, sumOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
@@ -238,9 +239,7 @@ export async function planExpenseClaim(
         return { ok: false, code: 'INVALID_LINES', detail: 'each line needs exactly one side' }
       }
     }
-    const sumDebit = sumOre(lines.map((l) => l.debit_amount || 0))
-    const sumCredit = sumOre(lines.map((l) => l.credit_amount || 0))
-    if (Math.abs(sumDebit - sumCredit) > 0.005) {
+    if (!lineBalance(lines).balanced) {
       return { ok: false, code: 'INVALID_LINES', detail: 'unbalanced' }
     }
     // The payout flow reimburses claim.amount_sek from the liability account,

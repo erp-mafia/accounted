@@ -19,6 +19,7 @@ import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
 import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import {
   autoCorrectionDescription,
   correctionDescriptionForSubmit,
@@ -205,11 +206,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
     closeCreateAccount()
   }
 
-  const totalDebit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const totalCredit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const roundedDebit = Math.round(totalDebit * 100) / 100
-  const roundedCredit = Math.round(totalCredit * 100) / 100
-  const isBalanced = roundedDebit === roundedCredit && roundedDebit > 0
+  const { totalDebit: roundedDebit, totalCredit: roundedCredit, balanced: isBalanced } = lineBalance(lines)
 
   const hasValidLines = lines.length >= 2 && lines.every((l) => l.account_number.length === 4)
 

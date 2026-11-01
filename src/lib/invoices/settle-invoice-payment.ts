@@ -11,6 +11,7 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { ORE_TOLERANCE, equalOre, isZeroOre, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -358,9 +359,8 @@ export async function settleInvoicePayment(
     // both refused before the sale below is booked.
     let customLinesPeriodId: string | null = null
     if (customLines) {
-      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+      const { balanced, totalDebit, totalCredit } = lineBalance(customLines)
+      if (!balanced) {
         return {
           ok: false,
           code: 'INVOICE_PAID_LINES_UNBALANCED',

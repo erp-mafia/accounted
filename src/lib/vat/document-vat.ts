@@ -21,11 +21,13 @@
  * Invoices we issue ourselves keep the per-line rule (computeLineVat,
  * docs/decisions/2026-10/2026-10-21-one-invoice-line-vat-rule.md).
  *
- * Integer arithmetic throughout (öre times basis points): 12 % and 6 % have
- * no exact binary fraction, and a float half-öre would round the wrong way.
- * Imports nothing but lib/money so the browser editor shows the figures the
- * server books.
+ * Every VAT figure comes from netVat, the one VAT-on-net rule, and the spread
+ * ranks lines in integers (öre times basis points): 12 % and 6 % have no exact
+ * binary fraction. Pure, so the browser editor shows the figures the server
+ * books.
  */
+
+import { netVat } from '@/lib/bookkeeping/gross-split'
 
 export interface DocumentVatLine {
   /** The line's net amount in the document currency (whole öre). */
@@ -77,7 +79,6 @@ export type DocumentVatResult =
   | DocumentVatMismatch
 
 const BP = 10000 // basis points per 1.0
-const HALF = BP / 2
 
 /** Whole öre of an amount already rounded to öre. */
 function toOre(amount: number): number {
@@ -90,11 +91,6 @@ function fromOre(ore: number): number {
 
 function rateBp(rate: number): number {
   return Math.round(rate * BP)
-}
-
-/** q / BP rounded half toward plus infinity: roundOre's rule on both signs. */
-function roundHalfUp(q: number): number {
-  return Math.floor((q + HALF) / BP)
 }
 
 /**
@@ -207,7 +203,7 @@ export function allocateDocumentVat(
     }
     if (bp === 0) return
     const q = lineOre * bp
-    const own = roundHalfUp(q)
+    const own = toOre(netVat(fromOre(lineOre), group.rate))
     vat[index] = fromOre(own)
     group.free.push({ index, lineOre, q, own })
   })
@@ -241,8 +237,8 @@ export function allocateDocumentVat(
       })
       continue
     }
-    const freeBaseQ = group.free.reduce((sum, line) => sum + line.q, 0)
-    const computedOre = roundHalfUp(freeBaseQ)
+    const freeBaseOre = group.free.reduce((sum, line) => sum + line.lineOre, 0)
+    const computedOre = toOre(netVat(fromOre(freeBaseOre), group.rate))
     const ownSum = group.free.reduce((sum, line) => sum + line.own, 0)
     const statedEntry = statedByBp.get(bp)
 

@@ -7,6 +7,7 @@ import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import type { AssetComponentSplitLine } from '@/lib/bookkeeping/engine'
 import {
@@ -1583,10 +1584,7 @@ export function buildAssetDisposalPlan(args: {
   if (input.disposal_type === 'sale' && proceedsGross > 0 && !vatTreatment) {
     throw new Error('Momsbehandling krävs vid försäljning.')
   }
-  const proceedsVat = roundOre(
-    vatTreatment === 'standard_25' ? proceedsGross * (0.25 / 1.25) : 0,
-  )
-  const proceedsNet = roundOre(proceedsGross - proceedsVat)
+  const { vat: proceedsVat, net: proceedsNet } = splitGrossVat(proceedsGross, vatTreatment === 'standard_25' ? 0.25 : 0)
   const netBookValue = roundOre(acquisitionCost - accumulatedDepreciation - writtenDown)
   const gainOrLoss = roundOre(proceedsNet - netBookValue)
 

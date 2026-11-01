@@ -136,6 +136,20 @@ describe('generateImportPreview', () => {
       expect(preview.trialBalance.isBalanced).toBe(false)
     })
 
+    it('judges the IB on what it books, each line in whole öre', () => {
+      // 100,0075 books as 100,01: not balanced against 100,00, though the raw
+      // difference is under one öre.
+      const parsed = makeParsedFile({
+        openingBalances: [
+          { yearIndex: 0, account: '1930', amount: 100 },
+          { yearIndex: 0, account: '2081', amount: -100.0075 },
+        ],
+      })
+      const preview = generateImportPreview(parsed, [makeMapping('1930', '1930'), makeMapping('2081', '2081')])
+
+      expect(preview.trialBalance).toMatchObject({ totalDebit: 100, totalCredit: 100.01, isBalanced: false })
+    })
+
     it('handles zero opening balances', () => {
       const parsed = makeParsedFile({ openingBalances: [] })
       const mappings: AccountMapping[] = []

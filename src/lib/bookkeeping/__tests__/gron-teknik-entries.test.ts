@@ -25,17 +25,6 @@ vi.mock('../engine', () => ({
   ),
 }))
 
-vi.mock('../vat-entries', () => ({
-  generateSalesVatLines: vi.fn().mockImplementation(({ baseAmount }: { baseAmount: number }) => [
-    {
-      account_number: '2611',
-      debit_amount: 0,
-      credit_amount: Math.round(baseAmount * 0.25 * 100) / 100,
-      line_description: 'Utgående moms',
-    },
-  ]),
-}))
-
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const { createInvoiceJournalEntry, createCreditNoteJournalEntry, createInvoiceCashEntry } = await import('../invoice-entries')

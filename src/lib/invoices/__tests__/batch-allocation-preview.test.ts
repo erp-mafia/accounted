@@ -9,6 +9,17 @@ const INV_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const INV_B = 'bbbbbbbb-0000-4000-8000-000000000002'
 
 describe('buildBatchAllocationPreview', () => {
+  it('says when the lines it projects do not balance', () => {
+    const preview = buildBatchAllocationPreview({
+      transaction: { amount: 1000, currency: 'SEK', date: '2026-07-31' },
+      bankAccount: '1930',
+      allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 1000 }],
+      invoices: { [INV_A]: { currency: 'SEK', exchange_rate: null, remaining_amount: 1000, total: 1000 } },
+      cashLines: { [INV_A]: [{ account_number: '3001', debit_amount: 0, credit_amount: 900 }] },
+    })
+    expect(preview.balanced).toBe(false)
+  })
+
   it('same-currency customer batch: Cr 1510 per invoice in id order, Dr 1930 for the whole receipt', () => {
     const preview = buildBatchAllocationPreview({
       transaction: { amount: 88250, currency: 'SEK', date: '2026-07-31T00:00:00+00:00' },

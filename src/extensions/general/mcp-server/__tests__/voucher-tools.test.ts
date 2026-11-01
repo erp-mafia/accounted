@@ -98,6 +98,27 @@ describe('gnubok_create_voucher: staging gates', () => {
     ).rejects.toThrow(/not balanced/i)
   })
 
+  it('rejects lines that balance only before each line is rounded', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createVoucher.execute(
+        {
+          entry_date: '2026-05-12',
+          description: 'three decimals',
+          fiscal_period_id: 'fp-1',
+          lines: [
+            { account_number: '1010', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '1020', debit_amount: 100.004, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 200.01 },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/not balanced/i)
+  })
+
   it('names the missing amount keys instead of coercing an unknown line shape to 0/0 (feedback seq 318571)', async () => {
     const { supabase } = createQueuedMockSupabase()
     // Four "balanced" formats an agent actually sent: none names

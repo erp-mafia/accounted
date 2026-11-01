@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT } from '@/lib/bookkeeping/ore-rounding'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
@@ -233,9 +234,6 @@ export function buildBatchAllocationPreview(input: {
       : { account_number: bankAccount, description: `Utbetalning ${entryDate}`, debit: 0, credit: txAbs },
   )
 
-  const debits = roundOre(lines.reduce((sum, l) => sum + l.debit, 0))
-  const credits = roundOre(lines.reduce((sum, l) => sum + l.credit, 0))
-
   // One invoice: the RPC appends "<number>, <counterparty>" to this wording;
   // the preview leaves both out, like the neutral line descriptions.
   const singleInvoiceDescription = isCustomer ? 'Inbetalning kundfaktura' : 'Utbetalning leverantörsfaktura'
@@ -245,7 +243,7 @@ export function buildBatchAllocationPreview(input: {
     entry_date: entryDate,
     description: sorted.length === 1 ? singleInvoiceDescription : batchDescription,
     lines,
-    balanced: Math.abs(debits - credits) < 0.005,
+    balanced: lineBalance(lines.map((l) => ({ debit_amount: l.debit, credit_amount: l.credit }))).difference === 0,
     fx,
   }
 }

@@ -1,3 +1,4 @@
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import { isSupplierInvoiceRoundingItem, supplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
@@ -58,5 +59,5 @@ export function supplierInvoiceEditorAmounts(
 /** The VAT on the summed base per rate; without a stated figure it is never refused. */
 function summedBaseVat(lines: DocumentVatLine[]): number[] {
   const result = allocateDocumentVat(lines)
-  return result.ok ? result.lineVat : lines.map((line) => line.overrideVat ?? roundOre(line.lineTotal * line.rate))
+  return result.ok ? result.lineVat : lines.map((line) => line.overrideVat ?? netVat(line.lineTotal, line.rate))
 }

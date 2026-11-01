@@ -9,8 +9,8 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
-import { roundOre } from '@/lib/money'
-import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
+import { formatAmountInput, roundOre } from '@/lib/money'
+import { grossVat, netVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import {
   resolveSkattekontoAccount,
   templateSkattekontoAccount,
@@ -91,20 +91,20 @@ export function applyTemplate(
     if (line.type === 'vat' && line.vat_rate) {
       amount = isReverseChargeVatAccount(line.account)
         ? // Self-assessed VAT on top of the base (the total)
-          roundOre(totalAmount * line.vat_rate)
+          netVat(totalAmount, line.vat_rate)
         : // VAT extracted from the total inclusive amount
           grossVat(totalAmount, line.vat_rate)
     } else if (line.type === 'settlement') {
-      amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
+      amount = roundOre(totalAmount * (line.ratio ?? 1))
     } else {
       // Business lines: use ratio (default 1.0)
-      amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
+      amount = roundOre(totalAmount * (line.ratio ?? 1))
     }
 
     result.push({
       account_number: line.account,
-      debit_amount: line.side === 'debit' ? amount.toFixed(2) : '',
-      credit_amount: line.side === 'credit' ? amount.toFixed(2) : '',
+      debit_amount: line.side === 'debit' ? formatAmountInput(amount, '.') : '',
+      credit_amount: line.side === 'credit' ? formatAmountInput(amount, '.') : '',
       line_description: line.label,
     })
   }
@@ -269,7 +269,7 @@ function fiktivRateFromBasis(
 ): number | null {
   for (const row of rows) {
     const rate = rcBasisAccountRate(row.account)
-    if (rate !== null && Math.abs(Math.round(row.amount * rate * 100) - Math.round(vatAmount * 100)) <= 1) {
+    if (rate !== null && Math.abs(Math.round(netVat(row.amount, rate) * 100) - Math.round(vatAmount * 100)) <= 1) {
       return rate
     }
   }

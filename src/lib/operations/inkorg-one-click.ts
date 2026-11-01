@@ -95,6 +95,7 @@ import {
 } from '@/lib/vat/seller-country'
 import { addDaysIso } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
 import { askedForReview, DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 import { factsFromLines, matchBookingReviewRules, type BookingReviewRule } from '@/lib/booking-review/match'
@@ -494,7 +495,7 @@ function swedishVat(input: OneClickInput, reading: InvoiceExtractionResult, doc:
   if (doc.mixedWithoutBreakdown) return { ok: false, ask: 'editor', reason: 'mixed_rates' }
   const total = finite(reading.totals?.total)
   const net = finite(reading.totals?.subtotal) ?? (total !== null ? roundOre(total - doc.total) : null)
-  if (net !== null && doc.total > roundOre(net * 0.25) + 0.01) return { ok: false, ask: 'editor', reason: 'vat_exceeds_rate' }
+  if (net !== null && doc.total > netVat(net, 0.25) + 0.01) return { ok: false, ask: 'editor', reason: 'vat_exceeds_rate' }
   if (doc.unknownRate) return { ok: false, ask: 'editor', reason: 'vat_rate_unknown' }
   if (!isKronorCurrency(reading.invoice?.currency)) return { ok: false, ask: 'editor', reason: 'foreign_currency_vat' }
   if (isNotVatRegistered(input.company.vatRegistered)) return { ok: true, vat: { kind: 'cost', amount: doc.total }, groups: doc.groups }
@@ -585,12 +586,12 @@ function invoiceOf(
       if (base === null || !(base > 0)) return { ok: false, reason: 'no_amount' }
       // The registration books the document's VAT for the rate (vat_breakdown),
       // which must be the net x rate within the öre a seller's rounding allows.
-      if (Math.abs(roundOre(base * group.rate) - group.amount) > 0.01) return { ok: false, reason: 'amount_mismatch' }
+      if (Math.abs(netVat(base, group.rate) - group.amount) > 0.01) return { ok: false, reason: 'amount_mismatch' }
       items.push({ description, amount: roundOre(base), account_number: costAccount, vat_rate: group.rate })
       itemVat.push(group.amount)
     }
   }
-  const vatOf = (index: number) => itemVat[index] ?? roundOre(items[index].amount * items[index].vat_rate)
+  const vatOf = (index: number) => itemVat[index] ?? netVat(items[index].amount, items[index].vat_rate)
   const registeredTotal = sumOre(items.map((item, index) => item.amount + (vat.kind === 'reverse_charge' ? 0 : vatOf(index))))
   if (total !== null && Math.abs(registeredTotal - total) > 0.01) return { ok: false, reason: 'amount_mismatch' }
 
@@ -779,7 +780,7 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
     // A paid invoice in kronor must be what the bank paid, to the öre: the settlement clears it whole.
     if (at.form === 'register_and_settle' && gross !== null && isKronorCurrency(built.invoice.currency)) {
       const payable = sumOre(
-        built.invoice.items.map((item) => item.amount + (built.invoice.reverse_charge ? 0 : roundOre(item.amount * item.vat_rate))),
+        built.invoice.items.map((item) => item.amount + (built.invoice.reverse_charge ? 0 : netVat(item.amount, item.vat_rate))),
       )
       if (Math.abs(payable - gross) > 0.01) return ask('editor', 'amount_mismatch')
     }

@@ -100,6 +100,7 @@ import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { formatCurrency } from '@/lib/utils'
 
 /** The request every door validates (BulkBookSchema, the v1 and MCP contract). */
@@ -714,14 +715,13 @@ function manualLinesRefusal(lines: NonNullable<BulkBookInput['manual_lines']>): 
       details: { issues: [{ field: `manual_lines.${empty}`, message: 'debit_amount och credit_amount kan inte båda vara noll.' }] },
     }
   }
-  const debit = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
-  const credit = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
-  if (Math.abs(debit - credit) > 0.005) {
+  const { balanced, totalDebit, totalCredit } = lineBalance(lines)
+  if (!balanced) {
     return {
       ok: false,
       code: 'BULK_BOOK_UNBALANCED',
-      messageSv: `Verifikationen balanserar inte (${formatCurrency(debit)} debet vs ${formatCurrency(credit)} kredit).`,
-      details: { total_debit: debit, total_credit: credit },
+      messageSv: `Verifikationen balanserar inte (${formatCurrency(totalDebit)} debet vs ${formatCurrency(totalCredit)} kredit).`,
+      details: { total_debit: totalDebit, total_credit: totalCredit },
     }
   }
   return null

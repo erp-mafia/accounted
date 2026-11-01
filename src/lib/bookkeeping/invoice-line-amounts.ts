@@ -1,3 +1,4 @@
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -11,7 +12,7 @@ import { roundOre } from '@/lib/money'
  *   gross    = roundOre(quantity * unit_price)
  *   discount = roundOre(gross * discount_percent / 100)
  *   net      = roundOre(gross - discount)
- *   vat      = roundOre(net * vat_rate / 100)        (computeLineVat)
+ *   vat      = netVat(net, vat_rate / 100)           (computeLineVat)
  *
  * `net` is what is stored as invoice_items.line_total and what VAT is
  * computed on (the discount reduces the beskattningsunderlag, ML 8 kap 13 §).
@@ -63,8 +64,9 @@ export function computeLineNet(
 }
 
 /**
- * The VAT of one invoice line, what invoice_items.vat_amount stores: the net
- * line total times the rate in percent, rounded to the öre once.
+ * The VAT of one invoice line, what invoice_items.vat_amount stores: netVat
+ * (lib/bookkeeping/gross-split.ts) for a rate in percent, the unit invoice rows
+ * carry.
  *
  * This is the one per-line VAT rule. The invoice builder stores it, the
  * previews, the editor and the invoice page show it, ROT/RUT bases its
@@ -80,5 +82,5 @@ export function computeLineNet(
  * and refused the invoice (crm#1343).
  */
 export function computeLineVat(net: number, vatRatePercent: number): number {
-  return roundOre((net * vatRatePercent) / 100)
+  return netVat(net, vatRatePercent / 100)
 }

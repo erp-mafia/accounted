@@ -41,6 +41,7 @@ import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
 import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 interface BulkBookDialogProps {
   open: boolean
@@ -267,15 +268,10 @@ export default function BulkBookDialog({
     return lines
   }, [tab, manualLines, selectedTemplate, mode, transactions, txSumAbs])
 
-  const previewTotals = useMemo(() => {
-    const debit = previewLines.reduce((s, l) => s + l.debit_amount, 0)
-    const credit = previewLines.reduce((s, l) => s + l.credit_amount, 0)
-    return { debit: roundOre(debit), credit: roundOre(credit) }
-  }, [previewLines])
-
   // Balance + bank-leg match are the two invariants the RPC will check; we
   // surface them here so the user knows whether confirm will succeed.
-  const isBalanced = Math.abs(previewTotals.debit - previewTotals.credit) < 0.005
+  const { difference: previewDifference } = useMemo(() => lineBalance(previewLines), [previewLines])
+  const isBalanced = previewDifference === 0
   // The bank side is measured as the RPC measures it (bankNetAccountTest): on
   // the ledgers the selected rows settle on, resolved the way the bank lines
   // above are pre-filled. Counting 1900-1999 alone left a row on a cash
@@ -780,7 +776,7 @@ export default function BulkBookDialog({
                   <div className="flex items-center gap-2 text-xs text-destructive">
                     <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                     <span>{t('balance_off', {
-                      delta: formatCurrency(Math.abs(previewTotals.debit - previewTotals.credit)),
+                      delta: formatCurrency(Math.abs(previewDifference)),
                     })}</span>
                   </div>
                 )}

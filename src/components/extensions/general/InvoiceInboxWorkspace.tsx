@@ -110,6 +110,7 @@ import BookingWhy from '@/components/bookkeeping/BookingWhy'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { parseAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -2804,9 +2805,7 @@ function ProposedBooking({
     return reason ? <p className="text-xs text-muted-foreground">{reason}</p> : null
   }
 
-  const debit = data.lines.reduce((t, l) => t + (l.debit_amount || 0), 0)
-  const credit = data.lines.reduce((t, l) => t + (l.credit_amount || 0), 0)
-  const balanced = Math.round((debit - credit) * 100) === 0
+  const balanced = lineBalance(data.lines).difference === 0
 
   return (
     <div className="space-y-2">
