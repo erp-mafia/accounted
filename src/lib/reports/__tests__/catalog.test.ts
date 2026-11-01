@@ -34,3 +34,19 @@ describe('report catalog: default windows', () => {
     expect(getReport('behandlingshistorik')?.defaultRange).toBe('this_month')
   })
 })
+
+describe('report catalog: the dimension cross report', () => {
+  it('shows only with dimensions enabled, for every legal form, and takes no dimension filter', () => {
+    const entry = getReport('dimension-cross')
+    expect(entry?.needsDimensions).toBe(true)
+    expect(entry?.entityType).toBeUndefined()
+    expect(entry?.needsEmployees).toBeUndefined()
+    // Its two dimensions are axes, not a filter on the report.
+    expect(entry?.dimensions).toBeUndefined()
+    expect(DATE_RANGE_SLUGS.has('dimension-cross')).toBe(true)
+    const slugs = (dimensionsEnabled: boolean) =>
+      getLibrarySections('aktiebolag', false, dimensionsEnabled).flatMap((s) => s.items.map((i) => i.slug))
+    expect(slugs(true)).toContain('dimension-cross')
+    expect(slugs(false)).not.toContain('dimension-cross')
+  })
+})

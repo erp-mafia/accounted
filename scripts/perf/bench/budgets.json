@@ -111,6 +111,16 @@
       "warm": 100,
       "mixed": 120
     },
+    "dimension_cross.buckets": {
+      "warm": 100,
+      "mixed": 120,
+      "note": "Not yet measured on the bench (accounted#133, 2026-10-31): set to the 100 ms target and dimension_pnl.buckets' mixed budget. Production on 2026-10-31: the line path took 51 ms warm for the company with the most two-dimension lines and 431 ms for a 70 000-line year, hence ledger_tagset_days; its rows read like ledger_dimension_days (47 700 rows in about 80 ms). Replace with twice the first scheduled run's worst p95."
+    },
+    "dimension_cross.cell_lines": {
+      "warm": 100,
+      "mixed": 120,
+      "note": "Not yet measured on the bench (accounted#133, 2026-10-31); same rule as dimension_cross.buckets. The cell is read through its first value's locator."
+    },
     "huvudbok.line_counts": {
       "warm": 40,
       "mixed": 50

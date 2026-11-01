@@ -53,6 +53,9 @@ export const SE_PACK_TERRITORY = [
   // The BAS chart, its SRU mapping, and the generated account-number list.
   'lib/bookkeeping/bas-data/',
   'lib/bookkeeping/bas-account-numbers.ts',
+  // The resultaträkning's BAS ranges, split out of bas-data/ so client code
+  // (the report pickers) can import them (client-server-only).
+  'lib/bookkeeping/result-account-ranges.ts',
   // The SE pack's BAS account per account role. Only se-bas.ts: the registry
   // and resolver beside it (account-roles/index.ts, roles.ts) are the
   // jurisdiction-agnostic seam and stay BAS-free.

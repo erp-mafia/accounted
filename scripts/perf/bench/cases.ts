@@ -286,6 +286,22 @@ export function buildCases(ctx: BenchContext): RpcCase[] {
       args: { p_company_id: co, p_fiscal_period_id: open.id, p_dim_no: '6', ...ytd },
       usedBy: 'dimensionsresultat (projekt)',
     },
+    {
+      id: 'dimension_cross.buckets',
+      rpc: 'get_dimension_cross_buckets',
+      args: { p_company_id: co, p_fiscal_period_id: open.id, p_dim_a: '1', p_dim_b: '6', ...ytd },
+      usedBy: 'resultat per två dimensioner (kostnadsställe x projekt)',
+    },
+    {
+      id: 'dimension_cross.cell_lines',
+      rpc: 'get_dimension_cross_lines',
+      args: {
+        p_company_id: co, p_fiscal_period_id: open.id, p_dim_a: '1', p_code_a: 'KS01', p_dim_b: '6', p_code_b: 'P001',
+        p_account_from: null, p_account_to: null, ...ytd,
+        p_after_date: null, p_after_voucher: null, p_after_line_id: null, p_limit: 200,
+      },
+      usedBy: 'resultat per två dimensioner: the lines of one cell, first page',
+    },
 
     // ---- huvudbok and grundbok ----
     {

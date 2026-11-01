@@ -641,6 +641,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Retag history of posted lines (operation dimensions.retag-log).
   gnubok_list_dimension_retag_log:        'reports:read',
   gnubok_get_dimension_pnl:               'reports:read',
+  // Resultat across two dimensions (operations reports.dimension-cross*, accounted#133).
+  gnubok_get_dimension_cross:             'reports:read',
+  gnubok_get_dimension_cross_lines:       'reports:read',
   // Staged bulk retag of posted-line dimensions (dimensions PR6).
   gnubok_tag_journal_lines:               'bookkeeping:write',
   // Document inbox

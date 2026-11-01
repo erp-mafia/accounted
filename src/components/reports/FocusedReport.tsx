@@ -40,6 +40,7 @@ const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView')
 const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportBodyLoading })
 const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportBodyLoading })
 const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportBodyLoading })
+const DimensionCrossView = dynamic(() => import('./lazy-views/DimensionCrossView'), { loading: ReportBodyLoading })
 const NEDeclarationView = dynamic(() =>
   import('./NEDeclarationView').then((module) => ({ default: module.NEDeclarationView })),
   { loading: ReportBodyLoading },
@@ -322,6 +323,8 @@ function FocusedView({
       return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} budgetId={budgetId} drilldown={drilldown} />
     case 'dimension-pnl':
       return <DimensionPnlView periodId={periodId} dateRange={dateRange} budgetId={budgetId} />
+    case 'dimension-cross':
+      return <DimensionCrossView periodId={periodId} dateRange={dateRange} />
     case 'balansrapport':
       return <BalansrapportView periodId={periodId} dateRange={dateRange} drilldown={drilldown} />
     case 'trial-balance':

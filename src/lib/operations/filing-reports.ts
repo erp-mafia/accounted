@@ -24,7 +24,8 @@
  *     personal data than an agent transcript should hold by default.
  */
 import { z } from 'zod'
-import { isoDateSchema } from '@/lib/invariants/zod'
+import { accountNumberSchema, isoDateSchema } from '@/lib/invariants/zod'
+import { BUDGET_EXAMPLE_ACCOUNTS, RESULTATKONTO_FIRST, RESULTATKONTO_LAST } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { AuditTrailQuerySchema } from '@/lib/api/schemas'
 import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistorik-types'
 import { maskOwnerPersonnummer, redactPersonnummer } from '@/lib/reports/owner-identity-mask'
@@ -706,7 +707,8 @@ export const reportsBokslutsbilagor = defineOperation({
 })
 
 // ─────────────────────────────────────────────────────────────────
-// KPI and resultat per dimension (v1 only; MCP tools exist)
+// KPI and resultat per dimension (v1 only; MCP tools exist), and resultat
+// across two dimensions (v1 and search-only MCP tools)
 // ─────────────────────────────────────────────────────────────────
 
 export const reportsKpi = defineOperation({
@@ -831,6 +833,166 @@ export const reportsDimensionPnl = defineOperation({
   errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_GENERATION_FAILED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-pnl' },
   run: async (ctx, input) => asDocumented(await (await reports()).getDimensionPnl(ctx, input)),
+})
+
+// Resultat across two dimensions (accounted#133). Search-only MCP tools: an
+// agent reaches them through gnubok_search_tools at no cost to tools/list.
+const DIM_NO = z.string().regex(/^[1-9]\d{0,3}$/)
+const RESULT_ACCOUNT = accountNumberSchema
+
+const dimensionCrossAxes = {
+  period_id: PERIOD_ID,
+  dim_a: DIM_NO.describe('The row dimension, an SIE dimension number: "1" kostnadsställe, "6" projekt, or a custom one.'),
+  dim_b: DIM_NO.describe('The column dimension, a different SIE dimension number.'),
+  account_from: RESULT_ACCOUNT.optional().describe('First account of the measure, 3000-8999, sent with account_to. Default: the whole result.'),
+  account_to: RESULT_ACCOUNT.optional().describe('Last account of the measure (inclusive), 3000-8999.'),
+  from_date: isoDateSchema.optional().describe('YYYY-MM-DD inside the period. Default: the period start.'),
+  to_date: isoDateSchema.optional().describe('YYYY-MM-DD inside the period, not before from_date. Default: the period end.'),
+}
+
+type AxesInput = { dim_a: string; dim_b: string; account_from?: string; account_to?: string }
+const twoDimensions = (b: AxesInput) => b.dim_a !== b.dim_b
+const rangeTogether = (b: AxesInput) => (b.account_from === undefined) === (b.account_to === undefined)
+
+const DIMENSION_CROSS_PITFALLS = [
+  'dim_a and dim_b must be two different dimensions; both are tags on the same line. A property of a dimension value (a home\'s region kept on the home) is not a tag and is not read.',
+  'Amounts are credit minus debit, as in the resultatrapport: revenue positive, costs negative.',
+  'Lines without a tag on a dimension land in its "(Utan dimension)" row or column (code null); the untagged x untagged cell is the remainder of the resultatrapport, so the cells sum to total.',
+  'What the bokslut run posts (source year_end) and the IB verifikat are left out, as in the resultatrapport.',
+]
+
+export const reportsDimensionCross = defineOperation({
+  id: 'reports.dimension-cross',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Result across two dimensions: one dimension\'s values as rows, another\'s as columns, one amount per cell.',
+    description:
+      'A matrix over two SIE dimensions tagged on the same journal lines: rows are dim_a\'s values, columns dim_b\'s, each cell the result (or the accounts account_from to account_to) of the lines carrying both tags, with row and column totals. "(Utan dimension)" rows and columns (code null) hold the lines without that tag, and total equals the resultatrapport for the same window and accounts. Read the lines behind a cell with GET /reports/dimension-cross/lines. Read-only.',
+    useWhen: 'Following up result per region and channel, per project and cost centre, or any two dimensions the books tag, for the year or one quarter or month.',
+    doNotUseFor: 'One dimension (GET /reports/dimension-pnl, accounts as rows) or one value only (GET /reports/income-statement with dim_no and dim_code).',
+    pitfalls: DIMENSION_CROSS_PITFALLS,
+    example: {
+      request: { period_id: '7c2b…', dim_a: '1', dim_b: '6' },
+      response: {
+        data: {
+          dim_a: { sie_dim_no: '1', name: 'Kostnadsställe' },
+          dim_b: { sie_dim_no: '6', name: 'Projekt' },
+          accounts: { from: RESULTATKONTO_FIRST, to: RESULTATKONTO_LAST },
+          rows: [{ code: 'NORR', name: 'Region Norr' }, { code: null, name: null }],
+          columns: [{ code: 'WEB', name: 'Webb' }, { code: null, name: null }],
+          cells: [[120000, 15000], [0, -40000]],
+          row_totals: [135000, -40000],
+          column_totals: [120000, -25000],
+          total: 95000,
+          period: { start: '2026-01-01', end: '2026-12-31' },
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object(dimensionCrossAxes)
+    .refine(twoDimensions, { message: 'dim_a and dim_b must be two different dimensions.', path: ['dim_b'] })
+    .refine(rangeTogether, { message: 'account_from and account_to must be sent together.', path: ['account_to'] }),
+  output: z
+    .object({
+      dim_a: z.object({ sie_dim_no: z.string(), name: z.string() }),
+      dim_b: z.object({ sie_dim_no: z.string(), name: z.string() }),
+      accounts: z.object({ from: z.string(), to: z.string() }),
+      rows: z.array(z.object({ code: z.string().nullable(), name: z.string().nullable() })),
+      columns: z.array(z.object({ code: z.string().nullable(), name: z.string().nullable() })),
+      cells: z.array(z.array(z.number())),
+      row_totals: z.array(z.number()),
+      column_totals: z.array(z.number()),
+      total: z.number(),
+      period: z.object({ start: z.string(), end: z.string() }),
+    })
+    .loose(),
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_NOT_READY', 'REPORT_GENERATION_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-cross' },
+  mcp: {
+    name: 'gnubok_get_dimension_cross',
+    title: 'Result Across Two Dimensions',
+    description:
+      'Result per value of one dimension (rows) and another (columns) tagged on the same lines, e.g. region x channel or project x cost centre, with totals equal to the resultatrapport. Optional account range and date window.',
+    keywords: ['två dimensioner', 'korstabell', 'pivot', 'resultat per region och kanal', 'projekt och kostnadsställe', 'dimensioner', 'cross tab', 'matrix'],
+  },
+  run: async (ctx, input) => asDocumented(await (await reports()).getDimensionCross(ctx, input)),
+})
+
+export const reportsDimensionCrossLines = defineOperation({
+  id: 'reports.dimension-cross-lines',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'The journal lines behind one cell of the two-dimension result, a page at a time.',
+    description:
+      'The lines one cell of GET /reports/dimension-cross sums: same period, window, accounts and entry set, the lines whose dim_a tag is code_a and dim_b tag is code_b (codes compared trimmed; leave a code out for the "(Utan dimension)" row or column). In date and voucher order, at most limit (default 200, at most 1000); pass next.after_date, next.after_voucher and next.after_line back for the next page. Each line names its verifikat (journal_entry_id, voucher_series, voucher_number). Read-only.',
+    useWhen: 'Checking what makes up one cell of the two-dimension report.',
+    doNotUseFor: 'All lines of an account (GET /reports/general-ledger).',
+    pitfalls: [
+      'Send the same dim_a, dim_b, account range and window as the report, or the lines will not add up to the cell.',
+      'A code left out means "no tag on that dimension", not "any value".',
+    ],
+    example: {
+      request: { period_id: '7c2b…', dim_a: '1', code_a: 'NORR', dim_b: '6', code_b: 'WEB', limit: 1 },
+      response: {
+        data: {
+          lines: [
+            {
+              line_id: '5d1e…',
+              journal_entry_id: '9a0b…',
+              entry_date: '2026-03-02',
+              voucher_series: 'A',
+              voucher_number: 12,
+              description: 'Bokning 1042',
+              line_description: null,
+              account_number: BUDGET_EXAMPLE_ACCOUNTS.sales,
+              debit_amount: 0,
+              credit_amount: 4800,
+              dimensions: { '1': 'NORR', '6': 'WEB' },
+            },
+          ],
+          has_more: true,
+          next: { after_date: '2026-03-02', after_voucher: 12, after_line: '5d1e…' },
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      ...dimensionCrossAxes,
+      code_a: z.string().min(1).optional().describe('The value of dim_a; leave out for the "(Utan dimension)" row.'),
+      code_b: z.string().min(1).optional().describe('The value of dim_b; leave out for the "(Utan dimension)" column.'),
+      after_date: isoDateSchema.optional().describe('next.after_date from the previous page.'),
+      after_voucher: z.coerce.number().int().min(0).optional().describe('next.after_voucher from the previous page.'),
+      after_line: z.string().uuid().optional().describe('next.after_line from the previous page.'),
+      limit: z.coerce.number().int().min(1).max(1000).optional().describe('Page size, 1-1000 (default 200).'),
+    })
+    .refine(twoDimensions, { message: 'dim_a and dim_b must be two different dimensions.', path: ['dim_b'] })
+    .refine(rangeTogether, { message: 'account_from and account_to must be sent together.', path: ['account_to'] }),
+  output: z
+    .object({
+      lines: z.array(z.record(z.string(), z.unknown())),
+      has_more: z.boolean(),
+      next: z.object({ after_date: z.string(), after_voucher: z.number(), after_line: z.string() }).nullable(),
+    })
+    .loose(),
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_NOT_READY', 'REPORT_GENERATION_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-cross/lines' },
+  mcp: {
+    name: 'gnubok_get_dimension_cross_lines',
+    title: 'Two-Dimension Result Lines',
+    description:
+      'The journal lines behind one cell of gnubok_get_dimension_cross (code_a, code_b; leave one out for its untagged row or column), paged, each with its verifikat.',
+    keywords: ['två dimensioner', 'verifikat bakom', 'rader', 'drill-down', 'korstabell'],
+  },
+  run: async (ctx, input) => asDocumented(await (await reports()).getDimensionCrossLines(ctx, input)),
 })
 
 // ─────────────────────────────────────────────────────────────────

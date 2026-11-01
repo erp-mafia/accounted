@@ -1555,6 +1555,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   ledger_account_days_companies: 'which companies the derived ledger sums are built for; no accounting content',
   ledger_account_entries: 'which verifikat have lines on which account, derived by triggers from the journal exported here',
   ledger_dimension_entries: 'the same per dimension value, derived from the journal lines exported here',
+  ledger_tagset_days: 'the same sums per account, day and the lines\' whole dimension tag set, derived by triggers from the journal lines exported here',
+  ledger_tagset_days_companies: 'which companies the tag set sums are built for; no accounting content',
   bokio_supplier_completion_work: 'opt-in provider recovery scheduling and leases; no accounting content',
   bokio_supplier_completion_entries: 'retry receipts; completed invoices, source identities and processing history are exported separately',
   invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',

@@ -138,6 +138,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     needsDimensions: true,
   },
   {
+    // Resultat across two dimensions (accounted#133): one dimension's values
+    // as rows, another's as columns, both tags on the same line. The two
+    // dimensions are axes, not a filter, so no `dimensions` flag.
+    slug: 'dimension-cross',
+    labelKey: 'name_dimension_cross',
+    descKey: 'desc_dimension_cross',
+    category: 'interim',
+    params: 'fiscal-range',
+    exports: ['pdf', 'xlsx'],
+    needsDimensions: true,
+    searchTerms:
+      'två dimensioner korstabell pivot matris region kanal projekt kostnadsställe per dimension resultat per region resultat per kanal cross tab two dimensions matrix',
+  },
+  {
     slug: 'balansrapport',
     labelKey: 'name_balansrapport',
     descKey: 'desc_balansrapport',

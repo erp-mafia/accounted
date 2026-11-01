@@ -1,4 +1,5 @@
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
+import { RESULTATKONTO_FIRST, RESULTATKONTO_LAST } from '../result-account-ranges'
 
 /**
  * BAS 8990-8999, årets resultat: 8990 Resultat and 8999 Årets resultat, both
@@ -30,8 +31,8 @@ export function isYearEndAccount(account: string, resultAccount: string): boolea
  * What a budget covers (accounted#134, P&L only) and what budget against
  * actual compares.
  */
-export const RESULTATKONTO_FIRST = '3000'
-export const RESULTATKONTO_LAST = '8999'
+// Defined beside the client-safe report ranges (../result-account-ranges.ts).
+export { RESULTATKONTO_FIRST, RESULTATKONTO_LAST }
 
 export function isResultatkonto(account: string): boolean {
   return ACCOUNT_NUMBER_RE.test(account) && account >= RESULTATKONTO_FIRST && account <= RESULTATKONTO_LAST

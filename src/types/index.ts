@@ -2916,6 +2916,54 @@ export interface DimensionPnlReport {
   budget_net_total?: number
 }
 
+// Resultat across two dimensions (accounted#133): dimension A's values as
+// rows, dimension B's as columns, one amount per cell for the measure (the
+// result, or the accounts of a range). `code: null` is the "(Utan
+// dimension)" row or column; the untagged x untagged cell is the remainder of
+// the resultatrapport, so the cells sum exactly to `total`.
+export interface DimensionCrossValue {
+  code: string | null
+  name: string | null
+}
+
+export interface DimensionCrossReport {
+  dim_a: { sie_dim_no: string; name: string }
+  dim_b: { sie_dim_no: string; name: string }
+  /** The accounts summed, inclusive; 3000-8999 is the whole result. */
+  accounts: { from: string; to: string }
+  rows: DimensionCrossValue[]
+  columns: DimensionCrossValue[]
+  /** cells[row][column], credit minus debit, as in the resultatrapport. */
+  cells: number[][]
+  row_totals: number[]
+  column_totals: number[]
+  /** The resultatrapport for the same window and accounts. */
+  total: number
+  period: { start: string; end: string }
+}
+
+/** One line behind a cell of the dimension cross report. */
+export interface DimensionCrossLine {
+  line_id: string
+  journal_entry_id: string
+  entry_date: string
+  voucher_series: string | null
+  voucher_number: number
+  description: string | null
+  line_description: string | null
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  dimensions: Record<string, unknown>
+}
+
+export interface DimensionCrossLinesPage {
+  lines: DimensionCrossLine[]
+  has_more: boolean
+  /** The cursor for the next page (the last line's), null on the last page. */
+  next: { after_date: string; after_voucher: number; after_line: string } | null
+}
+
 export interface BalansrapportRow {
   account_number: string
   account_name: string

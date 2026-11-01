@@ -192,6 +192,8 @@ import {
   auditTrailList,
   reportsBehandlingshistorik,
   reportsBokslutsbilagor,
+  reportsDimensionCross,
+  reportsDimensionCrossLines,
   reportsDimensionPnl,
   reportsInk2,
   reportsInk3,
@@ -458,6 +460,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   reportsBokslutsbilagor,
   reportsKpi,
   reportsDimensionPnl,
+  reportsDimensionCross,
+  reportsDimensionCrossLines,
   auditTrailList,
   // vat-settlement
   reportsVatSettlementProposal,

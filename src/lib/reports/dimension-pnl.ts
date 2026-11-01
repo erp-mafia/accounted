@@ -310,12 +310,12 @@ async function fetchTaggedBuckets(
 }
 
 // Canonical form matching normalizeLineDimensions: trimmed, non-empty.
-function normalizeCode(raw: string | undefined): string | null {
+export function normalizeCode(raw: string | undefined): string | null {
   const trimmed = typeof raw === 'string' ? raw.trim() : ''
   return trimmed.length > 0 ? trimmed : null
 }
 
-function defaultDimensionName(sieDimNo: string): string {
+export function defaultDimensionName(sieDimNo: string): string {
   if (sieDimNo === '1') return 'Kostnadsställe'
   if (sieDimNo === '6') return 'Projekt'
   return `Dimension ${sieDimNo}`

@@ -67,6 +67,9 @@ SET maintenance_work_mem = '512MB';
 \echo 'seed: ledger summaries'
 SELECT public.build_ledger_account_days('c0000000-0000-4000-8000-000000000001') AS measured_summary_rows,
        public.build_ledger_account_days('c0000000-0000-4000-8000-000000000002') AS build_target_summary_rows;
+-- The tag set summary (20261101121500) builds through the locators above.
+SELECT public.build_ledger_tagset_days('c0000000-0000-4000-8000-000000000001') AS measured_tagset_rows,
+       public.build_ledger_tagset_days('c0000000-0000-4000-8000-000000000002') AS build_target_tagset_rows;
 
 -- Every verifikat balances (debits equal credits, both above zero), and the
 -- summaries equal the journal for the companies the benchmark reads.
@@ -91,6 +94,14 @@ BEGIN
         SELECT * FROM public.ledger_account_days_drift('c0000000-0000-4000-8000-000000000002')) d;
   IF v_drift <> 0 THEN
     RAISE EXCEPTION 'seed: ledger_account_days_drift has % rows that disagree with the journal', v_drift;
+  END IF;
+
+  SELECT count(*) INTO v_drift
+  FROM (SELECT * FROM public.ledger_tagset_days_drift('c0000000-0000-4000-8000-000000000001')
+        UNION ALL
+        SELECT * FROM public.ledger_tagset_days_drift('c0000000-0000-4000-8000-000000000002')) d;
+  IF v_drift <> 0 THEN
+    RAISE EXCEPTION 'seed: ledger_tagset_days_drift has % rows that disagree with the journal', v_drift;
   END IF;
 END $$;
 
