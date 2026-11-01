@@ -13,7 +13,9 @@
  *     booked: revenue is recognised at payment (debit 19xx / credit
  *     30xx+26xx), so the verifikat that DEBITS a liquid-funds account (BAS
  *     class 19: 1910/1920/1930/1940…) IS the payment the user already booked;
- *     linking just marks the invoice paid without a duplicate entry.
+ *     linking just marks the invoice paid without a duplicate entry. A
+ *     payment the owner received privately is debited to 2013 instead and
+ *     settles the same way (settlesOnAccount, crm#1580).
  *
  * No payment entry is created in either case. Only an invoice_payments row
  * is inserted pointing at the existing journal_entry_id, plus the invoice's
@@ -75,7 +77,7 @@ import {
 import type { VoucherNumber } from './voucher-label'
 import { roundOre } from '@/lib/money'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
-import { resolveInvoiceSettlementSide } from './invoice-settlement-side'
+import { SETTLEMENT_ACCOUNTS_BEYOND_PREFIX, resolveInvoiceSettlementSide, settlesOnAccount } from './invoice-settlement-side'
 import {
   bookSaleBeforeSettlement,
   planSaleBeforeSettlementById,
@@ -162,6 +164,7 @@ export async function findMatchingVouchersForInvoice(
     remainingAmount,
     side: {
       accountPrefix: settlement.accountPrefix,
+      alsoAccounts: SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[settlement.side],
       entrySide: settlement.entrySide,
       bankSide: settlement.side === 'bank_debit',
     },
@@ -329,7 +332,6 @@ export async function validateVoucherForInvoiceLink(
   // Match the bank/cash debit or the AR credit, as invoice_settlement_side()
   // decides for THIS invoice: see the header.
   const settlement = await resolveInvoiceSettlementSide(supabase, companyId, invoice.id)
-  const accountPrefix = settlement.accountPrefix
 
   const { data: voucher, error: voucherError } = await supabase
     .from('journal_entries')
@@ -383,7 +385,7 @@ export async function validateVoucherForInvoiceLink(
       currency: string | null
       amount_in_currency: number | string | null
     }
-    if (!line.account_number?.startsWith(accountPrefix)) continue
+    if (!settlesOnAccount(settlement, line.account_number)) continue
     // Only a line that actually moves on the matched side counts as evidence
     // of a settlement; the opposite leg is irrelevant.
     const rawSide = Number(matchedSide === 'debit' ? line.debit_amount : line.credit_amount) || 0

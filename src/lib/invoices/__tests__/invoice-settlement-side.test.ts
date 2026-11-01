@@ -4,6 +4,7 @@ import {
   BANK_DEBIT_SIDE,
   invoiceSettlementSideFor,
   resolveInvoiceSettlementSide,
+  settlesOnAccount,
 } from '../invoice-settlement-side'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -21,6 +22,27 @@ describe('invoiceSettlementSideFor (the TypeScript twin of invoice_settlement_si
     [undefined, null, AR_CREDIT_SIDE],
   ] as const)('method %s, journal_entry_id %s', (method, link, expected) => {
     expect(invoiceSettlementSideFor(method, link)).toEqual(expected)
+  })
+})
+
+describe('settlesOnAccount (the TypeScript twin of invoice_settlement_line)', () => {
+  it.each([
+    // Unbooked kontantmetod invoice: where the money landed, the firm's
+    // liquid funds or the owner's private funds (crm#1580).
+    [BANK_DEBIT_SIDE, '1930', true],
+    [BANK_DEBIT_SIDE, '1910', true],
+    [BANK_DEBIT_SIDE, '2013', true],
+    [BANK_DEBIT_SIDE, '2018', false],
+    [BANK_DEBIT_SIDE, '1510', false],
+    [BANK_DEBIT_SIDE, '2440', false],
+    [BANK_DEBIT_SIDE, null, false],
+    // Booked invoice: the receivable only.
+    [AR_CREDIT_SIDE, '1510', true],
+    [AR_CREDIT_SIDE, '1513', true],
+    [AR_CREDIT_SIDE, '2013', false],
+    [AR_CREDIT_SIDE, '1930', false],
+  ] as const)('%o on %s settles: %s', (side, account, expected) => {
+    expect(settlesOnAccount(side, account)).toBe(expected)
   })
 })
 

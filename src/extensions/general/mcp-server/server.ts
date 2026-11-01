@@ -14702,7 +14702,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_find_voucher_candidates_for_invoice',
     keywords: ['verifikat', 'kundfaktura', 'koppla faktura'],
     title: 'Find Voucher Candidates (Invoice)',
-    description: "List posted verifikat that could be this invoice's payment (credit 1510; unbooked kontantmetod invoice: debit 19xx). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
+    description: "List posted verifikat that could be this invoice's payment (credit 1510; unbooked kontantmetod invoice: debit 19xx, or 2013 when the customer paid the owner privately). Call before gnubok_link_invoice_to_voucher to mark the faktura paid (no new bokföring).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14771,7 +14771,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_invoice_to_voucher',
     keywords: ['koppla faktura', 'verifikat', 'kundfaktura'],
     title: 'Link Invoice to Voucher',
-    description: 'Markera en faktura som betald via länk till en befintlig verifikation (krediterar 1510; obokförd kontantmetodfaktura: debiterar 19xx). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
+    description: 'Markera en faktura som betald via länk till en befintlig verifikation (krediterar 1510; obokförd kontantmetodfaktura: debiterar 19xx, eller 2013 när kunden betalade ägaren privat). Kör gnubok_find_voucher_candidates_for_invoice först. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

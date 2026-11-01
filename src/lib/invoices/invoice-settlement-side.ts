@@ -8,10 +8,15 @@
  * offers and what the RPC accepts cannot drift apart. The supplier side has
  * had the same shape since 20260921190300 (./supplier-settlement-side.ts).
  *
- *   bank_debit  the 19xx debit. A kontantmetod company's invoice with no
- *               booking verifikat (journal_entry_id IS NULL): the voucher
- *               that moved the money, Dr 19xx / Cr 30xx + 26xx, IS the whole
- *               booking.
+ *   bank_debit  the debit where the money landed. A kontantmetod company's
+ *               invoice with no booking verifikat (journal_entry_id IS NULL):
+ *               the voucher that received the payment, Dr 19xx / Cr 30xx +
+ *               26xx, IS the whole booking. The money may also have reached
+ *               the owner privately (a private account or wallet, crm#1580):
+ *               Dr 2013 Övriga egna uttag / Cr 30xx + 26xx, the verifikat the
+ *               mark-paid dialog books for such a payment. Which lines count
+ *               is settlesOnAccount, the twin of invoice_settlement_line()
+ *               (20261031225028).
  *   ar_credit   the 151x credit. Every other invoice: faktureringsmetoden,
  *               an invoice booked at issue before a switch to kontantmetoden,
  *               and a kontantmetod invoice carried over the year end
@@ -29,6 +34,7 @@
  * (__tests__/invoice-settlement-side.pg.test.ts) pins the two together.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { SE_ENSKILD_FIRMA } from '@/lib/company/forms/se-enskild-firma'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice-settlement-side')
@@ -53,6 +59,37 @@ export const BANK_DEBIT_SIDE: InvoiceSettlementSide = {
   side: 'bank_debit',
   accountPrefix: '19',
   entrySide: 'debit',
+}
+
+/**
+ * The enskild firma's uttag account (BAS 2026 2013 Övriga egna uttag): under
+ * kontantmetoden a customer who paid the owner privately settles the invoice
+ * on this debit (crm#1580). invoice_settlement_line() names the same account.
+ */
+export const OWNER_PRIVATE_FUNDS_ACCOUNT = SE_ENSKILD_FIRMA.equity.settlement.withdrawal
+
+/**
+ * Accounts that settle on a side besides its accountPrefix: the owner's
+ * private funds on the bank_debit side.
+ */
+export const SETTLEMENT_ACCOUNTS_BEYOND_PREFIX: Readonly<Record<InvoiceSettlementSideName, readonly string[]>> = {
+  bank_debit: [OWNER_PRIVATE_FUNDS_ACCOUNT],
+  ar_credit: [],
+}
+
+/**
+ * Whether a verifikat line on `accountNumber` is on the settlement side: the
+ * TypeScript twin of invoice_settlement_line() (20261031225028), which the
+ * link_invoice_to_voucher RPC reads. 19xx or 2013 on bank_debit, 151x on
+ * ar_credit.
+ */
+export function settlesOnAccount(
+  side: InvoiceSettlementSide,
+  accountNumber: string | null | undefined,
+): boolean {
+  if (!accountNumber) return false
+  return accountNumber.startsWith(side.accountPrefix) ||
+    SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[side.side].includes(accountNumber)
 }
 
 /**

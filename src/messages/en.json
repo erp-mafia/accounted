@@ -7231,7 +7231,7 @@
   },
   "invoice_link_voucher": {
     "intro": "Pick an existing posted journal entry that credits accounts receivable (1510). No new entry is created: you only link the existing one as the payment.",
-    "intro_cash": "Pick an existing posted journal entry that records the payment into a cash/bank account (e.g. 1930). No new entry is created: you only link the existing one as the payment.",
+    "intro_cash": "Pick an existing posted journal entry that records the payment into a cash/bank account (e.g. 1930), or on 2013 if the customer paid you privately. No new entry is created: you only link the existing one as the payment.",
     "search_placeholder": "Search by voucher number or description…",
     "confidence_high": "Strong match",
     "confidence_medium": "Likely match",
@@ -7239,7 +7239,7 @@
     "period_locked": "Locked period",
     "empty_title": "No matching journal entries found",
     "empty_description": "No posted entry credits 1510 in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
-    "empty_description_cash": "No posted entry debits a cash/bank account (19xx) in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
+    "empty_description_cash": "No posted entry debits a cash/bank account (19xx) or 2013 in this invoice's currency and date window. If it was booked in kronor, search for its voucher number. Otherwise post a new payment, or correct the prior bookkeeping first.",
     "intro_supplier": "Pick an existing posted journal entry that debits accounts payable (2440). No new entry is created: you only link the existing one as the payment.",
     "empty_description_supplier": "No posted entry debits accounts payable (2440) in this invoice's currency and date window. If the cost was booked straight against e.g. the bank account without 2440, it cannot be linked as a payment here: book the invoice from supplier invoices instead, or record a new payment.",
     "intro_supplier_pending": "Pick an existing posted journal entry that already holds the payment. No new entry is created: you only link the existing one as the payment.",
