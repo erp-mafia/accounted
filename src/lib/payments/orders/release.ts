@@ -1,8 +1,9 @@
 /**
  * Letting go of an order the bank holds nothing for, after cancelling its
  * payment at the bank when there is one. Shared by signing (a signing that
- * cannot go on, a restart that finds a payment gone) and the status sync (an
- * invoice that closed while its payment waited unsigned).
+ * cannot go on or whose BankID ended unsigned, a restart that finds a payment
+ * gone) and the status sync (a signing nobody finished, an invoice that
+ * closed while its payment waited unsigned).
  *
  * The rules (the payment_orders migration, rules 2 and 5):
  *   - Only a confirmed cancel counts (PaymentCancelResult 'cancelled').
@@ -209,6 +210,97 @@ export async function cancelAndRelease(
     result: released,
   })
   return 'kept'
+}
+
+/** Where stopping a signing left its orders (stopSigningOrders). */
+export interface StoppedSigning {
+  /** Orders back to approved after the bank confirmed the cancel of their payment, with that payment's id. */
+  released: Array<{ order: PaymentOrderRow; providerPaymentId: string }>
+  /** Orders whose cancel the bank did not confirm: still submitted with their payment id, for a person. */
+  kept: string[]
+}
+
+/**
+ * A signing that cannot go on, or whose BankID ended unsigned. Each of its
+ * orders ends where the bank leaves it: a payment that exists is cancelled
+ * there first (cancelAndRelease, which reads the order again before asking
+ * the bank); a claimed order that was never sent is released. An order with
+ * a create in flight, an unknown outcome, or one already handled by the
+ * caller is left alone. The signing batch ends as failed. Shared by the
+ * signing (signing.ts) and the status sync, so a signing ends the same way
+ * whichever of them sees it end.
+ */
+export async function stopSigningOrders(
+  writer: SupabaseClient,
+  actor: ReleaseActor & { companyId: string },
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  batchId: string,
+  orders: readonly PaymentOrderRow[],
+  reason: string,
+  handled: ReadonlySet<string> = new Set(),
+): Promise<StoppedSigning> {
+  const stopped: StoppedSigning = { released: [], kept: [] }
+  for (const order of orders) {
+    if (handled.has(order.id) || order.create_started_at || order.outcome_unknown_at) continue
+    if (order.provider_payment_id && (order.status === 'submitted' || order.status === 'awaiting_signature')) {
+      const result = await cancelAndRelease(writer, actor, provider, party, batchId, order, reason)
+      if (result === 'released') stopped.released.push({ order, providerPaymentId: order.provider_payment_id })
+      else if (result === 'kept') stopped.kept.push(order.id)
+    } else if (!order.provider_payment_id && order.status === 'submitted') {
+      await releasePaymentOrder(writer, actor, {
+        companyId: actor.companyId,
+        orderId: order.id,
+        batchId,
+        providerPaymentId: null,
+        providerStatus: null,
+        reason,
+      })
+    }
+  }
+  await writer
+    .from('payment_order_batches')
+    .update({ status: 'failed' })
+    .eq('id', batchId)
+    .eq('company_id', actor.companyId)
+    .in('status', ['created', 'awaiting_signature'])
+  return stopped
+}
+
+/**
+ * A signing whose BankID the bank reports failed (cancelled, abandoned,
+ * expired, or refused for good): nobody signed, and the bank pays nothing
+ * unsigned, so its payments are cancelled at the bank and its orders let go
+ * (stopSigningOrders), whichever of the signing poll and the status sync sees
+ * it first (crm#1470). Only while the signing still waits for that very
+ * attempt (a restart since has its own authorisation id), and only the caller
+ * that ends it cancels. The signing is failed before the first cancel:
+ * nothing offers a failed signing to be signed again, so no restart starts on
+ * payments being cancelled. Null when the attempt was no longer current:
+ * nothing was done.
+ */
+export async function endFailedSigning(
+  writer: SupabaseClient,
+  actor: ReleaseActor & { companyId: string },
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  signing: { batchId: string; authorisationId: string },
+  orders: readonly PaymentOrderRow[],
+  failure: { reason: string; detail: Record<string, unknown> },
+): Promise<StoppedSigning | null> {
+  const { data: ended } = await writer
+    .from('payment_order_batches')
+    .update({ status: 'failed' })
+    .eq('id', signing.batchId)
+    .eq('company_id', actor.companyId)
+    .eq('status', 'awaiting_signature')
+    .eq('provider_authorisation_id', signing.authorisationId)
+    .select('id')
+  if ((ended ?? []).length !== 1) return null
+  await logPaymentOrderEvents(writer, [
+    { company_id: actor.companyId, batch_id: signing.batchId, event_type: 'error', actor_user_id: actor.userId, detail: failure.detail },
+  ], actor.log)
+  return stopSigningOrders(writer, actor, provider, party, signing.batchId, orders, failure.reason)
 }
 
 /**

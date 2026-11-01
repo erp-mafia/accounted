@@ -1,6 +1,6 @@
 import { vi } from 'vitest'
 import type { PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
-import { makeTransaction } from '@/tests/helpers'
+import { makeTransaction, type createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import type { Transaction } from '@/types'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
 
@@ -129,6 +129,55 @@ export function fakeProvider(overrides: Partial<PaymentInitiationProvider> = {})
     cancelPayment: vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' }),
     ...overrides,
   }
+}
+
+/**
+ * A createTableMockSupabase answer backed by rows the test holds: every chain
+ * reads (or, with update, writes) the rows its eq/is/in/not-is filters match,
+ * so a test asserts where the rows end rather than the order of the calls.
+ * Updates compare and set: the filters run on the rows as they were, and an
+ * undefined key is left out, as the client leaves it out of the request.
+ */
+export function rowsTable<T extends object>(rows: T[]): TableMockResolver {
+  const field = (row: T, key: unknown) => (row as Record<string, unknown>)[key as string]
+  return (chain) => {
+    const matches = rows.filter((row) =>
+      chain.every(({ method, args: [key, value, more] }) => {
+        if (method === 'eq' || method === 'is') return field(row, key) === value
+        if (method === 'in') return (value as unknown[]).includes(field(row, key))
+        if (method === 'not' && value === 'is') return field(row, key) !== more
+        return true
+      }),
+    )
+    const update = chain.find((c) => c.method === 'update')
+    const patch = update && Object.fromEntries(Object.entries(update.args[0] as object).filter(([, v]) => v !== undefined))
+    if (patch) for (const row of matches) Object.assign(row, patch)
+    // Copies, as a database answers: what the code holds goes stale, the held rows do not.
+    const answer = matches.map((row) => ({ ...row }))
+    return { data: chain.some((c) => c.method === 'maybeSingle') ? (answer[0] ?? null) : answer }
+  }
+}
+
+type MockDb = ReturnType<typeof createTableMockSupabase>
+
+/**
+ * A signing and its orders held as rows: the batch and order tables answer
+ * from them (rowsTable), and release_payment_order moves an order by its
+ * rules: one still in that signing with that payment goes back to approved,
+ * out of the signing and without a payment id; anything else has moved.
+ */
+export function holdSigning(db: MockDb, signing: PaymentOrderBatchRow, orders: PaymentOrderRow[]): void {
+  db.setTable('payment_order_batches', rowsTable([signing]))
+  db.setTable('payment_orders', rowsTable(orders))
+  db.setTable('rpc:release_payment_order', () => {
+    const [args] = db.findCalls('rpc:release_payment_order', 'rpc').at(-1) as [{ p_order_id: string; p_batch_id: string | null; p_provider_payment_id: string | null }]
+    const row = orders.find((o) => o.id === args.p_order_id)
+    if (!row || row.batch_id !== args.p_batch_id || !['submitted', 'awaiting_signature'].includes(row.status) || row.provider_payment_id !== args.p_provider_payment_id) {
+      return { data: { ok: false, code: 'moved' } }
+    }
+    Object.assign(row, { status: 'approved', batch_id: null, provider_payment_id: null, provider_payment_product: null })
+    return { data: { ok: true, status: 'approved' } }
+  })
 }
 
 /**

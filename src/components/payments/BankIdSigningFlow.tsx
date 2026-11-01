@@ -17,7 +17,7 @@ import { BankMark } from '@/components/banks/BankMark'
 import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
 import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/psu-authoriser'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
-import { followUpDelayMs, PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
+import { followUpDelayMs, PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES, signsAnew } from './payment-order-status'
 import { VerificationStateText } from './VerificationStateText'
 import { verificationStep } from '@/lib/payments/orders/readiness'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
@@ -132,9 +132,9 @@ interface BankIdSigningFlowProps {
   /** Where the calls go; the session routes when absent. */
   client?: SigningClient
   /**
-   * A signing of these orders the bank already holds, unsigned (an abandoned
-   * BankID on the payment signing link): the method step signs it again
-   * instead of starting a new one.
+   * A signing of these orders the bank already holds, unsigned, in a signing
+   * nobody is in (Signera igen, isSignableAgain): the method step signs it
+   * again instead of starting a new one.
    */
   pendingBatchId?: string | null
   /** A personnummer typed before the page reloaded (the bank's own page in between). */
@@ -151,14 +151,18 @@ interface BankIdSigningFlowProps {
   onLinkIssued?: () => void
 }
 
-/** The signing is over, one way or the other: show where each payment stands. */
+/**
+ * The signing is over, one way or the other: show where each payment stands.
+ * Not a BankID that ended unsigned whose orders the server let go to be
+ * signed anew (signsAnew): the flow stays on its signing step and offers that.
+ */
 export function signingFinished(view: SigningView): boolean {
   return (
     view.status === 'signed' ||
     view.status === 'awaiting_second_signer' ||
     view.status === 'rejected' ||
     view.status === 'cancelled' ||
-    view.status === 'failed'
+    (view.status === 'failed' && !signsAnew(view))
   )
 }
 
@@ -335,11 +339,15 @@ export function BankIdSigningFlow({
     setBusy(true)
     try {
       const signer = { method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser }
+      // A BankID that ended unsigned: the orders it let go are signed in a new signing, never the spent one.
+      const anew = signing && signsAnew(signing) ? (signing.sign_anew ?? []) : null
       const view = second
         ? await client.secondSignature({ batchId: second, ...signer })
-        : pendingBatchId
-          ? await client.restart({ batchId: pendingBatchId, ...signer })
-          : await client.start({ orderIds: orders.map((o) => o.id), ...signer })
+        : anew
+          ? await client.start({ orderIds: anew, ...signer })
+          : pendingBatchId
+            ? await client.restart({ batchId: pendingBatchId, ...signer })
+            : await client.start({ orderIds: orders.map((o) => o.id), ...signer })
       markSentToBank()
       setSigning(view)
       adoptMethod(chosen, view)
@@ -675,6 +683,11 @@ export function BankIdSigningFlow({
     const failure = signing.failure_code
     const permanent = failure ? PERMANENT_SIGNING_FAILURES.has(failure) : false
     const waiting = signing.status === 'awaiting_signature'
+    // Signed again: the same signing while its payments wait at the bank
+    // (created), or a new one over the orders the server let go (signsAnew).
+    const anew = signsAnew(signing)
+    const signableAgain = !permanent && (signing.status === 'created' || anew)
+    const signAgain = anew ? begin : restart
     const anotherStep = step !== null && stepsSeen.length > 1
     // The bank's own page: the method asked for, or the approach the bank imposed.
     const redirect = method === 'redirect' || signing.challenge?.approach === 'redirect'
@@ -749,20 +762,20 @@ export function BankIdSigningFlow({
                 {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
               </AttnLine>
             )}
-            {!permanent && signing.status === 'created' && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
-            {!permanent && signing.status === 'created' && redirect && (
+            {signableAgain && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
+            {signableAgain && redirect && (
               <div className="flex justify-center">
-                <Button onClick={() => restart('redirect')} loading={busy} disabled={busy}>
+                <Button onClick={() => signAgain('redirect')} loading={busy} disabled={busy}>
                   {t('try_again')}
                 </Button>
               </div>
             )}
-            {!permanent && signing.status === 'created' && !redirect && (
+            {signableAgain && !redirect && (
               <div className="flex flex-wrap justify-center gap-2">
-                <Button variant="secondary" onClick={() => restart('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
+                <Button variant="secondary" onClick={() => signAgain('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
                   {t('method_same_device')}
                 </Button>
-                <Button onClick={() => restart('qr')} loading={busy && method === 'qr'} disabled={busy}>
+                <Button onClick={() => signAgain('qr')} loading={busy && method === 'qr'} disabled={busy}>
                   {t('try_again')}
                 </Button>
               </div>

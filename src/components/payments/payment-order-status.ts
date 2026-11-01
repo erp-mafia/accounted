@@ -69,14 +69,25 @@ export function canCancel(order: { status: PaymentOrderStatus; outcome_unknown_a
 }
 
 /**
- * Signera igen on a row: the order waits unsigned at the bank after its
- * BankID was abandoned or expired (sign_again, decided by the server with
- * isSignableAgain). The restart signs its whole signing, so the dialog shows
- * every order of that signing that waits too.
+ * Signera igen on a row: the order waits unsigned at the bank in a signing
+ * nobody is in (sign_again, decided by the server with isSignableAgain). The
+ * restart signs its whole signing, so the dialog shows every order of that
+ * signing that waits too.
  */
 export function signAgainOrders<T extends { id: string; batch_id: string | null; sign_again?: boolean }>(order: T, orders: readonly T[]): T[] {
   if (!order.sign_again || !order.batch_id) return []
   return orders.filter((o) => o.batch_id === order.batch_id && o.sign_again === true)
+}
+
+/**
+ * A BankID that ended unsigned (cancelled, abandoned, expired): the server
+ * cancelled the signing's payments at the bank and names the orders it let
+ * go, approved again (sign_anew, crm#1470). Signing again is a new signing
+ * over them; the server leaves the list empty for a failure signing cannot
+ * fix, and when the bank kept a payment.
+ */
+export function signsAnew(view: { status: string; sign_anew?: readonly string[] }): boolean {
+  return view.status === 'failed' && (view.sign_anew?.length ?? 0) > 0
 }
 
 /**

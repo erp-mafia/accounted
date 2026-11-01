@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { PaymentProviderError } from '@/lib/payments/initiation/provider'
+import { PaymentProviderError, type SigningTarget } from '@/lib/payments/initiation/provider'
 import type { DebtorSnapshot } from './debtor'
 import type { PaymentOrderStatus } from './status'
 
@@ -96,6 +96,17 @@ export interface PaymentOrderBatchRow {
   currency: string
   created_at: string
   updated_at: string
+}
+
+/** What a signing's BankID is for at the bank: its basket, or its one payment. Null before either exists. */
+export function signingTargetOf(batch: PaymentOrderBatchRow, orders: readonly PaymentOrderRow[]): SigningTarget | null {
+  if (batch.signing_target === 'basket') {
+    return batch.provider_batch_id ? { kind: 'basket', providerBasketId: batch.provider_batch_id } : null
+  }
+  const [order] = orders
+  return order?.provider_payment_id
+    ? { kind: 'payment', providerPaymentId: order.provider_payment_id, product: order.provider_payment_product ?? 'domestic' }
+    : null
 }
 
 export type PaymentOrderEventType =

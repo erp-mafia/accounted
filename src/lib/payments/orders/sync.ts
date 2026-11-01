@@ -39,7 +39,9 @@ import {
   getPaymentInitiationProvider,
   hasPaymentInitiationProviders,
   PaymentProviderError,
+  type PaymentInitiationProvider,
   type PaymentPartyContext,
+  type SigningProgress,
 } from '@/lib/payments/initiation/provider'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -59,9 +61,9 @@ import {
   type DebitMatchBasis,
 } from './debit-match'
 import { paymentAccountContext } from './debtor'
-import { cancelForClosedInvoice, unpayableOrders } from './release'
+import { cancelForClosedInvoice, endFailedSigning, unpayableOrders } from './release'
 import type { PaymentOrderStatus } from './status'
-import { logPaymentOrderEvents, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
+import { logPaymentOrderEvents, signingTargetOf, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
 
 /**
  * How long a create may run before it counts as dead: well past the signing
@@ -71,6 +73,13 @@ import { logPaymentOrderEvents, type PaymentOrderBatchRow, type PaymentOrderBatc
 export const STALE_CREATE_MINUTES = 15
 /** A BankID signing nobody finished: BankID itself gives up after a few minutes. */
 export const ABANDONED_SIGNING_MINUTES = 15
+/**
+ * How long the sync keeps asking about a BankID the bank still reports open,
+ * or cannot read: far past any BankID's own life. Past it the orders go back
+ * to 'submitted', as every unfinished signing did before crm#1470, and
+ * nothing is cancelled, since the bank never said the BankID failed.
+ */
+export const UNANSWERED_SIGNING_MINUTES = 60
 const BATCH_LIMIT = 200
 /** An executed order is swept for its debit this long after the bank executed it. */
 export const EXECUTED_ORDER_SWEEP_DAYS = 14
@@ -104,7 +113,11 @@ export interface PaymentStatusSyncResult {
   cancelledForClosedInvoice: number
   /** Such payments whose cancel the bank did not confirm: held for a person. */
   heldForPerson: number
-  /** Signings nobody finished: the orders went back to 'submitted', to sign again or cancel. */
+  /**
+   * Signings nobody finished: when the bank reports their BankID failed, their
+   * payments cancelled at the bank and the orders back to approved; when it
+   * still had not UNANSWERED_SIGNING_MINUTES on, the orders back to 'submitted'.
+   */
   abandoned: number
   /** Signings finished at the bank after the dialog closed: the batch now says so. */
   signedLate: number
@@ -167,7 +180,11 @@ function errorCode(err: unknown): string {
  * A signing started more than ABANDONED_SIGNING_MINUTES ago and never seen to
  * finish. The bank is asked first: the person may have signed and closed the
  * dialog before its next poll, and then the payments are accepted, not
- * abandoned. Only payments still unsigned go back to 'submitted'.
+ * abandoned. While they still read unsigned, the BankID itself is asked: one
+ * that finalised is a signing the bank is still confirming; one that failed
+ * gets its payments cancelled at the bank and its orders let go
+ * (endFailedSigning); one still open, or unreadable, is left for the next run
+ * until UNANSWERED_SIGNING_MINUTES, then its orders go back to 'submitted'.
  */
 async function settleAbandonedSignings(
   writer: SupabaseClient,
@@ -229,7 +246,31 @@ async function settleAbandonedSignings(
     }
     if (unknown) continue
 
-    if (statuses.some((s) => SIGNED.has(s))) {
+    if (statuses.length > 0 && statuses.every((s) => s === 'rejected' || s === 'cancelled' || s === 'failed')) {
+      // The bank closed every payment during the signing: nothing is left to sign again.
+      const to: PaymentOrderBatchStatus = statuses.every((s) => s === 'rejected')
+        ? 'rejected'
+        : statuses.every((s) => s === 'cancelled')
+          ? 'cancelled'
+          : 'failed'
+      await writer
+        .from('payment_order_batches')
+        .update({ status: to })
+        .eq('id', batch.id)
+        .eq('company_id', batch.company_id)
+        .eq('status', 'awaiting_signature')
+        .eq('provider_authorisation_id', attempt)
+      continue
+    }
+
+    // A payment still reading unsigned never alone says nobody signed: a bank
+    // may answer RCVD for minutes after a finalised BankID (crm desk #1267).
+    // The BankID itself is asked.
+    const signedPayment = statuses.some((s) => SIGNED.has(s))
+    const party = orders[0] ? statusParty(orders[0], orgNumber, await psuOf(batch.id)) : null
+    const bankId = signedPayment || !party ? null : await bankIdProgress(provider, party, batch, attempt, orders, log, result)
+
+    if (signedPayment || bankId?.state === 'finalised') {
       const to: PaymentOrderBatchStatus = statuses.includes('awaiting_second_signer') ? 'awaiting_second_signer' : 'signed'
       const { data: moved } = await writer
         .from('payment_order_batches')
@@ -255,26 +296,26 @@ async function settleAbandonedSignings(
       continue
     }
 
-    if (statuses.length > 0 && statuses.every((s) => s === 'rejected' || s === 'cancelled' || s === 'failed')) {
-      // The bank closed every payment during the signing: nothing is left to sign again.
-      const to: PaymentOrderBatchStatus = statuses.every((s) => s === 'rejected')
-        ? 'rejected'
-        : statuses.every((s) => s === 'cancelled')
-          ? 'cancelled'
-          : 'failed'
-      await writer
-        .from('payment_order_batches')
-        .update({ status: to })
-        .eq('id', batch.id)
-        .eq('company_id', batch.company_id)
-        .eq('status', 'awaiting_signature')
-        .eq('provider_authorisation_id', attempt)
+    // Nobody signed and nobody can any more: the payments are cancelled at the
+    // bank and the orders let go, as when the signing poll sees the BankID end
+    // (endFailedSigning). An order whose cancel the bank does not confirm stays
+    // submitted for a person. A BankID still open by the bank's word, or one
+    // that cannot be read, is not known to be abandoned: the signing is left
+    // for the next run, as an unreadable payment status is.
+    if (bankId?.state === 'failed' && party) {
+      const failure = { reason: 'SIGNING_ABANDONED', detail: { code: 'SIGNING_ABANDONED', provider_code: bankId.failureCode } }
+      const stopped = await endFailedSigning(writer, { companyId: batch.company_id, userId: null, log }, provider, party, { batchId: batch.id, authorisationId: attempt }, orders, failure)
+      if (stopped) result.abandoned += 1
       continue
     }
 
-    // Still unsigned: the payments wait at the bank, so the orders go back to
-    // 'submitted', where they can be signed again or cancelled. Only the
-    // attempt that was read is reset: a restart since then has its own id.
+    // A bank that never reports the BankID failed would otherwise keep the
+    // signing waiting, and be asked, on every run. Past
+    // UNANSWERED_SIGNING_MINUTES no BankID is still open, but nothing is
+    // cancelled on that inference: the orders go back to 'submitted' with
+    // their payments at the bank, to sign again or cancel. Only the attempt
+    // that was read is reset: a restart since then has its own id.
+    if (!startedBefore(batch, UNANSWERED_SIGNING_MINUTES)) continue
     const { data: reset } = await writer
       .from('payment_order_batches')
       .update({ status: 'created' })
@@ -292,8 +333,36 @@ async function settleAbandonedSignings(
       .eq('status', 'awaiting_signature')
     result.abandoned += 1
     await logPaymentOrderEvents(writer, [
-      { company_id: batch.company_id, batch_id: batch.id, event_type: 'error', detail: { code: 'SIGNING_ABANDONED' } },
+      { company_id: batch.company_id, batch_id: batch.id, event_type: 'error', detail: { code: 'SIGNING_ABANDONED', bank_id: bankId?.state ?? 'unreadable' } },
     ], log)
+  }
+}
+
+function startedBefore(batch: PaymentOrderBatchRow, minutes: number): boolean {
+  return batch.signing_started_at !== null && Date.parse(batch.signing_started_at) < Date.now() - minutes * 60_000
+}
+
+/**
+ * Where a signing's current BankID stands, read unattended with the party its
+ * payments were created with; null when it cannot be read (counted as an error).
+ */
+async function bankIdProgress(
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  batch: PaymentOrderBatchRow,
+  authorisationId: string,
+  orders: readonly PaymentOrderRow[],
+  log: Logger,
+  result: PaymentStatusSyncResult,
+): Promise<SigningProgress | null> {
+  const target = signingTargetOf(batch, orders)
+  if (!target) return null
+  try {
+    return await provider.pollSigning(party, target, authorisationId, batch.signing_method ?? 'qr')
+  } catch (err) {
+    result.errors += 1
+    log.warn('BankID of an unfinished signing could not be read', { batchId: batch.id, code: errorCode(err) })
+    return null
   }
 }
 
