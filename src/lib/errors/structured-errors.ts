@@ -8351,8 +8351,12 @@ const INVOICE_REGISTER_BOOKED: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_REGISTER_NUMBER_TAKEN: {
     httpStatus: 409,
-    message_sv: 'Fakturanumret finns redan i kundreskontran. Ett fakturanummer kan bara registreras en gång.',
-    message_en: 'That invoice number is already in the invoice register; a number can be registered once.',
+    message_sv: 'Fakturanumret finns redan i kundreskontran som en annan faktura eller redan kopplad till en verifikation. En faktura i reskontran utan verifikation kopplas bara när kund, valuta och belopp är desamma.',
+    message_en: 'That invoice number is already in the invoice register as another invoice, or already linked to a verifikat. A registered invoice without a verifikat is linked only when customer, currency and total are the same.',
+    remediation: {
+      description: 'Read the invoice named in details.invoice_id with gnubok_get_invoice. If it is this invoice without a verifikat, register again with its customer_id, currency and total. Never book its sale again: it is already in the books.',
+      tool: 'gnubok_get_invoice',
+    },
   },
   INVOICE_REGISTER_NUMBER_IN_SERIES: {
     httpStatus: 409,

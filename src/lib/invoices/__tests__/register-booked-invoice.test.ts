@@ -341,6 +341,9 @@ describe('planBookedInvoiceRegistration', () => {
       plan: {
         customerName: 'Testkund AB',
         voucher: { journalEntryId: VOUCHER_ID, label: 'B45', entryDate: '2026-03-02', description: 'Kundfaktura 1023 Testkund AB' },
+        linksInvoiceId: null,
+        invoiceDate: '2026-03-02',
+        dueDate: '2026-04-01',
         status: 'sent',
         // SEK: no rate, and the kronor are the invoice's own amounts.
         currency: 'SEK',
@@ -652,6 +655,153 @@ describe('registerBookedInvoice', () => {
     const { supabase } = books({ laterInvoices: [{ error: { code: '23505', message: 'duplicate key value violates unique constraint' } }] })
     const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
     expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
+  })
+})
+
+/**
+ * crm#1302: a migrated company's register held the invoice already, under its
+ * own number and with its lines, but without the verifikat that booked it
+ * (invoices.journal_entry_id null). The registration refused the number as
+ * taken, and book_invoice would book the sale a second time, so nothing the
+ * user or their agent could reach linked the row: the invoice read as
+ * unbooked with its sale in the books. The registration now links that row,
+ * after the same corroboration, and writes nothing else.
+ */
+describe('an invoice in the register without its verifikat', () => {
+  const EXISTING_ID = '66666666-6666-4666-8666-666666666666'
+  /** The migrated row: same number, customer and total, items of its own, no link. */
+  const unlinked = (overrides: Record<string, unknown> = {}) => ({
+    id: EXISTING_ID,
+    customer_id: CUSTOMER_ID,
+    invoice_date: '2026-03-01',
+    due_date: '2026-03-31',
+    status: 'sent',
+    document_type: 'invoice',
+    currency: 'SEK',
+    exchange_rate: null,
+    total: 12500,
+    total_sek: 12500,
+    subtotal: 10000,
+    subtotal_sek: 10000,
+    vat_amount: 2500,
+    vat_amount_sek: 2500,
+    vat_rate: 25,
+    vat_treatment: 'standard_25',
+    moms_ruta: '05',
+    reverse_charge_text: null,
+    paid_amount: 0,
+    remaining_amount: 12500,
+    journal_entry_id: null,
+    ...overrides,
+  })
+
+  it('plans a link to the row the register already holds, read from that row', async () => {
+    const { supabase } = books({ numberRows: [unlinked({ status: 'partially_paid', paid_amount: 2000, remaining_amount: 10500 })] })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input(), { today: TODAY })
+
+    expect(result.ok && result.plan).toMatchObject({
+      linksInvoiceId: EXISTING_ID,
+      voucher: { journalEntryId: VOUCHER_ID, label: 'B45' },
+      // The row's own dates and payment state, never the caller's.
+      invoiceDate: '2026-03-01',
+      dueDate: '2026-03-31',
+      status: 'partially_paid',
+      paidAmount: 2000,
+      remainingAmount: 10500,
+      paidAsOf: null,
+      total: 12500,
+      totalSek: 12500,
+    })
+  })
+
+  it('writes only the link, from null, and nothing to the journal or the payments', async () => {
+    const { supabase, calls, findCall } = books({
+      numberRows: [unlinked()],
+      laterInvoices: [{ data: [{ id: EXISTING_ID }] }],
+    })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
+
+    expect(result).toMatchObject({ ok: true, invoiceId: EXISTING_ID })
+    expect(findCall('invoices', 'update')?.[0]).toEqual({ journal_entry_id: VOUCHER_ID })
+    const filters = calls.filter((call) => call.table === 'invoices' && ['eq', 'is'].includes(call.method)).map((call) => [call.method, ...call.args])
+    expect(filters).toEqual(expect.arrayContaining([
+      ['eq', 'id', EXISTING_ID],
+      ['eq', 'company_id', COMPANY_ID],
+      ['is', 'journal_entry_id', null],
+    ]))
+    const writes = calls.filter((call) => ['insert', 'update', 'upsert', 'delete'].includes(call.method))
+    expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['update invoices'])
+    expect(calls.some((call) => call.table.startsWith('rpc:'))).toBe(false)
+  })
+
+  it('links the ticket\'s case: a momsfri 2 800 kr B-verifikat (Dr 1510 / Cr 3004) and the migrated open invoice it booked', async () => {
+    const momsfri: BookedInvoiceVoucherLine[] = [
+      { account_number: '3004', debit_amount: 0, credit_amount: 2800, currency: 'SEK' },
+      { account_number: '1510', debit_amount: 2800, credit_amount: 0, currency: 'SEK' },
+    ]
+    const row = unlinked({ total: 2800, total_sek: 2800, subtotal: 2800, subtotal_sek: 2800, vat_amount: 0, vat_amount_sek: 0, vat_rate: 0, vat_treatment: 'exempt', moms_ruta: null, remaining_amount: 2800 })
+    const { supabase, findCall } = books({
+      numberRows: [row],
+      voucher: { ...VOUCHER, voucher_number: 234, description: 'Kundfaktura 2995' },
+      lines: momsfri,
+      laterInvoices: [{ data: [{ id: EXISTING_ID }] }],
+    })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input({ invoice_number: '2995', total: 2800, remaining_amount: 2800 }), { today: TODAY })
+
+    expect(result).toMatchObject({ ok: true, invoiceId: EXISTING_ID, plan: { voucher: { label: 'B234' }, vatTreatment: 'exempt' } })
+    expect(findCall('invoices', 'update')?.[0]).toEqual({ journal_entry_id: VOUCHER_ID })
+  })
+
+  it('links a paid row too: the link is metadata, the payments stay as they are', async () => {
+    const { supabase } = books({
+      numberRows: [unlinked({ status: 'paid', paid_amount: 12500, remaining_amount: 0 })],
+      laterInvoices: [{ data: [{ id: EXISTING_ID }] }],
+    })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
+    expect(result.ok && result.plan).toMatchObject({ linksInvoiceId: EXISTING_ID, status: 'paid', remainingAmount: 0 })
+  })
+
+  it('answers a row linked between the plan and the write as taken', async () => {
+    const { supabase } = books({ numberRows: [unlinked()], laterInvoices: [{ data: [] }] })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
+    expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a row that already has its verifikat', { journal_entry_id: OTHER_INVOICE_ID }],
+    ['a draft', { status: 'draft' }],
+    ['a cancelled row', { status: 'cancelled' }],
+    ['a row with no status (the column default, draft)', { status: null }],
+    ['a quote under the number', { document_type: 'quote' }],
+    ['another customer', { customer_id: OTHER_INVOICE_ID }],
+    ['another total (an old-shape kreditfaktura)', { total: -12500, total_sek: -12500 }],
+    ['another currency', { currency: 'EUR' }],
+  ])('keeps the number taken for %s', async (_name, overrides) => {
+    const { supabase, calls } = books({ numberRows: [unlinked(overrides)] })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input(), { today: TODAY })
+    expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
+    expect(!result.ok && result.details).toMatchObject({ invoice_id: EXISTING_ID })
+    expect(calls.filter((call) => ['insert', 'update'].includes(call.method))).toEqual([])
+  })
+
+  it('runs every verifikat rule on the link: a reversed one, another invoice\'s, a wrong amount', async () => {
+    const cases: [Books, string][] = [
+      [{ voucher: { ...VOUCHER, status: 'reversed' } }, 'INVOICE_REGISTER_VOUCHER_NOT_POSTED'],
+      [{ holderRows: [{ id: OTHER_INVOICE_ID, invoice_number: '1022' }] }, 'INVOICE_REGISTER_VOUCHER_TAKEN'],
+      [{ voucher: { ...VOUCHER, source_type: 'opening_balance' } }, 'INVOICE_REGISTER_OPENING_BALANCE'],
+      [{ lines: taxedSale('3001', '2611', 8000, 2000) }, 'INVOICE_REGISTER_AMOUNT_MISMATCH'],
+    ]
+    for (const [state, code] of cases) {
+      const { supabase } = books({ numberRows: [unlinked()], ...state })
+      const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input(), { today: TODAY })
+      expect(!result.ok && result.code).toBe(code)
+    }
+  })
+
+  it('refuses a row whose kronor differ from what the verifikat books', async () => {
+    const { supabase } = books({ numberRows: [unlinked({ total_sek: 12000 })] })
+    const result = await planBookedInvoiceRegistration(supabase as never, COMPANY_ID, input(), { today: TODAY })
+    expect(!result.ok && result.code).toBe('INVOICE_REGISTER_AMOUNT_MISMATCH')
   })
 })
 
