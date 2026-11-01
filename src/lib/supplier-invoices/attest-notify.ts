@@ -134,17 +134,15 @@ export async function notifyAttestersOfInvoice(
   return result
 }
 
+/**
+ * The supplier_invoice.registered handler. A failure throws to the event bus,
+ * which logs it as an error with the event type and this consumer's name and
+ * keeps it from the registration and the other consumers (lib/events/bus.ts):
+ * nothing sends the attest mail again, so it must reach error tracking.
+ */
 export async function handleSupplierInvoiceRegistered(payload: EventPayload<'supplier_invoice.registered'>): Promise<void> {
   const { supplierInvoice, companyId } = payload
-  try {
-    await notifyAttestersOfInvoice(createServiceClient(), companyId, supplierInvoice.id)
-  } catch (error) {
-    log.warn('attest request mail not sent', {
-      companyId,
-      invoiceId: supplierInvoice.id,
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }
+  await notifyAttestersOfInvoice(createServiceClient(), companyId, supplierInvoice.id)
 }
 
 /** Subscribes the handler on its own; lib/init subscribes it through EVENT_CONSUMERS. */

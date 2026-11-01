@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { makeJournalEntry } from '@/tests/helpers'
 
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(),
 }))
@@ -12,7 +15,7 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
 
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { unlearnCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
-import { registerUnlearnOnReversalHandler, unlearnReversedBankBooking } from '../unlearn-on-reversal'
+import { registerUnlearnOnReversalHandler, unlearnOnReversal, unlearnReversedBankBooking } from '../unlearn-on-reversal'
 
 const mockServiceClient = vi.mocked(createServiceClientNoCookies)
 const mockUnlearn = vi.mocked(unlearnCounterpartyTemplate)
@@ -25,13 +28,13 @@ const LINES = [
 ]
 
 /** A client that answers the transactions read and the journal_entry_lines read, recording their filters. */
-function makeClient(opts: { transaction?: unknown; lines?: unknown[] } = {}) {
+function makeClient(opts: { transaction?: unknown; lines?: unknown[]; transactionError?: { message: string } } = {}) {
   const reads: Array<{ table: string; filters: Record<string, unknown> }> = []
   const from = vi.fn((table: string) => {
     const filters: Record<string, unknown> = {}
     reads.push({ table, filters })
     const result = table === 'transactions'
-      ? { data: opts.transaction ?? null, error: null }
+      ? { data: opts.transaction ?? null, error: opts.transactionError ?? null }
       : { data: opts.lines ?? [], error: null }
     const chain = {
       select: () => chain,
@@ -90,12 +93,36 @@ describe('unlearnReversedBankBooking', () => {
     expect(mockUnlearn).not.toHaveBeenCalled()
   })
 
-  it('never throws: the reversal stands when unlearning fails', async () => {
-    const { client } = makeClient({ transaction: BANK_TEXT })
-    mockUnlearn.mockRejectedValue(new Error('db down'))
+  it('a failed bank row read is a failure, not "no bank row": the template would stay taught', async () => {
+    const { client } = makeClient({ transactionError: { message: 'timeout' } })
     const entry = { ...makeJournalEntry({ source_type: 'bank_transaction', source_id: 'tx-1' }), lines: LINES }
 
-    await expect(unlearnReversedBankBooking(client, 'company-1', entry as never)).resolves.toBeNull()
+    await expect(unlearnReversedBankBooking(client, 'company-1', entry as never)).rejects.toThrow('transaction read failed')
+    expect(mockUnlearn).not.toHaveBeenCalled()
+  })
+
+  it('a failure reaches the event bus as an error; the reversal (the emit) stands', async () => {
+    const { client } = makeClient({ transaction: BANK_TEXT })
+    mockServiceClient.mockReturnValue(client)
+    mockUnlearn.mockRejectedValue(new Error('db down'))
+    const unsubscribe = eventBus.on('journal_entry.reversed', unlearnOnReversal)
+    const originalEntry = { ...makeJournalEntry({ source_type: 'bank_transaction', source_id: 'tx-1' }), lines: LINES }
+
+    await expect(eventBus.emit({
+      type: 'journal_entry.reversed',
+      payload: {
+        originalEntry: originalEntry as never,
+        reversalEntry: makeJournalEntry({ source_type: 'storno' }) as never,
+        userId: 'user-1',
+        companyId: 'company-1',
+      },
+    })).resolves.toBeUndefined()
+
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({
+      eventType: 'journal_entry.reversed',
+      handler: 'unlearnOnReversal',
+    }))
+    unsubscribe()
   })
 
   it('runs on every journal_entry.reversed once registered', async () => {

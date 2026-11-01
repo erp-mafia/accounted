@@ -1,5 +1,5 @@
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { bankBookingContext, booksBankLineInBankDirection } from '@/lib/bookkeeping/bank-booking-context'
+import { bankBookingContext, booksBankLineInBankDirection, booksForeignAmountAsKronor } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -252,6 +252,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
     checks.push(passed('bank_line_direction'))
+
+    // A foreign row with no SEK value: the dialog prefills its foreign amount
+    // as kronor when the rate is missing, and the lines are posted as they
+    // come. Refuse that signature before any draft; kronor typed from the
+    // bank statement still book (accounted#58).
+    if (booksForeignAmountAsKronor(lines, settlementAccount, transaction)) {
+      const amount = formatCurrency(Math.abs(transaction.amount), transaction.currency)
+      return errorResponseFromCode('TX_MISSING_SEK_VALUE', log, {
+        requestId,
+        messageSv: `Transaktionen är på ${amount} men saknar SEK-belopp och växelkurs, och bankraden på konto ${settlementAccount} står på beloppet i ${transaction.currency} som om det vore kronor. Ange beloppet i kronor enligt kontoutdraget, eller hämta växelkursen för transaktionsdatumet och försök igen.`,
+        messageEn: `The transaction is ${amount} but has neither a SEK amount nor an exchange rate, and the bank line on account ${settlementAccount} carries the ${transaction.currency} amount as if it were SEK. Enter the SEK amount from the bank statement, or fetch the exchange rate for the transaction date and retry.`,
+        details: { currency: transaction.currency, settlement_account: settlementAccount },
+      })
+    }
 
     // The lines are the person's own: the booking-time VAT and revenue
     // warnings apply (lib/bookkeeping/voucher-warnings-guard.ts). Duplicates

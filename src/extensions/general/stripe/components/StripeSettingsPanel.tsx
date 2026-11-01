@@ -55,6 +55,13 @@ export default function StripeSettingsPanel() {
               ? t('error_generic')
               : code
       }
+      // Non-SEK balance transactions get their own sentence on any counted
+      // outcome: the SEK account on 1686 can never carry them.
+      syncNote={(outcome) =>
+        'values' in outcome && outcome.values.foreignCurrency > 0
+          ? t('sync_foreign_currency', { count: outcome.values.foreignCurrency })
+          : null
+      }
       renderBadges={(c) =>
         !c.livemode && c.status === 'active' ? <Badge variant="warning">{t('test_mode')}</Badge> : null
       }

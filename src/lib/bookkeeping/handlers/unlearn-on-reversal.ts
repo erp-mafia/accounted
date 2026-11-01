@@ -3,10 +3,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { unlearnCounterpartyTemplate, type UnlearnOutcome } from '@/lib/bookkeeping/counterparty-templates'
 import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
-import { createLogger } from '@/lib/logger'
 import type { JournalEntry } from '@/types'
-
-const log = createLogger('unlearn-on-reversal')
 
 type VerifikatLine = { account_number: string; debit_amount: number | string; credit_amount: number | string }
 
@@ -18,7 +15,9 @@ type VerifikatLine = { account_number: string; debit_amount: number | string; cr
  * is corrected in one place (crm#1275).
  *
  * Learning is a side effect of booking and never blocks it; unlearning is the
- * same: a failure is logged and the reversal stands.
+ * same: the reversal stands. A failure throws to the event bus, which logs it
+ * as an error with the event type and this consumer's name (lib/events/bus.ts)
+ * and isolates it from the other consumers and the emitter.
  */
 export function registerUnlearnOnReversalHandler(): () => void {
   return eventBus.on('journal_entry.reversed', unlearnOnReversal)
@@ -35,30 +34,24 @@ export async function unlearnReversedBankBooking(
   entry: Pick<JournalEntry, 'id' | 'source_type' | 'source_id' | 'lines'>,
 ): Promise<UnlearnOutcome | null> {
   if (entry.source_type !== 'bank_transaction' || !entry.source_id) return null
-  try {
-    const { data: transaction } = await supabase
-      .from('transactions')
-      .select('merchant_name, original_description, description')
-      .eq('id', entry.source_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (!transaction) return null
+  const { data: transaction, error: transactionError } = await supabase
+    .from('transactions')
+    .select('merchant_name, original_description, description')
+    .eq('id', entry.source_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  // A failed read must not read as "no bank row": the template would stay taught.
+  if (transactionError) throw new Error(`reversed bank booking: transaction read failed: ${transactionError.message}`)
+  if (!transaction) return null
 
-    let lines: ReadonlyArray<VerifikatLine> = entry.lines ?? []
-    if (lines.length === 0) {
-      const { data } = await supabase
-        .from('journal_entry_lines')
-        .select('account_number, debit_amount, credit_amount')
-        .eq('journal_entry_id', entry.id)
-      lines = (data ?? []) as VerifikatLine[]
-    }
-    return await unlearnCounterpartyTemplate(supabase, companyId, transaction, lines)
-  } catch (err) {
-    log.warn('unlearning a reversed bank booking failed', {
-      companyId,
-      journalEntryId: entry.id,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
+  let lines: ReadonlyArray<VerifikatLine> = entry.lines ?? []
+  if (lines.length === 0) {
+    const { data, error } = await supabase
+      .from('journal_entry_lines')
+      .select('account_number, debit_amount, credit_amount')
+      .eq('journal_entry_id', entry.id)
+    if (error) throw new Error(`reversed bank booking: verifikat lines read failed: ${error.message}`)
+    lines = (data ?? []) as VerifikatLine[]
   }
+  return unlearnCounterpartyTemplate(supabase, companyId, transaction, lines)
 }

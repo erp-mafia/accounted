@@ -83,11 +83,12 @@ const SCENARIOS: Scenario[] = [
     description: 'Ränta augusti',
   },
   {
-    name: 'öresavrundning on a euro account',
+    // Was "on a euro account": that subtracted kronor from euro and pinned
+    // the mix. A foreign account is refused now (accounted#58, residual.test.ts).
+    name: 'öresavrundning on a card payment',
     kind: 'rounding',
     rows: [{ amount: -99.99, date: '2026-08-08', description: 'Kort' }],
     entryNet: -100,
-    currency: 'EUR',
   },
   {
     name: 'interest expense the engine refuses (a locked period): the links are undone',

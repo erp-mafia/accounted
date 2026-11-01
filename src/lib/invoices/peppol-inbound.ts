@@ -682,7 +682,10 @@ export function orderInboundMessagesOldestFirst(messages: PeppolInboundMessage[]
  * that is not in the archive would move the listing cursor beyond it (the
  * provider re-lists the rest next run; the archive's unique key tolerates the
  * repeat). A payload the archive can never hold is recorded as a terminal
- * stub instead, so it does not block the cursor forever.
+ * stub instead, so it does not block the cursor forever. A listing that
+ * consumes (transport.inboundListingConsumes: Qvalia direct marks the page
+ * read) never re-lists, so there the failure is an error and the rest of the
+ * page is still archived.
  */
 export async function syncInboundPeppolDocuments(args: {
   service: SupabaseClient
@@ -761,6 +764,7 @@ export async function syncInboundPeppolDocuments(args: {
  * Archive, route and deliver one listed page, oldest first, counting into
  * `result`. True when a document could not be archived: the caller stops the
  * document type there, so the cursor never passes an unarchived document.
+ * Never true for a listing that consumes (inboundListingConsumes).
  */
 async function archiveListedPage(args: {
   service: SupabaseClient
@@ -797,6 +801,15 @@ async function archiveListedPage(args: {
       const reason = describeError(err)
       result.failed += 1
       result.errors.push({ providerDocumentId: message.providerDocumentId, reason })
+      if (transport.inboundListingConsumes) {
+        // The provider has handed the page over: stopping here would lose the
+        // rest of it, and this document is not listed again either.
+        log.error('inbound Peppol document could not be archived; the provider does not list it again', err as Error, {
+          documentType,
+          providerDocumentId: message.providerDocumentId,
+        })
+        continue
+      }
       log.warn('inbound Peppol listing stopped at a document that could not be archived; newer ones are re-listed next run', {
         documentType,
         providerDocumentId: message.providerDocumentId,

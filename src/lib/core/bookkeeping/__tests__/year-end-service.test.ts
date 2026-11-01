@@ -923,6 +923,66 @@ describe('validateYearEndReadiness', () => {
     expect(result.blockers.some((b) => b.code === 'UNEXPLAINED_VOUCHER_GAP')).toBe(false)
   })
 
+  // accounted#58 F7: these reads ignored their error, so a failed read counted
+  // as 0 drafts or a reconciled counter and the year could close past it.
+  describe('fails closed on a failed read', () => {
+    const balanced = { rows: [], isBalanced: true, totalDebit: 0, totalCredit: 0 }
+
+    it('passes clean books with no check-failed blocker (normal path)', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.blockers).toEqual([])
+      expect(result.ready).toBe(true)
+    })
+
+    it('blocks with DRAFT_CHECK_FAILED when the draft count fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[1] = { data: null, error: { message: 'statement timeout' }, count: null } // count drafts fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers).toEqual([
+        { code: 'DRAFT_CHECK_FAILED', message: 'Kontrollen av utkast i perioden kunde inte genomföras: försök igen' },
+      ])
+      expect(result.errors).toEqual(result.blockers.map((b) => b.message))
+    })
+
+    it('blocks with VOUCHER_GAP_CHECK_FAILED when the sequence counter read fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[4] = { data: null, error: { message: 'connection reset' } } // voucher_sequences.last_number fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers).toEqual([
+        { code: 'VOUCHER_GAP_CHECK_FAILED', message: 'Kontrollen av nummerräknaren i serie A kunde inte genomföras: försök igen' },
+      ])
+      expect(result.sequenceMismatches).toEqual([])
+    })
+
+    it('blocks with VOUCHER_GAP_CHECK_FAILED when the highest voucher number read fails', async () => {
+      const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+      results = noGapResults(period)
+      results[5] = { data: null, error: { message: 'connection reset' } } // journal_entries max fails
+      vi.mocked(generateTrialBalance).mockResolvedValue(balanced as never)
+
+      const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+      expect(result.ready).toBe(false)
+      expect(result.blockers.map((b) => b.code)).toEqual(['VOUCHER_GAP_CHECK_FAILED'])
+      expect(result.blockers.some((b) => b.code === 'SEQUENCE_COUNTER_BEHIND')).toBe(false)
+    })
+  })
+
   it('detects gaps across multiple voucher series', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
 

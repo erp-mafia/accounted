@@ -1544,3 +1544,152 @@ describe('executeRecurringSchedule text rows and placeholders', () => {
     expect(header).toMatchObject({ invoice_date: '2026-08-31', due_date: '2026-09-30' })
   })
 })
+
+describe('executeRecurringSchedule article links (accounted#52)', () => {
+  const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+  const client = supabase as unknown as SupabaseClient
+  const today = new Date('2026-07-06T06:30:00Z')
+  const domesticCustomer = makeCustomer({ id: 'cust-1', customer_type: 'swedish_business' })
+  const nonEuCustomer = makeCustomer({ id: 'cust-1', customer_type: 'non_eu_business', country: 'GB' })
+
+  function makeSchedule(items: Array<Record<string, unknown>>) {
+    return {
+      id: 'sched-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      customer_id: 'cust-1',
+      name: 'Monthly retainer',
+      day_of_month: 6,
+      send_hour: 8,
+      payment_terms_days: 30,
+      currency: 'SEK',
+      your_reference: null,
+      our_reference: null,
+      notes: null,
+      auto_send: false,
+      status: 'active',
+      next_run_date: '2026-07-06',
+      last_run_at: null,
+      last_invoice_id: null,
+      last_run_warning: null,
+      generated_count: 0,
+      items: items.map((item, index) => ({
+        id: `si-${index}`,
+        schedule_id: 'sched-1',
+        sort_order: index,
+        line_type: 'product',
+        description: `Rad ${index + 1}`,
+        quantity: 1,
+        unit: 'st',
+        unit_price: 1000,
+        vat_rate: null,
+        ...item,
+      })),
+    } as unknown as Parameters<typeof executeRecurringSchedule>[1]
+  }
+
+  function insertedLines() {
+    return findCalls('invoice_items', 'insert')[0][0] as Array<Record<string, unknown>>
+  }
+
+  function enqueueTail(customer: ReturnType<typeof makeCustomer>) {
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({ data: { id: 'inv-1', invoice_number: null, customer, items: [] }, error: null }) // re-fetch
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+  })
+
+  it('writes the article, its number and revenue account, and its rate on a line without one', async () => {
+    enqueue({ data: domesticCustomer, error: null }) // customers select
+    enqueue({ data: [{ id: 'art-1', article_number: ' A-10 ', revenue_account: '3041', vat_rate: 12 }], error: null }) // articles
+    enqueue({ data: [{ account_number: '3041' }], error: null }) // chart_of_accounts
+    enqueueTail(domesticCustomer)
+
+    await executeRecurringSchedule(
+      client,
+      makeSchedule([{ article_id: 'art-1' }, { description: 'Fri rad' }]),
+      today,
+    )
+
+    const lines = insertedLines()
+    expect(lines[0]).toMatchObject({
+      article_id: 'art-1',
+      article_number: 'A-10',
+      revenue_account: '3041',
+      vat_rate: 12,
+      vat_amount: 120,
+    })
+    expect(lines[1]).toMatchObject({ article_id: null, article_number: null, revenue_account: null, vat_rate: 25 })
+    // The article read is scoped to the schedule's company.
+    expect(findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('keeps the line\'s own rate over the article\'s', async () => {
+    enqueue({ data: domesticCustomer, error: null })
+    enqueue({ data: [{ id: 'art-1', article_number: null, revenue_account: null, vat_rate: 12 }], error: null })
+    enqueueTail(domesticCustomer)
+
+    await executeRecurringSchedule(client, makeSchedule([{ article_id: 'art-1', vat_rate: 6 }]), today)
+
+    expect(insertedLines()[0]).toMatchObject({ article_id: 'art-1', vat_rate: 6, revenue_account: null })
+  })
+
+  it('does not adopt the article\'s domestic rate for an export customer', async () => {
+    enqueue({ data: nonEuCustomer, error: null })
+    enqueue({ data: [{ id: 'art-1', article_number: null, revenue_account: null, vat_rate: 25 }], error: null })
+    enqueueTail(nonEuCustomer)
+
+    await executeRecurringSchedule(client, makeSchedule([{ article_id: 'art-1' }]), today)
+
+    expect(insertedLines()[0]).toMatchObject({ article_id: 'art-1', vat_rate: 0, vat_amount: 0 })
+  })
+
+  it('books by VAT treatment when the article account is inactive, or balance-sheet on a VAT line', async () => {
+    enqueue({ data: domesticCustomer, error: null })
+    enqueue({
+      data: [
+        { id: 'art-1', article_number: null, revenue_account: '3999', vat_rate: 25 },
+        { id: 'art-2', article_number: null, revenue_account: '2420', vat_rate: 25 },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ account_number: '2420' }], error: null }) // 3999 inactive or missing
+    enqueueTail(domesticCustomer)
+
+    await executeRecurringSchedule(
+      client,
+      makeSchedule([{ article_id: 'art-1' }, { article_id: 'art-2' }]),
+      today,
+    )
+
+    const lines = insertedLines()
+    expect(lines[0]).toMatchObject({ article_id: 'art-1', revenue_account: null })
+    expect(lines[1]).toMatchObject({ article_id: 'art-2', revenue_account: null, vat_rate: 25 })
+  })
+
+  it('leaves a line unlinked when the article is not this company\'s', async () => {
+    enqueue({ data: domesticCustomer, error: null })
+    enqueue({ data: [], error: null }) // company-scoped read finds nothing
+    enqueueTail(domesticCustomer)
+
+    await executeRecurringSchedule(client, makeSchedule([{ article_id: 'foreign-art' }]), today)
+
+    expect(insertedLines()[0]).toMatchObject({ article_id: null, article_number: null, revenue_account: null })
+  })
+
+  it('creates nothing when the article read fails', async () => {
+    enqueue({ data: domesticCustomer, error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    await expect(
+      executeRecurringSchedule(client, makeSchedule([{ article_id: 'art-1' }]), today),
+    ).rejects.toThrow(/article read failed/)
+    expect(findCalls('invoices', 'insert')).toHaveLength(0)
+  })
+})

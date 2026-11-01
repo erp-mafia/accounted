@@ -62,6 +62,25 @@ describe('bookResidualAndLink', () => {
     expect(await bookResidualAndLink(supabase as never, COMPANY, USER, KEY, { external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee' })).toBeNull()
   })
 
+  it('refuses a foreign bank account before it reads or books anything (accounted#58)', async () => {
+    // +101 EUR of rows against a 1,150 kr bank leg used to read as a 1,049 kr
+    // residual: the rows' currency subtracted from kronor.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1932', currency: 'EUR' } })
+    await expect(
+      bookResidualAndLink(
+        supabase as never,
+        COMPANY,
+        USER,
+        KEY,
+        { external_ids: [T1], journal_entry_id: E1, kind: 'rounding' },
+        { dryRun: true },
+      ),
+    ).rejects.toMatchObject({ code: 'RESIDUAL_FOREIGN_CURRENCY' })
+    expect(matchMock).not.toHaveBeenCalled()
+    expect(createEntryMock).not.toHaveBeenCalled()
+  })
+
   it('previews a bank fee: expense on 6570 against the bank account, dated on the transaction', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK' } })

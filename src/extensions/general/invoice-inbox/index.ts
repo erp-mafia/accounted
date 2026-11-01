@@ -275,21 +275,19 @@ export const invoiceInboxExtension: Extension = {
       // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked
       // from here, and carry a person's type onto the item already queued.
       eventType: 'document.classified',
+      // A failure throws to the event bus, which logs it as an error with the
+      // event type and this consumer's name and keeps it from the classifier (lib/events/bus.ts).
       handler: async (payload: EventPayload<'document.classified'>) => {
-        try {
-          const outcome = await routeClassifiedDocument(createServiceClientNoCookies(), {
-            documentId: payload.document.id,
-            companyId: payload.companyId,
-            userId: payload.userId,
-            docType: payload.docType,
-            admission: payload.admission,
-            decidedBy: payload.decidedBy,
-          })
-          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv' || outcome === 'duplicate_of_queued_or_booked') {
-            extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
-          }
-        } catch (err) {
-          extensionLog.warn('routing classified document failed', { doc: payload.document.id, reason: err instanceof Error ? err.message : String(err) })
+        const outcome = await routeClassifiedDocument(createServiceClientNoCookies(), {
+          documentId: payload.document.id,
+          companyId: payload.companyId,
+          userId: payload.userId,
+          docType: payload.docType,
+          admission: payload.admission,
+          decidedBy: payload.decidedBy,
+        })
+        if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv' || outcome === 'duplicate_of_queued_or_booked') {
+          extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
         }
       },
     },

@@ -301,17 +301,26 @@ export interface SkattekontoLinkOptions {
   account?: SkattekontoLedgerAccount
 }
 
-/** Rows already linked to an entry, with the amounts the group check needs. */
+/** Swedish, shown as is: a failed read of the rows already on a verifikat. */
+export const LINKED_ROWS_READ_FAILED =
+  'Det gick inte att läsa vilka skattekontohändelser som redan är kopplade till verifikatet. Försök igen.'
+
+/**
+ * Rows already linked to an entry, with the amounts the group check needs.
+ * A failed read throws (accounted#58): read as "none linked", a verifikat
+ * another row already explains would settle this one too and be linked twice.
+ */
 async function fetchLinkedRows(
   supabase: SupabaseClient,
   companyId: string,
   journalEntryId: string,
 ): Promise<Array<{ id: string; belopp_skatteverket: number | string }>> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('skattekonto_transactions')
     .select('id, belopp_skatteverket')
     .eq('company_id', companyId)
     .eq('journal_entry_id', journalEntryId)
+  if (error) throw new Error(LINKED_ROWS_READ_FAILED)
   if (Array.isArray(data)) return data as Array<{ id: string; belopp_skatteverket: number | string }>
   return data ? [data as { id: string; belopp_skatteverket: number | string }] : []
 }

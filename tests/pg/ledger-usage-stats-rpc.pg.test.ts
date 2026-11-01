@@ -10,9 +10,13 @@
  * aggregation (credit notes and reversed invoices excluded; moms,
  * öresavrundning, skuld and bank rows never the dominant account, crm#1310),
  * and two-company isolation (a foreign company id yields empty sections).
+ * Counterparty patterns key on the text the counterparty templates learn
+ * from (merchant name, else original_description, else description), so a
+ * feed without merchant names still gets patterns, on the template key.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { namesCounterparty, normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getPool } from './setup'
 import {
   seedCompany,
@@ -39,7 +43,9 @@ async function insertBookedTransaction(params: {
   companyId: string
   userId: string
   journalEntryId: string | null
-  merchantName: string
+  merchantName: string | null
+  originalDescription?: string | null
+  description?: string
   category: string
   date: string
   amount?: number
@@ -48,18 +54,19 @@ async function insertBookedTransaction(params: {
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, date, description,
-        journal_entry_id, merchant_name, category)
-     VALUES ($1, $2, $3, 'SEK', $4, $5, $6, $7, $8, $9)`,
+        journal_entry_id, merchant_name, category, original_description)
+     VALUES ($1, $2, $3, 'SEK', $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       params.companyId,
       params.userId,
       params.amount ?? -500,
       params.date,
-      `Payment ${params.merchantName}`,
+      params.description ?? `Payment ${params.merchantName}`,
       params.journalEntryId,
       params.merchantName,
       params.category,
+      params.originalDescription ?? null,
     ],
   )
   return id
@@ -77,7 +84,9 @@ async function bookMerchant(params: {
   userId: string
   companyId: string
   fiscalPeriodId: string
-  merchantName: string
+  merchantName: string | null
+  originalDescription?: string | null
+  description?: string
   category: string
   date: string
   expenseAccount: string
@@ -89,6 +98,8 @@ async function bookMerchant(params: {
     userId: params.userId,
     journalEntryId: null,
     merchantName: params.merchantName,
+    originalDescription: params.originalDescription,
+    description: params.description,
     category: params.category,
     date: params.date,
   })
@@ -550,5 +561,114 @@ describe('get_ledger_usage_stats', () => {
     expect(klarna!.occurrences).toBe(1)
     expect(klarna!.dominant_category).toBe('expense_card_fees')
     expect(klarna!.dominant_account_number).toBe('6580')
+  })
+})
+
+describe('get_ledger_usage_stats: feeds without a merchant name', () => {
+  let userId: string
+  let companyId: string
+  let fiscalPeriodId: string
+  let voucher = 1
+  // ASCII only: the key must not depend on the database's case-folding locale.
+  const LONG_TEXT = `Butik Med Ett Mycket Langt Namn ${'Stockholm '.repeat(8)}`.trim()
+
+  beforeAll(async () => {
+    const seeded = await seedCompany()
+    userId = seeded.userId
+    companyId = seeded.companyId
+    fiscalPeriodId = seeded.fiscalPeriodId
+    const book = (row: {
+      merchantName?: string | null
+      originalDescription?: string | null
+      description: string
+      category?: string
+      account?: string
+      date?: string
+    }) =>
+      bookMerchant({
+        userId, companyId, fiscalPeriodId,
+        merchantName: row.merchantName ?? null,
+        originalDescription: row.originalDescription ?? null,
+        description: row.description,
+        category: row.category ?? 'expense_software',
+        date: row.date ?? '2026-06-01',
+        expenseAccount: row.account ?? '5420',
+        voucherNumber: voucher++,
+      })
+
+    // The bank's original text carries the counterparty (no merchant name);
+    // the working title was trimmed at ingest. Three spellings, one key.
+    await book({ originalDescription: 'KORTKÖP SPOTIFY AB 2026-05-01', description: 'SPOTIFY AB', date: '2026-05-01' })
+    await book({ originalDescription: 'Spotify AB', description: 'Spotify', date: '2026-05-31' })
+    await book({ originalDescription: 'SPOTIFY AB', description: 'Musik', date: '2026-06-30' })
+    // No merchant name and no original text: the description is the text.
+    await book({ merchantName: '', description: 'Telia Sverige AB', category: 'expense_telecom', account: '6212' })
+    // A merchant name wins over the bank's texts.
+    await book({ merchantName: 'SL', originalDescription: 'KORTKÖP SL ACCESS', description: 'Resa', category: 'expense_travel', account: '5810' })
+    // Texts that only say how it was paid name no one, and a one-letter key
+    // is no identity: no pattern for any of these.
+    await book({ originalDescription: 'INTERNET BET 4', description: 'INTERNET BET 4', category: 'expense_other', account: '4010' })
+    await book({ originalDescription: 'Insättning', description: 'Insättning', category: 'expense_other', account: '4010' })
+    await book({ originalDescription: 'Autogiro', description: 'Autogiro', category: 'expense_other', account: '4010' })
+    await book({ originalDescription: 'J', description: 'J', category: 'expense_other', account: '4010' })
+    // A bank text longer than any merchant name.
+    await book({ originalDescription: LONG_TEXT, description: 'Butik', category: 'expense_other', account: '4010' })
+  })
+
+  it('builds patterns from original_description and description when merchant_name is empty', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const spotify = stats.counterparty_patterns.find((p) => p.counterparty_key === 'spotify')
+    expect(spotify).toMatchObject({
+      occurrences: 3,
+      last_booked: '2026-06-30',
+      dominant_category: 'expense_software',
+      dominant_category_count: 3,
+      dominant_account_number: '5420',
+    })
+    // Keyed on the immutable bank text, not the renamed working title.
+    expect(stats.counterparty_patterns.find((p) => p.counterparty_key === 'musik')).toBeUndefined()
+
+    const telia = stats.counterparty_patterns.find((p) => p.counterparty_key === 'telia sverige')
+    expect(telia).toMatchObject({ counterparty: 'Telia Sverige AB', occurrences: 1, dominant_account_number: '6212' })
+
+    const sl = stats.counterparty_patterns.find((p) => p.counterparty_key === 'sl')
+    expect(sl).toMatchObject({ counterparty: 'SL', occurrences: 1, dominant_account_number: '5810' })
+    expect(stats.counterparty_patterns.find((p) => p.counterparty_key.includes('access'))).toBeUndefined()
+  })
+
+  it('leaves out payment-method texts and keys shorter than two characters', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const keys = stats.counterparty_patterns.map((p) => p.counterparty_key)
+    for (const raw of ['INTERNET BET 4', 'Insättning', 'Autogiro']) {
+      expect(namesCounterparty(raw), raw).toBe(false)
+      expect(keys).not.toContain(normalizeCounterpartyName(raw))
+    }
+    expect(keys).not.toContain('j')
+    expect(keys.every((k) => k.length >= 2)).toBe(true)
+  })
+
+  it('returns the categorization_templates key, so the template join stays exact', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const byKey = new Map(stats.counterparty_patterns.map((p) => [p.counterparty_key, p]))
+    for (const raw of ['KORTKÖP SPOTIFY AB 2026-05-01', 'Telia Sverige AB', 'SL', LONG_TEXT]) {
+      expect(byKey.has(normalizeCounterpartyName(raw)), raw).toBe(true)
+    }
+  })
+
+  it('cuts the display name at 60 characters and keeps the output shape', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const long = stats.counterparty_patterns.find(
+      (p) => p.counterparty_key === normalizeCounterpartyName(LONG_TEXT),
+    )
+    expect(LONG_TEXT.length).toBeGreaterThan(60)
+    expect(long!.counterparty).toBe(LONG_TEXT.slice(0, 60))
+    expect(long!.occurrences).toBe(1)
+    for (const p of stats.counterparty_patterns) {
+      expect(Object.keys(p).sort()).toEqual([
+        'counterparty', 'counterparty_key', 'dominant_account_number', 'dominant_category',
+        'dominant_category_count', 'last_booked', 'occurrences',
+      ])
+      expect(p.counterparty.length).toBeLessThanOrEqual(60)
+    }
   })
 })

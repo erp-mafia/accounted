@@ -445,6 +445,33 @@ describe('syncInboundPeppolDocuments', () => {
     expect(transport.fetchInboundDocumentXml).toHaveBeenCalledTimes(1)
   })
 
+  it('archives the rest of the page past a failure when the listing consumes it (Qvalia direct marks the page read)', async () => {
+    const transport = makeTransport({ listInboundDocuments: listing([newer, older]), inboundListingConsumes: true })
+    enqueue({ data: null, error: null })                                          // invoice cursor
+    enqueue({ data: null, error: null })                                          // older: no existing row
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } }) // older: insert fails transiently
+    enqueue({ data: null, error: null })                                          // newer: no existing row
+    enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer' }), error: null }) // newer insert
+    unregistered()                                                                // newer: nobody registered
+    enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer', status: 'unrouted' }), error: null })
+    enqueue({ data: null, error: null })                                          // credit note cursor
+
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {})
+
+    const summary = await syncInboundPeppolDocuments({ service, transport, deliver: null, log, now: NOW })
+
+    expect(summary).toMatchObject({ listed: 2, archived: 1, failed: 1, unrouted: 1 })
+    expect(summary.errors).toEqual([{ providerDocumentId: 'older', reason: expect.stringContaining('connection failure') }])
+    expect(inserts().map((insert) => insert.provider_document_id)).toEqual(['older', 'newer'])
+    // Not listed again by the provider: an error, not a warning.
+    expect(errorSpy).toHaveBeenCalledWith(
+      'inbound Peppol document could not be archived; the provider does not list it again',
+      expect.anything(),
+      { documentType: 'Invoice', providerDocumentId: 'older' },
+    )
+    errorSpy.mockRestore()
+  })
+
   it('records a payload the archive can never hold as a terminal stub and moves on to the newer document', async () => {
     const transport = makeTransport({ listInboundDocuments: listing([older, newer]) })
     const stub = row({ id: 'stub-1', provider_document_id: 'older', ubl_json: {}, status: 'failed', last_error: `${PEPPOL_INBOUND_UNARCHIVABLE_PREFIX}check constraint` })

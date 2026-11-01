@@ -14,7 +14,10 @@ const log = createLogger('events/inbox-companion')
  * door emits supplier_invoice.match_confirmed (the dashboard and v1 match,
  * register-and-settle, a signed payment order's debit, a samlingsbetalning),
  * so none of them can leave the receipt in the inbox. Best effort: a failure
- * is logged and never fails the settlement, which is already booked.
+ * never fails the settlement, which is already booked. A refusal (the pair
+ * no longer holds, a locked period) is an answer, logged where it is made; an
+ * exception throws to the event bus, which logs it as an error with the event
+ * type and this consumer's name (lib/events/bus.ts).
  */
 export async function followReceiptOnSupplierPayment({
   supplierInvoice,
@@ -22,8 +25,10 @@ export async function followReceiptOnSupplierPayment({
   userId,
 }: EventPayload<'supplier_invoice.match_confirmed'>): Promise<void> {
   if (!companyId || !supplierInvoice?.id) return
-  await followReceiptsOfSupplierInvoice(
+  const follows = await followReceiptsOfSupplierInvoice(
     { supabase: createServiceClientNoCookies(), companyId, userId, log },
     supplierInvoice.id,
   )
+  const crashed = follows.filter((follow) => follow.status === 'failed' && follow.code === 'UNKNOWN_ERROR').length
+  if (crashed > 0) throw new Error(`inbox companion: ${crashed} receipt follow(s) could not run`)
 }

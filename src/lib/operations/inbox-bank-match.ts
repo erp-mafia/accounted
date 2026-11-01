@@ -51,19 +51,20 @@ export async function proposeBankMatchForInboxItem(
   }
 }
 
-/** Bank rows arrived: look again at the open items they could pay. Never throws. */
+/**
+ * Bank rows arrived: look again at the open items they could pay. Items it
+ * could not look at are logged; a failure of the whole pass throws to the
+ * event bus (the only caller is the transaction.synced consumer), which logs
+ * it as an error and keeps it from the sync (lib/events/bus.ts).
+ */
 export async function proposeBankMatchesForArrivedRows(
   supabase: SupabaseClient,
   companyId: string,
   transactions: readonly ArrivedBankRow[],
   log: Pick<Logger, 'warn'> = defaultLog,
 ): Promise<void> {
-  try {
-    const { failed } = await refreshInboxBankMatchesForTransactions(supabase, companyId, transactions, INBOX_BANK_MATCH_RULES)
-    if (failed > 0) log.warn('inbox bank match: items not refreshed', { companyId, failed })
-  } catch (err) {
-    log.warn('inbox bank match on bank arrival failed', { companyId, reason: reason(err) })
-  }
+  const { failed } = await refreshInboxBankMatchesForTransactions(supabase, companyId, transactions, INBOX_BANK_MATCH_RULES)
+  if (failed > 0) log.warn('inbox bank match: items not refreshed', { companyId, failed })
 }
 
 // ---------------------------------------------------------------------------

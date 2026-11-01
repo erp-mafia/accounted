@@ -130,10 +130,15 @@ class EventBus {
     if (fallback.length > 0) await this.run(event, fallback)
   }
 
-  /** Run handlers concurrently; a rejection is logged, never thrown. */
+  /**
+   * Run handlers concurrently; a rejection is logged, never thrown. Each
+   * call goes through an async wrapper, so a handler that throws before it
+   * returns a promise is a rejection too, not a throw out of emit() that
+   * skips the handlers after it.
+   */
   private async run(event: CoreEvent, handlers: AnyHandler[]): Promise<PromiseSettledResult<void>[]> {
     const results = await Promise.allSettled(
-      handlers.map((handler) => handler(event.payload))
+      handlers.map(async (handler) => handler(event.payload))
     )
 
     for (let i = 0; i < results.length; i++) {

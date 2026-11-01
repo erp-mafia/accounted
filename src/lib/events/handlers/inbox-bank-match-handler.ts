@@ -9,7 +9,8 @@ import { proposeBankMatchesForArrivedRows } from '@/lib/operations/inbox-bank-ma
  * so an invoice that came in before its payment shows "Ser redan betald ut"
  * once the payment is in the bank. The bank feed's own matchers run first
  * (they hint or settle the row during the ingest), and a row they claimed is
- * never proposed. Best effort: a failure is logged and never fails the sync.
+ * never proposed. Best effort: a failure throws to the event bus, which logs
+ * it as an error and never fails the sync with it (lib/events/bus.ts).
  */
 export function registerInboxBankMatchHandler(): () => void {
   return eventBus.on('transaction.synced', proposeInboxBankMatches)

@@ -56,10 +56,21 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * start reads that balance into the feed (planFetch) unless 1686 already
  * holds a balance in the ledger, in which case the books carry it and the
  * feed starts at Swedish midnight of the start day.
+ *
+ * Currency (accounted#58 P1.10): the cash account on 1686 is kept in SEK, and
+ * a cash account has exactly one currency. A Stripe account can also hold
+ * balances in other currencies; Stripe states each balance transaction in
+ * the currency of its balance and gives no kronor value for it. Such a row
+ * on the SEK account can never be booked (the bank-booking guards refuse a
+ * row whose currency differs from its cash account's) and hides from the
+ * account's views and reconciliation, so the feed leaves it out and counts
+ * it in `foreignCurrency`.
  */
 
 /** BAS ledger account for the Stripe balance cash account. */
 export const STRIPE_LEDGER_ACCOUNT = '1686'
+/** Currency of the Stripe balance cash account; see "Currency" above. */
+const STRIPE_LEDGER_CURRENCY = 'SEK'
 /** BAS 2026 name for 1686; used when creating the chart account. */
 const STRIPE_LEDGER_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 /** transactions.import_source for Stripe feed rows. */
@@ -111,6 +122,8 @@ export interface StripeTransactionSyncSummary {
   /** Rows skipped by external_id / content dedup. */
   duplicates: number
   errors: number
+  /** Processed balance transactions left out for not being in SEK. */
+  foreignCurrency: number
   /** Set when the caller's time budget ran out before all chunks processed. */
   deadlineReached?: boolean
   /** Set when the connection turned out to be revoked upstream. */
@@ -262,6 +275,14 @@ export function mapBalanceTransaction(
     })
   }
   return rows
+}
+
+/**
+ * Whether a balance transaction can land on the SEK cash account on 1686:
+ * only one in SEK (see "Currency" in the header).
+ */
+export function isLedgerCurrency(txn: Pick<BalanceTxnLike, 'currency'>): boolean {
+  return txn.currency.toUpperCase() === STRIPE_LEDGER_CURRENCY
 }
 
 /** Moves the cursor forward to `ms`, never back. */
@@ -445,7 +466,7 @@ async function ensureStripeBalanceAccount(
     supabase,
     connection.company_id,
     STRIPE_LEDGER_ACCOUNT,
-    'SEK',
+    STRIPE_LEDGER_CURRENCY,
     'Stripe-saldo',
   )
   if (firstRun) {
@@ -494,6 +515,7 @@ export async function syncStripeBalanceTransactions(
     imported: 0,
     duplicates: 0,
     errors: 0,
+    foreignCurrency: 0,
   }
   if (!connection.stripe_account_id || connection.status !== 'active') return summary
 
@@ -539,6 +561,12 @@ export async function syncStripeBalanceTransactions(
 
   await ensureStripeBalanceAccount(supabase, connection, firstRun, log)
 
+  /** Left-out non-SEK balance transactions per currency, for the log. */
+  const foreignByCurrency: Record<string, number> = {}
+  // Earliest chunk with a row that failed to insert; the cursor never passes
+  // it, as in the webshop order syncs.
+  let failureFloorMs = Number.POSITIVE_INFINITY
+
   for (const chunk of chunked(txns, INGEST_CHUNK_SIZE)) {
     if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
       summary.deadlineReached = true
@@ -550,35 +578,62 @@ export async function syncStripeBalanceTransactions(
       break
     }
 
-    const rows = chunk.flatMap((txn) =>
+    const bookable: BalanceTxnLike[] = []
+    for (const txn of chunk) {
+      if (isLedgerCurrency(txn)) {
+        bookable.push(txn)
+      } else {
+        const currency = txn.currency.toUpperCase()
+        foreignByCurrency[currency] = (foreignByCurrency[currency] ?? 0) + 1
+        summary.foreignCurrency += 1
+      }
+    }
+    const rows = bookable.flatMap((txn) =>
       mapBalanceTransaction(connection.stripe_account_id!, txn),
     )
     // Auto-categorization is skipped on purpose: booking Stripe money is a
     // human decision in the inbox, like any bank feed. Invoice matching still
-    // runs (suggestions only), and FX enrichment covers non-SEK rows.
+    // runs (suggestions only).
     //
     // stableExternalIds: the ids embed Stripe's balance-transaction id, which
     // names one booking for good. Two refunds of the same amount on the same
     // day share a title ("Stripe-återbetalning"); when they land in different
     // ingest calls (a chunk boundary, a later run), the second must not be
     // dropped as a copy of the first.
-    const result = await ingestTransactions(
-      supabase,
-      connection.company_id,
-      connection.user_id,
-      rows,
-      { settlementAccount: STRIPE_LEDGER_ACCOUNT, skipAutoCategorization: true, stableExternalIds: true },
-    )
-    summary.imported += result.imported
-    summary.duplicates += result.duplicates
-    summary.errors += result.errors
+    if (rows.length > 0) {
+      const result = await ingestTransactions(
+        supabase,
+        connection.company_id,
+        connection.user_id,
+        rows,
+        { settlementAccount: STRIPE_LEDGER_ACCOUNT, skipAutoCategorization: true, stableExternalIds: true },
+      )
+      summary.imported += result.imported
+      summary.duplicates += result.duplicates
+      summary.errors += result.errors
+      if (result.errors > 0) {
+        // A failed insert is counted, not stored. Hold the cursor below this
+        // chunk so the next run lists it again and retries the row (the stored
+        // ones are external_id duplicates there); moving on would leave a row
+        // that fails two runs in a row outside the 24h overlap for good. The
+        // cron runner reports the count as an error (lib/webshop-orders/order-cron).
+        failureFloorMs = Math.min(failureFloorMs, chunk[0].created * 1000 - 1000)
+        log.warn('balance-transaction rows not imported; cursor held below them', {
+          connectionId: connection.id,
+          errors: result.errors,
+          code: result.first_error?.code ?? null,
+          reason: result.first_error?.message ?? null,
+        })
+      }
+    }
 
     // Persist the cursor after each chunk so a crash or deadline stop resumes
-    // from the last fully-processed chunk (the 24h overlap absorbs the rest).
-    // Never back: a first run's chunks from before the connection moment
-    // leave the seeded cursor where it is, so a stopped first run reruns as
-    // a first run instead of reading as a backfill to that earlier date.
-    await advanceWatermark(supabase, connection, chunk[chunk.length - 1].created * 1000)
+    // from the last fully-processed chunk (the 24h overlap absorbs the rest),
+    // capped by the failure floor. Never back: a first run's chunks from
+    // before the connection moment leave the seeded cursor where it is, so a
+    // stopped first run reruns as a first run instead of reading as a
+    // backfill to that earlier date.
+    await advanceWatermark(supabase, connection, Math.min(chunk[chunk.length - 1].created * 1000, failureFloorMs))
   }
 
   // Scanned-through watermark, as in the webshop order syncs: a window listed
@@ -586,7 +641,14 @@ export async function syncStripeBalanceTransactions(
   // when the last transaction is days old. The 24h overlap re-poll covers
   // transactions Stripe made visible while the run was in flight.
   if (windowExhausted && !summary.deadlineReached) {
-    await advanceWatermark(supabase, connection, runStartMs)
+    await advanceWatermark(supabase, connection, Math.min(runStartMs, failureFloorMs))
+  }
+
+  if (summary.foreignCurrency > 0) {
+    log.warn('non-SEK balance transactions left out of the feed', {
+      connectionId: connection.id,
+      currencies: foreignByCurrency,
+    })
   }
 
   log.info('stripe balance-transaction sync done', {

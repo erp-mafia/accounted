@@ -203,6 +203,34 @@ function sieJobCommitActor(job: SIEJob): CommitActor | null {
   return { type: sealed.type as CommitActor['type'], ...(typeof sealed.label === 'string' ? {label:sealed.label} : {}) }
 }
 
+/**
+ * Claims of one job from which it counts as looping. A finished import took
+ * at most 4 claims in production (2026-11-01). A failing step is counted by
+ * record_sie_job_failure and stops at 32 failures, but a run killed at the
+ * route's 300 s and a step that yields without progress are counted by
+ * nothing: yield_sie_import_job and a lapsed lease leave consecutive_failures
+ * alone, so such a job is claimed every minute for good (accounted#115). Only
+ * job_attempt, raised by every claim, shows it. Pausing the job needs an RPC
+ * change; until then the claim makes it visible.
+ */
+export const SIE_RECLAIM_ALERT_ATTEMPTS = 20
+
+/** Logs a claimed job that keeps being claimed without finishing, as an error. */
+export function reportRepeatedReclaim(job: SIEJob, logger: Pick<typeof log, 'error'> = log): void {
+  if (!(job.job_attempt >= SIE_RECLAIM_ALERT_ATTEMPTS)) return
+  logger.error('SIE job reclaimed repeatedly without finishing', {
+    alert: true,
+    companyId: job.company_id,
+    importId: job.id,
+    state: job.job_state,
+    phase: job.job_phase,
+    attempt: job.job_attempt,
+    consecutiveFailures: job.consecutive_failures,
+    chunksDone: job.chunks_done,
+    chunksTotal: job.chunks_total,
+  })
+}
+
 /** after() is only a fast path. Cron owns recovery, independent of the browser. */
 export async function runSIEWorker(options: { importId?:string; budgetMs?:number; supabase?:SupabaseClient } = {}): Promise<{ jobs:number; chunks:number }> {
   if (!runsSIEJobs()) return {jobs:0,chunks:0}
@@ -216,6 +244,7 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
     if (error) throw new Error(error.message)
     if (!data?.id) break
     let job = data as SIEJob
+    reportRepeatedReclaim(job)
     const learning: FinalizeLearning = {}
     jobs++
     try {

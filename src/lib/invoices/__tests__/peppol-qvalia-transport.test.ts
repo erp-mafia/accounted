@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -658,6 +661,25 @@ describe('Qvalia transport: receiving side', () => {
     expect(messages.map((m) => m.providerDocumentId)).toEqual(['in-1', 'in-2'])
     expect(messages[0]).toMatchObject({ provider: 'qvalia', documentType: 'Invoice' })
     expect(messages[0].payload).toHaveProperty('Invoice')
+  })
+
+  it('reads a credit note whose integrationId sits under CreditNote, and logs a listed document it cannot name', async () => {
+    // The read endpoint has marked both read: a silent skip lost them for good (accounted#115).
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: 'success',
+      data: [
+        { CreditNote: { integrationId: 'cn-1', 'cbc:ID': [{ _: 'K-1' }] } },
+        { CreditNote: { 'cbc:ID': [{ _: 'K-2' }] } },
+      ],
+    }))
+    const messages = await transport.listInboundDocuments!({ documentType: 'CreditNote', limit: 10 })
+    expect(messages.map((m) => m.providerDocumentId)).toEqual(['cn-1'])
+    expect(logMock.error).toHaveBeenCalledWith('Qvalia listed an inbound document without an integrationId; it is not archived', {
+      documentType: 'CreditNote',
+      markedRead: true,
+      keys: ['CreditNote'],
+    })
+    expect(transport.inboundListingConsumes).toBe(true)
   })
 
   it('re-syncs with includeRead, handles 204 as empty, and reads credit notes from their own collection', async () => {

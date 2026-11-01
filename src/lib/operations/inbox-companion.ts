@@ -239,24 +239,18 @@ export async function followPairedReceipt(ctx: OperationContext, invoiceItemId: 
  * A supplier invoice was settled against a bank row: the receipt of every
  * inbox item it was registered from follows onto the payment's verifikat
  * (the invoice registered unpaid, its receipt kept as its companion, then
- * paid). Never throws.
+ * paid). Each item's follow never throws (followPairedReceipt); a failed
+ * read of the items throws to the caller, the supplier_invoice.match_confirmed
+ * consumer, so the event bus logs it as an error.
  */
 export async function followReceiptsOfSupplierInvoice(ctx: OperationContext, supplierInvoiceId: string): Promise<PairedReceiptFollow[]> {
-  try {
-    const { data, error } = await ctx.supabase
-      .from('invoice_inbox_items')
-      .select('id')
-      .eq('company_id', ctx.companyId)
-      .eq('created_supplier_invoice_id', supplierInvoiceId)
-    if (error) throw error
-    const out: PairedReceiptFollow[] = []
-    for (const row of (data ?? []) as Array<{ id: string }>) out.push(await followPairedReceipt(ctx, row.id))
-    return out
-  } catch (error) {
-    ctx.log.warn('inbox companion: the supplier invoice\'s inbox items could not be read', {
-      supplierInvoiceId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    return [{ status: 'failed', code: 'UNKNOWN_ERROR' }]
-  }
+  const { data, error } = await ctx.supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', ctx.companyId)
+    .eq('created_supplier_invoice_id', supplierInvoiceId)
+  if (error) throw new Error(`inbox companion: the supplier invoice's inbox items could not be read: ${error.message}`)
+  const out: PairedReceiptFollow[] = []
+  for (const row of (data ?? []) as Array<{ id: string }>) out.push(await followPairedReceipt(ctx, row.id))
+  return out
 }

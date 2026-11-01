@@ -2131,11 +2131,16 @@ export interface RecurringInvoiceScheduleItem {
   quantity: number
   unit: string
   unit_price: number
-  // null = inherit customer's default VAT rate at spawn time
+  // null = inherit customer's default VAT rate at spawn time (the linked
+  // article's rate when the customer may carry it)
   vat_rate: number | null
   // Per-item bag copied onto the generated invoice_items.dimensions; merges
   // over the schedule default on that item's revenue line.
   dimensions?: Record<string, string>
+  // Article the line was picked from; the spawn copies it (with the article's
+  // number and revenue account) onto the generated invoice line. Undefined
+  // until migration 20261101003800 has run.
+  article_id?: string | null
   created_at: string
 }
 
@@ -4005,6 +4010,7 @@ export type YearEndBlockerCode =
   | 'PERIOD_LOCKED'
   | 'CLOSING_ENTRY_EXISTS'
   | 'DRAFT_ENTRIES'
+  | 'DRAFT_CHECK_FAILED'
   | 'UNEXPLAINED_VOUCHER_GAP'
   | 'SEQUENCE_COUNTER_BEHIND'
   | 'TRIAL_BALANCE_UNBALANCED'

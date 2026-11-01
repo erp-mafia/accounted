@@ -28,6 +28,14 @@ describe('inbox companion handler', () => {
     )
   })
 
+  it('an item whose follow crashed fails the delivery, so the event bus logs it; a refusal does not', async () => {
+    const payload = { supplierInvoice: { id: 'si-1' } as SupplierInvoice, transaction: { id: 'tx-1' } as Transaction, userId: 'user-1', companyId: 'co-1' }
+    followReceipts.mockResolvedValue([{ status: 'failed', code: 'INBOX_COMPANION_NOT_PAIRED' }, { status: 'completed', journal_entry_id: 'je-1', transaction_id: 'tx-1' }])
+    await expect(followReceiptOnSupplierPayment(payload)).resolves.toBeUndefined()
+    followReceipts.mockResolvedValue([{ status: 'failed', code: 'UNKNOWN_ERROR' }])
+    await expect(followReceiptOnSupplierPayment(payload)).rejects.toThrow('1 receipt follow(s) could not run')
+  })
+
   it('does nothing without a company or an invoice', async () => {
     await followReceiptOnSupplierPayment({ supplierInvoice: { id: 'si-1' } as SupplierInvoice, transaction: {} as Transaction, userId: 'u', companyId: '' })
     await followReceiptOnSupplierPayment({ supplierInvoice: {} as SupplierInvoice, transaction: {} as Transaction, userId: 'u', companyId: 'co-1' })

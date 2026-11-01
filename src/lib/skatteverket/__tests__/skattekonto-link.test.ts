@@ -138,6 +138,17 @@ describe('linkSkattekontoRow', () => {
     await expect(linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)).rejects.toMatchObject({ code })
   })
 
+  it('fails closed when the rows already on the entry cannot be read (accounted#58)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: row() })
+    enqueue({ data: entry([{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }]) })
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout' } })
+    const failed = linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)
+    await expect(failed).rejects.toThrow(/redan är kopplade till verifikatet/)
+    await expect(failed).rejects.not.toBeInstanceOf(SkattekontoLinkError)
+    expect(findCalls('skattekonto_transactions', 'update')).toHaveLength(0)
+  })
+
   it('refuses an entry already linked by another row when the group no longer settles it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: row() })

@@ -9,6 +9,7 @@ import { fetchLiveLedgerSettlements } from '@/lib/reconciliation/ledger-settleme
 import {
   evaluateSkattekontoLink,
   groupSettlesEntry,
+  LINKED_ROWS_READ_FAILED,
   linkSkattekontoRows,
   SkattekontoLinkError,
 } from '@/lib/skatteverket/skattekonto-link'
@@ -635,13 +636,15 @@ export async function findMatchSuggestionsBulk(
   // entry with links is only a candidate for a row that the group check
   // still accepts together with them.
   const candidateEntryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
-  const { data: linked } = candidateEntryIds.length
+  const { data: linked, error: linkedError } = candidateEntryIds.length
     ? await supabase
         .from('skattekonto_transactions')
         .select('journal_entry_id, belopp_skatteverket')
         .eq('company_id', companyId)
         .in('journal_entry_id', candidateEntryIds)
-    : { data: [] }
+    : { data: [], error: null }
+  // Read as "none linked", a taken verifikat would be proposed again.
+  if (linkedError) return new Map()
 
   // AGI period extraction across the batch.
   const periods: Array<{ year: number; month: number }> = []
@@ -1643,11 +1646,14 @@ export async function matchSkattekontoToEntry(
 
   // Rows already on this verifikat join the check (crm#104): the entry is
   // only "taken" when the group with this row added no longer settles it.
-  const { data: linkedData } = await supabase
+  // A failed read throws: read as "none linked", a verifikat another row
+  // already explains would be linked a second time (accounted#58).
+  const { data: linkedData, error: linkedError } = await supabase
     .from('skattekonto_transactions')
     .select('id, belopp_skatteverket')
     .eq('company_id', companyId)
     .eq('journal_entry_id', journalEntryId)
+  if (linkedError) throw new Error(LINKED_ROWS_READ_FAILED)
   const linkedRows = (Array.isArray(linkedData) ? linkedData : linkedData ? [linkedData] : []) as Array<{
     id: string
     belopp_skatteverket?: number | string | null

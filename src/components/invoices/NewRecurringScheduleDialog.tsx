@@ -48,8 +48,11 @@ import {
   mentionsPeriodPlaceholder,
 } from '@/lib/invoices/recurring-placeholders'
 import UnitPicker from '@/components/invoices/UnitPicker'
+import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { sortArticles } from '@/lib/articles/sort'
+import { articleLineName, documentLanguageOf } from '@/lib/articles/line-name'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 
 const currencies: readonly Currency[] = CURRENCIES
@@ -165,6 +168,10 @@ function NewRecurringScheduleForm({
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>(
     () => ({ ...(schedule?.default_dimensions ?? {}) }),
   )
+  // The article register (accounted#52), numeric-aware order like the
+  // invoice editor's picker.
+  const { articles: articleRows } = useArticles()
+  const articles = useMemo(() => sortArticles(articleRows), [articleRows])
 
   const schema = useMemo(() => {
     const itemSchema = z
@@ -185,6 +192,9 @@ function NewRecurringScheduleForm({
         // dropped here is erased by the wholesale item replace on save. The
         // server validates the codes (DimensionsBagSchema).
         dimensions: z.record(z.string(), z.string()).optional(),
+        // The article the line was picked from; declared for the same reason
+        // as dimensions (the save replaces every line).
+        article_id: z.string().uuid().nullable().optional(),
       })
       .superRefine((item, ctx) => {
         // A text row is description-only (may be blank for a spacer).
@@ -315,6 +325,7 @@ function NewRecurringScheduleForm({
                     // Carried whether or not the pickers show: the save sends
                     // the full item list back and would otherwise erase it.
                     dimensions: hasDimensionValues(it.dimensions) ? { ...it.dimensions } : undefined,
+                    article_id: it.article_id ?? null,
                   }))
               : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null }],
         }
@@ -464,6 +475,30 @@ function NewRecurringScheduleForm({
 
   function toggleItemDimensions(index: number) {
     setValue(`items.${index}.dimensions`, isDimOpen(index) ? undefined : {}, { shouldDirty: true })
+  }
+
+  // A line picked from an article keeps the link: every generated invoice
+  // books it to the article's revenue account and, since the dialog has no
+  // Moms field, at the article's rate when the customer may carry it (both
+  // read at each run). Picking fills text, unit and price like the invoice
+  // editor; "Egen rad" drops the link and keeps what was typed.
+  function applyArticle(index: number, value: string) {
+    if (value === 'none') {
+      if (items[index]?.article_id) setValue(`items.${index}.vat_rate`, null, { shouldDirty: true })
+      setValue(`items.${index}.article_id`, null, { shouldDirty: true })
+      return
+    }
+    const article = articles.find((a) => a.id === value)
+    if (!article) return
+    setValue(`items.${index}.article_id`, article.id, { shouldDirty: true })
+    setValue(`items.${index}.description`, articleLineName(article, documentLanguageOf(selectedCustomer)), {
+      shouldValidate: true,
+      shouldDirty: true,
+    })
+    if (article.unit) setValue(`items.${index}.unit`, article.unit, { shouldDirty: true })
+    setValue(`items.${index}.unit_price`, Number(article.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
+    // A stored rate would win over the article's at each run.
+    setValue(`items.${index}.vat_rate`, null, { shouldDirty: true })
   }
 
   function updateItemDimension(index: number, dimNo: string, code: string | null) {
@@ -779,6 +814,19 @@ function NewRecurringScheduleForm({
                   <p className="text-sm text-destructive mt-1">
                     {errors.items[index].description?.message}
                   </p>
+                )}
+                {articles.length > 0 && (
+                  <div className="mt-1">
+                    <ArticleCombobox
+                      value={items[index]?.article_id ?? null}
+                      articles={articles}
+                      onChange={(v) => applyArticle(index, v)}
+                      freeTextLabel={tInvoice('article_free_text')}
+                      placeholder={tInvoice('article_placeholder')}
+                      emptyLabel={tInvoice('article_search_empty')}
+                      ariaLabel={tInvoice('article_label')}
+                    />
+                  </div>
                 )}
                 {dimensionsEnabled && (
                   <Button

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 const getUserById = vi.fn()
 const maybeSingle = vi.fn()
 vi.mock('@/lib/auth/api-keys', () => ({
@@ -101,12 +104,21 @@ describe('agent feedback relay', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('never fails the feedback call when the lookup or the send fails', async () => {
+  it('never fails the feedback call when the lookup or the send fails; each failure reaches the bus as an error', async () => {
+    const failedDelivery = expect.objectContaining({ eventType: 'agent.feedback', handler: 'relayAgentFeedback', companyId: 'co-1' })
     getUserById.mockRejectedValue(new Error('auth unavailable'))
     await expect(emit(feedback())).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenLastCalledWith('handler failed', expect.objectContaining({ message: 'auth unavailable' }), failedDelivery)
+
+    getUserById.mockResolvedValue({ data: { user: null }, error: { message: 'admin api down' } })
+    await expect(emit(feedback())).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenLastCalledWith('handler failed', expect.objectContaining({ message: expect.stringContaining('reporter lookup failed') }), failedDelivery)
+
     getUserById.mockResolvedValue({ data: { user: { email: 'owner@example.test' } } })
     sendEmail.mockResolvedValue({ success: false, error: 'rate limited' })
     await expect(emit(feedback())).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenLastCalledWith('handler failed', expect.objectContaining({ message: expect.stringContaining('send failed: rate limited') }), failedDelivery)
+    expect(logMock.error).toHaveBeenCalledTimes(3)
   })
 })
 

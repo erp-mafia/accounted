@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 const sendAttestRequestMail = vi.fn()
 vi.mock('@/lib/email/send-attest-request', () => ({ sendAttestRequestMail: (...args: unknown[]) => sendAttestRequestMail(...args) }))
 vi.mock('@/lib/email/brand-sender', () => ({ getBaseUrlForCompany: async () => 'https://app.example.se' }))
@@ -93,7 +96,7 @@ describe('notifyAttestersOfInvoice', () => {
     expect(sendAttestRequestMail).not.toHaveBeenCalled()
   })
 
-  it('runs on supplier_invoice.registered and never throws at the emitter', async () => {
+  it('runs on supplier_invoice.registered and never throws at the emitter; a failure reaches the bus as an error', async () => {
     seed({ company_attest_policies: { error: { message: 'boom' } } })
     const unsubscribe = registerAttestNotificationHandler()
     await expect(
@@ -101,5 +104,10 @@ describe('notifyAttestersOfInvoice', () => {
     ).resolves.toBeUndefined()
     unsubscribe()
     expect(sendAttestRequestMail).not.toHaveBeenCalled()
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.anything(), expect.objectContaining({
+      eventType: 'supplier_invoice.registered',
+      handler: 'handleSupplierInvoiceRegistered',
+      companyId: 'c1',
+    }))
   })
 })

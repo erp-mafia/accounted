@@ -348,6 +348,10 @@ import {
 } from '@/lib/pending-operations/schemas/recurring-schedule'
 import { computeInitialRunDate, getStockholmDateHour } from '@/lib/invoices/recurring-schedule-service'
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
+import {
+  RECURRING_ARTICLE_INVALID_MESSAGE,
+  findForeignRecurringArticleIds,
+} from '@/lib/invoices/recurring-schedule-items'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
@@ -1079,6 +1083,23 @@ const CreateSkillArgsSchema = z.object({
 }).strict().refine((input) => input.kind === 'workflow' ? input.steps.length > 0 : input.text.trim().length > 0, {
   message: 'A workflow needs steps; knowledge and an analysis need text',
 })
+
+/**
+ * Recurring schedule lines may link only this company's articles (the commit
+ * executor checks again). Refused at staging so the agent learns it before
+ * anyone approves.
+ */
+async function assertRecurringArticlesOwned(
+  supabase: SupabaseClient,
+  companyId: string,
+  items: ReadonlyArray<{ line_type?: string | null; article_id?: string | null }>,
+): Promise<void> {
+  const { invalidArticleIds, error } = await findForeignRecurringArticleIds(supabase, companyId, items)
+  if (error) throw dbError(error)
+  if (invalidArticleIds.length > 0) {
+    throw badArgument('items', `${RECURRING_ARTICLE_INVALID_MESSAGE} (${invalidArticleIds.join(', ')}). Use gnubok_list_articles.`)
+  }
+}
 
 /**
  * The company's own private item an agent may replace or delete (crm#1506).
@@ -4124,6 +4145,9 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   PERIOD_LOCKED: 'period_locked',
   CLOSING_ENTRY_EXISTS: 'closing_entry_exists',
   DRAFT_ENTRIES: 'draft_entries',
+  // The fail-closed variant of the draft count, like UNBOOKED_CHECK_FAILED:
+  // "we could not tell", so the agent reacts as to drafts (look, re-run).
+  DRAFT_CHECK_FAILED: 'draft_entries',
   UNEXPLAINED_VOUCHER_GAP: 'unexplained_voucher_gap',
   SEQUENCE_COUNTER_BEHIND: 'sequence_mismatch',
   TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
@@ -27534,7 +27558,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_recurring_schedules',
     keywords: ['återkommande fakturor', 'stående faktura', 'abonnemang'],
     title: 'List Recurring Invoice Schedules',
-    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (any 1-12; presets 1/3/6/12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
+    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (1-12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -27557,7 +27581,7 @@ export const tools: McpTool[] = [
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         day_of_month: { type: 'number', description: '1-31; clamps to the last day in shorter months' },
-        interval_months: { type: 'number', description: 'Months between runs: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly' },
+        interval_months: { type: 'number', description: 'Months between runs, 1-12 (3 = quarterly, 12 = yearly)' },
         send_hour: { type: 'number', description: 'Whole hour 0-23 in Europe/Stockholm time' },
         payment_terms_days: { type: 'number' },
         currency: { type: 'string' },
@@ -27583,8 +27607,9 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string' },
               unit_price: { type: 'number' },
-              vat_rate: { type: ['number', 'null'], description: 'null = customer default at spawn time' },
+              vat_rate: { type: ['number', 'null'], description: 'null = customer default at spawn' },
               dimensions: { type: 'object', description: 'Per-item dims bag; wins per key over default_dimensions' },
+              article_id: { type: ['string', 'null'] },
             },
           },
         },
@@ -27600,7 +27625,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, period_start, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(line_type, description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
+          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, period_start, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(*)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -27629,6 +27654,8 @@ export const tools: McpTool[] = [
             unit_price: it.unit_price,
             vat_rate: it.vat_rate ?? null,
             dimensions: it.dimensions ?? {},
+            // '*' above: article_id is absent until migration 20261101003800.
+            article_id: it.article_id ?? null,
           }))
         const monthlyTotalExclVat =
           Math.round(items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unit_price), 0) * 100) / 100
@@ -27687,7 +27714,7 @@ export const tools: McpTool[] = [
           type: 'integer',
           minimum: 1,
           maximum: 31,
-          description: 'Day of month the invoice is created. 29-31 clamp to the last day in shorter months; the stored day is kept for longer months.',
+          description: 'Day the invoice is created; 29-31 clamp to the last day in shorter months.',
         },
         interval_months: {
           type: 'integer',
@@ -27730,7 +27757,7 @@ export const tools: McpTool[] = [
           items: {
             type: 'object',
             properties: {
-              line_type: { type: 'string', enum: ['product', 'text'], description: "Default product. text = free-text or blank row copied onto every invoice as a text row (description only, may be empty; quantity/unit/unit_price ignored, never booked). At least one product row is required." },
+              line_type: { type: 'string', enum: ['product', 'text'], description: 'Default product. text = free-text/blank row copied onto every invoice (description only, may be empty; amounts ignored, never booked). At least one product row is required.' },
               description: { type: 'string', description: 'May use the placeholders listed under notes.' },
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån. Default st.' },
@@ -27738,8 +27765,9 @@ export const tools: McpTool[] = [
               vat_rate: {
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
-                description: 'Omit or null to use the customer default VAT rate at spawn time. A rate outside that default set (any non-zero rate to a foreign business customer) bills the default instead.',
+                description: 'Omit/null = customer default at spawn. A rate outside that default set (non-zero to a foreign business) bills the default.',
               },
+              article_id: { type: 'string', description: 'From gnubok_list_articles: books to its account and, without vat_rate, its rate.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -27820,6 +27848,7 @@ export const tools: McpTool[] = [
 
       if (error) throw dbError(error)
       if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
+      await assertRecurringArticlesOwned(supabase, companyId, params.items)
       if (params.auto_send && !customer.email) {
         throw new Error('Customer has no email address: auto_send requires one. Stage with auto_send=false or add an email first.')
       }
@@ -27901,13 +27930,13 @@ export const tools: McpTool[] = [
           type: 'integer',
           minimum: 1,
           maximum: 31,
-          description: '1-31; clamps to the last day in shorter months. Changing it rolls next_run_date to the next future occurrence.',
+          description: '1-31, clamped in shorter months. Changing it rolls next_run_date to the next future occurrence.',
         },
         interval_months: {
           type: 'integer',
           minimum: 1,
           maximum: 12,
-          description: 'Months between invoices: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly. Changing only interval_months leaves next_run_date untouched.',
+          description: 'Months between invoices, 1-12 (3 = quarterly, 12 = yearly). Changing only interval_months leaves next_run_date untouched.',
         },
         send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },
@@ -27940,7 +27969,7 @@ export const tools: McpTool[] = [
         items: {
           type: 'array',
           minItems: 1,
-          description: 'Replaces ALL existing template lines when provided; omit to keep the current lines unchanged.',
+          description: 'Replaces ALL lines (send each back with its article_id); omit to keep.',
           items: {
             type: 'object',
             properties: {
@@ -27952,8 +27981,9 @@ export const tools: McpTool[] = [
               vat_rate: {
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
-                description: 'Omit or null to use the customer default VAT rate at spawn time. A rate outside that default set (any non-zero rate to a foreign business customer) bills the default instead.',
+                description: 'Omit/null = customer default at spawn. A rate outside that default set (non-zero to a foreign business) bills the default.',
               },
+              article_id: { type: 'string', description: 'From gnubok_list_articles: books to its account and, without vat_rate, its rate.' },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -28032,7 +28062,7 @@ export const tools: McpTool[] = [
       const { data: current, error } = await supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, period_start, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(line_type, description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
+          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, period_start, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(*)',
         )
         .eq('id', parsed.data.schedule_id)
         .eq('company_id', companyId)
@@ -28040,6 +28070,7 @@ export const tools: McpTool[] = [
 
       if (error) throw dbError(error)
       if (!current) throw new Error('Recurring schedule not found. Use gnubok_list_recurring_schedules to find IDs.')
+      if (parsedChanges.items) await assertRecurringArticlesOwned(supabase, companyId, parsedChanges.items)
 
       // Turning auto_send on, or moving the schedule to another customer,
       // requires the (target) customer to have an email when auto_send is
@@ -28092,6 +28123,7 @@ export const tools: McpTool[] = [
           unit_price: it.unit_price,
           vat_rate: it.vat_rate ?? null,
           dimensions: it.dimensions ?? {},
+          article_id: it.article_id ?? null,
         }))
 
       const currentPreview = {

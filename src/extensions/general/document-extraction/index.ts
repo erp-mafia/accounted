@@ -190,11 +190,11 @@ async function extractAndPersist(
       await fillQueuedItems(supabase, companyId, document.id, data)
     }
   } catch (err) {
-    log.warn('extraction threw', {
-      doc: document.id,
-      err: err instanceof Error ? err.message : String(err),
-    })
+    // Stamped so nothing re-attempts it, then thrown: nothing retries a
+    // failed:exception, so the event bus logs it as an error with the event
+    // type and this consumer's name (lib/events/bus.ts).
     await stamp(supabase, document.id, 'failed:exception')
+    throw err
   }
 }
 

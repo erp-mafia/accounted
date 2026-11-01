@@ -252,7 +252,7 @@ describe('syncSummary', () => {
     // With errors > 0 it means the opposite: the rows are missing from the inbox.
     expect(syncSummary(syncPayload({ fetched: 200, imported: 0, errors: 200 }))).toEqual({
       reason: 'errors',
-      values: { fetched: 200, imported: 0, errors: 200 },
+      values: { fetched: 200, imported: 0, foreignCurrency: 0, errors: 200 },
     })
   })
 
@@ -274,7 +274,14 @@ describe('syncSummary', () => {
     // (44bdefc86): the sentence no longer names a linked count.
     expect(syncSummary(syncPayload({ fetched: 12, imported: 9, duplicates: 3 }))).toEqual({
       reason: 'feed',
-      values: { fetched: 12, imported: 9 },
+      values: { fetched: 12, imported: 9, foreignCurrency: 0 },
+    })
+  })
+
+  it('carries the non-SEK rows the feed left out, for their own sentence (accounted#58)', () => {
+    expect(syncSummary(syncPayload({ fetched: 5, imported: 2, foreignCurrency: 3 }))).toEqual({
+      reason: 'feed',
+      values: { fetched: 5, imported: 2, foreignCurrency: 3 },
     })
   })
 })

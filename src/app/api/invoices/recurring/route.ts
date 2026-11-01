@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { CreateRecurringScheduleSchema } from '@/lib/api/schemas'
-import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
+import {
+  RECURRING_ARTICLE_INVALID_MESSAGE,
+  findForeignRecurringArticleIds,
+  insertRecurringScheduleItems,
+  toRecurringScheduleItemRow,
+} from '@/lib/invoices/recurring-schedule-items'
 import {
   computeInitialRunDate,
   getStockholmDateHour,
@@ -91,6 +96,20 @@ export const POST = withRouteContext(
       )
     }
 
+    // Article links must be this company's articles (the FK alone does not
+    // prove that).
+    const articleCheck = await findForeignRecurringArticleIds(supabase, companyId, input.items)
+    if (articleCheck.error) {
+      log.error('failed to verify schedule articles', articleCheck.error)
+      return errorResponse(articleCheck.error, log, { requestId })
+    }
+    if (articleCheck.invalidArticleIds.length > 0) {
+      return NextResponse.json(
+        { error: RECURRING_ARTICLE_INVALID_MESSAGE, type: 'validation_error' },
+        { status: 400 },
+      )
+    }
+
     // An explicit first run date fixes the month phase (yearly in February,
     // quarterly Feb/May/Aug/Nov). It must sit on the schedule grid, or the
     // cron would drift back to day_of_month after the first run, and it
@@ -152,9 +171,7 @@ export const POST = withRouteContext(
 
     const itemRows = input.items.map((item, idx) => toRecurringScheduleItemRow(schedule.id, item, idx))
 
-    const { error: itemsError } = await supabase
-      .from('recurring_invoice_schedule_items')
-      .insert(itemRows)
+    const { error: itemsError } = await insertRecurringScheduleItems(supabase, itemRows)
 
     if (itemsError) {
       // Roll back the parent so a half-created schedule doesn't ship.
