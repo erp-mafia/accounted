@@ -613,6 +613,27 @@ describe('runReconciliation', () => {
     expect(result.applied).toBe(0)
   })
 
+  it('never writes a pointer on a row booked through a voucher link: it would anchor the row to two verifikat', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const free = makeTransaction({ id: 'tx-free', amount: 700, date: '2024-06-15', currency: 'SEK' })
+    const booked = {
+      ...makeTransaction({ id: 'tx-booked', amount: 700, date: '2024-06-15', currency: 'SEK' }),
+      transaction_voucher_links: [{ role: 'bank_line' }],
+    }
+    const supplementary = {
+      ...makeTransaction({ id: 'tx-residual', amount: 700, date: '2024-06-15', currency: 'SEK' }),
+      transaction_voucher_links: [{ role: 'other' }],
+    }
+
+    enqueue({ data: [makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 700, entry_date: '2024-06-15' })] })
+    enqueue({ data: [booked, free, supplementary] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
+
+    expect(result.candidates).toBe(2)
+    expect(result.matches.map((m) => m.transaction.id)).not.toContain('tx-booked')
+  })
+
   it('never auto-links a partially allocated verifikat, even on its full line amount', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 
@@ -1881,6 +1902,21 @@ describe('linkTransactionToVouchers', () => {
     enqueue({ data: opts.held ?? [] }) // transaction_voucher_links held by other rows
     enqueue({ data: opts.pointers ?? [] }) // other rows whose pointer names a verifikat (GitHub #3507)
   }
+
+  it.each(['opening_balance', 'storno'])('refuses a %s as a slice: it is no bank movement', async (sourceType) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueReads(enqueue, { entries: [postedEntries[0], { ...postedEntries[1], source_type: sourceType }] })
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+    )
+
+    expect(result).toMatchObject({ success: false, code: 'ENTRY_NOT_BANK_MOVEMENT' })
+  })
 
   it('links one row to two verifikat: pointer stays NULL, one signed bank_line slice per verifikat, one matched event each', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()

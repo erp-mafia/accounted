@@ -283,17 +283,18 @@ describe('get_ledger_usage_stats', () => {
       { account: '4010', debit: 300, credit: 0 },
       { account: '1930', debit: 0, credit: 300 },
     ])
-    const stornoId = await insertPostedJournalEntry({
+    const stornoId = await insertDraftJournalEntry({
       userId, companyId, fiscalPeriodId,
-      entryDate: '2026-06-15', voucherNumber: 9,
-      sourceType: 'storno',
-      lines: [
-        { accountNumber: '1930', debitAmount: 300, creditAmount: 0 },
-        { accountNumber: '4010', debitAmount: 0, creditAmount: 300 },
-      ],
+      entryDate: '2026-06-15', status: 'draft', voucherNumber: 9,
     })
+    await insertLines(stornoId, [
+      { account: '1930', debit: 300, credit: 0 },
+      { account: '4010', debit: 0, credit: 300 },
+    ])
     // Legacy shape: a transaction still linked to the storno entry (predates
-    // reverseEntry() unlinking). Must not create a counterparty pattern.
+    // reverseEntry() unlinking). Must not create a counterparty pattern. The
+    // pointer guard refuses this write since 20261101023500 and leaves the rows
+    // that already have it, so the row goes on before the entry is a storno.
     await insertBookedTransaction({
       companyId, userId,
       journalEntryId: stornoId,
@@ -302,6 +303,7 @@ describe('get_ledger_usage_stats', () => {
       category: 'expense_other',
       date: '2026-06-15',
     })
+    await getPool().query(`UPDATE public.journal_entries SET source_type = 'storno', status = 'posted' WHERE id = $1`, [stornoId])
 
     // Draft entry: must not appear in account_usage.
     const draftId = await insertDraftJournalEntry({

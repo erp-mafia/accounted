@@ -1,8 +1,8 @@
 /**
  * The payment plan for matching ONE bank transaction to ONE customer invoice:
  * the FX resolution and the `planInvoicePayment` call (overshoot guard,
- * öresavrundning, paid/remaining/status) that the agent commit executor
- * (`commitMatchTransactionInvoice`) runs before it posts anything.
+ * öresavrundning, paid/remaining/status) that bookCustomerBankMatch runs
+ * before it posts anything.
  *
  * Shared with the MCP tools that STAGE that operation, so a match the approval
  * would refuse is refused when it is staged, from the same inputs: the
@@ -55,7 +55,18 @@ export interface MatchInvoiceAmounts extends InvoicePaymentTotals {
 
 export type MatchFx =
   | { required: false }
-  | { required: true; rate: number; paidInInvoiceCurrency: number }
+  | {
+      required: true
+      rate: number
+      paidInInvoiceCurrency: number
+      /**
+       * Provenance of the rate: 'manual' = caller-supplied from a bank
+       * statement (Riksbanken had no rate for the date), 'riksbanken' = spot
+       * rate on the payment date. A manual override on a money path must be
+       * traceable (BFL 5 kap 6-7 §; ML 8 kap 21-23 §).
+       */
+      source: 'manual' | 'riksbanken'
+    }
 
 /** An overshoot, in the invoice's currency. */
 type OvershootDetails = { transaction_amount: number; remaining_amount: number; excess: number }
@@ -241,14 +252,13 @@ export async function planTransactionInvoiceMatch(
   supabase: SupabaseClient,
   transaction: MatchTransactionAmounts,
   invoice: MatchInvoiceAmounts,
-  opts?: { overpaymentAccount?: string; feeAccount?: string },
+  opts?: { overpaymentAccount?: string; feeAccount?: string; manualExchangeRate?: number },
 ): Promise<MatchPaymentPlanResult> {
-  // FX resolution: parity with the dashboard and v1 match routes. paidAmount
-  // MUST be denominated in the INVOICE's currency (the unit of
-  // invoices.paid_amount / remaining_amount and invoice_payments.amount).
-  // Feeding the raw bank amount straight in (a) rejected exact whole-krona
-  // settlements of öre-carrying invoices and (b) would corrupt the column
-  // units on a cross-currency match.
+  // FX resolution. paidAmount MUST be denominated in the INVOICE's currency
+  // (the unit of invoices.paid_amount / remaining_amount and
+  // invoice_payments.amount). Feeding the raw bank amount straight in (a)
+  // rejected exact whole-krona settlements of öre-carrying invoices and (b)
+  // would corrupt the column units on a cross-currency match.
   const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
   if (
     txIsForeign &&
@@ -269,22 +279,26 @@ export async function planTransactionInvoiceMatch(
 
   let fx: MatchFx = { required: false }
   if (transaction.currency !== invoice.currency) {
-    let rate: number | null = null
-    try {
-      const rateInfo = await fetchExchangeRate(
-        invoice.currency as Currency,
-        new Date(transaction.date),
-        supabase,
-      )
-      if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
-    } catch {
-      rate = null
+    const manualRate = opts?.manualExchangeRate && opts.manualExchangeRate > 0 ? opts.manualExchangeRate : null
+    let rate = manualRate
+    if (rate == null) {
+      try {
+        const rateInfo = await fetchExchangeRate(
+          invoice.currency as Currency,
+          new Date(transaction.date),
+          supabase,
+        )
+        if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
+      } catch {
+        rate = null
+      }
     }
     if (rate == null) return { ok: false, code: 'MATCH_INVOICE_FX_RATE_UNAVAILABLE' }
     fx = {
       required: true,
       rate,
       paidInInvoiceCurrency: fxPaidInInvoiceCurrency(txAbsSek, rate, invoice),
+      source: manualRate != null ? 'manual' : 'riksbanken',
     }
   }
   const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount

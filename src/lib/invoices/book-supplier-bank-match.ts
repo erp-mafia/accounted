@@ -18,7 +18,9 @@
  * used to post a second payment verifikat and leave the first one posted
  * with no row, so the bank account was credited twice. The one way past is
  * the row's own categorization with `stornoExisting`, which a person
- * confirms: that verifikat is reversed (storno), then the payment books.
+ * confirms: that verifikat is reversed (storno), then the payment books. An
+ * ignored row is refused by the same gate (BANK_ROW_IGNORED): it can carry no
+ * verifikat, and the claim below used to fail after one had posted.
  *
  * Callers: a person confirming a suggestion (the dashboard match route and
  * its v1 twin, action 'matched'), the Inkorg's register-and-settle, and the
@@ -49,7 +51,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
-import { decideBankRowRebooking } from '@/lib/transactions/is-booked'
+import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { planSupplierBankMatch, type SupplierBankMatchPlan } from '@/lib/invoices/apply-supplier-payment'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -157,7 +159,7 @@ export async function bookSupplierBankMatch(
   if (rebooking.outcome === 'refuse') {
     return {
       ok: false,
-      code: 'MATCH_SI_TX_ALREADY_BOOKED',
+      code: bankRowRefusalCode(rebooking, 'MATCH_SI_TX_ALREADY_BOOKED'),
       details: {
         journal_entry_id: rebooking.journalEntryId,
         voucher: rebooking.voucher,

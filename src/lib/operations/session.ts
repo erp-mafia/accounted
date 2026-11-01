@@ -37,7 +37,7 @@ export function sessionFailureResponse(
       details: { reason: getErrorMessage(outcome.error) },
     })
   }
-  if (outcome.error) return errorResponse(outcome.error, log, { requestId })
+  if (outcome.error) return errorResponse(outcome.error, log, { requestId, details: outcome.details })
   return errorResponseFromCode(outcome.code, log, {
     requestId,
     details: outcome.details,

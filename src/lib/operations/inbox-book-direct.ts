@@ -50,7 +50,7 @@ import { passed, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
-import { assertTransactionBookable } from '@/lib/transactions/is-booked'
+import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import type { InboxChannelContext, JournalEntry, Transaction } from '@/types'
 import { followPairedReceipt } from './inbox-companion'
 import { refuseWhenPairBooked } from './inbox-pair-guard'
@@ -126,7 +126,7 @@ export async function bookInboxItemDirectly(
   if (sourceTransactionId) {
     const { data: tx, error: txError } = await ctx.supabase
       .from('transactions')
-      .select('id, journal_entry_id, cash_account_id, date, amount, currency, amount_sek, exchange_rate, transaction_voucher_links(journal_entry_id, role)')
+      .select('id, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, date, amount, currency, amount_sek, exchange_rate, transaction_voucher_links(journal_entry_id, role)')
       .eq('id', sourceTransactionId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
@@ -136,12 +136,14 @@ export async function bookInboxItemDirectly(
     // The booking doors' shared answer: the pointer OR a bank_line voucher
     // link naming a posted verifikat (a bulk-booked or split row has a
     // NULL pointer). A stale pointer at a reversed verifikat does not
-    // block; the locked link below replaces exactly that observed value.
-    const bookable = await assertTransactionBookable(ctx.supabase, ctx.companyId, tx)
-    if (!bookable.ok) {
-      return refused(errorResponseFromCode(bookable.code, ctx.log, {
+    // block; the locked link below replaces exactly that observed value. An
+    // ignored row is refused before the verifikat posts: the link would fail
+    // on the row's CHECK and the verifikat would need a storno.
+    const rebooking = await decideBankRowRebooking(ctx.supabase, ctx.companyId, tx, { replace: false })
+    if (rebooking.outcome === 'refuse') {
+      return refused(errorResponseFromCode(bankRowRefusalCode(rebooking, 'TRANSACTION_ALREADY_CATEGORIZED'), ctx.log, {
         requestId: ctx.requestId,
-        details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
+        details: { journal_entry_id: rebooking.journalEntryId, via: rebooking.via },
       }))
     }
     transaction = tx

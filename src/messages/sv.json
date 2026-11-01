@@ -4708,6 +4708,7 @@
     "duplicate_body_unverified": "Det finns redan en bokförd verifikation {label} på {amount} nära i tid ({date}). Beloppet kunde inte verifieras eftersom växelkurs saknas. Har du redan bokfört denna betalning manuellt?",
     "already_booked_title": "Transaktionen är redan bokförd",
     "already_booked_storno_and_match": "Återför {label} och matcha",
+    "already_booked_open_voucher": "Öppna {label}",
     "link_to_existing": "Koppla till {label}",
     "create_new_anyway": "Skapa ny verifikation ändå",
     "transaction_label": "Transaktion",

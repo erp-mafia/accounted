@@ -24,6 +24,10 @@ import { ROOT, scanApplicationWriters, scanSqlWriters, unstampedByFile } from '.
 
 /** Application writes that move or restore an existing link: no new link, so no basis to record. */
 const APP_MOVES_AND_RESTORES: Record<string, { count: number; why: string }> = {
+  'src/lib/invoices/book-customer-bank-match.ts': {
+    count: 1,
+    why: 'the unwind puts the row back as it was read after a failed invoice or payment write.',
+  },
   'src/lib/core/bookkeeping/storno-service.ts': {
     count: 2,
     why: 'relinkTransactionsToEntry moves the pointer and the voucher links to the correction; the basis follows (20261016160100 keeps it on transactions, the voucher-link update leaves it alone).',

@@ -33,6 +33,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
 import { normalizeOcrReference } from './duplicate-payment-guard'
+import { invoiceDocumentRefusal } from '@/lib/transactions/invoice-document-refusal'
 import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
@@ -372,16 +373,7 @@ export async function loadInvoiceMatchPool(
   // attached but whose status leaked (still 'sent'/'overdue'). Partially-paid
   // invoices can legitimately take more payments, so they pass through.
   // Without this, a status leak would double-book the receipt.
-  const payableInvoices = invoices.filter(
-    (invoice) => {
-      const creditNotes = (invoice as Invoice & {
-        credit_notes?: Array<{ status: string; creation_complete?: boolean }>
-      }).credit_notes ?? []
-      return !invoice.credited_invoice_id && !creditNotes.some(
-        (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
-      )
-    },
-  )
+  const payableInvoices = invoices.filter((invoice) => invoiceDocumentRefusal(invoice) === null)
   const fullCandidateIds = payableInvoices
     .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
     .map((inv) => inv.id as string)

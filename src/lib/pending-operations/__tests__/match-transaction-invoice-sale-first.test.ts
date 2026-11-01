@@ -54,6 +54,19 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
 }))
 
+// Open: the gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts). Mocked with the
+// chart check so neither consumes a slot in the queued Supabase mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn(async () => []),
+}))
+
+import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(): PendingOperation {
@@ -135,15 +148,16 @@ function enqueueReads(
   enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
   enqueue({ data: transaction(opts.tx), error: null }) // transaction fetch
   enqueue({ data: { ...SENT_INVOICE, ...opts.invoice }, error: null }) // invoice fetch
+  enqueue({ data: [], error: null }) // hard-duplicate check
   enqueue({ data: { accounting_method: opts.method ?? 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
   enqueue({ data: [], error: null }) // cash_accounts fallback listing -> 1930
 }
 
 /** The writes after the payment verifikat, then the dispatcher's own update. */
 function enqueueSettleWrites(enqueue: ReturnType<typeof createQueuedMockSupabase>['enqueue']) {
+  enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
   enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
   enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-  enqueue({ data: null, error: null }) // transactions update (link)
   enqueue({ data: null, error: null }) // dispatcher pending_operations update
 }
 
@@ -152,7 +166,6 @@ beforeEach(() => {
   eventBus.clear()
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
-  mockReverseEntry.mockResolvedValue({ id: 'storno-1' })
   mockCreateCashEntry.mockResolvedValue({ id: 'je-cash' })
   mockPlanSale.mockResolvedValue(NOT_REQUIRED)
   mockBookSale.mockResolvedValue(NOTHING_BOOKED)
@@ -189,22 +202,6 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
     expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(12500)
   })
 
-  it('books the sale before the storno, and the storno before the payment', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
-    mockBookSale.mockResolvedValue(BOOKED)
-    enqueueReads(enqueue, { tx: { journal_entry_id: 'je-categorised' } })
-    enqueue({ data: null, error: null }) // transactions update (unlink after the storno)
-    enqueueSettleWrites(enqueue)
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
-
-    expect(result.status).toBe('committed')
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-categorised')
-    expect(mockBookSale.mock.invocationCallOrder[0]).toBeLessThan(mockReverseEntry.mock.invocationCallOrder[0])
-    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
-  })
-
   it('a partial payment books the whole sale, then the partial clearing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
@@ -229,7 +226,7 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
       code: 'PERIOD_LOCKED',
       details: { reason: 'period_locked_at_set', invoice_date: '2026-05-01', sale_first: true, invoice_id: 'inv-1' },
     })
-    enqueueReads(enqueue, { tx: { journal_entry_id: 'je-categorised' } })
+    enqueueReads(enqueue)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
@@ -240,7 +237,6 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
     expect(result.http_status).toBe(getErrorEntry('PERIOD_LOCKED')?.httpStatus)
     expect(result.data).toMatchObject({ sale_first: true, invoice_date: '2026-05-01' })
     expect(mockBookSale).not.toHaveBeenCalled()
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     expect(findCalls('invoices', 'update')).toHaveLength(0)
@@ -256,7 +252,7 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
       code: 'INVOICE_BOOK_INVALID_STATUS',
       details: { currentStatus: 'partially_paid', sale_first: true, invoice_id: 'inv-1' },
     })
-    enqueueReads(enqueue, { tx: { journal_entry_id: 'je-categorised' } })
+    enqueueReads(enqueue)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
@@ -265,18 +261,31 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
     expect(result.operation_status).toBe('rejected')
     expect(result.code).toBe('INVOICE_BOOK_INVALID_STATUS')
     expect(result.data).toMatchObject({ sale_first: true })
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(findCalls('invoices', 'update')).toHaveLength(0)
     expect(findCalls('transactions', 'update')).toHaveLength(0)
   })
 
-  it('a storno that fails after the sale is a partial commit naming the sale', async () => {
+  it('names the sale when the payment then books nothing: a partial commit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
+    mockBookSale.mockResolvedValue(BOOKED)
+    mockCreateJournalEntry.mockResolvedValue(null)
+    enqueueReads(enqueue)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
+
+    expect(result.operation_status).toBe('failed_partial')
+    expect(result.data).toMatchObject({ posted_ids: { sale_journal_entry_id: 'je-sale' } })
+  })
+
+  it('names the sale when a typed refusal of the payment follows it: a partial commit', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
     mockBookSale.mockResolvedValue(BOOKED)
-    mockReverseEntry.mockRejectedValue(new Error('storno refused'))
-    enqueueReads(enqueue, { tx: { journal_entry_id: 'je-categorised' } })
+    mockCreateJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(500, 400))
+    enqueueReads(enqueue)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
@@ -284,25 +293,7 @@ describe('commitPendingOperation: match_transaction_invoice books the sale first
     expect(result.status).toBe('failed')
     expect(result.operation_status).toBe('failed_partial')
     expect(result.data).toMatchObject({ posted_ids: { sale_journal_entry_id: 'je-sale' } })
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(findCalls('invoices', 'update')).toHaveLength(0)
-  })
-
-  it('names the sale and the storno when the payment then books nothing', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
-    mockBookSale.mockResolvedValue(BOOKED)
-    mockCreateJournalEntry.mockResolvedValue(null)
-    enqueueReads(enqueue, { tx: { journal_entry_id: 'je-categorised' } })
-    enqueue({ data: null, error: null }) // transactions update (unlink after the storno)
-    enqueue({ data: null, error: null }) // dispatcher pending_operations update
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
-
-    expect(result.operation_status).toBe('failed_partial')
-    expect(result.data).toMatchObject({
-      posted_ids: { sale_journal_entry_id: 'je-sale', reversal_journal_entry_id: 'storno-1' },
-    })
   })
 
   it('an already booked invoice (plan: not required) settles as before, with no sale named', async () => {

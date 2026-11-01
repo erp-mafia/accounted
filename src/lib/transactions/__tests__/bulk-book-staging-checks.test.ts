@@ -191,6 +191,30 @@ describe('bulk booking dry run (what staging runs)', () => {
     expect(messageOf(outcome)).toMatch(/konto 1930 med \S*5\s000\skr, men raderna rör det med \S*4\s000\skr/)
   })
 
+  it.each(['storno', 'opening_balance'])('refuses at staging a link to a %s, as the other link doors do', async (source_type) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null })
+    enqueue({
+      data: {
+        id: JE,
+        status: 'posted',
+        entry_date: '2026-10-20',
+        source_type,
+        journal_entry_lines: [
+          { account_number: '2440', debit_amount: '5000', credit_amount: '0' },
+          { account_number: '1930', debit_amount: '0', credit_amount: '5000' },
+        ],
+      },
+      error: null,
+    })
+
+    expect(await run(supabase, { existing_journal_entry_id: JE })).toMatchObject({
+      ok: false,
+      code: 'LINK_TX_JE_NOT_BANK_MOVEMENT',
+      details: { source_type },
+    })
+  })
+
   it('stages a link whose verifikat moves the row\'s account by its amount', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null })
@@ -234,5 +258,31 @@ describe('bulk booking dry run (what staging runs)', () => {
       code: 'BULK_BOOK_INVALID_ACCOUNT',
       details: { invalid_accounts: ['2645', '6570'], inactive_accounts: ['6570'], not_in_chart: ['2645'] },
     })
+  })
+
+  it('refuses at staging a row booked through a voucher link, which the RPC refuses at commit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...transferOut, transaction_voucher_links: [{ journal_entry_id: JE }] }] })
+
+    expect(await run(supabase, { existing_journal_entry_id: JE })).toMatchObject({
+      ok: false,
+      code: 'BULK_BOOK_TX_ALREADY_BOOKED',
+      details: { tx_id: TX_OUT, via: 'transaction_voucher_links' },
+    })
+  })
+
+  it('refuses an ignored row, on a dry run and a commit alike: it can carry no verifikat', async () => {
+    for (const dryRun of [true, false]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [{ ...transferOut, is_ignored: true }] })
+
+      const outcome = await bulkBookTransactions(
+        { supabase: supabase as never, companyId: 'company-1', userId: 'user-1', log: createLogger('test') },
+        { tx_ids: [TX_OUT], existing_journal_entry_id: JE } as BulkBookInput,
+        { dryRun },
+      )
+
+      expect(outcome).toMatchObject({ ok: false, code: 'BANK_ROW_IGNORED', details: { tx_id: TX_OUT } })
+    }
   })
 })

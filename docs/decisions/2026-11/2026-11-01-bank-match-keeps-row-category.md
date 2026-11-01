@@ -1,0 +1,1 @@
+[2026-11-01] A bank match keeps the row's own category on every door, as v1 did: the dashboard and the approval wrote income_services on goods and rental rows too, and nothing reads the column on a matched row; the verifikat is the booking truth.

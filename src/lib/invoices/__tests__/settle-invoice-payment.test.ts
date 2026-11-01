@@ -1000,6 +1000,7 @@ describe('settleInvoicePayment', () => {
       let deletesWhenCancelled = -1
       vi.mocked(cancelOrphanedPaymentEntry).mockImplementationOnce(async () => {
         deletesWhenCancelled = findCalls('invoice_payments', 'delete').length
+        return true
       })
 
       await settleInvoicePayment(

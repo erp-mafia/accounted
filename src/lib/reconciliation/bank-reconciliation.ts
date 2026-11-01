@@ -8,10 +8,12 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dbError } from '@/lib/errors/db-error'
 import {
   hasLiveJournalEntryLink,
+  isBankMovementEntry,
   prepareBankLink,
   writeBankLink,
   type BankLinkRefusalCode,
 } from '@/lib/transactions/bank-link'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import {
@@ -625,19 +627,24 @@ export async function runReconciliation(
   // Fetch unmatched transactions, scoped to the selected cash account.
   // Paginated: a busy company can exceed PostgREST's silent 1000-row cap, which
   // would make the matcher skip transactions without any signal. Ordered on id
-  // (unique) so pages never duplicate or skip rows.
-  const transactions = await fetchAllRows<Transaction>(({ from, to }) => {
-    let query = supabase
-      .from('transactions')
-      .select('*')
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false)
-    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
-    if (dateFrom) query = query.gte('date', dateFrom)
-    if (dateTo) query = query.lte('date', dateTo)
-    return query.order('id').range(from, to)
-  })
+  // (unique) so pages never duplicate or skip rows. The junction rows ride
+  // along: a row booked through a bank_line link (a samlingsverifikat, a split)
+  // has no pointer, and a pointer written here would anchor it to a second
+  // verifikat, unattended on the nightly sweep.
+  const transactions = (
+    await fetchAllRows<Transaction & { transaction_voucher_links?: Array<{ role?: string | null }> | null }>(({ from, to }) => {
+      let query = supabase
+        .from('transactions')
+        .select('*, transaction_voucher_links(role)')
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .eq('is_ignored', false)
+      query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+      if (dateFrom) query = query.gte('date', dateFrom)
+      if (dateTo) query = query.lte('date', dateTo)
+      return query.order('id').range(from, to)
+    })
+  ).filter((row) => !hasBankLineJunctionRow(row.transaction_voucher_links))
 
   // Same diagnostic as the read path, and it matters MORE here: an unscoped run
   // matches transactions from every same-currency account against unlinked GL
@@ -1624,11 +1631,12 @@ export async function linkTransactionToVouchers(
     status: string
     voucher_series: string | null
     voucher_number: number | null
+    source_type?: string | null
   }> = []
   for (const part of idParts) {
     const { data } = await supabase
       .from('journal_entries')
-      .select('id, status, voucher_series, voucher_number')
+      .select('id, status, voucher_series, voucher_number, source_type')
       .eq('company_id', companyId)
       .in('id', part)
     entries.push(...((data ?? []) as typeof entries))
@@ -1646,6 +1654,9 @@ export async function linkTransactionToVouchers(
     }
     if (entry.status !== 'posted') {
       return refused('ENTRY_NOT_POSTED', `Verifikat ${labelOf(id)} är inte bokförd ännu.`)
+    }
+    if (!isBankMovementEntry(entry)) {
+      return refused('ENTRY_NOT_BANK_MOVEMENT', `Verifikat ${labelOf(id)} är en ingående balans eller en storno och kan inte kopplas.`)
     }
   }
 
@@ -2095,7 +2106,7 @@ export async function autoReconcileTransactionForLinkedVoucher(
   const toDate = shiftIsoDate(entry.entry_date, windowDays)
   let candQuery = supabase
     .from('transactions')
-    .select('id, amount')
+    .select('id, amount, transaction_voucher_links(role)')
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
     .eq('is_ignored', false)
@@ -2109,7 +2120,10 @@ export async function autoReconcileTransactionForLinkedVoucher(
   )
   const { data: candidates } = await candQuery
 
-  const matches = ((candidates ?? []) as Array<{ id: string; amount: number }>).filter((tx) => {
+  const matches = (
+    (candidates ?? []) as Array<{ id: string; amount: number; transaction_voucher_links?: Array<{ role?: string | null }> | null }>
+  ).filter((tx) => {
+    if (hasBankLineJunctionRow(tx.transaction_voucher_links)) return false
     const amt = Number(tx.amount)
     if (Math.abs(Math.abs(amt) - Math.abs(movement)) > VOUCHER_LINK_AMOUNT_TOLERANCE) return false
     return Math.sign(amt) === Math.sign(movement)

@@ -490,12 +490,11 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
     )
   }
 
-  it('refuses a payment date outside an open period before any write, the storno included', async () => {
+  it('refuses a payment date outside an open period before any write', async () => {
 (mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
     const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          // A categorised row: the match would storno its verifikat first.
-          transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+          transactions: { data: TRANSACTION, error: null },
           invoices: { data: SENT_INVOICE, error: null },
           company_settings: {
             data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
@@ -612,7 +611,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kont
     expect(businessWrites(calls)).toEqual([])
   })
 
-  it('refuses a partial payment of a never-booked kontantmetod invoice with the same code, before the storno', async () => {
+  it('refuses a partial payment of a never-booked kontantmetod invoice with the same code', async () => {
     const { supabase, calls } = cashSupabase(SENT_INVOICE, {
       ...TRANSACTION,
       amount: 5000,
@@ -662,10 +661,10 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kont
     expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(5000)
   })
 
-  it('refuses unbalanced custom lines before reversing the transaction voucher', async () => {
+  it('refuses unbalanced custom lines before anything is written', async () => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
       invoices: { data: SENT_INVOICE, error: null },
       company_settings: {
         data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
@@ -695,10 +694,10 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kont
     expect(businessWrites(calls)).toEqual([])
   })
 
-  it('refuses an inactive settlement account before reversing the transaction voucher', async () => {
+  it('refuses an inactive settlement account before anything is written', async () => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
       invoices: { data: SENT_INVOICE, error: null },
       company_settings: {
         data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
@@ -725,5 +724,53 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kont
     expect((await response.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
     expect(mockedReverseEntry).not.toHaveBeenCalled()
     expect(businessWrites(calls)).toEqual([])
+  })
+})
+
+// One 1500 kr row booked twice moved 1930 by 3000 kr. This door refuses through
+// the gate every door asks; every shape runs on real Postgres in
+// tests/pg/customer-bank-match-doors.pg.test.ts.
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: a booked or ignored row', () => {
+  function writes(calls: RecordedCall[]) {
+    return calls.filter((c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'))
+  }
+
+  async function match(tx: Record<string, unknown>) {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: { ...TRANSACTION, ...tx }, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      transaction_voucher_links: { data: [], error: null },
+      journal_entries: {
+        data: [{ id: 'je-own', status: 'posted', source_type: 'bank_transaction', source_id: TX_ID, voucher_series: 'A', voucher_number: 12 }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const response = await matchInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`, { invoice_id: INVOICE_ID }),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    return { status: response.status, body: await response.json(), calls }
+  }
+
+  it('answers 409 naming the verifikat and how to undo it, and reverses and books nothing', async () => {
+    const { status, body, calls } = await match({ journal_entry_id: 'je-own' })
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-own', voucher: 'A12', via: 'pointer', undo: 'uncategorize' })
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('answers 409 BANK_ROW_IGNORED for an ignored row', async () => {
+    const { status, body, calls } = await match({ is_ignored: true })
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_ROW_IGNORED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(writes(calls)).toEqual([])
   })
 })

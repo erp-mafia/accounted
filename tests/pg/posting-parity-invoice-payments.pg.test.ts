@@ -9,12 +9,13 @@
  * kursvinst, a kontantmetoden payment), the v1 mark-paid route on an API key,
  * the staged mark_invoice_paid approval, the kontantfaktura paid at issue,
  * the dashboard bank match route (in full, in part, an overpayment booked on
- * 2420, an EUR row with its kursdifferens, a row categorized first whose
- * verifikat is reversed, a kontantmetoden match, the person's own rows), the
- * v1 bank match (in full, a categorized row, kontantmetoden, the person's own
- * rows) and the staged match_transaction_invoice approval (in full, a
- * categorized row, kontantmetoden). Three flows storno a payment a moved door
- * posted, so the engine's payment sync (the reversal hook) runs on it. Every
+ * 2420, an EUR row with its kursdifferens, a row categorized first and undone
+ * before the match, a kontantmetoden match, the person's own rows), the v1
+ * bank match (in full, a categorized row undone first, kontantmetoden, the
+ * person's own rows) and the staged match_transaction_invoice approval (in
+ * full, a categorized row undone first, kontantmetoden). Three flows storno a
+ * payment a moved door posted, so the engine's payment sync (the reversal
+ * hook) runs on it. Every
  * verifikat a door writes is dumped normalised (series, number, date,
  * description, source type, status and every line) together with the
  * invoices, their payment rows and the bank lines the doors write beside
@@ -31,9 +32,9 @@
  *      every verifikat a moved door wrote has exactly ONE event linked: a
  *      payment sale.payment_received (the invoice as subject, the customer as
  *      party, the debt settled and the kronor that arrived, kontantmetoden's
- *      moms), a bank match's storno of the row's earlier booking
- *      ledger.storno (role reversal) of the bank line, with the door's link
- *      basis as evidence (the staged ones naming their pending operation);
+ *      moms), the undo of the row's earlier booking ledger.storno (role
+ *      reversal) of the bank line, with the door's link basis as evidence (the
+ *      staged ones naming their pending operation);
  *      the stornos the reversal-hook flows make directly through the engine
  *      carry none, and the payment sync puts each reversed payment's invoice
  *      back to unpaid exactly as with the port off;
@@ -68,8 +69,10 @@ import { categorizeTransaction } from '@/lib/transactions/categorize-core'
 import type { CompanySettings, PendingOperation } from '@/types'
 import { POST as markPaidRoute } from '@/app/api/invoices/[id]/mark-paid/route'
 import { POST as matchInvoiceRoute } from '@/app/api/transactions/[id]/match-invoice/route'
+import { POST as uncategorizeRoute } from '@/app/api/transactions/[id]/uncategorize/route'
 import { POST as v1MarkPaidRoute } from '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-paid/route'
 import { POST as v1MatchInvoiceRoute } from '@/app/api/v1/companies/[companyId]/transactions/[id]/match-invoice/route'
+import { POST as v1UncategorizeRoute } from '@/app/api/v1/companies/[companyId]/transactions/[id]/uncategorize/route'
 import { seedCompany } from './fixtures'
 import { getPool } from './setup'
 import type { PgRest } from './postgrest-over-pg'
@@ -382,6 +385,24 @@ async function v1Match(seed: Seed, transactionId: string, body: Record<string, u
   )
 }
 
+/** The way out a match of a booked row names: the row's own booking is undone first. */
+async function uncategorize(transactionId: string): Promise<void> {
+  await expectStatus(
+    await uncategorizeRoute(sessionRequest(`/api/transactions/${transactionId}/uncategorize`, {}), params({ id: transactionId })),
+    200,
+  )
+}
+
+async function v1Uncategorize(seed: Seed, transactionId: string): Promise<void> {
+  await expectStatus(
+    await v1UncategorizeRoute(
+      v1Request(seed, `/api/v1/companies/${seed.companyId}/transactions/${transactionId}/uncategorize`, {}),
+      params({ companyId: seed.companyId, id: transactionId }),
+    ),
+    200,
+  )
+}
+
 /** The live payment verifikat of an invoice. */
 async function paymentEntryOf(invoiceId: string): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
@@ -546,9 +567,12 @@ const FLOWS: Flow[] = [
       invoiceIds: [await issued(seed, '2026-04-06', 19)],
       transactionIds: [await categorizedRow(seed, { date: '2026-04-20', description: 'Kund AB kategoriserad', amount: 2375 })],
     }),
-    run: async (_seed, { invoiceIds, transactionIds }) => match(transactionIds![0]!, { invoice_id: invoiceIds![0] }),
+    run: async (_seed, { invoiceIds, transactionIds }) => {
+      await uncategorize(transactionIds![0]!)
+      await match(transactionIds![0]!, { invoice_id: invoiceIds![0] })
+    },
     events: [
-      { ...STORNO, subject: row0, link_basis: 'system_derived' },
+      { ...STORNO, subject: row0, link_basis: 'user_created' },
       { ...MATCHED, occurred_on: '2026-04-20', subject: invoice0, amount: 2375, amount_sek: 2375 },
     ],
   },
@@ -594,9 +618,12 @@ const FLOWS: Flow[] = [
       invoiceIds: [await issued(seed, '2026-05-05', 23)],
       transactionIds: [await categorizedRow(seed, { date: '2026-05-19', description: 'Kund AB v1 kategoriserad', amount: 2875 })],
     }),
-    run: async (seed, { invoiceIds, transactionIds }) => v1Match(seed, transactionIds![0]!, { invoice_id: invoiceIds![0] }),
+    run: async (seed, { invoiceIds, transactionIds }) => {
+      await v1Uncategorize(seed, transactionIds![0]!)
+      await v1Match(seed, transactionIds![0]!, { invoice_id: invoiceIds![0] })
+    },
     events: [
-      { ...STORNO, subject: row0, link_basis: 'system_derived' },
+      { ...STORNO, subject: row0, link_basis: 'client_asserted' },
       { ...MATCHED, occurred_on: '2026-05-19', subject: invoice0, amount: 2875, amount_sek: 2875, link_basis: 'client_asserted' },
     ],
   },
@@ -645,10 +672,15 @@ const FLOWS: Flow[] = [
       transactionIds: [await categorizedRow(seed, { date: '2026-06-16', description: 'Kund AB agent kategoriserad', amount: 3375 })],
     }),
     run: async (seed, { invoiceIds, transactionIds }) => {
+      const { rows } = await getPool().query<{ journal_entry_id: string }>(
+        `SELECT journal_entry_id::text AS journal_entry_id FROM public.transactions WHERE id = $1`,
+        [transactionIds![0]],
+      )
+      await approve(seed, await stageOperation(seed, 'uncategorize_transaction', { transaction_id: transactionIds![0], journal_entry_id: rows[0]!.journal_entry_id }))
       await approve(seed, await stageOperation(seed, 'match_transaction_invoice', { transaction_id: transactionIds![0], invoice_id: invoiceIds![0] }))
     },
     events: [
-      { ...STORNO, subject: row0, link_basis: 'system_derived' },
+      { ...STORNO, subject: row0, link_basis: STAGED },
       { ...MATCHED, occurred_on: '2026-06-16', subject: invoice0, amount: 3375, amount_sek: 3375, link_basis: STAGED },
     ],
   },
@@ -978,10 +1010,9 @@ async function approveStatus(seed: Seed, op: PendingOperation): Promise<number> 
  * One door each, on records prepared beforehand (their registration verifikat
  * drawn before the doors run): the dashboard mark-paid (generated and the
  * person's own rows), the v1 mark-paid, the staged mark_invoice_paid, the
- * kontantfaktura at issue, the dashboard bank match (a free row, and a
- * categorized row whose verifikat it reverses), the v1 bank match (a free
- * row, a categorized row) and the staged match (a categorized row). Answers
- * each door's HTTP status (or the lib door's outcome as 200 / 409).
+ * kontantfaktura at issue, and two dashboard, two v1 and one staged bank
+ * match on free rows. Answers each door's HTTP status (or the lib door's
+ * outcome as 200 / 409).
  */
 interface DoorSet {
   run: () => Promise<number[]>
@@ -991,8 +1022,8 @@ interface DoorSet {
   rows: Array<{ id: string; journalEntryId: string | null }>
 }
 
-/** The verifikat the doors post: one payment each, plus a storno for each categorized row. */
-const DOOR_VOUCHERS = 13
+/** The verifikat the doors post: one payment each. */
+const DOOR_VOUCHERS = 10
 
 let doorSeq = 0
 
@@ -1003,7 +1034,7 @@ async function prepareDoors(seed: Seed, date: string): Promise<DoorSet> {
   const invoice = (k: number) => issued(seed, date, hours(k))
   const [markPaidId, ownRowsId, v1MarkPaidId, stagedPaidId] = [await invoice(0), await invoice(1), await invoice(2), await invoice(3)]
   const kontantfakturaId = await draft(seed, date, hours(4))
-  const [matchId, matchCategorizedId, v1MatchId, v1CategorizedId, stagedMatchId] = [
+  const [matchId, secondMatchId, v1MatchId, secondV1Id, stagedMatchId] = [
     await invoice(5),
     await invoice(6),
     await invoice(7),
@@ -1011,20 +1042,19 @@ async function prepareDoors(seed: Seed, date: string): Promise<DoorSet> {
     await invoice(9),
   ]
   const row = (k: number) => insertRow(seed, { date, description: `Inbetalning ${n}-${k}`, amount: hours(k) * 125 })
-  const categorized = (k: number) => categorizedRow(seed, { date, description: `Kategoriserad ${n}-${k}`, amount: hours(k) * 125 })
   const matchRow = await row(5)
-  const matchCategorizedRow = await categorized(6)
+  const secondMatchRow = await row(6)
   const v1MatchRow = await row(7)
-  const v1CategorizedRow = await categorized(8)
-  const stagedMatchRow = await categorized(9)
-  const rowIds = [matchRow, matchCategorizedRow, v1MatchRow, v1CategorizedRow, stagedMatchRow]
+  const secondV1Row = await row(8)
+  const stagedMatchRow = await row(9)
+  const rowIds = [matchRow, secondMatchRow, v1MatchRow, secondV1Row, stagedMatchRow]
   const { rows } = await getPool().query<{ id: string; journal_entry_id: string | null }>(
     `SELECT id::text AS id, journal_entry_id::text AS journal_entry_id FROM public.transactions WHERE id = ANY($1::uuid[])`,
     [rowIds],
   )
   const v1 = (pathname: string, body: unknown) => v1Request(seed, `/api/v1/companies/${seed.companyId}${pathname}`, body)
   return {
-    invoiceIds: [markPaidId, ownRowsId, v1MarkPaidId, stagedPaidId, kontantfakturaId, matchId, matchCategorizedId, v1MatchId, v1CategorizedId, stagedMatchId],
+    invoiceIds: [markPaidId, ownRowsId, v1MarkPaidId, stagedPaidId, kontantfakturaId, matchId, secondMatchId, v1MatchId, secondV1Id, stagedMatchId],
     rows: rowIds.map((id) => ({ id, journalEntryId: rows.find((r) => r.id === id)!.journal_entry_id })),
     run: async () => [
       (await markPaidRoute(sessionRequest(`/api/invoices/${markPaidId}/mark-paid`, { payment_date: date }), params({ id: markPaidId }))).status,
@@ -1061,8 +1091,8 @@ async function prepareDoors(seed: Seed, date: string): Promise<DoorSet> {
       (await matchInvoiceRoute(sessionRequest(`/api/transactions/${matchRow}/match-invoice`, { invoice_id: matchId }), params({ id: matchRow }))).status,
       (
         await matchInvoiceRoute(
-          sessionRequest(`/api/transactions/${matchCategorizedRow}/match-invoice`, { invoice_id: matchCategorizedId }),
-          params({ id: matchCategorizedRow }),
+          sessionRequest(`/api/transactions/${secondMatchRow}/match-invoice`, { invoice_id: secondMatchId }),
+          params({ id: secondMatchRow }),
         )
       ).status,
       (
@@ -1073,8 +1103,8 @@ async function prepareDoors(seed: Seed, date: string): Promise<DoorSet> {
       ).status,
       (
         await v1MatchInvoiceRoute(
-          v1(`/transactions/${v1CategorizedRow}/match-invoice`, { invoice_id: v1CategorizedId }),
-          params({ companyId: seed.companyId, id: v1CategorizedRow }),
+          v1(`/transactions/${secondV1Row}/match-invoice`, { invoice_id: secondV1Id }),
+          params({ companyId: seed.companyId, id: secondV1Row }),
         )
       ).status,
       await approveStatus(
@@ -1193,8 +1223,8 @@ describe('posting port parity, customer invoice payments and bank matches (pg)',
           }
         }
       }
-      // The staged mark_invoice_paid and the three staged matches.
-      expect(operations.size).toBe(4)
+      // The staged mark_invoice_paid, the three staged matches and the undo before one of them.
+      expect(operations.size).toBe(5)
 
       // The payment sync ran on every reversed payment exactly as with the
       // port off (the registers above are equal); here, that it did run.

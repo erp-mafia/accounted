@@ -1,9 +1,8 @@
 /**
  * The public bank match of an invoice a deferring company has not booked yet
  * (defer_invoice_booking): the sale is booked first through the :book step
- * (lib/invoices/sale-first.ts), then the storno of a conflicting
- * categorisation and the payment verifikat. A refusal there refuses the match
- * with the :book code and nothing is written. The rule itself has its own
+ * (lib/invoices/sale-first.ts), then the payment verifikat. A refusal there
+ * refuses the match with the :book code and nothing is written. The rule itself has its own
  * suite; here it is a controllable mock and the tests pin the route's wiring.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -36,13 +35,11 @@ vi.mock('@supabase/supabase-js', async () => {
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn().mockResolvedValue({ id: 'je-payment' }),
   findFiscalPeriod: vi.fn().mockResolvedValue('fp-1'),
-  reverseEntry: vi.fn().mockResolvedValue({ id: 'je-storno' }),
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createJournalEntry as mockedCreateJournalEntry,
-  reverseEntry as mockedReverseEntry,
 } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events/bus'
 import { POST as matchInvoice } from '../route'
@@ -51,7 +48,6 @@ import { createTableMockSupabase } from '@/tests/helpers'
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCreateJournalEntry = mockedCreateJournalEntry as ReturnType<typeof vi.fn>
-const mockReverseEntry = mockedReverseEntry as ReturnType<typeof vi.fn>
 
 type RecordedCall = { table: string; method: string; args: unknown[] }
 
@@ -165,7 +161,6 @@ beforeEach(() => {
     mode: 'live',
   })
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
-  mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
   mockPlanSale.mockResolvedValue(NOT_REQUIRED)
   mockBookSale.mockResolvedValue(NOTHING_BOOKED)
 })
@@ -200,19 +195,6 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: the 
     expect(pdfLookup.map((c) => c.args)).toContainEqual(['journal_entry_id', 'je-sale'])
   })
 
-  it('books the sale before the storno of a conflicting categorisation, then the payment', async () => {
-    mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
-    mockBookSale.mockResolvedValue(BOOKED)
-    const { supabase } = db({ tx: { journal_entry_id: 'je-categorised' } })
-
-    const { status } = await match(supabase)
-
-    expect(status).toBe(200)
-    expect(mockReverseEntry).toHaveBeenCalled()
-    expect(mockBookSale.mock.invocationCallOrder[0]).toBeLessThan(mockReverseEntry.mock.invocationCallOrder[0])
-    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
-  })
-
   it('a partial payment books the whole sale, then the partial clearing', async () => {
     mockPlanSale.mockResolvedValue(REQUIRED_PLAN)
     mockBookSale.mockResolvedValue(BOOKED)
@@ -235,7 +217,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: the 
       code: 'INVOICE_BOOK_NO_FISCAL_PERIOD',
       details: { invoiceDate: '2024-06-01', sale_first: true, invoice_id: INVOICE_ID },
     })
-    const { supabase, calls } = db({ tx: { journal_entry_id: 'je-categorised' } })
+    const { supabase, calls } = db()
 
     const { status, body } = await match(supabase)
 
@@ -243,7 +225,6 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: the 
     expect(body.error.code).toBe('INVOICE_BOOK_NO_FISCAL_PERIOD')
     expect(body.error.details).toMatchObject({ sale_first: true })
     expect(mockBookSale).not.toHaveBeenCalled()
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(businessWrites(calls)).toEqual([])
   })
@@ -255,14 +236,13 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: the 
       code: 'PERIOD_LOCKED',
       details: { reason: 'period_locked_at_set', invoice_date: '2024-06-01', sale_first: true, invoice_id: INVOICE_ID },
     })
-    const { supabase, calls } = db({ tx: { journal_entry_id: 'je-categorised' } })
+    const { supabase, calls } = db()
 
     const { status, body } = await match(supabase)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('PERIOD_LOCKED')
     expect(body.error.details).toMatchObject({ sale_first: true, invoice_date: '2024-06-01' })
-    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
     expect(businessWrites(calls)).toEqual([])
   })

@@ -41,6 +41,13 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
   matchInvoiceCandidates: mockMatchInvoiceCandidates,
 }))
 
+// The refusals on the row and the invoice alone have their own suite
+// (match-transaction-invoice-booked-row.test.ts) and take no slot in the queue.
+vi.mock('@/lib/invoices/book-customer-bank-match', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/book-customer-bank-match')>()),
+  refuseCustomerBankMatch: vi.fn(async () => null),
+}))
+
 import { tools } from '../server'
 
 const match = tools.find((t) => t.name === 'gnubok_match_transaction_to_invoice')!

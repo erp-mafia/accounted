@@ -468,10 +468,9 @@ invoice's currency and the kronor that arrived on the payment account, the
 moms only when the verifikat books the sale at payment. Every door hands
 down its link basis and the debt settled: `settleInvoicePayment` (both
 mark-paid routes, the staged `mark_invoice_paid`, the kontantfaktura at
-issue; the person's own rows there record no rule source), the dashboard
-and v1 bank match routes and the staged `match_transaction_invoice`; each
-match door's storno of the row's earlier booking goes through
-`reverseJournalEntry` as `ledger.storno` of the bank line. The ROT/RUT
+issue; the person's own rows there record no rule source) and
+`bookCustomerBankMatch` (the dashboard and v1 bank match routes and the
+staged `match_transaction_invoice`). The ROT/RUT
 generators (`createRotRutPayoutSetEntry`, `createRotRutReclaimEntry`,
 `createMigratedDeductionEntry`) record `se.rot_rut.payout_received` (one
 event for a transfer paying several begäran), `se.rot_rut.reclaimed` and

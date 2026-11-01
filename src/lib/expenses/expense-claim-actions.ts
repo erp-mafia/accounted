@@ -30,8 +30,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
-import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { bankRowRefusalCode, decideBankRowRebooking, type GatedBankRow } from '@/lib/transactions/is-booked'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
@@ -665,19 +664,16 @@ export async function matchExpensePayout(
     // samlingsverifikat carries journal_entry_id = NULL and must still refuse.
     const { data: transactionRow, error: fetchTxError } = await supabase
       .from('transactions')
-      .select('id, date, amount, currency, journal_entry_id, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
+      .select('id, date, amount, currency, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
       .eq('id', input.transaction_id)
       .eq('company_id', companyId)
       .single()
     if (fetchTxError || !transactionRow) return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
-    const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow as {
-      id: string
+    const transaction = transactionRow as GatedBankRow & {
       date: string
       amount: number
       currency: string | null
-      journal_entry_id: string | null
       cash_account_id: string | null
-      transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
     }
 
     if (!(transaction.amount < 0)) {
@@ -686,18 +682,16 @@ export async function matchExpensePayout(
     if ((transaction.currency || 'SEK').toUpperCase() !== 'SEK') {
       return { ok: false, code: 'EXPENSE_PAYOUT_MATCH_CURRENCY', details: { currency: transaction.currency } }
     }
-    // Only a LIVE (posted) pointer or a bank_line junction row blocks: a
-    // pointer left behind by a storno reads as "utan koppling" in the UI and
-    // must stay matchable (same predicate as link-journal-entry, issue #988).
-    // The RPC re-checks under its row lock; this is the early, readable answer.
-    if (
-      hasBankLineJunctionRow(junctionLinks) ||
-      (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
-    ) {
+    // The gate every booking door asks: a posted pointer or bank_line link
+    // refuses, a pointer left behind by a storno does not (issue #988), and
+    // an ignored row is refused. The RPC re-checks under its row lock; this
+    // is the early, readable answer.
+    const rebooking = await decideBankRowRebooking(supabase, companyId, transaction, { replace: false })
+    if (rebooking.outcome === 'refuse') {
       return {
         ok: false,
-        code: 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED',
-        details: { existingJournalEntryId: transaction.journal_entry_id },
+        code: bankRowRefusalCode(rebooking, 'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED'),
+        details: { existingJournalEntryId: rebooking.journalEntryId },
       }
     }
 

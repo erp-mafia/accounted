@@ -84,6 +84,20 @@ const CASES: Case[] = [
     codes: ['ENTRY_REVERSED', 'LINK_TX_JE_NOT_POSTED'],
   },
   {
+    name: 'an opening balance: it predates the feed',
+    row: freeRow,
+    entry: { ...postedEntry, source_type: 'opening_balance' },
+    lines: [bankLine],
+    codes: ['ENTRY_NOT_BANK_MOVEMENT', 'LINK_TX_JE_NOT_BANK_MOVEMENT'],
+  },
+  {
+    name: 'a storno: it cancels a verifikat',
+    row: freeRow,
+    entry: { ...postedEntry, source_type: 'storno' },
+    lines: [bankLine],
+    codes: ['ENTRY_NOT_BANK_MOVEMENT', 'LINK_TX_JE_NOT_BANK_MOVEMENT'],
+  },
+  {
     name: 'a draft',
     row: freeRow,
     entry: { ...postedEntry, status: 'draft' },

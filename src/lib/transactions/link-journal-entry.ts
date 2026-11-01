@@ -34,6 +34,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
+import { hasActiveCreditNote } from '@/lib/transactions/invoice-document-refusal'
 import { resolveInvoiceSettlementSide } from '@/lib/invoices/invoice-settlement-side'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
@@ -162,6 +163,8 @@ function linkRefusal(
     case 'ENTRY_NOT_POSTED':
     case 'ENTRY_REVERSED':
       return { ok: false, code: 'LINK_TX_JE_NOT_POSTED', details: { currentStatus: prepared.entryStatus ?? null } }
+    case 'ENTRY_NOT_BANK_MOVEMENT':
+      return { ok: false, code: 'LINK_TX_JE_NOT_BANK_MOVEMENT' }
     case 'CURRENCY_MISMATCH':
       return { ok: false, code: 'BANK_BOOKING_CURRENCY_MISMATCH', details: { reason: prepared.error } }
     // Other rows already hold the verifikat's bank leg (GitHub #3507): its
@@ -268,7 +271,7 @@ export async function linkTransactionToJournalEntry(
     const { data: invoiceRow, error: fetchInvError } = await supabase
       .from('invoices')
       .select(
-        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, credited_invoice_id, customer:customers(name)'
+        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, credited_invoice_id, customer:customers(name), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)'
       )
       .eq('id', invoiceId)
       .eq('company_id', companyId)
@@ -278,7 +281,9 @@ export async function linkTransactionToJournalEntry(
       return { ok: false, code: 'LINK_TX_INVOICE_NOT_FOUND' }
     }
 
-    if (invoiceRow.credited_invoice_id) {
+    // One rule with the match doors: a credit note, or an original with an
+    // active credit note, takes no payment.
+    if (invoiceRow.credited_invoice_id || hasActiveCreditNote(invoiceRow)) {
       return { ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' }
     }
 
@@ -531,12 +536,7 @@ export async function linkTransactionToJournalEntry(
     const recorded = await recordInvoicePaymentRow(supabase, {
       userId,
       companyId,
-      invoice: {
-        id: invoiceId,
-        currency: invoice.currency,
-        exchange_rate: invoice.exchange_rate,
-        paid_amount: invoice.paid_amount,
-      },
+      invoice,
       paymentDate: transaction.date,
       newPaidAmount,
       journalEntryId,

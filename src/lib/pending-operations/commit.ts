@@ -15,7 +15,6 @@
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
@@ -46,7 +45,6 @@ import {
   normalizeVatRateToDecimal,
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
-import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import {
   archiveIssuedInvoicePdf,
   issueAndBookInvoice,
@@ -54,19 +52,12 @@ import {
   restoreUnbookedDraft,
   type IssuableInvoice,
 } from '@/lib/invoices/issue-and-book-invoice'
-import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
-import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
-import { cashPartialBlockReason, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
+import { supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
-import {
-  invoicePaymentBusinessEvent,
-  matchedBankLineStornoBusinessEvent,
-  type InvoicePaymentPostingContext,
-} from '@/lib/bookkeeping/invoice-business-events'
 import { postingPort } from '@/lib/posting/port'
 import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoices/attest-service'
 import type { AttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
@@ -148,28 +139,17 @@ import {
   RegisterBookedSupplierInvoiceParamsSchema,
   registerBookedSupplierInvoice,
 } from '@/lib/supplier-invoices/register-booked'
-import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
+import { bookCustomerBankMatch } from '@/lib/invoices/book-customer-bank-match'
+import { bankRowAlreadyBookedMessages } from '@/lib/errors/match-si-tx-already-booked'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import {
-  guardDuplicatePaymentVoucher,
-  recordDuplicateCandidateOverride,
-} from '@/lib/invoices/already-explained-guard'
 import {
   linkSupplierInvoiceToVoucher,
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
-import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { describeRefundFailure, refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
-import {
-  bookSaleBeforeSettlement,
-  planSaleBeforeSettlement,
-  type SaleFirstRefusal,
-} from '@/lib/invoices/sale-first'
+import type { SaleFirstRefusal } from '@/lib/invoices/sale-first'
 import { creditInvoice } from '@/lib/invoices/credit-invoice'
-import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
-import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import {
@@ -314,7 +294,6 @@ import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
 import { commitReminderDailyBatch, reminderBatchApprovalRefusal } from '@/lib/reminders/batch-commit'
 import type { AnyOperation, OperationOutcome } from '@/lib/operations/types'
 import type {
-  Transaction,
   TransactionCategory,
   EntityType,
   VatTreatment,
@@ -328,15 +307,19 @@ import type {
   InvoiceItem,
   InvoiceDocumentType,
   AccountingMethod,
-  CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
   FiscalPeriod,
 } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { linkBasisColumns } from '@/lib/links/stamp'
-import { checkAccountingMethod, type AccountingMethodCheck } from '@/lib/company/accounting-method'
+import {
+  ACCOUNTING_METHOD_MISSING,
+  ACCOUNTING_METHOD_UNREADABLE,
+  checkAccountingMethod,
+  type AccountingMethodUnavailableCode,
+} from '@/lib/company/accounting-method'
 
 const log = createLogger('pending-operations/commit')
 
@@ -449,7 +432,7 @@ async function loadBookingContext(
 }
 
 /** An unreadable accounting method as an executor refusal: side-effect free, so the op stays pending. */
-function accountingMethodRefusal(method: Extract<AccountingMethodCheck, { ok: false }>): ExecutorResult {
+function accountingMethodRefusal(method: { code: AccountingMethodUnavailableCode }): ExecutorResult {
   const entry = getErrorEntry(method.code)
   return {
     error: entry?.message_sv ?? 'Företagets bokföringsmetod kunde inte läsas, så inget bokfördes.',
@@ -3330,507 +3313,84 @@ async function commitMarkInvoiceSent(
   }
 }
 
+/**
+ * Refusals of a staged match that are a state of the books, not a failure of
+ * the approval: the dispatcher records a 409 as rejected, and the user can
+ * stage the match again once the state has changed.
+ */
+const MATCH_STATE_REFUSALS: ReadonlySet<string> = new Set([
+  'MATCH_INVOICE_TX_ALREADY_LINKED',
+  'MATCH_INVOICE_NOT_INVOICE_TYPE',
+  'MATCH_INVOICE_CREDIT_NOTE',
+  'MATCH_INVOICE_NOT_OPEN',
+])
+
+/** The approval of a staged match: the booking is bookCustomerBankMatch, this maps its outcome. */
 async function commitMatchTransactionInvoice(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  const transactionId = params.transaction_id as string
-  const invoiceId = params.invoice_id as string
-
-  const { data: transaction, error: txError } = await supabase
-    .from('transactions').select('*').eq('id', transactionId).eq('company_id', companyId).single()
-
-  if (txError || !transaction) return { error: 'Transaction not found', status: 404 }
-  if (transaction.amount <= 0) return { error: 'Only income transactions can be matched', status: 400 }
-  if (transaction.invoice_id) return { error: 'Transaction already linked to an invoice', status: 409 }
-
-  const { data: invoice, error: invError } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('id', invoiceId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (invError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.credited_invoice_id) {
-    return { error: 'Kreditfakturor kan inte registreras som betalda.', status: 409 }
-  }
-  // Parity with the dashboard match route (MATCH_INVOICE_NOT_INVOICE_TYPE):
-  // proformas, delivery notes and quotes carry no receivable to settle.
-  if (invoice.document_type && invoice.document_type !== 'invoice') {
-    const entry = getErrorEntry('MATCH_INVOICE_NOT_INVOICE_TYPE')
-    return {
-      error: entry?.message_sv ?? 'Only invoices can be matched to a transaction.',
-      errorCode: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
-      // 409 like the credit-note guard above: the dispatcher records it as
-      // rejected (a state refusal), not failed (an execution error).
-      status: 409,
-    }
-  }
-  if (!isMatchableInvoiceStatus(invoice.status)) {
-    return { error: 'Invoice is not in a matchable state', status: 409 }
-  }
-
-  // Soft-duplicate guard: parity with the dashboard and v1 match routes
-  // (MATCH_INVOICE_POSSIBLE_DUPLICATE), which this path bypassed. A manual
-  // verifikation that already books this receipt means the approved match
-  // would double-book it. Runs BEFORE the irreversible storno below, and
-  // re-binds force to the candidate detected NOW: an approval staged before
-  // the manual voucher was posted cannot slip through (issue #2294).
-  const duplicate = await guardDuplicatePaymentVoucher(
-    supabase,
-    companyId,
-    transaction,
+  const outcome = await bookCustomerBankMatch(
+    { supabase, companyId, userId, log },
     {
+      transactionId: params.transaction_id as string,
+      invoiceId: params.invoice_id as string,
+      // Where the user chose to book an excess and a provider's fee, with the
+      // amounts the approver saw: re-checked against the amounts as they are now.
+      overpaymentAccount: typeof params.overpayment_account === 'string' ? params.overpayment_account : undefined,
+      overpaymentAmount: params.overpayment_amount === undefined ? undefined : Number(params.overpayment_amount),
+      feeAccount: typeof params.fee_account === 'string' ? params.fee_account : undefined,
+      feeAmount: params.fee_amount === undefined ? undefined : Number(params.fee_amount),
+      // Re-bound to the candidate detected now: an approval staged before the
+      // manual voucher was posted cannot slip through (issue #2294).
       force: params.force === true,
-      expected_journal_entry_id:
+      expectedJournalEntryId:
         typeof params.expected_journal_entry_id === 'string' ? params.expected_journal_entry_id : undefined,
+      overrideVia: 'pending_operation_force',
     },
-    { onDetectError: (err) => log.warn('match_transaction_invoice: duplicate detection failed (continuing)', err) },
   )
-  if (duplicate.status === 'blocked') {
-    const entry = getErrorEntry('MATCH_INVOICE_POSSIBLE_DUPLICATE')
-    return {
-      error: `${entry?.message_sv ?? 'Det finns redan en bokförd verifikation på samma belopp och datum.'} (verifikat ${duplicate.candidate.voucher_label}, ${duplicate.candidate.entry_date})`,
-      errorCode: 'MATCH_INVOICE_POSSIBLE_DUPLICATE',
-      status: 409,
-      data: { candidate: duplicate.candidate },
+  if (!outcome.ok) {
+    // Nothing was written, as in loadBookingContext: the operation stays pending.
+    if (outcome.code === ACCOUNTING_METHOD_UNREADABLE || outcome.code === ACCOUNTING_METHOD_MISSING) {
+      return accountingMethodRefusal({ code: outcome.code })
     }
-  }
-  if (duplicate.status === 'mismatch') {
-    const entry = getErrorEntry('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
-    return {
-      error: entry?.message_sv ?? 'Verifikationen som dubblettkontrollen visade matchar inte längre.',
-      errorCode: 'MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH',
-      status: 409,
-      data: {
-        expected_journal_entry_id: duplicate.expected_journal_entry_id,
-        detected_journal_entry_id: duplicate.detected_journal_entry_id,
-      },
-    }
-  }
-
-  // FX resolution (paidAmount in the INVOICE's currency) + overshoot guard +
-  // paid/remaining math, through the one helper the staging tools run too, so
-  // a match refused here is refused when it is staged (crm#253). This agent
-  // path previously had NO overshoot guard, so a 1500 payment on a 1000
-  // invoice was silently accepted (paid_amount > total, AR over-credited).
-  // Runs BEFORE the storno + JE below, so a rejected match leaves the
-  // transaction untouched and never burns a voucher number.
-  // overpayment_account: where the user chose to book an excess of a krona
-  // or more (2420, or 3740 under its cap). The plan re-checks it against the
-  // amounts as they are now, and the builders book exactly what it allows.
-  // fee_account: the user named the shortfall a payment provider's fee
-  // withheld from its payout (6570, crm#1364); the plan re-checks it the same
-  // way and settles the invoice in full only while it is one.
-  const matchPlan = await planTransactionInvoiceMatch(supabase, transaction, invoice, {
-    overpaymentAccount: typeof params.overpayment_account === 'string' ? params.overpayment_account : undefined,
-    feeAccount: typeof params.fee_account === 'string' ? params.fee_account : undefined,
-  })
-  if (!matchPlan.ok) {
-    return {
-      error: getErrorEntry(matchPlan.code)?.message_sv ?? matchPlan.code,
-      errorCode: matchPlan.code,
-      status: 400,
-      // The amounts the stage-time refusal names, so an op staged before that
-      // guard (or whose invoice changed since) is just as actionable here.
-      ...(matchPlan.code === 'MATCH_AMOUNT_EXCEEDS_REMAINING' ||
-      matchPlan.code === 'MATCH_OVERPAYMENT_ROUNDING_CAP' ||
-      matchPlan.code === 'MATCH_PAYMENT_FEE_NOT_ALLOWED'
-        ? { data: { currency: matchPlan.currency, ...matchPlan.details } }
-        : {}),
-    }
-  }
-  // The approver saw one excess amount: book that one or nothing. A payment
-  // applied to the invoice since staging would otherwise grow the excess
-  // booked on 2420 past what was approved.
-  if (
-    matchPlan.overpayment &&
-    roundOre(Number(params.overpayment_amount)) !== matchPlan.overpayment.amount
-  ) {
-    return {
-      error:
-        getErrorEntry('MATCH_OVERPAYMENT_CHANGED')?.message_sv ??
-        'Fakturans återstående belopp har ändrats sedan matchningen förbereddes.',
-      errorCode: 'MATCH_OVERPAYMENT_CHANGED',
-      status: 409,
-      data: { staged_excess: params.overpayment_amount ?? null, current_excess: matchPlan.overpayment.amount },
-    }
-  }
-  // The same for the fee: the approver saw one amount on 6570.
-  if (matchPlan.fee && roundOre(Number(params.fee_amount)) !== matchPlan.fee.amount) {
-    return {
-      error:
-        getErrorEntry('MATCH_PAYMENT_FEE_CHANGED')?.message_sv ??
-        'Fakturans återstående belopp har ändrats sedan matchningen förbereddes.',
-      errorCode: 'MATCH_PAYMENT_FEE_CHANGED',
-      status: 409,
-      data: { staged_fee: params.fee_amount ?? null, current_fee: matchPlan.fee.amount },
-    }
-  }
-  const { fx } = matchPlan
-  const overpaymentAccount = matchPlan.overpayment?.account
-  const feeAccount = matchPlan.fee?.account
-  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = matchPlan.plan
-  const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
-
-  // Read-only prevalidation, deliberately hoisted ABOVE the irreversible
-  // storno below (issue #842): resolveSettlementAccount can throw
-  // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
-  // here must reject the op with NOTHING posted. Behavior-preserving on the
-  // happy path: these are pure reads.
-  const bookingContext = await loadBookingContext(supabase, companyId)
-  if (!bookingContext.ok) return bookingContext.result
-  const { accountingMethod, entityType } = bookingContext
-
-  // Route on invoice state, not the company's current setting. Mirror of
-  // the match-invoice route fix: see that handler for the full rationale.
-  const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
-
-  // Reject cash-method partials and part-paid completions on never-booked
-  // invoices BEFORE the irreversible storno below. The old fallback booked an
-  // accrual-style clearing entry against an EMPTY 1510 (negative receivable,
-  // no revenue, no moms: bokslutsmetoden reports moms at payment, per
-  // installment), and the cash builder books the FULL invoice, so
-  // neither shape is bookable here. Mirrors the dashboard and v1 match routes.
-  const cashBlock = cashPartialBlockReason({
-    invoiceAlreadyBooked,
-    accountingMethod,
-    priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
-    paysRemainingInFull: isFullyPaid,
-  })
-  if (cashBlock) {
-    return {
-      error:
-        getErrorEntry('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')?.message_sv ??
-        'Kontantmetoden kan inte bokföra delbetalningar av en obokförd faktura automatiskt.',
-      status: 400,
-    }
-  }
-
-  // Debit the cash account THIS transaction actually belongs to, never a
-  // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
-  // only source of truth for which bank/cash account a real, matched
-  // transaction settled into. Mirrors the match-invoice route fix.
-  const paymentAccount = await resolveSettlementAccount(supabase, companyId, transaction.cash_account_id, log)
-
-  // A payment date outside an open period leaves the entry builders below with
-  // nothing to book, and the invoice used to be marked paid with no verifikat.
-  // Refuse here, before the irreversible storno, as the match routes do.
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
-  if (!fiscalPeriodId) {
-    return {
-      error:
-        getErrorEntry('INVOICE_PAID_NO_FISCAL_PERIOD')?.message_sv ??
-        'Ingen öppen räkenskapsperiod för betalningsdatumet.',
-      status: 400,
-    }
-  }
-
-  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
-  // its verifikat gets its sale booked first, by the Bokför step on its
-  // invoice date, and the payment then clears the 1510 it debits
-  // (lib/invoices/sale-first.ts). Planned here, before the storno, so a
-  // refusal leaves everything untouched.
-  const saleCtx = { supabase, companyId, userId, log }
-  const salePlan = await planSaleBeforeSettlement(saleCtx, invoice, { settlementDate: transaction.date })
-  if (!salePlan.ok) return saleFirstRefusalResult(salePlan)
-
-  // From here on the executor posts irreversible vouchers. Track their ids so
-  // a later failure can land the op in 'failed_partial' carrying them
-  // (issue #842) instead of a clean-looking 'rejected'.
-  const postedIds: Record<string, string> = {}
-
-  // The sale first: a correct booking of the sent invoice whatever happens
-  // to the match after it.
-  const sale = await bookSaleBeforeSettlement(saleCtx, salePlan)
-  if (!sale.ok) return saleFirstRefusalResult(sale)
-  if (sale.bookedHere && sale.journalEntryId) postedIds.sale_journal_entry_id = sale.journalEntryId
-
-  if (transaction.journal_entry_id) {
-    // Through the posting port: while POSTING_EVENTS is on, the storno
-    // records ledger.storno of the bank line (system_derived, with this
-    // approval as evidence: the match replaces the booking).
-    let reversal
-    try {
-      reversal = await postingPort.reverseJournalEntry({
-        supabase,
-        companyId,
-        userId,
-        entryId: transaction.journal_entry_id,
-        event: () => matchedBankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('system_derived')),
-        role: 'reversal',
-      })
-    } catch (err) {
-      // The sale posted above makes a failed storno a partial commit.
-      if (Object.keys(postedIds).length > 0) {
+    // A chart the user can complete keeps the operation pending, whatever
+    // posted; any other typed error after the sale posted is a partial commit.
+    if (outcome.error instanceof AccountsNotInChartError) throw outcome.error
+    if (outcome.error) {
+      if (outcome.partialPostedIds) {
         throw new PartialCommitError(
-          `match_transaction_invoice failed after booking the invoice's sale: ${err instanceof Error ? err.message : 'storno failed'}`,
-          postedIds,
-          err,
+          `match_transaction_invoice failed after booking the invoice's sale: ${outcome.error instanceof Error ? outcome.error.message : outcome.code}`,
+          outcome.partialPostedIds,
+          outcome.error,
         )
       }
-      throw err
+      throw outcome.error
     }
-    postedIds.reversal_journal_entry_id = reversal.id
-    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
-  }
-
-  // Posting port (step 2f-2): what this executor saw, read only while
-  // POSTING_EVENTS is on: the staged pair (agent_proposed_user_approved inside
-  // this approval, as the payment row records it) and the debt settled.
-  const posting = (): InvoicePaymentPostingContext => ({
-    linkBasis: linkBasisColumns('user_confirmed'),
-    settledAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
-  })
-
-  let journalEntryId: string | null = null
-  try {
-    if (useCashEntry) {
-      const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
-        paymentAccount, transaction, overpaymentAccount, posting,
-        { deferDeductionShare: accountingMethod === 'cash', feeAccount },
-      )
-      journalEntryId = je?.id ?? null
-    } else {
-      // Clearing entry against 1510, built by the SAME shared helper the
-      // dashboard and v1 routes use, so all three produce byte-identical
-      // lines: bank leg = the actual SEK that hit the account, 1510 credited
-      // at the invoice's booking rate, and a 3960/7960 FX-diff line (or a
-      // 3740 öresavrundning line on pure SEK) making the verifikat balance.
-      // The old createInvoicePaymentJournalEntry(paidAmount) shape could not
-      // carry either residual, so öre-settled and cross-currency matches
-      // left 1510 unclean. The open period was checked before the storno.
-      // The invoice's dimension bag rides every leg, FX result lines included
-      // (the builder stamps it), exactly as the match routes book it.
-      const { description, lines: clearingLines } = buildInvoiceMatchClearingLines(
-        {
-          amount: transaction.amount,
-          amount_sek: transaction.amount_sek ?? null,
-          currency: transaction.currency,
-          exchange_rate: transaction.exchange_rate ?? null,
-        },
-        {
-          currency: invoice.currency,
-          exchange_rate: invoice.exchange_rate ?? null,
-          remaining_amount: invoice.remaining_amount ?? null,
-          total: invoice.total,
-          paid_amount: invoice.paid_amount ?? null,
-          invoice_number: invoice.invoice_number,
-          customer: invoice.customer,
-          default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
-        },
-        fx.required ? fx.paidInInvoiceCurrency : undefined,
-        paymentAccount,
-        overpaymentAccount,
-        feeAccount,
-      )
-      const input: CreateJournalEntryInput = {
-        fiscal_period_id: fiscalPeriodId,
-        entry_date: transaction.date,
-        description,
-        source_type: 'invoice_paid',
-        source_id: invoice.id,
-        bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
-        lines: clearingLines,
-      }
-      const je = await postingPort.postJournalEntry({
-        supabase,
-        companyId,
-        userId,
-        event: () =>
-          invoicePaymentBusinessEvent(invoice as Invoice, input, { paymentAccount, generated: true, bankLine: true }, posting()),
-        input,
-      })
-      journalEntryId = je?.id ?? null
-    }
-  } catch (err) {
-    // Recoverable: the dispatcher releases the op back to 'pending' and this
-    // executor is re-entrant past the storno (the transaction was unlinked
-    // above, so a retry does not post a second storno). Keep that path even
-    // when a reversal voucher was already posted.
-    if (err instanceof AccountsNotInChartError) throw err
-    if (isBookkeepingError(err)) {
-      // A reversal voucher already posted makes this a partial commit, not a
-      // clean failure: surface the storno id (issue #842).
-      if (Object.keys(postedIds).length > 0) {
-        throw new PartialCommitError(
-          `match_transaction_invoice failed after posting a reversal voucher: ${err instanceof Error ? err.message : 'journal entry creation failed'}`,
-          postedIds,
-          err,
-        )
-      }
-      throw err
-    }
-    log.error('Failed to create match journal entry:', err)
-  }
-  // Fail closed, as the match routes do: the invoice is never marked paid
-  // without its payment verifikat. A storno posted above is reported as a
-  // partial commit rather than hidden behind a clean-looking refusal.
-  if (!journalEntryId) {
+    const entry = getErrorEntry(outcome.code)
+    const candidate = (outcome.details as { candidate?: { voucher_label: string; entry_date: string } } | undefined)?.candidate
     return {
-      error:
-        getErrorEntry('MATCH_INVOICE_RECORD_PAYMENT_FAILED')?.message_sv ??
-        'Kunde inte registrera fakturabetalningen.',
-      status: 500,
-      ...(Object.keys(postedIds).length > 0 ? { partialPostedIds: postedIds } : {}),
+      error: candidate
+        ? `${entry?.message_sv ?? outcome.code} (verifikat ${candidate.voucher_label}, ${candidate.entry_date})`
+        : (bankRowAlreadyBookedMessages(outcome.code, outcome.details)?.message_sv ?? entry?.message_sv ?? outcome.code),
+      errorCode: outcome.code,
+      status: MATCH_STATE_REFUSALS.has(outcome.code) ? 409 : (entry?.httpStatus ?? 400),
+      ...(outcome.details ? { data: outcome.details } : {}),
+      ...(outcome.partialPostedIds ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }
   }
-  postedIds.payment_journal_entry_id = journalEntryId
-
-  const { data: updatedRows, error: updateInvError } = await supabase
-    .from('invoices')
-    .update({
-      status: newStatus,
-      paid_at: paidAt,
-      paid_amount: newPaidAmount,
-      remaining_amount: newRemaining,
-    })
-    .eq('id', invoiceId)
-    .in('status', [...MATCHABLE_INVOICE_STATUSES])
-    .select('id')
-
-  if (updateInvError) {
-    return {
-      error: 'Failed to update invoice status',
-      status: 500,
-      ...(Object.keys(postedIds).length > 0 ? { partialPostedIds: postedIds } : {}),
-    }
-  }
-  if (!updatedRows || updatedRows.length === 0) {
-    return {
-      error: 'Invoice has already been fully paid or is no longer matchable',
-      status: 409,
-      ...(Object.keys(postedIds).length > 0 ? { partialPostedIds: postedIds } : {}),
-    }
-  }
-
-  // No cash-method note here anymore: pure kontantmetoden partials are now
-  // rejected above, and for an invoice booked at send the clearing entry
-  // handles a partial correctly, so the note would be misleading.
-  // The AR sub-ledger row goes through the single writer
-  // (lib/invoices/invoice-payment-row.ts), which owns the amount definition:
-  // applied to the invoice, never the cash received (#2250). Not fatal here,
-  // exactly like the fire-and-forget insert it replaces: the voucher and the
-  // invoice update are already committed. The failure is logged now, so the
-  // row the kontantmetod cut-off would otherwise miss can be added.
-  const recorded = await recordInvoicePaymentRow(supabase, {
-    userId,
-    companyId,
-    invoice: {
-      id: invoiceId,
-      currency: invoice.currency,
-      exchange_rate: invoice.exchange_rate,
-      paid_amount: invoice.paid_amount,
-    },
-    paymentDate: transaction.date,
-    newPaidAmount,
-    journalEntryId,
-    transactionId,
-    exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
-    source: 'bank',
-    // The staged pair; the approval scope makes it agent_proposed_user_approved.
-    linkBasis: { basis: 'user_confirmed' },
-  })
-  if (!recorded.ok) {
-    log.error('match_transaction_invoice: invoice_payments insert failed', undefined, {
-      invoiceId,
-      transactionId,
-      companyId,
-      error: recorded.error,
-    })
-  }
-
-  // The override was acted on: durable behandlingshistorik record (BFNAR
-  // 2013:2 p. 9.16), same event the categorize guard writes.
-  if (duplicate.status === 'overridden') {
-    await recordDuplicateCandidateOverride(
-      companyId,
-      transactionId,
-      duplicate.candidate,
-      { actor: { type: 'user', id: userId }, via: 'pending_operation_force' },
-      (err) => log.warn('match_transaction_invoice: failed to record override behandlingshistorik', err),
-    )
-  }
-
-  // The invoice is now settled, so every OTHER transaction still carrying a
-  // suggestion pointer at it is dead: retire them (issue #1259). This
-  // operation's own row is cleared by the update just below.
-  if (isFullyPaid) {
-    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId, {
-      exceptTransactionId: transactionId,
-    })
-  }
-
-  await supabase
-    .from('transactions')
-    .update({
-      invoice_id: invoiceId,
-      potential_invoice_id: null,
-      journal_entry_id: journalEntryId,
-      is_business: true,
-      category: 'income_services',
-      // The staged pair; inside this approval it records agent_proposed_user_approved.
-      ...linkBasisColumns('user_confirmed'),
-    })
-    .eq('id', transactionId)
-
-  const settledInvoice = {
-    ...(invoice as Invoice),
-    status: newStatus,
-    paid_at: paidAt,
-    paid_amount: newPaidAmount,
-    remaining_amount: newRemaining,
-  } as Invoice
-  try {
-    await eventBus.emit({
-      type: 'invoice.match_confirmed',
-      payload: {
-        invoice: settledInvoice,
-        transaction: {
-          ...(transaction as Transaction),
-          invoice_id: invoiceId,
-          potential_invoice_id: null,
-          journal_entry_id: journalEntryId,
-          is_business: true,
-          category: 'income_services',
-        } as Transaction,
-        userId,
-        companyId,
-      },
-    })
-  } catch { /* non-critical */ }
-  // A match that settles the invoice in full is its invoice.paid transition,
-  // exactly as on the dashboard and v1 match routes.
-  await emitInvoicePaidIfSettled({
-    newStatus,
-    invoice: settledInvoice,
-    paymentAmount: roundOre(newPaidAmount - (invoice.paid_amount ?? 0)),
-    paymentDate: transaction.date,
-    userId,
-    companyId,
-  })
-  // A befarad kundförlust reserve the payment made unnecessary comes back
-  // (Dr 1519 / Cr 6352), as on every payment path. Never throws.
-  await releaseDoubtfulReserveAfterChange(supabase, companyId, userId, {
-    invoiceId: invoice.id,
-    entryDate: transaction.date,
-    trigger: 'payment',
-  })
 
   return {
     data: {
-      invoice_status: newStatus,
-      paid_amount: newPaidAmount,
-      journal_entry_id: journalEntryId,
-      ...(matchPlan.overpayment ? { overpayment: matchPlan.overpayment } : {}),
-      ...(matchPlan.fee ? { fee: matchPlan.fee } : {}),
+      invoice_status: outcome.invoiceStatus,
+      paid_amount: outcome.paidAmount,
+      journal_entry_id: outcome.journalEntryId,
+      ...(outcome.overpayment ? { overpayment: outcome.overpayment } : {}),
+      ...(outcome.fee ? { fee: outcome.fee } : {}),
       // The sale verifikat this match booked first (defer_invoice_booking).
-      ...(postedIds.sale_journal_entry_id ? { sale_journal_entry_id: postedIds.sale_journal_entry_id } : {}),
+      ...(outcome.saleJournalEntryId ? { sale_journal_entry_id: outcome.saleJournalEntryId } : {}),
     },
   }
 }
@@ -8114,7 +7674,10 @@ async function commitPendingOperationInner(
       result.errorCode === 'BOOKING_REVIEW_REQUIRED' ||
       result.errorCode === 'BOOKING_REVIEW_LIMIT' ||
       // The categorize core's word for the same database refusal.
-      result.errorCode === 'TX_CATEGORIZE_REVIEW_REQUIRED'
+      result.errorCode === 'TX_CATEGORIZE_REVIEW_REQUIRED' ||
+      // A read behind the bank row gate failed, before any write: the same
+      // approval can be given again.
+      result.errorCode === 'BANK_ROW_READ_FAILED'
     ) {
       await supabase
         .from('pending_operations')

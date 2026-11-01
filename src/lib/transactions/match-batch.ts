@@ -13,7 +13,12 @@
  *
  * Rules, in order (the dashboard's order, pinned by its tests):
  *   1. only fakturor carry a receivable: a proforma or quote is refused
- *      (the RPC gates on status alone);
+ *      (the RPC gates on status alone), and so is a credit note or an
+ *      original with an active credit note, as on the single match
+ *      (invoiceDocumentRefusal);
+ *   1b. the row: already booked or ignored is refused by the gate every
+ *      booking door asks (decideBankRowRebooking), before anything is
+ *      written; the RPC reads the same anchors under its row lock;
  *   2. already-explained guard: posted vouchers that already book this bank
  *      row (each invoice marked paid by hand, a Bankgirot aggregate) refuse
  *      the batch unless force=true names exactly that set;
@@ -84,6 +89,8 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal } from '@/lib/bookkeeping/payout-fee-lines'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { invoiceDocumentRefusal, type InvoiceDocumentFields } from '@/lib/transactions/invoice-document-refusal'
+import { bankRowRefusalCode, decideBankRowRebookingById } from '@/lib/transactions/is-booked'
 import { chunk } from '@/lib/utils'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import {
@@ -168,11 +175,11 @@ export async function matchTransactionBatch(
   if (customerInvoiceIds.length > 0) {
     // Read in slices: a full batch of ids in one `.in()` overruns the
     // gateway's URL limit (lib/reconciliation/limits.ts).
-    const docRows: { id: string; document_type: string | null }[] = []
+    const docRows: ({ id: string } & InvoiceDocumentFields)[] = []
     for (const part of chunk(customerInvoiceIds, ID_READ_CHUNK)) {
       const { data, error: docError } = await supabase
         .from('invoices')
-        .select('id, document_type')
+        .select('id, document_type, credited_invoice_id, credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
         .in('id', part)
         .eq('company_id', companyId)
       if (docError) {
@@ -181,13 +188,21 @@ export async function matchTransactionBatch(
       }
       docRows.push(...((data ?? []) as typeof docRows))
     }
-    const offender = docRows.find((r) => r.document_type && r.document_type !== 'invoice')
-    if (offender) {
-      return {
-        ok: false,
-        code: 'MATCH_INVOICE_NOT_INVOICE_TYPE',
-        details: { invoiceId: offender.id, documentType: offender.document_type },
-      }
+    for (const row of docRows) {
+      const refusal = invoiceDocumentRefusal(row)
+      if (refusal) return { ok: false, code: refusal.code, details: { invoiceId: row.id, ...refusal.details } }
+    }
+  }
+
+  // 1b. A row already booked or ignored, on a dry run and a commit alike and
+  // before a sale or registration is booked for it. A row that is not there
+  // is the RPC's refusal, and the dry run's.
+  const rebooking = await decideBankRowRebookingById(supabase, companyId, transactionId, { replace: false })
+  if (rebooking.outcome === 'refuse') {
+    return {
+      ok: false,
+      code: bankRowRefusalCode(rebooking, 'BATCH_TX_ALREADY_BOOKED'),
+      details: { journal_entry_id: rebooking.journalEntryId, voucher: rebooking.voucher, via: rebooking.via, undo: rebooking.undo },
     }
   }
 
@@ -559,7 +574,7 @@ async function previewMatchBatch(
 
   const { data: txRow, error: txError } = await supabase
     .from('transactions')
-    .select('id, description, merchant_name, amount, currency, date, journal_entry_id, cash_account_id')
+    .select('id, description, merchant_name, amount, currency, date, cash_account_id')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -572,10 +587,8 @@ async function previewMatchBatch(
     amount: number
     currency: string | null
     date: string
-    journal_entry_id: string | null
     cash_account_id: string | null
   }
-  if (transaction.journal_entry_id) return { ok: false, code: 'BATCH_TX_ALREADY_BOOKED' }
   if (transaction.amount === 0) return { ok: false, code: 'BATCH_TX_ZERO_AMOUNT' }
 
   const isCustomer = allocations[0]!.kind === 'customer_invoice'

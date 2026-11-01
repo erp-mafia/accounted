@@ -465,7 +465,13 @@ class SqlBuilder {
   private relationship(table: string, relation: string, hint: string | null) {
     const candidates: Array<{ fk: ForeignKey; direction: 'to_one' | 'to_many' }> = []
     for (const fk of this.catalog.foreignKeys) {
-      if (fk.fromTable === table && fk.toTable === relation) candidates.push({ fk, direction: 'to_one' })
+      if (fk.fromTable === table && fk.toTable === relation) {
+        // A self-reference hinted by its own column answers the rows that
+        // point here, as real PostgREST does (`invoices!credited_invoice_id`
+        // lists an invoice's credit notes, checked on the tool-pg stack).
+        const children = fk.fromTable === fk.toTable && fk.fromCols.length === 1 && fk.fromCols[0] === hint
+        candidates.push({ fk, direction: children ? 'to_many' : 'to_one' })
+      }
       if (fk.fromTable === relation && fk.toTable === table && fk.fromTable !== fk.toTable) {
         candidates.push({ fk, direction: 'to_many' })
       }

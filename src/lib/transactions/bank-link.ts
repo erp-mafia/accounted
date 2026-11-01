@@ -54,6 +54,8 @@ export type BankLinkRefusalCode =
   /** A draft or a cancelled draft: not in the ledger. */
   | 'ENTRY_NOT_POSTED'
   | 'ENTRY_REVERSED'
+  /** An opening balance or a storno: isBankMovementEntry. */
+  | 'ENTRY_NOT_BANK_MOVEMENT'
   /** The verifikat does not settle the row on the account: no line there, or the amounts differ. */
   | 'NOT_SETTLED'
   /** A 1:N request that is not a split: a verifikat twice, fewer than two, more than 50. */
@@ -171,6 +173,18 @@ function refusal(
 const ALREADY_LINKED = 'Transaktionen är redan kopplad till en verifikation.'
 
 /**
+ * Can this verifikat be a bank row's movement? An opening balance predates
+ * the feed (a link to one is a permanent phantom difference) and a storno
+ * cancels a verifikat, so neither is listed as a candidate, and neither may be
+ * named by id. The database refuses the same pair at the write
+ * (block_transaction_link_to_opening_balance), where the answer was only "try
+ * again".
+ */
+export function isBankMovementEntry(entry: { source_type?: string | null }): boolean {
+  return entry.source_type !== 'opening_balance' && entry.source_type !== 'storno'
+}
+
+/**
  * Every check a bank link needs, on reads only.
  *
  * `accountNumber` is the ledger account the link settles on: the account
@@ -256,6 +270,9 @@ export async function prepareBankLink(
   }
   if (entry.status !== 'posted') {
     return refusal('ENTRY_NOT_POSTED', 'Verifikationen är inte bokförd ännu.', { entryStatus: entry.status as string })
+  }
+  if (!isBankMovementEntry(entry)) {
+    return refusal('ENTRY_NOT_BANK_MOVEMENT', 'Verifikationen är en ingående balans eller en storno och kan inte kopplas.')
   }
 
   const cashAccountId = typeof tx.cash_account_id === 'string' ? tx.cash_account_id : null

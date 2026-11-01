@@ -153,13 +153,17 @@ describe('linkTransactionToJournalEntry: the invoice settlement side (#3440)', (
       { account_number: '2611', debit_amount: 0, credit_amount: 250 },
     ],
   }
-  const run = (voucher: { lines: unknown[] } & Record<string, unknown>, side: Record<string, string>) => {
+  const run = (
+    voucher: { lines: unknown[] } & Record<string, unknown>,
+    side: Record<string, string>,
+    invoiceOverrides: Record<string, unknown> = {},
+  ) => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     const { lines, ...entry } = voucher
     enqueue({ data: tx, error: null })
     enqueue({ data: entry, error: null })
     enqueueBankLinkLeg(enqueue, 1250)
-    enqueue({ data: invoice, error: null })
+    enqueue({ data: { ...invoice, ...invoiceOverrides }, error: null })
     enqueue({ data: side, error: null }) // invoice_settlement_side
     enqueue({ data: lines, error: null }) // the voucher's lines on that side
     return {
@@ -172,6 +176,17 @@ describe('linkTransactionToJournalEntry: the invoice settlement side (#3440)', (
   }
   const AR_CREDIT = { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }
   const BANK_DEBIT = { settlement_side: 'bank_debit', account_prefix: '19', entry_side: 'debit' }
+
+  it('refuses an original with an active credit note, as the match doors do, and a cancelled or half-created one does not count', async () => {
+    const live = { id: 'cn-1', status: 'sent', creation_complete: true }
+    expect(await run(revenueVoucher, BANK_DEBIT, { credit_notes: [live] }).outcome)
+      .toMatchObject({ ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' })
+
+    for (const creditNote of [{ ...live, status: 'cancelled' }, { ...live, creation_complete: false }]) {
+      expect(await run(revenueVoucher, BANK_DEBIT, { credit_notes: [creditNote] }).outcome)
+        .not.toMatchObject({ code: 'LINK_TX_INVOICE_CREDIT_NOTE' })
+    }
+  })
 
   it('refuses a carried invoice (151x credit side) against a revenue-and-moms voucher, writing nothing', async () => {
     const { outcome, findCalls, supabase } = run(revenueVoucher, AR_CREDIT)
