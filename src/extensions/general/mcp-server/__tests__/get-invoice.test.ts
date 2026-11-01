@@ -40,6 +40,9 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
     total: 4250,
     paid_amount: 0,
     remaining_amount: 4250,
+    // The invoice's own öresavrundning choice, so no company read is needed.
+    ore_rounding: true,
+    deduction_total: 0,
     your_reference: 'Anna',
     our_reference: null,
     notes: null,
@@ -608,5 +611,70 @@ describe('gnubok_get_invoice: quote progress (crm#1196)', () => {
 
     expect(result.converted_from_id).toBe('quote-1')
     expect(result.quote_invoicing).toBeUndefined()
+  })
+})
+
+// crm#1568: the read returned the exact total and remaining_amount only, so an
+// agent reported 3116,25 kr for an invoice whose "Att betala" is 3116 kr.
+describe('gnubok_get_invoice: what the invoice asks for (crm#1568)', () => {
+  const execute = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+
+  it('returns amount_to_pay and ore_rounding_amount next to the exact total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: invoiceRow({
+        status: 'sent',
+        invoice_number: 'F-1002',
+        due_date: '2099-12-31',
+        subtotal: 2493,
+        vat_amount: 623.25,
+        total: 3116.25,
+        remaining_amount: 3116.25,
+        ore_rounding: true,
+        journal_entry_id: 'je-1',
+      }),
+    })
+
+    const result = await execute(supabase)
+
+    const columns = String(findCall('invoices', 'select')?.[0])
+    expect(columns).toContain('ore_rounding')
+    expect(columns).toContain('deduction_total')
+    expect(result).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25, remaining_amount: 3116.25 })
+    // Its own choice, frozen at issue: the company setting is not read.
+    expect(findCall('company_settings', 'select')).toBeUndefined()
+  })
+
+  it('computes a draft without a choice of its own with the company setting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ total: 4312.5, remaining_amount: 4312.5, ore_rounding: null }) })
+    enqueue({ data: { ore_rounding: true } })
+
+    const result = await execute(supabase)
+
+    expect(findCall('company_settings', 'eq')).toEqual(['company_id', COMPANY_ID])
+    expect(result).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5 })
+  })
+
+  it('nets the ROT/RUT deduction the customer does not pay', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', due_date: '2099-12-31', total: 10000.4, remaining_amount: 7000.4, deduction_total: 3000 }) })
+
+    const result = await execute(supabase)
+
+    expect(result).toMatchObject({ total: 10000.4, amount_to_pay: 7000, ore_rounding_amount: -0.4 })
+  })
+
+  it('declares both figures in its output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, { description?: string }> }).properties
+    expect(props.amount_to_pay.description).toMatch(/Att betala/)
+    expect(props.ore_rounding_amount).toBeDefined()
   })
 })

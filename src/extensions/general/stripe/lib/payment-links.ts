@@ -6,6 +6,8 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { invoiceAmountDue } from '@/lib/invoices/amount-due'
+import { companyOreRoundingFor } from '@/lib/invoices/amount-to-pay-fields'
 import type { Invoice, CreditNote } from '@/types'
 import {
   connectedAccountOptions,
@@ -41,8 +43,15 @@ async function getActiveConnection(
  * simply sends the invoice without a link. Throws on actual Stripe API
  * failures so the caller can surface a warning.
  *
- * The link amount is the customer's payable share (`remaining_amount`, which
- * is total minus ROT/RUT deduction at send time) in the invoice currency.
+ * The link amount is what the invoice asks for (invoiceAmountDue, the figure
+ * its PDF and every payment QR print): "Att betala" after öresavrundning and
+ * any ROT/RUT deduction, the remainder once partly paid, in the invoice
+ * currency. It used to be `remaining_amount`, the exact ledger figure, so an
+ * invoice asking 3 116 kr charged 3 116,25 kr by card (crm#1568). The
+ * company's öresavrundning is read only for an invoice without its own
+ * choice (a draft at send); a failed read throws, so no link is priced on a
+ * guessed setting.
+ *
  * Stripe idempotency keys are derived from the invoice id plus the payable
  * amount in minor units: a retried send of the same amount reuses the same
  * Price and Payment Link instead of minting duplicates, while a resend after
@@ -74,8 +83,7 @@ export async function createInvoicePaymentLink(
     return null
   }
 
-  const payable =
-    invoice.remaining_amount ?? (invoice.total - (invoice.deduction_total ?? 0))
+  const payable = invoiceAmountDue(invoice, await companyOreRoundingFor(supabase, companyId, [invoice]))
   if (!(payable > 0)) return null
 
   const stripe = getStripe()

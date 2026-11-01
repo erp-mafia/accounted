@@ -421,6 +421,68 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.meta.partial_expansions).toBeUndefined()
   })
 
+  // crm#1568: the open invoices carried the exact total only, so an
+  // integration read 3116,25 kr where the invoice asks for 3116 kr.
+  it('embeds what each open invoice asks for, as the invoice endpoints report it', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+      company_settings: { data: { ore_rounding: true }, error: null },
+      invoices: {
+        data: [
+          { id: 'inv-up', invoice_number: 'F-1001', invoice_date: '2026-10-31', due_date: '2026-11-30', status: 'sent', currency: 'SEK', total: 4312.5, remaining_amount: 4312.5, ore_rounding: true, deduction_total: 0, credited_invoice_id: null },
+          { id: 'inv-null', invoice_number: 'F-0900', invoice_date: '2026-03-31', due_date: '2026-04-30', status: 'sent', currency: 'SEK', total: 3116.25, remaining_amount: 3116.25, ore_rounding: null, deduction_total: 0, credited_invoice_id: null },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(supabase.captured.selects.invoices?.[0]).toContain('ore_rounding')
+    expect(body.data.invoices[0]).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5, remaining_amount: 4312.5 })
+    // A row without its own choice follows the company setting.
+    expect(body.data.invoices[1]).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25 })
+    // The columns the figures are derived from are not part of the shape.
+    expect(body.data.invoices[0]).not.toHaveProperty('ore_rounding')
+    expect(body.data.invoices[0]).not.toHaveProperty('deduction_total')
+    expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
+  it('degrades the expansion, never a guessed figure, when the company setting cannot be read', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SAMPLE_CUSTOMER, error: null },
+        company_settings: { data: null, error: { message: 'permission denied' } },
+        invoices: {
+          data: [{ id: 'inv-null', invoice_number: 'F-0900', invoice_date: '2026-03-31', due_date: '2026-04-30', status: 'sent', currency: 'SEK', total: 3116.25, remaining_amount: 3116.25, ore_rounding: null, deduction_total: 0, credited_invoice_id: null }],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.invoices).toEqual([])
+    expect(body.meta.partial_expansions).toEqual(['invoices'])
+  })
+
   it('returns 404 when the customer does not exist for the company', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

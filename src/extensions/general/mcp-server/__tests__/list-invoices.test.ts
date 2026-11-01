@@ -158,3 +158,69 @@ describe('gnubok_list_invoices: overdue follows the due date (crm#1084)', () => 
     ])
   })
 })
+
+// crm#1568: an invoice with öresavrundning listed only its exact total and
+// remaining_amount, so an agent reported 3116,25 kr for an invoice whose
+// "Att betala" is 3116 kr. The list now carries the figures the v1 API has
+// carried since crm#1487, from the same helper (withAmountToPay).
+describe('gnubok_list_invoices: what the invoice asks for (crm#1568)', () => {
+  it('returns amount_to_pay and ore_rounding_amount next to the exact total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        // Rounded up from a half krona, and the report's own 3116,25 rounded down.
+        invoiceRow({ id: 'inv-up', invoice_number: 'F-1001', status: 'sent', due_date: '2099-12-31', total: 4312.5, paid_amount: null, remaining_amount: 4312.5, ore_rounding: true, deduction_total: 0 }),
+        invoiceRow({ id: 'inv-down', invoice_number: 'F-1002', status: 'sent', due_date: '2099-12-31', total: 3116.25, paid_amount: null, remaining_amount: 3116.25, ore_rounding: true, deduction_total: 0 }),
+      ],
+      count: 2,
+    })
+
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as ListResult
+
+    const columns = String(findCall('invoices', 'select')?.[0])
+    expect(columns).toContain('ore_rounding')
+    expect(columns).toContain('deduction_total')
+    // total and remaining_amount stay what the books carry; amount_to_pay is the document's figure.
+    expect(result.invoices[0]).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5, remaining_amount: 4312.5 })
+    expect(result.invoices[1]).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25, remaining_amount: 3116.25 })
+    // Both rows carry their own choice (frozen at issue): no company read.
+    expect(findCall('company_settings', 'select')).toBeUndefined()
+  })
+
+  it('computes a draft without a choice of its own with the company setting, and nets a ROT/RUT deduction', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'draft', status: 'draft', total: 3116.25, paid_amount: null, remaining_amount: 3116.25, ore_rounding: null, deduction_total: 0 }),
+        invoiceRow({ id: 'issued-off', status: 'sent', due_date: '2099-12-31', total: 3116.25, paid_amount: null, remaining_amount: 3116.25, ore_rounding: false, deduction_total: 0 }),
+        invoiceRow({ id: 'rot', status: 'sent', due_date: '2099-12-31', total: 10000.4, paid_amount: null, remaining_amount: 7000.4, ore_rounding: true, deduction_total: 3000 }),
+        invoiceRow({ id: 'eur', status: 'sent', due_date: '2099-12-31', currency: 'EUR', total: 100.5, paid_amount: null, remaining_amount: 100.5, ore_rounding: true, deduction_total: 0 }),
+        invoiceRow({ id: 'credit', status: 'sent', due_date: '2099-12-31', total: -3116.25, paid_amount: null, remaining_amount: 0, ore_rounding: true, deduction_total: 0, credited_invoice_id: 'inv-orig' }),
+      ],
+      count: 5,
+    })
+    enqueue({ data: { ore_rounding: false } }) // company_settings: rounding off today
+
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as ListResult
+    const byId = Object.fromEntries(result.invoices.map((inv) => [inv.id, inv]))
+
+    expect(findCall('company_settings', 'eq')).toEqual(['company_id', 'company-1'])
+    // The draft follows today's company setting (off): it asks for the exact total.
+    expect(byId.draft).toMatchObject({ amount_to_pay: 3116.25, ore_rounding_amount: 0 })
+    // An issued row keeps its own choice whatever the company says today.
+    expect(byId['issued-off']).toMatchObject({ amount_to_pay: 3116.25, ore_rounding_amount: 0 })
+    expect(byId.rot).toMatchObject({ total: 10000.4, amount_to_pay: 7000, ore_rounding_amount: -0.4 })
+    // Öresavrundning is a Swedish-krona rule: a foreign invoice asks for its total.
+    expect(byId.eur).toMatchObject({ amount_to_pay: 100.5, ore_rounding_amount: 0 })
+    // A credit note mirrors the invoice it credits.
+    expect(byId.credit).toMatchObject({ amount_to_pay: -3116, ore_rounding_amount: 0.25 })
+  })
+
+  it('fails the call when the company setting cannot be read, never guessing it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'draft', total: 3116.25, ore_rounding: null, deduction_total: 0 })], count: 1 })
+    enqueue({ error: { message: 'permission denied' } }) // company_settings
+
+    await expect(listInvoices.execute({}, 'company-1', 'user-1', supabase as never)).rejects.toThrow(/ore_rounding/)
+  })
+})
