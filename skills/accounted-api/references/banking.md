@@ -4326,6 +4326,7 @@ Confirms a supplier invoice payment match. Creates the payment journal entry (ac
 - Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): a supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date), then the payment clears that 2440; registration_journal_entry_id names it (null when nothing was booked first). When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid invoice SI_BOOK_INVALID_STATUS), the match is refused with that code, details.registration_first is true, and nothing is booked or reversed.
 - A transaction that is already booked is refused with 409 MATCH_SI_TX_ALREADY_BOOKED and nothing is written: its pointer or a bank_line link names a posted verifikat, or it is linked to an existing verifikat. details names it (journal_entry_id, voucher, via: pointer, link, reconciliation, or concurrent when another booking took the transaction first). When details.storno_allowed is true the booking is the transaction's own categorization: resend with storno_existing: true to reverse it (storno) and book the payment, after every other check has passed. A samlingsverifikat, a split or a reconciliation link is never reversed here: unlink or correct it first. Before 2026-10-28 this endpoint reversed a categorization without being asked and re-pointed a reconciliation link.
 - A failed read of the transaction returns 503 BANK_ROW_READ_FAILED: nothing was booked, retry the same request.
+- A posted verifikat that already books this payment (same SEK amount on the transaction's settlement account within 7 days, linked to no other transaction, e.g. a payment booked by hand) is refused with 409 MATCH_SI_POSSIBLE_DUPLICATE and nothing is written; details.candidate names it. Link the supplier invoice to that verifikat instead (POST /supplier-invoices/{id}/link-to-voucher), or, when the transaction is a separate payment, resend with force: true and expected_journal_entry_id set to details.candidate.journal_entry_id (a fresh Idempotency-Key). A stale id returns 409 MATCH_SI_FORCE_CANDIDATE_MISMATCH.
 - Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.
 - Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.
 - Idempotency-Key is mandatory.
@@ -4340,7 +4341,9 @@ Request body:
 {
   supplier_invoice_id: string,
   lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, dimensions?: Record<string, string> }[],
-  storno_existing?: boolean
+  storno_existing?: boolean,
+  force?: boolean,
+  expected_journal_entry_id?: string
 }
 ```
 

@@ -22,6 +22,15 @@
  * ignored row is refused by the same gate (BANK_ROW_IGNORED): it can carry no
  * verifikat, and the claim below used to fail after one had posted.
  *
+ * A verifikat that already books the payment outside the invoice (a hand
+ * booking Debit 2440 / Credit 1930 while the invoice stayed open) is refused
+ * too, with the customer match's ledger duplicate guard in its supplier
+ * reading (detectDuplicatePaymentVoucher, skipClaimed): a verifikat that
+ * already pays an invoice or is linked to a bank row is never named.
+ * MATCH_SI_POSSIBLE_DUPLICATE names it. A
+ * person who checked it passes `force` bound to that verifikat; the debit of
+ * a payment order never does, so it waits for a person (accounted#58).
+ *
  * Callers: a person confirming a suggestion (the dashboard match route and
  * its v1 twin, action 'matched'), the Inkorg's register-and-settle, and the
  * debit of a bank payment order the owner already BankID-signed
@@ -53,6 +62,7 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
+import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { planSupplierBankMatch, type SupplierBankMatchPlan } from '@/lib/invoices/apply-supplier-payment'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -124,6 +134,15 @@ export interface BookSupplierBankMatchArgs {
    * reverses a samlingsverifikat, a split or a reconciliation link.
    */
   stornoExisting?: boolean
+  /**
+   * A person reviewed the verifikat a MATCH_SI_POSSIBLE_DUPLICATE refusal
+   * named and confirms this bank row is a separate payment: the match books
+   * anyway. Bound to that verifikat by `expectedJournalEntryId`, which is
+   * detected again here; a stale or guessed id is refused with
+   * MATCH_SI_FORCE_CANDIDATE_MISMATCH. Never set by the payment order's debit.
+   */
+  force?: boolean
+  expectedJournalEntryId?: string | null
 }
 
 export type BookSupplierBankMatchResult =
@@ -171,6 +190,56 @@ export async function bookSupplierBankMatch(
     }
   }
   const replaced = rebooking.outcome === 'replace' ? rebooking : null
+
+  // Does a posted verifikat already book this payment? The customer match's
+  // soft-duplicate guard, same detector, same force binding (accounted#58):
+  // a voucher on the row's settlement account, same SEK amount within 7
+  // days, in the supplier reading (skipClaimed): one that already pays or
+  // registers an invoice, or is linked to any bank row, is that booking, so
+  // two equal invoices paid the same week never flag each other. The row's
+  // own categorization is its pointer, so the detector never names it. A
+  // failed detection lets the match through without force (as on the
+  // customer match) and refuses force, which needs a detected candidate.
+  let dismissedDuplicateId: string | null = null
+  try {
+    const candidate = await detectDuplicatePaymentVoucher(supabase, {
+      companyId,
+      transactionId,
+      transactionDate: transaction.date,
+      transactionAmount: transaction.amount,
+      transactionCurrency: transaction.currency ?? null,
+      transactionAmountSek: transaction.amount_sek ?? null,
+      transactionExchangeRate: transaction.exchange_rate ?? null,
+      cashAccountId: transaction.cash_account_id ?? null,
+    }, { skipClaimed: true })
+    if (!args.force) {
+      if (candidate) return { ok: false, code: 'MATCH_SI_POSSIBLE_DUPLICATE', details: { candidate } }
+    } else if (!candidate || candidate.journal_entry_id !== args.expectedJournalEntryId) {
+      return {
+        ok: false,
+        code: 'MATCH_SI_FORCE_CANDIDATE_MISMATCH',
+        details: {
+          expected_journal_entry_id: args.expectedJournalEntryId ?? null,
+          detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+        },
+      }
+    } else {
+      dismissedDuplicateId = candidate.journal_entry_id
+      log.warn('soft-duplicate guard bypassed', {
+        reason: 'force=true',
+        transactionId,
+        supplierInvoiceId,
+        userId,
+        dismissedJournalEntryId: dismissedDuplicateId,
+      })
+    }
+  } catch (err) {
+    if (args.force) {
+      log.error('duplicate-payment-voucher detection failed under force=true', err as Error)
+      return { ok: false, code: 'INTERNAL_ERROR', error: err }
+    }
+    log.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+  }
 
   // Fail closed (accounted#58): planned as faktureringsmetoden, a
   // kontantmetod invoice that was never booked would only clear 2440 and its
@@ -600,6 +669,8 @@ export async function bookSupplierBankMatch(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
+      // The verifikat a person dismissed as not this payment (force).
+      ...(dismissedDuplicateId ? { dismissed_duplicate_journal_entry_id: dismissedDuplicateId } : {}),
       ...(match.newState ?? {}),
     },
   })

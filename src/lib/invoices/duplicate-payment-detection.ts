@@ -107,6 +107,22 @@ interface DetectArgs {
   cashAccountId?: string | null
 }
 
+/** Most vouchers the supplier reading skips as claimed before it stops looking. */
+const CLAIMED_SKIP_LIMIT = 5
+
+export interface DetectOptions {
+  /**
+   * The supplier match's reading (accounted#58). A voucher that is already
+   * the payment or registration verifikat of a supplier invoice, pays a
+   * customer invoice, or is linked to any bank row (the twin rule below
+   * included) is that booking, not a hand booking of this payment: it is
+   * skipped and the next candidate looked for. Without it the content-only
+   * twin rule named the payment of one invoice as the duplicate of an equal
+   * payment of another invoice the same week. A failed claim read throws.
+   */
+  skipClaimed?: boolean
+}
+
 /**
  * Find the single most likely verifikation that already books this bank
  * transaction. Returns null when no candidate is found.
@@ -137,6 +153,7 @@ interface DetectArgs {
 export async function detectDuplicatePaymentVoucher(
   supabase: SupabaseClient,
   args: DetectArgs,
+  opts?: DetectOptions,
 ): Promise<DuplicateVoucherCandidate | null> {
   const { companyId, transactionId, transactionDate, transactionAmount } = args
 
@@ -147,7 +164,7 @@ export async function detectDuplicatePaymentVoucher(
     bankAccountNumber = ledger.accountNumber?.trim() || null
   }
 
-  const candidate = await detectLedgerDuplicateVoucher(supabase, companyId, {
+  const target = {
     id: transactionId,
     date: transactionDate,
     amount: transactionAmount,
@@ -156,7 +173,18 @@ export async function detectDuplicatePaymentVoucher(
     exchange_rate: args.transactionExchangeRate ?? null,
     cash_account_id: args.cashAccountId ?? null,
     settlement_account: bankAccountNumber,
-  })
+  }
+  let candidate = await detectLedgerDuplicateVoucher(supabase, companyId, target)
+  const skipped: string[] = []
+  while (
+    candidate &&
+    opts?.skipClaimed &&
+    (candidate.transaction_id !== null || (await isClaimedVoucher(supabase, companyId, candidate.journal_entry_id)))
+  ) {
+    if (skipped.length >= CLAIMED_SKIP_LIMIT) return null
+    skipped.push(candidate.journal_entry_id)
+    candidate = await detectLedgerDuplicateVoucher(supabase, companyId, target, { excludeJournalEntryIds: skipped })
+  }
   if (!candidate) return null
 
   return {
@@ -178,6 +206,43 @@ export async function detectDuplicatePaymentVoucher(
     amount_verified: candidate.amount_verified,
     unverified_reason: candidate.unverified_reason,
   }
+}
+
+/**
+ * Whether a verifikat is already claimed as an invoice's booking: the payment
+ * (supplier_invoice_payments, supplier_invoices.payment_journal_entry_id) or
+ * registration verifikat of a supplier invoice, or a customer invoice payment.
+ * Throws when a read fails, so the caller's detection-failure path runs.
+ */
+async function isClaimedVoucher(supabase: SupabaseClient, companyId: string, journalEntryId: string): Promise<boolean> {
+  const reads = await Promise.all([
+    supabase
+      .from('supplier_invoice_payments')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', journalEntryId)
+      .limit(1),
+    supabase
+      .from('supplier_invoices')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('payment_journal_entry_id', journalEntryId)
+      .limit(1),
+    supabase
+      .from('supplier_invoices')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('registration_journal_entry_id', journalEntryId)
+      .limit(1),
+    supabase
+      .from('invoice_payments')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', journalEntryId)
+      .limit(1),
+  ])
+  if (reads.some((read) => read.error)) throw new Error('duplicate-payment check: voucher claim lookup failed')
+  return reads.some((read) => Array.isArray(read.data) && read.data.length > 0)
 }
 
 // ============================================================

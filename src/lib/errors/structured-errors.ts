@@ -1617,6 +1617,27 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
         'When details.storno_allowed is true the booking is the transaction\'s own categorization: resend with storno_existing: true to reverse it (storno) and book the payment. Otherwise the transaction is booked through a samlingsverifikat, a split or a link to an existing verifikat: unlink or correct that booking first, or link the invoice to the existing verifikat.',
     },
   },
+  // accounted#58: the customer match's soft-duplicate guard on the supplier
+  // doors. details.candidate names the verifikat (detectDuplicatePaymentVoucher).
+  MATCH_SI_POSSIBLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns redan en bokförd verifikation på samma belopp nära samma datum. Har du redan bokfört denna betalning? Koppla leverantörsfakturan till den befintliga verifikationen, eller skapa ny verifikation ändå om de inte hör ihop.',
+    message_en:
+      'A posted journal entry already books the same amount on a nearby date. The payment may already be booked by hand: link the supplier invoice to the existing voucher, or pass force=true to create a new one anyway.',
+    retryable: false,
+    remediation: {
+      description:
+        'Link the supplier invoice to the existing voucher instead of booking a second payment (POST /supplier-invoices/{id}/link-to-voucher with details.candidate.journal_entry_id). Only if the row is a genuinely separate payment, call again with force=true and expected_journal_entry_id set to the id the refusal named.',
+    },
+  },
+  MATCH_SI_FORCE_CANDIDATE_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen som dubblettkontrollen visade matchar inte längre. Stäng dialogen och försök igen så att rätt verifikation visas.',
+    message_en:
+      'The candidate journal entry echoed in expected_journal_entry_id does not match the one detected at request time. Retry without force to obtain the current candidate.',
+  },
   MATCH_SI_ALREADY_PAID: {
     httpStatus: 400,
     message_sv: 'Leverantörsfakturan är redan betald eller krediterad.',

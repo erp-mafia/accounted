@@ -108,6 +108,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
 }))
 
+// The ledger duplicate guard (accounted#58): its own queries are pinned by
+// lib/transactions/__tests__/booking-duplicate-detection tests; here it is a
+// seam so it consumes no slot in the queued Supabase mock.
+const mockDetectDuplicate = vi.fn()
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
+}))
+
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -127,6 +135,7 @@ beforeEach(() => {
   mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
+  mockDetectDuplicate.mockResolvedValue(null)
 })
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
@@ -1446,5 +1455,161 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a bank row that is
     const res = await POST(makeStornoReq({ storno_existing: 'yes' }), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(400)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: a verifikat already books the payment (accounted#58)', () => {
+  const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333'
+  const OTHER_ID = '44444444-4444-4444-8444-444444444444'
+  const candidate = {
+    journal_entry_id: CANDIDATE_ID,
+    voucher_label: 'A7',
+    entry_date: '2026-05-11',
+    description: 'Betalning leverantör',
+    amount: 225,
+    bank_account_number: '1930',
+    reason: 'exact_amount_within_window',
+    amount_verified: true,
+    unverified_reason: null,
+  }
+
+  function makeBodyReq(body: Record<string, unknown>) {
+    return new Request(`http://localhost/api/transactions/${TX_UUID}/match-supplier-invoice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplier_invoice_id: SI_UUID, ...body }),
+    })
+  }
+
+  function enqueueOpenRow() {
+    enqueue({
+      data: {
+        id: TX_UUID, company_id: 'company-1', amount: -225, currency: 'SEK', amount_sek: null,
+        exchange_rate: null, supplier_invoice_id: null, journal_entry_id: null, cash_account_id: 'ca-1',
+        document_id: null, date: '2026-05-12',
+      },
+    })
+    enqueue({
+      data: {
+        id: SI_UUID, currency: 'SEK', exchange_rate: null, status: 'registered', remaining_amount: 225,
+        paid_amount: 0, supplier: { supplier_type: 'swedish_business' }, items: [],
+      },
+    })
+    enqueue({ data: [] }) // transaction_voucher_links: the booked-row gate
+  }
+
+  function expectNothingBooked() {
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(findCalls('supplier_invoice_payments', 'insert')).toEqual([])
+  }
+
+  it('answers 409 MATCH_SI_POSSIBLE_DUPLICATE naming the verifikat, and books nothing', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { candidate: unknown } } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_POSSIBLE_DUPLICATE')
+    expect(body.error.details.candidate).toEqual(candidate)
+    // The row as the door read it: its own currency and settlement account.
+    expect(mockDetectDuplicate).toHaveBeenCalledWith(mockSupabase, expect.objectContaining({
+      companyId: 'company-1',
+      transactionId: TX_UUID,
+      transactionDate: '2026-05-12',
+      transactionAmount: -225,
+      transactionCurrency: 'SEK',
+      cashAccountId: 'ca-1',
+    }), { skipClaimed: true }) // the supplier reading: another invoice's payment is never named
+    expectNothingBooked()
+  })
+
+  it('books with force bound to the verifikat it named, and logs the dismissed verifikat', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -225, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 225 },
+    })
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(logMatchEvent)).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', TX_UUID, 'matched',
+      expect.objectContaining({
+        newState: expect.objectContaining({ dismissed_duplicate_journal_entry_id: CANDIDATE_ID }),
+      }),
+    )
+  })
+
+  it('refuses force naming another verifikat with 409 MATCH_SI_FORCE_CANDIDATE_MISMATCH, booking nothing', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: OTHER_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_FORCE_CANDIDATE_MISMATCH')
+    expect(body.error.details).toEqual({ expected_journal_entry_id: OTHER_ID, detected_journal_entry_id: CANDIDATE_ID })
+    expectNothingBooked()
+  })
+
+  it('refuses force when nothing is detected any more (the caller retries without force)', async () => {
+    enqueueOpenRow()
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_FORCE_CANDIDATE_MISMATCH')
+    expectNothingBooked()
+  })
+
+  it('rejects force without expected_journal_entry_id (400) before reading anything', async () => {
+    const res = await POST(makeBodyReq({ force: true }), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(400)
+    expect(mockDetectDuplicate).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('a failed detection lets the match through without force, as on the customer match', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -225, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 225 },
+    })
+    mockDetectDuplicate.mockRejectedValue(new Error('read failed'))
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(res.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed detection refuses force: it needs the verifikat it names', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockRejectedValue(new Error('read failed'))
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+
+    expect(res.status).toBe(500)
+    expectNothingBooked()
   })
 })

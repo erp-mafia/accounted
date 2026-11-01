@@ -16,7 +16,9 @@ import type { SupplierInvoice } from '@/types'
  * a bank payment order. A deferring company's unbooked invoice is booked
  * first there, by the Bokför step. A row that is already booked answers 409
  * MATCH_SI_TX_ALREADY_BOOKED; the dialog then offers to reverse the row's own
- * categorization and resends with storno_existing.
+ * categorization and resends with storno_existing. A verifikat that already
+ * books the payment answers 409 MATCH_SI_POSSIBLE_DUPLICATE; the dialog shows
+ * it and "Skapa ny verifikation ändå" resends with force bound to it.
  */
 export const POST = withRouteContext(
   'transaction.match_supplier_invoice',
@@ -29,7 +31,7 @@ export const POST = withRouteContext(
       operation: 'transaction.match_supplier_invoice',
     })
     if (!validation.success) return validation.response
-    const { supplier_invoice_id, lines: customLines, storno_existing } = validation.data
+    const { supplier_invoice_id, lines: customLines, storno_existing, force, expected_journal_entry_id } = validation.data
 
     const txLog = log.child({ transactionId, supplierInvoiceId: supplier_invoice_id })
 
@@ -87,6 +89,9 @@ export const POST = withRouteContext(
       linkBasis: { basis: 'user_confirmed' },
       // Sent only by the dialog's "Återför och matcha", after a refusal named the verifikat.
       stornoExisting: storno_existing,
+      // The dialog's "Skapa ny verifikation ändå", bound to the verifikat the guard named.
+      force,
+      expectedJournalEntryId: expected_journal_entry_id ?? null,
     })
     if (!outcome.ok) {
       if (outcome.error !== undefined) return errorResponse(outcome.error, txLog, { requestId })

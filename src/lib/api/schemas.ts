@@ -3409,7 +3409,12 @@ export const MatchSupplierInvoiceSchema = z.object({
   // (storno) and books the payment in its place; only that booking, never a
   // samlingsverifikat, a split or a reconciliation link (details.storno_allowed).
   storno_existing: z.boolean().optional(),
-})
+  // Bypass the soft-duplicate guard (MATCH_SI_POSSIBLE_DUPLICATE) after the
+  // person reviewed the verifikat it named, bound to it by
+  // expected_journal_entry_id as on the customer match (accounted#58).
+  force: z.boolean().optional(),
+  expected_journal_entry_id: uuid.optional(),
+}).refine(forceNamesCandidate, FORCE_NAMES_CANDIDATE_ISSUE)
 
 // The Inkorg's "Registrera och koppla till betalningen": the inbox convert
 // body (as POST /items/:id/convert takes it) and the bank row the item looks
