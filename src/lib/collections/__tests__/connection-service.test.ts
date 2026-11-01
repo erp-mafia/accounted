@@ -290,6 +290,16 @@ describe('the activation, step by step against the fake', () => {
   })
 })
 
+describe('the creditor number', () => {
+  it('reads through the one reader: an empty company copy hides nothing', async () => {
+    db = createMemorySupabase()
+    db.seed('companies', [{ id: COMPANY_ID, name: 'Test AB', org_number: '', entity_type: 'aktiebolag' }])
+    db.seed('company_settings', [{ company_id: COMPANY_ID, entity_type: 'aktiebolag', company_name: 'Test AB', org_number: '556012-5790' }])
+    const context = await loadActivationContext(db.client, COMPANY_ID)
+    expect(context.company.orgNumber).toBe('5560125790')
+  })
+})
+
 describe('a sole trader', () => {
   beforeEach(() => {
     db = createMemorySupabase()

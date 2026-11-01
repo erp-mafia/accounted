@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type Stripe from 'stripe'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isValidSwedishVatNumber, normalizeVatNumber } from '@/lib/vat/vat-number'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { getStripe } from './client'
 
 /**
@@ -92,13 +93,13 @@ export function companyBillingIdentity(
   // An unknown legal form could be a sole trader, so it gets no org number.
   const entityType = company?.entity_type ?? settings?.entity_type ?? null
   const legalPerson = isEntityType(entityType) && !usesPersonnummerAsOrgNumber(entityType)
-  const canonicalOrg = legalPerson ? normalizeOrgNumber(company?.org_number ?? settings?.org_number ?? null) : null
+  const canonicalOrg = legalPerson ? normalizeOrgNumber(effectiveOrgNumber(settings?.org_number, company?.org_number)) : null
 
   return {
     name: text(settings?.company_name) ?? text(company?.name),
     address,
     vatNumber,
-    orgNumber: canonicalOrg ? formatOrgNumber(canonicalOrg) : null,
+    orgNumber: canonicalOrg ? formatOrgNumberDisplay(canonicalOrg) : null,
   }
 }
 

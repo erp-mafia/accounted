@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { formatRedovisare } from '@/lib/skatteverket/format'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -9,7 +9,7 @@ import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.get',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (_request, { supabase, companyId, log }, { params }) => {
     const { id } = await params
 
     const { data: run, error } = await supabase
@@ -33,7 +33,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       by_employee: Record<string, { gross: number; tax: number; net: number }>
     }
 
-    const [employeesResult, settingsResult, previousRun, correctedByRunId, deliveriesResult] =
+    const [employeesResult, arbetsgivare, previousRun, correctedByRunId, deliveriesResult] =
       await Promise.all([
         // Employees with line items. A failed embed here (e.g. a schema/column
         // mismatch on the joined tables) must surface — silently returning an
@@ -44,12 +44,12 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
           .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions, f_skatt_status, salary_type, monthly_salary, hourly_rate, employment_degree, fora_fok_id), line_items:salary_line_items(*)')
           .eq('salary_run_id', id)
           .order('created_at'),
-        // Skatteverket arbetsgivare ID for AGI submission.
-        supabase
-          .from('company_settings')
-          .select('org_number, entity_type')
-          .eq('company_id', companyId)
-          .maybeSingle(),
+        // Skatteverket arbetsgivare ID for AGI submission. A number that does
+        // not convert leaves the page without one, logged: AGI answers that itself.
+        companyRedovisare(supabase, companyId).catch((err: unknown) => {
+          log.warn('arbetsgivare id unavailable', { error: err instanceof Error ? err.message : String(err) })
+          return null
+        }),
         // Latest booked run before this period — powers the Δ-vs-last-month
         // column. Effective values (overrides coalesced) so the diff matches
         // what was actually booked and AGI-reported.
@@ -118,16 +118,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         { error: `Kunde inte läsa anställda för lönekörningen: ${getUserErrorMessage(employeesError)}` },
         { status: 500 },
       )
-    }
-
-    const settings = settingsResult.data
-    let arbetsgivare: string | null = null
-    if (settings?.org_number && settings?.entity_type) {
-      try {
-        arbetsgivare = formatRedovisare(settings.org_number, settings.entity_type)
-      } catch {
-        arbetsgivare = null
-      }
     }
 
     const deliveries = deliveriesResult.data

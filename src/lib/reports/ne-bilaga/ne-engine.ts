@@ -3,6 +3,7 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre, truncateToWholeKronor } from '@/lib/money'
+import { companyIdentityFrom } from '@/lib/company/org-number'
 import type { FiscalPeriod } from '@/types'
 import type {
   NEDeclaration,
@@ -209,17 +210,7 @@ export async function generateNEDeclaration(
     .eq('company_id', companyId)
     .single()
 
-  // Resolve entity_type: prefer company_settings, fall back to companies table (NOT NULL, always reliable)
-  let entityType = settings?.entity_type
-  if (!entityType) {
-    const { data: company, error: companyError } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    if (companyError) throw new Error(`Failed to resolve entity type: ${companyError.message}`)
-    entityType = company?.entity_type
-  }
+  const { orgNumber, entityType } = await companyIdentityFrom(supabase, companyId, settings)
 
   if (entityType !== 'enskild_firma') {
     throw new Error('NE declaration is only for enskild firma (sole proprietorship)')
@@ -390,7 +381,8 @@ export async function generateNEDeclaration(
     breakdown,
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
-      orgNumber: settings?.org_number || null,
+      orgNumber,
+      entityType,
       addressLine1: settings?.address_line1 || null,
       postalCode: settings?.postal_code || null,
       city: settings?.city || null,

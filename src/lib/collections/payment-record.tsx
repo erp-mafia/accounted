@@ -2,7 +2,8 @@ import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-p
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { roundOre } from '@/lib/money'
-import { formatAmount, formatOrgNumber } from '@/lib/utils'
+import { formatAmount } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { pdfText } from '@/lib/pdf/number-text'
 
 /**
@@ -91,7 +92,7 @@ export function buildPaymentRecordModel(input: PaymentRecordInput): PaymentRecor
   return {
     providerName: input.providerName?.trim() || 'inkassobolaget',
     companyName: input.company?.company_name ?? null,
-    orgNumber: input.company?.org_number?.trim() ? formatOrgNumber(input.company.org_number.trim()) : null,
+    orgNumber: input.company?.org_number?.trim() ? formatOrgNumberDisplay(input.company.org_number.trim()) : null,
     invoiceNumber: input.invoice.invoice_number ?? null,
     customerName: input.invoice.customer_name ?? null,
     caseNumber: input.caseNumber,

@@ -7,7 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import type { Register, RegisterRow } from '@/lib/parties/register'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 export interface MergeCandidate {
   id: string
@@ -116,7 +116,7 @@ export function MergeDialog({
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{c.displayName}</div>
                     <div className="text-xs text-muted-foreground tabular-nums">
-                      {c.orgNumber ? formatOrgNumber(c.orgNumber) : ''}
+                      {c.orgNumber ? formatOrgNumberDisplay(c.orgNumber) : ''}
                       {c.status === 'suggested' ? (c.orgNumber ? ' · ' : '') + t('view_suggested') : ''}
                     </div>
                   </div>

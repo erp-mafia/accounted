@@ -1,5 +1,6 @@
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
 import { buildInfoSru, sruBlankettType, sruFile, sruText } from '@/lib/reports/sru/envelope'
+import { toRedovisare12 } from '@/lib/invariants/org-number'
 import type {
   INK2Declaration,
   INK2RSRUCode,
@@ -24,29 +25,14 @@ import {
  * Encoding: ISO 8859-1 (handled by the API route when writing the response)
  * Amounts: integers in hela kronor, no decimals, no thousands separators
  * Org number: 12 digits with century prefix 16 for juridisk person
+ * (toRedovisare12, the one conversion every filing shares)
  */
-
-/**
- * Format org number as 12-digit with century prefix.
- * Swedish juridiska personer use century prefix "16".
- * Input: "556677-8899" or "5566778899"
- * Output: "165566778899"
- */
-function formatOrgNumber12(orgNumber: string): string {
-  const clean = orgNumber.replace(/-/g, '')
-  if (clean.length === 12) return clean
-  if (clean.length === 10) return `16${clean}`
-  return `16${clean}`
-}
 
 /**
  * Generate the BLANKETTER.SRU file content with three blankett blocks
  */
-function generateBlanketterSru(declaration: INK2Declaration, now: Date): string {
+function generateBlanketterSru(declaration: INK2Declaration, now: Date, orgNumber12: string): string {
   const lines: string[] = []
-  const orgNumber12 = declaration.companyInfo.orgNumber
-    ? formatOrgNumber12(declaration.companyInfo.orgNumber)
-    : '000000000000'
 
   const fiscalYearEnd = declaration.fiscalYear.end
   const companyName = sruText(declaration.companyInfo.companyName)
@@ -143,11 +129,12 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
 export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmission {
   const now = new Date()
   const info = declaration.companyInfo
+  const identity12 = toRedovisare12(info.orgNumber ?? '', info.entityType)
 
   return {
     infoSru: buildInfoSru(
       {
-        identity12: info.orgNumber ? formatOrgNumber12(info.orgNumber) : '000000000000',
+        identity12,
         name: info.companyName,
         addressLine1: info.addressLine1,
         postalCode: info.postalCode,
@@ -156,7 +143,7 @@ export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmissi
       },
       now,
     ),
-    blanketterSru: generateBlanketterSru(declaration, now),
+    blanketterSru: generateBlanketterSru(declaration, now, identity12),
     generatedAt: now.toISOString(),
   }
 }

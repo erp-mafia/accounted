@@ -1,6 +1,6 @@
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import { formatDateSv, pdfAmount, pdfText } from '@/lib/pdf/number-text'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import type { ForenklatArsbokslut } from './service'
 import type { K1StatementRow } from './types'
 
@@ -111,7 +111,7 @@ export function ForenklatArsbokslutPDF({ report }: { report: ForenklatArsbokslut
           Förenklat årsbokslut för räkenskapsåret {range(period.period_start, period.period_end)}
         </Text>
         {report.company.org_number && (
-          <Text style={styles.meta}>Organisationsnummer {formatOrgNumber(report.company.org_number)}</Text>
+          <Text style={styles.meta}>Organisationsnummer {formatOrgNumberDisplay(report.company.org_number)}</Text>
         )}
 
         <Statement
@@ -156,7 +156,7 @@ export function ForenklatArsbokslutPDF({ report }: { report: ForenklatArsbokslut
         <View style={styles.footer} fixed>
           <Text>
             {report.company.name}
-            {report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''}
+            {report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''}
           </Text>
           <Text render={({ pageNumber, totalPages }) => `Sida ${pageNumber} av ${totalPages}`} />
         </View>

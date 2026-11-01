@@ -11,6 +11,7 @@ import {
 } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
 import { isOrgNumberRefusedOnIndividual } from '@/lib/invariants/personal-number-shape'
+import { swedishNumberKind } from '@/lib/invariants/org-number'
 import type {
   DetectedCustomerColumns,
   ParsedCustomerRow,
@@ -29,6 +30,17 @@ const VALID_CUSTOMER_TYPES: CustomerType[] = [
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const ORG_NUMBER_RE = /^[\d\s\-]{6,20}$/
+
+/**
+ * A Swedish company row whose number reads as neither a company's nor a
+ * person's: a typo, or a VAT number in the org number column. Stored, it would
+ * pass for an identity no filing or provider can use.
+ */
+function isUnreadableSwedishNumber(customerType: CustomerType, orgNumber: string): boolean {
+  return customerType === 'swedish_business'
+    && /^\d{10}(\d{2})?$/.test(orgNumber.replace(/[\s-]/g, ''))
+    && swedishNumberKind(orgNumber) === 'none'
+}
 
 /** Same cap as the customer form and the MCP tools. */
 const CUSTOMER_NUMBER_MAX_LENGTH = 32
@@ -236,7 +248,7 @@ export async function parseCustomersFile(
         `Kundnumret i kolumnen "${header(columns.customer_number_col)}" får vara högst ${CUSTOMER_NUMBER_MAX_LENGTH} tecken`,
       )
     }
-    if (orgNumber && !ORG_NUMBER_RE.test(orgNumber)) {
+    if (orgNumber && (!ORG_NUMBER_RE.test(orgNumber) || isUnreadableSwedishNumber(customerType, orgNumber))) {
       validationErrors.push(`Ogiltigt org-/personnummer "${orgNumber}" i kolumnen "${header(columns.org_number_col)}"`)
     }
     // A privatperson's personnummer is stored as its personnummer; any other

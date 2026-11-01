@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { createScbClient, identityLookupBody, nameQuery, nameSearchBody, SCB_SEARCH_CAP } from '../client'
 import { isScbConfigured, scbConfigFromEnv } from '../config'
 import { factsFromScbCompany, BOLAGSVERKET_WARNING_CODES } from '../map'
-import { isLegalPersonOrgNumber, toPeOrgNr } from '../org-number'
+import { toPeOrgNr } from '../org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import { ScbApiError, scbJson } from '../transport'
 
 /** One Je row exactly as the live API returned it on 2026-09-03 (AB Volvo, public registry data). */

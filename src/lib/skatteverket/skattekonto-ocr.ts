@@ -44,10 +44,11 @@ const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
  * Compute the Skattekontot OCR reference for a company.
  *
  * Accepts org_number/personnummer in any common Swedish format
- * ("556012-3456", "5560123456", "19880225-1234", "198802251234"); a value
- * already in twelve-digit form passes through the century step untouched.
+ * ("556012-3456", "5560123456", "19880225-1234", "198802251234"); a stored
+ * century is kept.
  *
- * @throws when the input is not 10 or 12 digits after separators are stripped.
+ * @throws {FilingIdentityError} when the number does not fit the legal form:
+ * 16 in front of a birth date is a valid reference for nobody.
  */
 export function generateSkattekontoOcr(
   orgOrPersonnummer: string,

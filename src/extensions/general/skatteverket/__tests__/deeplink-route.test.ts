@@ -143,6 +143,16 @@ describe('POST /system-connection/deeplink', () => {
     expect(mockCreateDeepLink).not.toHaveBeenCalled()
   })
 
+  it('422 with the way out when the number does not fit the form: no link, no row', async () => {
+    const res = await findRoute().handler(request(), makeContext({ orgNumber: '198003740118' }))
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.code).toBe('FILING_IDENTITY_REFUSED')
+    expect(body.error).toMatch(/kontakta supporten/)
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
   it('mints the link for the company\'s own 12-digit org number, records the opt-in row, audits', async () => {
     const res = await findRoute().handler(request(), makeContext())
     expect(res.status).toBe(200)

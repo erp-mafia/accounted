@@ -9,6 +9,10 @@ import {
   stripOrgNumberFormatting,
   formatOrgNumberDisplay,
   toRedovisare12,
+  sameOrgNumber,
+  partyOrgKey,
+  swedishNumberKind,
+  isLegalPersonOrgNumber,
 } from '@/lib/invariants/org-number'
 
 // Real-shaped numbers with correct Luhn check digits.
@@ -23,6 +27,103 @@ describe('stripOrgNumberFormatting', () => {
     // Letters are preserved so the caller's shape check can reject them,
     // instead of a digit-strip silently making garbage look valid.
     expect(stripOrgNumberFormatting('5560125790x')).toBe('5560125790x')
+  })
+})
+
+describe('the one reducer', () => {
+  it('normalizeOrgNumber accepts what orgNumberKey reads, and no 12-digit value without a century', () => {
+    expect(normalizeOrgNumber(`83${AB_10}`)).toBeNull()
+    expect(orgNumberKey(`83${AB_10}`)).toBeNull()
+    expect(isOrgNumberShaped(`83${AB_10}`)).toBe(false)
+    expect(hasInvalidOrgNumberCheckDigit(`83${AB_10}`)).toBe(false)
+    expect(formatOrgNumberDisplay(`83${AB_10}`)).toBe(`83${AB_10}`)
+  })
+
+  it('takes a plus only where a personnummer has it', () => {
+    expect(stripOrgNumberFormatting('250175+0112')).toBe('2501750112')
+    expect(stripOrgNumberFormatting('+46701234567')).toBe('+46701234567')
+    expect(orgNumberKey('+4670123456')).toBeNull()
+  })
+})
+
+describe('sameOrgNumber', () => {
+  it.each([
+    ['556012-5790', AB_10],
+    ['165560125790', AB_10],
+    ['16556012-5790', '556012 5790'],
+    ['198003740118', '800374-0118'],
+    ['BE0123456789', 'be 0123456789'],
+  ])('%s and %s are one number', (a, b) => {
+    expect(sameOrgNumber(a, b)).toBe(true)
+  })
+
+  it.each([
+    ['BE0123456789', 'FR0123456789'],
+    ['NO123456789', 'DK123456789'],
+    [`83${AB_10}`, AB_10],
+    [AB_10, '5560125791'],
+    [null, null],
+    ['', ''],
+    [AB_10, null],
+  ])('%s and %s are not', (a, b) => {
+    expect(sameOrgNumber(a, b)).toBe(false)
+  })
+})
+
+describe('partyOrgKey', () => {
+  it('is the 10-digit key of a Swedish number and the letters and digits of any other', () => {
+    expect(partyOrgKey('165560125790')).toBe(AB_10)
+    expect(partyOrgKey('be 0123.456.789')).toBe('BE0123456789')
+    expect(partyOrgKey(`83${AB_10}`)).toBe(`83${AB_10}`)
+  })
+
+  it('is null when there is no number at all', () => {
+    expect(partyOrgKey(null)).toBeNull()
+    expect(partyOrgKey('')).toBeNull()
+    expect(partyOrgKey(' - ')).toBeNull()
+  })
+})
+
+describe('swedishNumberKind', () => {
+  it.each([
+    [AB_10, 'legal_person'],
+    ['556012-5790', 'legal_person'],
+    ['165560125790', 'legal_person'],
+    ['16556012-5790', 'legal_person'],
+    ['8003740118', 'person'],
+    ['800374-0118', 'person'],
+    ['800374+0118', 'person'],
+    ['198003740118', 'person'],
+    ['19800374-0118', 'person'],
+    ['188003740118', 'person'],
+    ['208003740118', 'person'],
+    // A century that belongs to the other kind of number.
+    ['168003740118', 'none'],
+    ['195560125790', 'none'],
+    // Month 00, month 13, day 00, day 32.
+    ['8000011230', 'none'],
+    ['8013011237', 'none'],
+    ['8001001236', 'none'],
+    ['8001321234', 'none'],
+    // A VAT number typed as an org number, a foreign number, nothing.
+    ['556012579001', 'none'],
+    ['BE5560125790', 'none'],
+    ['12345', 'none'],
+    ['', 'none'],
+    [null, 'none'],
+    [undefined, 'none'],
+  ])('%s is %s', (raw, kind) => {
+    expect(swedishNumberKind(raw)).toBe(kind)
+  })
+
+  it('needs no check digit: a mistyped personnummer is still a person', () => {
+    expect(swedishNumberKind('8003740119')).toBe('person')
+  })
+
+  it('isLegalPersonOrgNumber reads the same test', () => {
+    expect(isLegalPersonOrgNumber('165560125790')).toBe(true)
+    expect(isLegalPersonOrgNumber('BE5560125790')).toBe(false)
+    expect(isLegalPersonOrgNumber('8003740118')).toBe(false)
   })
 })
 

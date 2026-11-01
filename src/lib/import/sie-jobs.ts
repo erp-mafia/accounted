@@ -12,7 +12,7 @@ import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
 import { onlyUsedSIEMappings } from './sie-preview-mappings'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
-import { checkSIEOrgNumber } from './sie-org-number'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { isVoucherOnlySIE } from './sie-voucher-only'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
@@ -424,7 +424,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   // migration), so this is where another organisation's books are stopped.
   // Not a hard block: an ombildning or a company registered under the wrong
   // number is legitimate, so the user confirms instead.
-  const orgCheck = await checkSIEOrgNumber(supabase, companyId, parsed.header.orgNumber)
+  const orgCheck = await checkSourceOrgNumber(supabase, companyId, parsed.header.orgNumber)
   if (orgCheck.mismatch && !confirmOrgNumberMismatch) {
     throw new SIEJobValidationError(
       `SIE-filen gäller organisationsnummer ${orgCheck.fileOrgNumber}, inte företagets (${orgCheck.companyOrgNumber}).`,

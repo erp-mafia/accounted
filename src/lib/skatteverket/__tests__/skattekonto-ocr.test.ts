@@ -5,6 +5,7 @@ import {
   SKATTEKONTO_BANKGIRO,
 } from '../skattekonto-ocr'
 import { luhnValidate } from '@/lib/bankgiro/luhn'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 
 describe('generateSkattekontoOcr', () => {
   // Ground truth from Skatteverket for org 554466-8808: the reference their
@@ -42,10 +43,11 @@ describe('generateSkattekontoOcr', () => {
 
   it('does not give an enskild firma the organisationsnummer prefix', () => {
     const ef = generateSkattekontoOcr('880225-1234', 'enskild_firma')
-    const ab = generateSkattekontoOcr('880225-1234', 'aktiebolag')
     expect(ef.startsWith('16')).toBe(false)
-    expect(ab.startsWith('16')).toBe(true)
-    expect(ef).not.toBe(ab)
+  })
+
+  it('refuses a personnummer on an aktiebolag: 16 in front of it is a valid reference for nobody', () => {
+    expect(() => generateSkattekontoOcr('880225-1234', 'aktiebolag')).toThrow(FilingIdentityError)
   })
 
   it('rejects malformed numbers', () => {

@@ -1,0 +1,1 @@
+[2026-11-01] Every filing takes the company's identity from toRedovisare12: a person's number the most recent birth date not after today, one that cannot be a birth date 16 under any form. An owner aged 100+ stored in 10 digits files under 20xx, on NE as on moms: stored digits lose the plus.

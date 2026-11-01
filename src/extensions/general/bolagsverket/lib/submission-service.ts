@@ -14,6 +14,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { generateIxbrlDocument, embedKontrollsumma } from '@/lib/bokslut/ixbrl/document/generate'
@@ -69,12 +70,6 @@ export function hashPnr(companyId: string, pnr: string, secret: string): string 
   return createHmac('sha256', secret)
     .update(`${companyId}:${pnr.replace(/\D/g, '')}`)
     .digest('hex')
-}
-
-/** Normalize to the 10-digit orgnr the API expects (no dash, no century). */
-export function normalizeOrgnr(orgNumber: string): string {
-  const digits = orgNumber.replace(/\D/g, '')
-  return digits.length === 12 ? digits.slice(2) : digits
 }
 
 /**
@@ -196,16 +191,11 @@ async function markSubmissionError(
   }
 }
 
-async function getOrgnr(supabase: SupabaseClient, companyId: string): Promise<string> {
-  const { data, error } = await supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error) throw new Error(`Kunde inte läsa organisationsnummer: ${error.message}`)
-  const orgNumber = (data as { org_number?: string } | null)?.org_number
+/** The 10-digit orgnr the API expects (no dash, no century). */
+export async function getOrgnr(supabase: SupabaseClient, companyId: string): Promise<string> {
+  const orgNumber = await companyOrgNumber(supabase, companyId)
   if (!orgNumber) throw new Error('Organisationsnummer saknas i företagsinställningarna.')
-  return normalizeOrgnr(orgNumber)
+  return orgNumber
 }
 
 /**

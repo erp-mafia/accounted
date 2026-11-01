@@ -30,7 +30,7 @@ import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-mess
 import type { CustomerDto, SupplierDto, CreditedInvoiceRefDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
-import { orgNumberKey } from '@/lib/invariants/org-number'
+import { orgNumberKey, partyOrgKey } from '@/lib/invariants/org-number'
 import {
   fetchCompanyInfoDirect,
   fetchCustomersDirect,
@@ -297,10 +297,9 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
 /**
  * Dedup key for supplier org numbers: the register stores the 10-digit key
  * (#2391) while a provider sends whatever spelling it holds ('556677-8899'),
- * so the map is keyed by orgNumberKey on both sides; a value that is not a
- * Swedish org number keys by itself, as before.
+ * so the map is keyed by partyOrgKey on both sides.
  */
-const orgMapKey = (value: string): string => orgNumberKey(value) ?? value
+export const orgMapKey = (value: string): string => partyOrgKey(value) ?? value
 
 /**
  * The existing row a register party maps onto, or undefined.
@@ -1431,7 +1430,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               country:
                 partyCountry(inv.supplier.postalAddress?.countryCode) ??
                 (supplierType === 'swedish_business' ? 'SE' : null),
-              org_number: supplierOrgNumber ? orgMapKey(supplierOrgNumber) : supplierOrgNumber,
+              org_number: supplierOrgNumber ? orgNumberKey(supplierOrgNumber) ?? supplierOrgNumber : supplierOrgNumber,
             }
             stub = { key, row: minimalSupplier, waitingInvoiceIndices: [] }
             stubByKey.set(key, stub)

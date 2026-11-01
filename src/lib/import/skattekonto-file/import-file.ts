@@ -20,7 +20,7 @@
  * A dry run parses, checks and counts and writes nothing.
  */
 import { generateFileHash } from '@/lib/import/bank-file/parser'
-import { normalizeOrgNumber } from '@/lib/import/shared/column-utils'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
@@ -225,17 +225,7 @@ export async function importSkattekontoFile(
 
   // Wrong-company guard: the modern export names its orgnr in the header row
   // (legacy files have none). The dashboard asks the user to confirm.
-  let orgNumberMismatch = false
-  if (parsed.org_number) {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('org_number')
-      .eq('company_id', companyId)
-      .maybeSingle()
-    const companyOrg = normalizeOrgNumber(settings?.org_number ?? null)
-    const fileOrg = normalizeOrgNumber(parsed.org_number)
-    orgNumberMismatch = companyOrg !== null && fileOrg !== null && companyOrg !== fileOrg
-  }
+  const { mismatch: orgNumberMismatch } = await checkSourceOrgNumber(supabase, companyId, parsed.org_number)
   if (orgNumberMismatch && !input.confirm_org_number_mismatch) {
     return {
       ok: false,

@@ -402,7 +402,7 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     enqueueMany([
       { data: GET_RUN },
       { data: [] }, // employees in this run
-      { data: { org_number: null, entity_type: null } },
+      { data: { org_number: '5566778899', entity_type: 'aktiebolag' } },
       { data: { id: 'run-1', period_year: 2026, period_month: 6 } }, // previous-run lookup
       { data: [] }, // deliveries
       {
@@ -466,6 +466,51 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
 
     expect(status).toBe(200)
     expect(body.data.previous_run).toBeNull()
+  })
+
+  it('names the employer in its 12-digit form for AGI', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: GET_RUN },
+      { data: [] },
+      { data: { org_number: '556677-8899', entity_type: 'aktiebolag' } },
+      { data: null }, // no previous booked run
+      { data: [] }, // deliveries
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-2'),
+      createMockRouteParams({ id: 'run-2' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.arbetsgivare).toBe('165566778899')
+  })
+
+  it('a number that does not convert leaves the page without an employer, not a 500', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: GET_RUN },
+      { data: [] },
+      { data: { org_number: '12345', entity_type: 'aktiebolag' } },
+      { data: null }, // no previous booked run
+      { data: [] }, // deliveries
+      { data: { org_number: '12345', entity_type: 'aktiebolag' } }, // companies, read after settings
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-2'),
+      createMockRouteParams({ id: 'run-2' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.arbetsgivare).toBeNull()
   })
 
   it('masks embedded employees: no ciphertext, no personnummer_last4', async () => {

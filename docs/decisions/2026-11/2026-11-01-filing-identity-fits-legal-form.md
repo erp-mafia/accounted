@@ -1,0 +1,1 @@
+[2026-11-01] toRedovisare12 refuses a number that does not fit the legal form and names support: an AB on a personnummer would file and pay under that person. A legal person's number still takes 16 under every form: a handelsbolag has no form here and sits on enskild firma.

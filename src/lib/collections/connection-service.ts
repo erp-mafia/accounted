@@ -8,13 +8,14 @@ import type {
 } from '@accounted/connect-contract'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { EntityType } from '@/types'
 import {
-  creditorOrgNumber,
   findPayoutOption,
   isEmail,
   normalizeVatNumber,
@@ -289,8 +290,7 @@ export async function loadActivationContext(
     vat_number: string | null
   } | null
   const entityType = await resolveCompanyEntityType(db as SupabaseClient, companyId, company?.entity_type ?? settings?.entity_type)
-  const storedOrgNumber = company?.org_number ?? settings?.org_number ?? null
-  const orgNumber = creditorOrgNumber(storedOrgNumber)
+  const orgNumber = normalizeOrgNumber(effectiveOrgNumber(settings?.org_number, company?.org_number))
   const soleTrader = usesPersonnummerAsOrgNumber(entityType)
   const options = payoutOptions((accountsRes.data ?? []) as PayoutSourceAccount[])
   const defaultId = (defaultRes.data as { cash_account_id: string } | null)?.cash_account_id ?? null

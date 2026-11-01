@@ -33,7 +33,8 @@ import {
   getResponseErrorMessage,
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { DEDUCTION_TYPE_LABEL_KEYS, type DeductionType } from '@/lib/bookkeeping/rot-rut-rules'
 
 type RequestStatus =
@@ -536,9 +537,7 @@ export default function RotRutPayoutDialog({
                               ? t('gron_teknik_property_line', { property: candidate.property.fastighet })
                               : t('gron_teknik_brf_line', {
                                   apartment: candidate.property.lagenhetsNr ?? '-',
-                                  org: formatOrgNumber(
-                                    (candidate.property.brfOrgNr ?? '').replace(/^16(?=\d{10}$)/, ''),
-                                  ),
+                                  org: formatOrgNumberDisplay(candidate.property.brfOrgNr),
                                 })}
                           </li>
                         )}

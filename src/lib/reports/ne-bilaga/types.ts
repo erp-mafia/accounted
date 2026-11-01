@@ -1,3 +1,5 @@
+import type { EntityType } from '@/types'
+
 // NE-bilaga rutor (NE appendix boxes). Which BAS accounts feed each one:
 // NE_ACCOUNT_RANGES in ne-engine.ts (BAS kopplingstabell NE_EJ_K1).
 export interface NEDeclarationRutor {
@@ -53,6 +55,7 @@ export interface NEDeclaration {
   companyInfo: {
     companyName: string
     orgNumber: string | null
+    entityType: EntityType
     addressLine1: string | null
     postalCode: string | null
     city: string | null

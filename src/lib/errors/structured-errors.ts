@@ -4450,6 +4450,13 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skattedeklarationen kunde inte genereras.',
     message_en: 'Failed to generate tax declaration.',
   },
+  FILING_IDENTITY_REFUSED: {
+    httpStatus: 422,
+    message_sv:
+      'Ogiltigt organisationsnummer: numret passar inte företagsformen. Ett aktiebolag eller en förening lämnar in på sitt organisationsnummer, en enskild firma på ägarens personnummer. Rätta numret under Inställningar → Allmänt. Går det inte att ändra där, kontakta supporten så rättar vi det.',
+    message_en:
+      "Invalid organisation number: it does not fit the legal form. An aktiebolag or association files on its organisation number, an enskild firma on the owner's personnummer. Correct it under Settings → General. If it cannot be changed there, contact support and we will fix it.",
+  },
   // ── Wave 3: filing reports and the momsredovisning verifikat over v1/MCP
   // (lib/reports/filing-report-service.ts, lib/reports/vat-settlement-booking.ts) ──
   TAX_DECL_INK2_WRONG_LEGAL_FORM: {

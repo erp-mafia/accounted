@@ -28,7 +28,7 @@ import {
   type PayoutKind,
 } from '@/lib/collections/activation-form'
 import { formatKronor } from '@/lib/collections/amount-text'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { collectionsAction, useCollectionsWords, type CollectionsSettingsData } from './collections-client'
 
 /**
@@ -253,7 +253,7 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
 
       <SettingsGroup label={t('step_company')}>
         <SettingsRow label={t('field_org_number')} htmlFor="coll-org">
-          <SettingsInput id="coll-org" value={activation.company.orgNumber ? formatOrgNumber(activation.company.orgNumber) : ''} disabled />
+          <SettingsInput id="coll-org" value={activation.company.orgNumber ? formatOrgNumberDisplay(activation.company.orgNumber) : ''} disabled />
         </SettingsRow>
         <SettingsRow label={t('field_name')} htmlFor="coll-name" align="baseline">
           <SettingsInput id="coll-name" value={company.name} onChange={(e) => setCompany({ ...company, name: e.target.value })} />

@@ -51,6 +51,7 @@ import {
   type PasteSkipReason,
 } from '@/lib/invoices/invoice-number-paste'
 import { beslutFileIsForCompany, readBeslutFile } from '@/lib/invoices/rot-rut-beslut-file'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -666,7 +667,7 @@ export default function MatchAllocationDialog({
       toast({ title: t('paste_beslut_invalid'), variant: 'destructive' })
       return
     }
-    if (!beslutFileIsForCompany(beslut, companySettings?.org_number ?? null)) {
+    if (!beslutFileIsForCompany(beslut, effectiveOrgNumber(companySettings?.org_number, company.org_number))) {
       toast({ title: t('paste_beslut_wrong_company'), variant: 'destructive' })
       return
     }

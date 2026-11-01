@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { isAccountNumber } from '@/lib/invariants/account-number'
-import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isSaneDateString } from '@/lib/invariants/iso-date'
 import { formatBankgiroNumber, formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 
@@ -70,21 +69,6 @@ export function isSwedishVatNumber(value: string): boolean {
 export function pastDateError(value: string, today: string): ActivationErrorKey | null {
   if (!isSaneDateString(value)) return 'invalid_date'
   return value > today ? 'date_in_future' : null
-}
-
-/** YYMMDD+NNNN: the personnummer of someone aged 100 or more. */
-const PLUS_FORM_RE = /^(\d{6})\s*\+\s*(\d{4})$/
-
-/**
- * The company's ten-digit organisationsnummer from what it stored: ten or
- * twelve digits, with hyphens or spaces (normalizeOrgNumber), or with the
- * plus an enskild firma's number carries when it is the personnummer of an
- * owner aged 100 or more. Luhn-checked; null for anything else.
- */
-export function creditorOrgNumber(stored: string | null | undefined): string | null {
-  if (!stored) return null
-  const plus = PLUS_FORM_RE.exec(stored.trim())
-  return normalizeOrgNumber(plus ? plus[1] + plus[2] : stored)
 }
 
 /** An amount typed as kronor, at most two decimals. */

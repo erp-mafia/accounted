@@ -1,3 +1,4 @@
+import { partyOrgKey } from '@/lib/invariants/org-number'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CustomerDto, SupplierDto } from '@/lib/providers/dto'
 import { fetchMigrationPage, hydrateCustomers, hydrateSuppliers } from '@/lib/providers/provider-data-fetcher'
@@ -9,7 +10,6 @@ import {
   buildCustomerCards,
   customerNameKey,
   customerRegisterFacts,
-  identityKey,
   matchExistingCustomer,
   type CustomerCard,
   type PartyFacts,
@@ -221,9 +221,7 @@ const compareKeys = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 function supplierFacts(dto: SupplierDto): PartyFacts {
   return {
-    identity: identityKey(
-      dto.party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id || dto.party.legalEntity?.companyId,
-    ),
+    identity: partyOrgKey(dto.party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id || dto.party.legalEntity?.companyId) ?? undefined,
     vat: dto.vatNumber ? normalizeVatNumber(dto.vatNumber) || undefined : undefined,
     name: customerNameKey(dto.party.name),
   }
@@ -354,7 +352,7 @@ async function loadCards(supabase: SupabaseClient, companyId: string): Promise<C
     cards: {
       customers: buildCustomerCards(customers),
       suppliers: suppliers.map((row) => {
-        const identity = identityKey(row.org_number)
+        const identity = partyOrgKey(row.org_number)
         return {
           id: row.id,
           identities: identity ? [identity] : [],

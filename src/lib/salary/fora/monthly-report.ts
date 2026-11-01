@@ -14,12 +14,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre, sumOre } from '@/lib/money'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { foraPayAmount, type ForaPayLine } from './pay'
 import {
   buildForaFile,
-  foraOrganizationNumber,
   type ForaEmployeeInput,
   type ForaFile,
   type ForaIssue,
@@ -121,8 +122,7 @@ export async function generateForaMonthlyReport(
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) return { ok: false, code: 'DB_ERROR', cause: settingsError }
-  // The current number wins over the one frozen at onboarding, as for the AGI.
-  const orgNumber = (settings?.org_number || company.org_number || '').trim()
+  const orgNumber = effectiveOrgNumber(settings?.org_number, company.org_number) ?? ''
 
   const { data: runRows, error: runError } = await supabase
     .from('salary_runs')
@@ -259,7 +259,7 @@ export async function generateForaMonthlyReport(
     data: {
       year,
       month,
-      filename: `Fora_${foraOrganizationNumber(orgNumber)}_${period}.json`,
+      filename: `Fora_${orgNumberKey(orgNumber)}_${period}.json`,
       file: built.file,
       payrolls,
       total_pay_amount: payrolls.reduce((sum, p) => sum + p.pay_amount, 0),

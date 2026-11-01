@@ -9,7 +9,8 @@ import { ChevronDownIcon, XMarkIcon, type Icon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
-import { cn, formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import { TransactionPartsSection } from '@/components/transactions/TransactionPartsSection'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
@@ -129,7 +130,7 @@ export function TransactionDrawer({
   // organisationsnummer, the amount a foreign purchase was made in with the
   // rate (the bank's own on a SEK account, else the amounts' ratio: there
   // exchange_rate is the Riksbanken SEK rate), and the balance after.
-  const orgNumber = transaction.counterparty_org_number ? formatOrgNumber(transaction.counterparty_org_number) : null
+  const orgNumber = transaction.counterparty_org_number ? formatOrgNumberDisplay(transaction.counterparty_org_number) : null
   const instructed =
     transaction.instructed_amount != null && transaction.instructed_currency && transaction.instructed_currency !== transaction.currency
       ? { amount: transaction.instructed_amount, currency: transaction.instructed_currency }

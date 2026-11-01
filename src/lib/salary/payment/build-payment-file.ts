@@ -69,6 +69,8 @@ import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import { formatCurrency } from '@/lib/utils'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { bankFileIdOrg, effectiveOrgNumber } from '@/lib/company/org-number'
+import { formatOrgNumberDisplay, orgNumberKey } from '@/lib/invariants/org-number'
 import { generatePain001, pain001TransactionId } from './pain001-generator'
 import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
 import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
@@ -273,6 +275,7 @@ interface RunRow {
 
 interface SettingsRow {
   company_name: string | null
+  org_number: string | null
   /** The legacy payer columns: borrowed only by an account without an IBAN of its own (paying-account.ts). */
   iban: string | null
   bic: string | null
@@ -468,7 +471,7 @@ export async function buildSalaryPaymentFile(
   // ids live here, not on companies. The paying account is step 5.
   const { data: settingsData, error: settingsErr } = await supabase
     .from('company_settings')
-    .select('company_name, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id')
+    .select('company_name, org_number, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
@@ -480,6 +483,7 @@ export async function buildSalaryPaymentFile(
   // Bankgirot LB has no message id the bank deduplicates on: no versions.
   if (input.newVersion && format !== 'pain001') return fail('NEW_VERSION_UNSUPPORTED', format)
   const companyRow = company as { name: string; org_number: string | null }
+  const orgNumber = orgNumberKey(effectiveOrgNumber(settings?.org_number, companyRow.org_number))
   const warnings: string[] = []
 
   let pain001Company: Pain001CompanyData | null = null
@@ -526,7 +530,7 @@ export async function buildSalaryPaymentFile(
       // Sender name follows the current company name (company_settings.company_name),
       // not the frozen onboarding companies.name.
       name: settings.company_name || companyRow.name,
-      orgNumber: companyRow.org_number || '',
+      orgNumber: orgNumber ?? '',
       iban: debtor.iban,
       bic: debtor.bic,
       city: settings.city,
@@ -681,7 +685,7 @@ export async function buildSalaryPaymentFile(
     if (format === 'pain001') {
       const messageId = salaryPaymentMessageId(
         getBranding().appName.toUpperCase(),
-        `${companyRow.org_number?.replace('-', '')}`,
+        bankFileIdOrg(companyRow.org_number, orgNumber),
         periodLabel,
         version,
       )
@@ -742,13 +746,13 @@ export async function buildSalaryPaymentFile(
     payer: pain001Company
       ? {
           name: pain001Company.name,
-          orgNumber: companyRow.org_number,
+          orgNumber: orgNumber && formatOrgNumberDisplay(orgNumber),
           account: pain001Company.iban,
           cashAccount: payingCashAccount,
         }
       : {
           name: (bgLbCompany as BgLbCompanyData).name,
-          orgNumber: companyRow.org_number,
+          orgNumber: orgNumber && formatOrgNumberDisplay(orgNumber),
           account: (bgLbCompany as BgLbCompanyData).senderBankgiro,
           cashAccount: null,
         },

@@ -103,6 +103,38 @@ beforeEach(() => {
   })
 })
 
+describe('generateNEDeclaration: the number it files under', () => {
+  it('reads a number held only on the company row', async () => {
+    const stub = makeSupabase()
+    const companyRowOnly = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { company_name: 'Testfirman', org_number: null, entity_type: 'enskild_firma' }, error: null }),
+              }),
+            }),
+          }
+        }
+        if (table === 'companies') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: { org_number: '800374-0118', entity_type: 'enskild_firma' }, error: null }),
+              }),
+            }),
+          }
+        }
+        return stub.from(table)
+      },
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await generateNEDeclaration(companyRowOnly as any, COMPANY_ID, PERIOD_ID)
+    expect(result.companyInfo.orgNumber).toBe('800374-0118')
+  })
+})
+
 describe('generateNEDeclaration: closed fiscal year', () => {
   it('requests the pre-closing trial balance', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

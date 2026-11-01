@@ -24,14 +24,14 @@ import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { getConnection } from '@/lib/digital-mailboxes/connections'
 import { isDigitalMailboxApiError } from '@/lib/digital-mailboxes/http'
-import { isLegalPersonOrgNumber, personnummer12 } from '@/lib/digital-mailboxes/identifiers'
+import { personnummer12 } from '@/lib/digital-mailboxes/identifiers'
 import { getDigitalMailboxProviders } from '@/lib/digital-mailboxes/providers'
 import type {
   DigitalMailboxProviderId,
   MailboxRecipient,
   OutgoingPayment,
 } from '@/lib/digital-mailboxes/types'
-import { normalizeOrgNumber } from '@/lib/invariants/org-number'
+import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { invoiceAmountDue } from '@/lib/invoices/amount-due'
 import { issueAndBookInvoice } from '@/lib/invoices/issue-and-book-invoice'
 import { invoicePrintsBankgiro, invoicePrintsPlusgiro, invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'

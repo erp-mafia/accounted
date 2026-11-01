@@ -31,7 +31,8 @@ import { formatBankgiroNumber, formatPlusgiroNumber, validateBankgiroNumber, val
 import { formatIbanGroups } from '@/lib/company/connection-iban'
 import { isSaneDateString, ISO_DATE_RE } from '@/lib/invariants/iso-date'
 import { formatAmountInput, parseAmountInput } from '@/lib/money'
-import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 /** The fields the panel lists, in the order it lists them. */
 export const PANEL_FIELDS = [
@@ -174,7 +175,7 @@ export function formatFieldValue(name: PanelFieldName, value: unknown, currency 
     case 'payment_due_date':
       return text(formatDate(String(value)), true)
     case 'seller_legal_registration_identifier':
-      return text(formatOrgNumber(String(value)), true)
+      return text(formatOrgNumberDisplay(String(value)), true)
     case 'payment_account_bankgiro':
       return text(formatBankgiroNumber(String(value)), true)
     case 'payment_account_plusgiro':

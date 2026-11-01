@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { beslutFileIsForCompany, normalizeOrgNumber, readBeslutFile } from '../rot-rut-beslut-file'
+import { beslutFileIsForCompany, readBeslutFile } from '../rot-rut-beslut-file'
 
 const FILE = {
   version: '1',
@@ -31,7 +31,6 @@ describe('readBeslutFile', () => {
 
 describe('beslutFileIsForCompany', () => {
   it("matches the company's 10-digit org number to the 16-prefixed utförare in the file", () => {
-    expect(normalizeOrgNumber('878000-3656')).toBe('168780003656')
     expect(beslutFileIsForCompany(FILE, '878000-3656')).toBe(true)
   })
 

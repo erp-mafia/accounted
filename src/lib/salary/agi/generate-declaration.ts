@@ -48,6 +48,8 @@ import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
+import { parseEntityType } from '@/lib/company/entity-type'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
 // this, columns added by recent migrations (removed_from_agi,
@@ -487,7 +489,7 @@ async function readAgiCompanyIdentity(
 ): Promise<AgiCompanyIdentity | null> {
   const { data: company } = await supabase
     .from('companies')
-    .select('name, org_number')
+    .select('name, org_number, entity_type')
     .eq('id', companyId)
     .single()
 
@@ -495,7 +497,7 @@ async function readAgiCompanyIdentity(
 
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('company_name, org_number, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
+    .select('company_name, org_number, entity_type, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
     .eq('company_id', companyId)
     .single()
 
@@ -509,7 +511,8 @@ async function readAgiCompanyIdentity(
   // name (company_settings.company_name), not the frozen onboarding companies.name.
   const companyName = settings?.company_name || company.name
   return {
-    orgNumber: (settings?.org_number || company.org_number || '').trim(),
+    orgNumber: effectiveOrgNumber(settings?.org_number, company.org_number) ?? '',
+    entityType: parseEntityType(settings?.entity_type || company.entity_type),
     companyName,
     // The AGI kontaktperson is the company's tax contact when one is set
     // (company_settings.tax_contact_*, the same contact the periodisk

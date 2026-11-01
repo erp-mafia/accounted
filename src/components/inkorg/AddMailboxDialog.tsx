@@ -28,7 +28,8 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { digitalMailboxRowView, type DigitalMailboxRowView } from '@/lib/inkorg/digital-mailbox-row'
 import { mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
-import { formatDateTime, formatOrgNumber } from '@/lib/utils'
+import { formatDateTime } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { DoorMark } from './door-icon'
 
 type AddressState =
@@ -918,7 +919,7 @@ function BilloCreateForm({ onCancel, onCreated }: { onCancel: () => void; onCrea
           <BilloFact label={t('billo_field_company')} value={company?.name || null} />
           <BilloFact
             label={t('billo_field_org_number')}
-            value={company?.org_number ? formatOrgNumber(company.org_number) : null}
+            value={company?.org_number ? formatOrgNumberDisplay(company.org_number) : null}
           />
           <BilloFact label={t('billo_field_address')} value={address} />
           <BilloFact label={t('billo_field_representative')} value={representative} />

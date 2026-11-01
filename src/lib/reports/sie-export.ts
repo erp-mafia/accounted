@@ -3,7 +3,7 @@ import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { getOpeningBalances } from './opening-balances'
@@ -205,7 +205,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
 
   if (options.org_number) {
     // Spec format is nnnnnn-nnnn; company_settings may store it without the hyphen.
-    lines.push(`#ORGNR ${formatOrgNumber(options.org_number)}`)
+    lines.push(`#ORGNR ${formatOrgNumberDisplay(options.org_number)}`)
   }
 
   lines.push(`#FNAMN "${escapeQuotes(options.company_name)}"`)

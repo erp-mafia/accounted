@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { compareSIEOrgNumber } from '../sie-org-number'
+import { compareSourceOrgNumber } from '@/lib/company/org-number'
 import { submitSIEJob } from '../sie-jobs'
 import type { SIEJob } from '../sie-job-contract'
 import type { AccountMapping } from '../types'
@@ -13,7 +13,7 @@ const body = '#RAR 0 20260101 20261231\n#VER "" "" 20260201 "Sale"\n{\n#TRANS 19
 const fileFor = (orgnr?: string) =>
   `#FLAGGA 0\n#SIETYP 4\n#FNAMN "Example AB"\n${orgnr ? `#ORGNR ${orgnr}\n` : ''}${body}`
 
-describe('compareSIEOrgNumber', () => {
+describe('compareSourceOrgNumber', () => {
   it.each([
     ['556677-8899', '5566778899'],
     ['16556677-8899', '5566778899'],
@@ -21,11 +21,11 @@ describe('compareSIEOrgNumber', () => {
     ['19800101-1231', '8001011231'],
     [' 556677 8899 ', '556677-8899'],
   ])('treats %s and %s as one number', (file, company) => {
-    expect(compareSIEOrgNumber(file, company).mismatch).toBe(false)
+    expect(compareSourceOrgNumber(file, company).mismatch).toBe(false)
   })
 
   it('flags two different numbers', () => {
-    expect(compareSIEOrgNumber('556677-8899', '5599887766')).toEqual({
+    expect(compareSourceOrgNumber('556677-8899', '5599887766')).toEqual({
       fileOrgNumber: '556677-8899', companyOrgNumber: '5599887766', mismatch: true,
     })
   })
@@ -36,12 +36,12 @@ describe('compareSIEOrgNumber', () => {
     ['556677-8899', null],
     ['556677-8899', '  '],
   ])('does not compare when a side is missing (%s, %s)', (file, company) => {
-    expect(compareSIEOrgNumber(file, company).mismatch).toBe(false)
+    expect(compareSourceOrgNumber(file, company).mismatch).toBe(false)
   })
 
   it('compares a value that is not org-number shaped as written', () => {
-    expect(compareSIEOrgNumber('SE556677889901', '5566778899').mismatch).toBe(true)
-    expect(compareSIEOrgNumber('ABC', 'ABC').mismatch).toBe(false)
+    expect(compareSourceOrgNumber('SE556677889901', '5566778899').mismatch).toBe(true)
+    expect(compareSourceOrgNumber('ABC', 'ABC').mismatch).toBe(false)
   })
 })
 
@@ -51,8 +51,8 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
   function admitting(companyOrg: string | null) {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     const job = { id: 'import-1', job_state: 'queued' } as unknown as SIEJob
-    // companies, then the period, the predecessor and the start RPC.
-    enqueueMany([{ data: { org_number: companyOrg } }, { data: { id: 'period-1' } }, { data: null }, { data: job }])
+    // company_settings, then the period, the predecessor and the start RPC.
+    enqueueMany([{ data: { org_number: companyOrg, entity_type: 'aktiebolag' } }, { data: { id: 'period-1' } }, { data: null }, { data: job }])
     return { supabase, job }
   }
 
@@ -110,7 +110,7 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
 
     await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',
       fileFor('556677-8899'), mappings, options)).resolves.toEqual(job)
-    expect(findCall('company_settings', 'select')).toEqual(['org_number'])
+    expect(findCall('company_settings', 'select')).toEqual(['org_number, entity_type'])
   })
 
   // companies.org_number is empty for companies whose number lives only in
@@ -119,7 +119,7 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
   it('refuses another organisation\'s file against company_settings when companies has no number', async () => {
     vi.stubEnv('SIE_IMPORT_JOBS', 'true')
     const { supabase, enqueueMany } = createQueuedMockSupabase()
-    enqueueMany([{ data: { org_number: null } }, { data: { org_number: '198001011231' } }])
+    enqueueMany([{ data: { org_number: '198001011231', entity_type: 'enskild_firma' } }])
 
     await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',
       fileFor('556677-8899'), mappings, options)).rejects.toMatchObject({
@@ -133,7 +133,7 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
     vi.stubEnv('SIE_IMPORT_JOBS', 'true')
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     const job = { id: 'import-1', job_state: 'queued' } as unknown as SIEJob
-    enqueueMany([{ data: { org_number: '' } }, { data: { org_number: '198001011231' } },
+    enqueueMany([{ data: { org_number: '198001011231', entity_type: 'enskild_firma' } },
       { data: { id: 'period-1' } }, { data: null }, { data: job }])
 
     await expect(submitSIEJob(supabase as unknown as SupabaseClient, 'company-1', 'user-1',

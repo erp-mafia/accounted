@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { formatDateSv, pdfNumberText } from '@/lib/pdf/number-text'
 import { ink3Sections, ink3SignMark } from './presentation'
 import type { Ink3Field, Ink3Underlag } from './types'
@@ -137,7 +137,7 @@ export function Ink3UnderlagPDF({ underlag, generatedAt }: { underlag: Ink3Under
           <View style={styles.companyBlock}>
             <Text style={styles.companyName}>{companyInfo.companyName}</Text>
             {companyInfo.orgNumber && (
-              <Text style={styles.meta}>Org.nr: {formatOrgNumber(companyInfo.orgNumber)}</Text>
+              <Text style={styles.meta}>Org.nr: {formatOrgNumberDisplay(companyInfo.orgNumber)}</Text>
             )}
           </View>
         </View>
@@ -211,7 +211,7 @@ export function Ink3UnderlagPDF({ underlag, generatedAt }: { underlag: Ink3Under
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {companyInfo.companyName}
-            {companyInfo.orgNumber ? ` · ${formatOrgNumber(companyInfo.orgNumber)}` : ''}
+            {companyInfo.orgNumber ? ` · ${formatOrgNumberDisplay(companyInfo.orgNumber)}` : ''}
           </Text>
           <Text
             style={styles.footerText}

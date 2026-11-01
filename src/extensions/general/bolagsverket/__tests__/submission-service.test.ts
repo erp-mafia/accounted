@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import { eventBus } from '@/lib/events/bus'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/bokslut/ixbrl/build-input', () => ({
   buildIxbrlInput: vi.fn(async () => ({
@@ -47,7 +47,7 @@ import {
   ensureSubscription,
   handleWebhook,
   hashPnr,
-  normalizeOrgnr,
+  getOrgnr,
   submitArsredovisning,
 } from '../lib/submission-service'
 import type { HandelseMeddelande } from '../types'
@@ -231,11 +231,15 @@ describe('ensureSubscription', () => {
   })
 })
 
-describe('normalizeOrgnr / hashPnr', () => {
-  it('normalizes 12-digit and dashed org numbers to the 10-digit API form', () => {
-    expect(normalizeOrgnr('556000-1111')).toBe('5560001111')
-    expect(normalizeOrgnr('165560001111')).toBe('5560001111')
-    expect(normalizeOrgnr('5560001111')).toBe('5560001111')
+describe('getOrgnr / hashPnr', () => {
+  it('gives the 10-digit API form whichever written form is stored, and refuses none', async () => {
+    const stored = (org_number: string | null) => createTableMockSupabase({
+      company_settings: { data: { org_number }, error: null },
+      companies: { data: { org_number: null }, error: null },
+    }).supabase as never
+    expect(await getOrgnr(stored('556677-8899'), 'c')).toBe('5566778899')
+    expect(await getOrgnr(stored('165566778899'), 'c')).toBe('5566778899')
+    await expect(getOrgnr(stored(`83${'5566778899'}`), 'c')).rejects.toThrow(/saknas/)
   })
 
   it('hashes personnummer with company salt: never the raw value', () => {

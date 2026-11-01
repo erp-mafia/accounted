@@ -57,7 +57,7 @@ beforeEach(() => {
 describe('gnubok_import_sie: stage-time validation', () => {
   it('stages a valid file with a parsed, content-rich preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { org_number: '5566778899' }, error: null }) // companies: the file's own number
+    enqueue({ data: { org_number: '5566778899' }, error: null }) // company_settings: the file's own number
     enqueue({ data: { id: 'op-sie' }, error: null }) // pending_operations insert
 
     const result = (await importSie.execute(
@@ -217,7 +217,7 @@ describe('gnubok_import_sie: stage-time validation', () => {
 
   it('stages when partial overlap exists (1 of 2 accounts mapped)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { org_number: '5566778899' }, error: null }) // companies
+    enqueue({ data: { org_number: '5566778899' }, error: null }) // company_settings
     enqueue({ data: { id: 'op-sie-partial' }, error: null })
 
     const partial = [
@@ -244,7 +244,7 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     const staged: Array<Record<string, unknown>> = []
     const supabase = {
       from: (table: string) => {
-        if (table === 'companies') {
+        if (table === 'company_settings') {
           return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
         }
         if (table !== 'pending_operations') throw new Error(`Unexpected table: ${table}`)
@@ -393,7 +393,7 @@ describe('gnubok_import_sie: the file\'s #ORGNR against the company', () => {
   function buildCapturingSupabase(companyOrg: string) {
     const staged: Array<Record<string, unknown>> = []
     const supabase = {
-      from: (table: string) => table === 'companies'
+      from: (table: string) => table === 'company_settings'
         ? { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { org_number: companyOrg }, error: null }) }) }) }
         : { insert: (row: Record<string, unknown>) => {
             staged.push(row)

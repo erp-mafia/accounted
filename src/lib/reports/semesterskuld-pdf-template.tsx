@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { VacationLiabilityCheck, VacationLiabilityReport } from '@/lib/reports/vacation-liability'
@@ -81,7 +81,7 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
           </View>
           <View style={styles.companyInfo}>
             {company.name ? <Text style={styles.companyName}>{pdfText(company.name)}</Text> : null}
-            {company.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(company.org_number)}</Text> : null}
+            {company.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(company.org_number)}</Text> : null}
           </View>
         </View>
 
@@ -163,7 +163,7 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {pdfText(company.name)}
-            {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+            {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
             {' · Semesterskuld per '}
             {report.asOfDate}
           </Text>

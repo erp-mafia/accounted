@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import {
   BEHANDLINGSHISTORIK_CATEGORIES,
@@ -209,7 +209,7 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           <View style={styles.companyInfo}>
             {report.company.name ? <Text style={styles.companyName}>{report.company.name}</Text> : null}
             {report.company.org_number ? (
-              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(report.company.org_number)}</Text>
+              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(report.company.org_number)}</Text>
             ) : null}
           </View>
         </View>
@@ -260,7 +260,7 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {report.company.name}
-            {report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''}
+            {report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''}
             {' · Behandlingshistorik'}
           </Text>
           <Text

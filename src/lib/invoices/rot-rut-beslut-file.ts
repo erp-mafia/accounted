@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { sameOrgNumber } from '@/lib/invariants/org-number'
 
 /**
  * Skatteverkets beslutsfil for rot/rut: the decision JSON the user downloads
@@ -52,17 +53,13 @@ export function readBeslutFile(text: string): RotRutBeslutFile | null {
   return parsed.success ? parsed.data : null
 }
 
-/** Normalize an org number to SKV's 12-digit form (16-prefixed). */
-export function normalizeOrgNumber(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  return digits.length === 10 ? `16${digits}` : digits
-}
-
 /**
  * Whether a beslutsfil is this company's: its utförare is the company's org
- * number (company_settings.org_number). A company without one is refused, as
- * a file for another utförare must never record or pick anything here.
+ * number, in whichever form either side writes it (Skatteverket's century on a
+ * sole trader's utförare is not documented, and the key does not need it). A
+ * company without one is refused, as a file for another utförare must never
+ * record or pick anything here.
  */
 export function beslutFileIsForCompany(file: Pick<RotRutBeslutFile, 'utforare'>, orgNumber: string | null): boolean {
-  return !!orgNumber && normalizeOrgNumber(orgNumber) === normalizeOrgNumber(file.utforare)
+  return sameOrgNumber(orgNumber, file.utforare)
 }

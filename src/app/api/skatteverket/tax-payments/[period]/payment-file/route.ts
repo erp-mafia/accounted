@@ -7,6 +7,9 @@ import { paysThroughSwedbankIso2, resolveBatchDebtor, supplierPain001Debtor } fr
 import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 import { payingAccountMissingSv } from '@/lib/payments/paying-account'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { parseEntityType } from '@/lib/company/entity-type'
+import { bankFileIdOrg, readCompanyOrgNumber } from '@/lib/company/org-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { roundOre } from '@/lib/money'
 import { fileResponse } from '@/lib/api/file-response'
@@ -89,7 +92,8 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     .eq('id', companyId)
     .single()
 
-  if (!company || !company.org_number) {
+  const orgNumber = company ? await readCompanyOrgNumber(supabase, companyId) : null
+  if (!company || !orgNumber) {
     return NextResponse.json(
       { error: 'Organisationsnummer saknas för företaget.' },
       { status: 400 }
@@ -99,21 +103,16 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   // The reference is the company's twelve-digit identity plus a Luhn check
   // digit (13 digits), not the ten-digit form: Skatteverket rejects the short
   // one. Skatteverket's own reported OCR wins when the skattekonto has been
-  // synced; the derived value is the fallback.
-  //
-  // The entity_type collapse below is total, not a guess at a default:
-  // companies.entity_type is NOT NULL with CHECK IN ('enskild_firma',
-  // 'aktiebolag'), so there is no third value and no null to mis-tag. It
-  // matters because it picks the prefix: a personnummer must keep its century
-  // where an organisationsnummer takes "16", and getting that wrong yields a
-  // Luhn-valid OCR for the wrong taxpayer.
+  // synced; the derived value is the fallback. The form picks the prefix: a
+  // personnummer keeps its century where an organisationsnummer takes "16",
+  // and getting that wrong yields a Luhn-valid OCR for the wrong taxpayer.
   let ocr: string
   try {
     ocr = await resolveSkattekontoOcr(
       supabase,
       companyId,
-      company.org_number,
-      company.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+      orgNumber,
+      parseEntityType(company.entity_type),
     )
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
@@ -170,8 +169,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     // brand-prefixed id was 34 characters, so every month's EndToEndId came
     // out the same, and Swedbank refuses an EndToEndId repeated within 90
     // days (MIG 2.0 PmtId/EndToEndId).
-    const orgDigits = company.org_number.replace(/\D/g, '')
-    const messageId = `SKATT-${period}-${orgDigits}`
+    const messageId = `SKATT-${period}-${bankFileIdOrg(company.org_number, orgNumberKey(orgNumber))}`
 
     let xml: string
     try {

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { companyOrgNumber, resolveOrgNumberChange } from '../org-number'
+import {
+  companyIdentityFrom,
+  companyOrgNumber,
+  companyRedovisare,
+  effectiveOrgNumber,
+  readCompanyOrgNumber,
+  resolveOrgNumberChange,
+} from '../org-number'
 
 function stored(settings: string | null | undefined, company?: string | null) {
   return createTableMockSupabase({
@@ -46,6 +53,89 @@ describe('companyOrgNumber', () => {
     expect(await companyOrgNumber(stored(undefined), 'co-1')).toBeNull()
     expect(await companyOrgNumber(stored(null, null), 'co-1')).toBeNull()
     expect(await companyOrgNumber(stored('', ''), 'co-1')).toBeNull()
+  })
+})
+
+describe('effectiveOrgNumber', () => {
+  it('lets the settings copy lead, as written, so a stored century survives', () => {
+    expect(effectiveOrgNumber('19800374-0118', '8003740118')).toBe('19800374-0118')
+    expect(effectiveOrgNumber(' 556012-5790 ', '2021005489')).toBe('556012-5790')
+  })
+
+  it('takes the company copy when the settings hold nothing, an empty string or no number', () => {
+    expect(effectiveOrgNumber(null, '5560125790')).toBe('5560125790')
+    expect(effectiveOrgNumber(undefined, '5560125790')).toBe('5560125790')
+    expect(effectiveOrgNumber('', '5560125790')).toBe('5560125790')
+    expect(effectiveOrgNumber('   ', '5560125790')).toBe('5560125790')
+    expect(effectiveOrgNumber('saknas', '5560125790')).toBe('5560125790')
+  })
+
+  it('an empty company copy hides nothing either', () => {
+    expect(effectiveOrgNumber('5560125790', '')).toBe('5560125790')
+  })
+
+  it('keeps a value that reads as no number when there is nothing better, so a door can refuse it by name', () => {
+    expect(effectiveOrgNumber('12345', null)).toBe('12345')
+    expect(effectiveOrgNumber(null, '12345')).toBe('12345')
+    expect(effectiveOrgNumber('', '')).toBeNull()
+    expect(effectiveOrgNumber(null, null)).toBeNull()
+  })
+})
+
+describe('readCompanyOrgNumber', () => {
+  it('reads the company row only when the settings do not decide it', async () => {
+    const decided = createTableMockSupabase({ company_settings: { data: { org_number: '5560125790' }, error: null } })
+    expect(await readCompanyOrgNumber(decided.supabase as never, 'co-1')).toBe('5560125790')
+    expect(decided.tables()).toEqual(['company_settings'])
+  })
+
+  it('does not call a failed read "no number"', async () => {
+    const failed = createTableMockSupabase({ company_settings: { data: null, error: { message: 'boom' } } })
+    await expect(readCompanyOrgNumber(failed.supabase as never, 'co-1')).rejects.toMatchObject({ message: 'boom' })
+    await expect(companyOrgNumber(failed.supabase as never, 'co-1')).rejects.toMatchObject({ message: 'boom' })
+  })
+})
+
+describe('companyIdentityFrom', () => {
+  const rows = (company: { org_number: string | null; entity_type: string }) =>
+    createTableMockSupabase({ companies: { data: company, error: null } })
+
+  it('reads no company row when the settings row decides both', async () => {
+    const mock = rows({ org_number: '2021005489', entity_type: 'enskild_firma' })
+    const identity = await companyIdentityFrom(mock.supabase as never, 'co-1', { org_number: '5560125790', entity_type: 'aktiebolag' })
+    expect(identity).toEqual({ orgNumber: '5560125790', entityType: 'aktiebolag' })
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('lets the company row stand in for a settings row without a number or a form', async () => {
+    const mock = rows({ org_number: '556012-5790', entity_type: 'aktiebolag' })
+    expect(await companyIdentityFrom(mock.supabase as never, 'co-1', { org_number: '', entity_type: null }))
+      .toEqual({ orgNumber: '556012-5790', entityType: 'aktiebolag' })
+    expect(await companyIdentityFrom(mock.supabase as never, 'co-1', null))
+      .toEqual({ orgNumber: '556012-5790', entityType: 'aktiebolag' })
+  })
+
+  it('does not call a failed read "no number"', async () => {
+    const failed = createTableMockSupabase({ companies: { data: null, error: { message: 'boom' } } })
+    await expect(companyIdentityFrom(failed.supabase as never, 'co-1', null)).rejects.toMatchObject({ message: 'boom' })
+  })
+})
+
+describe('companyRedovisare', () => {
+  const company = (org: string | null, entityType: string) =>
+    createTableMockSupabase({
+      company_settings: { data: { org_number: org }, error: null },
+      companies: { data: { org_number: null, entity_type: entityType }, error: null },
+    }).supabase as never
+
+  it('builds the filing identity from the number and the legal form', async () => {
+    expect(await companyRedovisare(company('5560125790', 'aktiebolag'), 'co-1')).toBe('165560125790')
+    expect(await companyRedovisare(company('800374-0118', 'enskild_firma'), 'co-1')).toBe('198003740118')
+    expect(await companyRedovisare(company('198003740118', 'enskild_firma'), 'co-1')).toBe('198003740118')
+  })
+
+  it('is null without a number', async () => {
+    expect(await companyRedovisare(company(null, 'aktiebolag'), 'co-1')).toBeNull()
   })
 })
 

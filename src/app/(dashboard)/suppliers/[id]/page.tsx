@@ -22,7 +22,7 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -212,7 +212,7 @@ export default function SupplierDetailPage() {
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
             <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumber(supplier.org_number) })}` : ''}
+              {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumberDisplay(supplier.org_number) })}` : ''}
             </p>
           </div>
 

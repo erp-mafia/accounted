@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
 import { orgNumberKey } from '@/lib/invariants/org-number'
-import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
+import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
@@ -50,7 +50,7 @@ export const POST = withRouteContext(
 
       // Org number, then e-mail, or a same-name supplier the user confirmed
       // (lib/import/shared/register-match.ts).
-      const matcher = createRegisterMatcher(existing, { orgKey: supplierOrgKey })
+      const matcher = createRegisterMatcher(existing)
 
       const created: Supplier[] = []
       const updated: Supplier[] = []

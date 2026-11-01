@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { roundOre } from '@/lib/money'
 import { describeCode, PAYMENT_STATUS_CODES, REFUND_REASON_CODES } from './codes'
 import {
@@ -480,8 +481,7 @@ async function loadCustomerKeys(supabase: SupabaseClient, companyId: string, man
   for (const c of customers) {
     keys.names.set(c.id, c.name)
     push(keys.byPayerNumber, normalizePayerNumber(c.customer_number), c.id)
-    const org = digits(c.org_number)
-    push(keys.byOrgNumber, org.length === 10 ? org : null, c.id)
+    push(keys.byOrgNumber, orgNumberKey(c.org_number), c.id)
   }
   for (const m of mandates) if (m.status === 'active' && m.customer_id) keys.withActive.add(m.customer_id)
   return keys
@@ -492,7 +492,8 @@ function customerFor(keys: CustomerKeys, payerNumber: string, identityNumber: st
   const byNumber = keys.byPayerNumber.get(payerNumber) ?? []
   if (byNumber.length === 1) return byNumber[0]!
   if (byNumber.length > 1) return null
-  const byOrg = identityNumber && identityNumber.length === 10 ? (keys.byOrgNumber.get(identityNumber) ?? []) : []
+  const orgKey = orgNumberKey(identityNumber)
+  const byOrg = orgKey ? (keys.byOrgNumber.get(orgKey) ?? []) : []
   return byOrg.length === 1 ? byOrg[0]! : null
 }
 

@@ -158,7 +158,7 @@ function ink2Declaration() {
     ink2s: { '7650': 1000 },
     breakdown: {},
     totals: { totalAssets: 1, totalEquityLiabilities: 1, operatingResult: 1, aretsResultat: 1 },
-    companyInfo: { companyName: 'Testbolaget AB', orgNumber: '556677-8899', addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: null },
+    companyInfo: { companyName: 'Testbolaget AB', orgNumber: '556677-8899', entityType: 'aktiebolag', addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: null },
     warnings: [],
   }
 }
@@ -168,7 +168,7 @@ function neDeclaration() {
     fiscalYear: { id: PERIOD_ID, name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
     rutor: { R1: 480000, R2: 0, R3: 0, R4: 0, R5: 0, R6: 0, R7: 0, R8: 0, R9: 0, R10: 0, R11: 480000 },
     breakdown: {},
-    companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: PNR, addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: 'anna@example.se' },
+    companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: PNR, entityType: 'enskild_firma', addressLine1: 'Gatan 1', postalCode: '11122', city: 'Stockholm', email: 'anna@example.se' },
     warnings: [`Kontrollera ${PNR} mot Skatteverket`],
     bookedResult: 480000,
     sruBlockers: [],
@@ -265,6 +265,17 @@ describe('GET /reports/ink2 and /reports/ink2/sru', () => {
     expect((await res.json()).error.code).toBe('TAX_DECL_GENERATION_FAILED')
   })
 
+  it('422 FILING_IDENTITY_REFUSED when the number does not fit the form, with the way out', async () => {
+    useClient({ fiscal_periods: PERIOD, company_settings: AB })
+    const declaration = ink2Declaration()
+    m.ink2.mockResolvedValue({ ...declaration, companyInfo: { ...declaration.companyInfo, orgNumber: '198003740118' } })
+    const res = await get(getInk2Sru, `/reports/ink2/sru?period_id=${PERIOD_ID}`)
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('FILING_IDENTITY_REFUSED')
+    expect(body.error.message).toMatch(/kontakta supporten/)
+  })
+
   it('the SRU zip holds INFO.SRU and BLANKETTER.SRU in ISO 8859-1', async () => {
     useClient({ fiscal_periods: PERIOD, company_settings: AB })
     m.ink2.mockResolvedValue(ink2Declaration())
@@ -315,6 +326,15 @@ describe('GET /reports/ne-bilaga and /reports/ne-bilaga/sru', () => {
     const zip = await JSZip.loadAsync(await res.arrayBuffer())
     const info = await zip.file('INFO.SRU')!.async('string')
     expect(info).toContain(PNR)
+  })
+
+  it('422 FILING_IDENTITY_REFUSED when the number is not a person', async () => {
+    useClient({ fiscal_periods: PERIOD, company_settings: EF })
+    const declaration = neDeclaration()
+    m.ne.mockResolvedValue({ ...declaration, companyInfo: { ...declaration.companyInfo, orgNumber: '5566778899' } })
+    const res = await get(getNeSru, `/reports/ne-bilaga/sru?period_id=${PERIOD_ID}`)
+    expect(res.status).toBe(422)
+    expect((await res.json()).error.code).toBe('FILING_IDENTITY_REFUSED')
   })
 
   it('refuses the SRU file when R11 cannot be reconciled with the books, with the reason', async () => {
@@ -409,6 +429,14 @@ describe('GET /reports/vat-declaration/eskd', () => {
     const res = await get(getEskd, '/reports/vat-declaration/eskd?period_type=quarterly&year=2026&period=1')
     expect(res.status).toBe(404)
     expect((await res.json()).error.code).toBe('VAT_ESKD_SETTINGS_MISSING')
+  })
+
+  it('400 VAT_ESKD_ORG_NUMBER_INVALID for 12 digits without a century: the header would name somebody else', async () => {
+    useClient({ company_settings: { data: { org_number: '835566778899' }, error: null } })
+    const res = await get(getEskd, '/reports/vat-declaration/eskd?period_type=quarterly&year=2026&period=1')
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VAT_ESKD_ORG_NUMBER_INVALID')
+    expect(m.vat).not.toHaveBeenCalled()
   })
 
   it('400 VAT_ESKD_ORG_NUMBER_INVALID without a 10 or 12 digit org number, before computing', async () => {

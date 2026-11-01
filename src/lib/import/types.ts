@@ -555,7 +555,7 @@ export interface ImportPreview {
   orgNumber: string | null
 
   // The file's orgNumber against the company's, by the comparison the
-  // submit gate uses (compareSIEOrgNumber). A mismatch needs the user's
+  // submit gate uses (compareSourceOrgNumber). A mismatch needs the user's
   // confirmation before the import starts. Set by the parse route only.
   orgNumberMismatch?: boolean
   companyOrgNumber?: string | null

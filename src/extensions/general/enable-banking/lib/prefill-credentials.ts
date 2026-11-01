@@ -1,3 +1,4 @@
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import type { AuthMethod, AuthMethodCredential } from './api-client'
 
 /**
@@ -30,13 +31,9 @@ export interface PrefillCompany {
   entity_type: string | null
 }
 
-/**
- * The 10-digit organisationsnummer Swedish banks call företags-ID. Null when
- * the stored number is not 10 digits.
- */
+/** The 10-digit organisationsnummer Swedish banks call företags-ID, or null when the stored number reads as none. */
 export function companyIdDigits(company: PrefillCompany): string | null {
-  const digits = (company.org_number ?? '').replace(/\D/g, '')
-  return digits.length === 10 ? digits : null
+  return orgNumberKey(company.org_number)
 }
 
 /** Whether the method asks the PSU for a company identifier at all. */

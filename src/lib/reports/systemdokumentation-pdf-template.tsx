@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { SystemdokumentationReport } from '@/lib/reports/systemdokumentation-types'
 import { formatStockholmTimestamp } from '@/lib/reports/behandlingshistorik'
@@ -132,7 +132,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           </View>
           <View style={styles.companyInfo}>
             {c.name ? <Text style={styles.companyName}>{pdfText(c.name)}</Text> : null}
-            {c.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(c.org_number)}</Text> : null}
+            {c.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(c.org_number)}</Text> : null}
           </View>
         </View>
 
@@ -330,7 +330,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
 
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
-            {pdfText(`${report.company.name ?? ''}${report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''} · Systemdokumentation ${report.period.name}`)}
+            {pdfText(`${report.company.name ?? ''}${report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''} · Systemdokumentation ${report.period.name}`)}
           </Text>
           <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Genererad ${generated} · Sida ${pageNumber} av ${totalPages}`} />
         </View>

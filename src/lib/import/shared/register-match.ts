@@ -1,5 +1,5 @@
 import { normalizeEmail, normalizeNameKey } from '@/lib/import/shared/column-utils'
-import { orgNumberKey } from '@/lib/invariants/org-number'
+import { partyOrgKey } from '@/lib/invariants/org-number'
 
 /**
  * Duplicate matching for the customer and supplier register imports.
@@ -68,8 +68,6 @@ export interface RegisterMatch<T> {
 }
 
 export interface RegisterMatcherOptions {
-  /** Dedup key for an org number: customers and suppliers normalise it differently. */
-  orgKey: (value: string | null) => string | null
   namePolicy?: NameMatchPolicy
 }
 
@@ -86,15 +84,6 @@ export interface RegisterMatcher<T extends MatchableRecord> {
 }
 
 const KEY_ORDER: RegisterMatchKey[] = ['customer_number', 'org_number', 'email', 'name']
-
-/**
- * Supplier org number key: the Swedish 10-digit key when the value is one (so
- * a 12-digit CSV value finds the stored 10-digit row, #2391), else the value
- * as typed, so BE0123456789 and FR0123456789 stay two suppliers.
- */
-export function supplierOrgKey(value: string | null): string | null {
-  return orgNumberKey(value) ?? (value?.trim() || null)
-}
 
 /**
  * A customer import row as the matcher sees it. An individual (privatperson)
@@ -120,13 +109,13 @@ export function normalizeNameForMatch(value: string | null | undefined): string 
 
 export function createRegisterMatcher<T extends MatchableRecord>(
   records: readonly T[],
-  options: RegisterMatcherOptions,
+  options: RegisterMatcherOptions = {},
 ): RegisterMatcher<T> {
   const namePolicy = options.namePolicy ?? NAME_MATCH_POLICY
 
   const keyOf: Record<RegisterMatchKey, (r: MatchableRow) => string | null> = {
     customer_number: (r) => normalizeCustomerNumber(r.customer_number),
-    org_number: (r) => options.orgKey(r.org_number),
+    org_number: (r) => partyOrgKey(r.org_number),
     email: (r) => normalizeEmail(r.email),
     name: (r) => normalizeNameForMatch(r.name),
   }
@@ -152,13 +141,13 @@ export function createRegisterMatcher<T extends MatchableRecord>(
   for (const record of records) add(record)
 
   const isIndividual = (p: MatchableRow) => p.customer_type === 'individual'
-  const isBusinessWithOrg = (p: MatchableRow) => !isIndividual(p) && options.orgKey(p.org_number) !== null
+  const isBusinessWithOrg = (p: MatchableRow) => !isIndividual(p) && partyOrgKey(p.org_number) !== null
   /** An individual and a business with an org number are never the same party. */
   const crossesKind = (row: MatchableRow, record: T) =>
     (isIndividual(row) && isBusinessWithOrg(record)) || (isBusinessWithOrg(row) && isIndividual(record))
 
   const find = (row: MatchableRow): RegisterMatch<T> | null => {
-    const rowOrg = options.orgKey(row.org_number)
+    const rowOrg = partyOrgKey(row.org_number)
     let pool: T[] | null = null
     let decidedBy: RegisterMatchKey | null = null
 
@@ -174,7 +163,7 @@ export function createRegisterMatcher<T extends MatchableRecord>(
         .filter((c) => keyOf[key](c) === value)
         .filter((c) => !pool || pool.includes(c))
         .filter((c) => {
-          const org = options.orgKey(c.org_number)
+          const org = partyOrgKey(c.org_number)
           return !rowOrg || !org || org === rowOrg
         })
         .filter((c) => !crossesKind(row, c))

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getCompanyDisplayName } from '@/lib/company/context'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { roundOre } from '@/lib/money'
 import {
   salaryJournalTotals,
@@ -86,10 +87,11 @@ export async function buildSalaryRunUnderlag(
 
   const { data: company, error: companyError } = await supabase
     .from('companies')
-    .select('name, org_number')
+    .select('name')
     .eq('id', companyId)
     .maybeSingle()
   if (companyError) throw companyError
+  const companyOrgNumber = await readCompanyOrgNumber(supabase, companyId)
   // Employer name follows the current company name, as on the payslip.
   const displayName = await getCompanyDisplayName(supabase, companyId)
 
@@ -150,7 +152,7 @@ export async function buildSalaryRunUnderlag(
     ok: true,
     data: {
       companyName: displayName ?? company?.name ?? '',
-      companyOrgNumber: company?.org_number ?? '',
+      companyOrgNumber: companyOrgNumber ?? '',
       periodYear: run.period_year,
       periodMonth: run.period_month,
       paymentDate: run.payment_date,

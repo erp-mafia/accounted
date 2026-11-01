@@ -3,8 +3,8 @@ import {
   checkNewOrgNumber,
   decideOrgNumberChange,
   lockedOrgNumber,
-  validStoredOrgNumber,
 } from '../org-number-rule'
+import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 
 // 556012-5790 and 202100-5489: legal persons (third digit 2 or more), valid
 // check digit. 121212-1212: Skatteverket's test personnummer, valid check digit.
@@ -13,21 +13,21 @@ const AB_OTHER = '2021005489'
 const PNR = '1212121212'
 const AB_BAD_CHECK = '5560125791'
 
-describe('validStoredOrgNumber', () => {
+describe('a stored number is valid by normalizeOrgNumber', () => {
   it('reads a valid number in any stored form as ten digits', () => {
-    expect(validStoredOrgNumber('5560125790')).toBe(AB)
-    expect(validStoredOrgNumber('556012-5790')).toBe(AB)
-    expect(validStoredOrgNumber('16556012-5790')).toBe(AB)
-    expect(validStoredOrgNumber('19121212-1212')).toBe(PNR)
+    expect(normalizeOrgNumber('5560125790')).toBe(AB)
+    expect(normalizeOrgNumber('556012-5790')).toBe(AB)
+    expect(normalizeOrgNumber('16556012-5790')).toBe(AB)
+    expect(normalizeOrgNumber('19121212-1212')).toBe(PNR)
   })
 
   it('is null for empty, unshaped, a VAT number or a wrong check digit', () => {
-    expect(validStoredOrgNumber(null)).toBeNull()
-    expect(validStoredOrgNumber('')).toBeNull()
-    expect(validStoredOrgNumber('saknas')).toBeNull()
-    expect(validStoredOrgNumber('12345')).toBeNull()
-    expect(validStoredOrgNumber('556012579001')).toBeNull()
-    expect(validStoredOrgNumber(AB_BAD_CHECK)).toBeNull()
+    expect(normalizeOrgNumber(null)).toBeNull()
+    expect(normalizeOrgNumber('')).toBeNull()
+    expect(normalizeOrgNumber('saknas')).toBeNull()
+    expect(normalizeOrgNumber('12345')).toBeNull()
+    expect(normalizeOrgNumber('556012579001')).toBeNull()
+    expect(normalizeOrgNumber(AB_BAD_CHECK)).toBeNull()
   })
 })
 

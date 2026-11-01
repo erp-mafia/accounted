@@ -6,7 +6,8 @@ import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
 import { agiFiledForRun } from '@/lib/salary/agi-submission-state'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { createLogger } from '@/lib/logger'
-import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
+import { companyRedovisare } from '@/lib/company/org-number'
+import { rutorToMomsuppgift, formatRedovisningsperiod } from './mappers'
 import type { SkatteverketMomsuppgift } from '../types'
 
 /**
@@ -45,25 +46,17 @@ export interface AgiUnderlagPrep {
 }
 
 /**
- * Resolve a company's 12-digit "redovisare" string from company_settings.
- * Shared by the VAT and AGI paths and by the status tools that only need the
- * identifier (no momsuppgift / XML compute).
+ * A company's 12-digit "redovisare" string. Shared by the VAT and AGI paths
+ * and by the status tools that only need the identifier (no momsuppgift / XML
+ * compute).
  */
 export async function resolveRedovisare(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string> {
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('org_number, entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.org_number) {
-    throw new Error('Organisationsnummer saknas i företagsinställningar')
-  }
-
-  return formatRedovisare(settings.org_number, settings.entity_type)
+  const redovisare = await companyRedovisare(supabase, companyId)
+  if (!redovisare) throw new Error('Organisationsnummer saknas i företagsinställningar')
+  return redovisare
 }
 
 /** YYYYMM, the only shape Skatteverket accepts as a redovisningsperiod. */

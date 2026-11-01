@@ -157,6 +157,8 @@ describe('ubl helpers', () => {
     expect(swedishOrgNumberFrom('556016-0680')).toBe('5560160680')
     expect(swedishOrgNumberFrom('165560160680')).toBe('5560160680')
     expect(swedishOrgNumberFrom('12', null)).toBeNull()
+    expect(swedishOrgNumberFrom('198003740118')).toBe('8003740118')
+    expect(swedishOrgNumberFrom('BE5560160680', '5560160680')).toBe('5560160680')
   })
 })
 

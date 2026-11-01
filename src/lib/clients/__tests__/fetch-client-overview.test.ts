@@ -35,6 +35,16 @@ describe('fetchOverviewRowsForCompanies: the byrå customer number', () => {
     expect(db.payloads('companies', 'select')).toContain('id, byra_client_number')
   })
 
+  it('shows the org number through the one reader: an empty company copy hides nothing', async () => {
+    companiesTable({ data: [] })
+    db.setTable('company_settings', { data: [{ company_id: 'c-2', company_name: 'Beta AB', org_number: '556677-8899' }] })
+    const rows = await fetchOverviewRowsForCompanies(supabase, [{ id: 'c-2', name: 'Beta AB', org_number: '' }])
+    expect(rows[0]?.orgNumber).toBe('556677-8899')
+    db.setTable('company_settings', { data: [{ company_id: 'c-2', company_name: 'Beta AB', org_number: '' }] })
+    const other = await fetchOverviewRowsForCompanies(supabase, [{ id: 'c-2', name: 'Beta AB', org_number: '556677-8899' }])
+    expect(other[0]?.orgNumber).toBe('556677-8899')
+  })
+
   it('leaves the numbers empty instead of failing the overview when the read fails', async () => {
     companiesTable({ error: { message: 'column companies.byra_client_number does not exist' } })
     const rows = await fetchOverviewRowsForCompanies(supabase, companies)

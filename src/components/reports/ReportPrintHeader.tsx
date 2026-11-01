@@ -5,7 +5,8 @@ import { flushSync } from 'react-dom'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
-import { cn, formatDate, formatOrgNumber } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 /**
  * What a printed report page says about itself: company, org number, the
@@ -37,7 +38,7 @@ export function ReportPrintHeader({
   }, [])
 
   const facts = [
-    company?.org_number ? t('print_org_number', { number: formatOrgNumber(company.org_number) }) : null,
+    company?.org_number ? t('print_org_number', { number: formatOrgNumberDisplay(company.org_number) }) : null,
     period ? t('print_period', { from: formatDate(period.start), to: formatDate(period.end) }) : null,
     t('print_printed_at', { date: formatDateLong(printedAt) }),
   ].filter((fact): fact is string => fact !== null)

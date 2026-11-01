@@ -8,6 +8,8 @@ import type {
   TICCompanyStatusEntry,
   TICBeneficialOwnerResponse,
 } from './tic-types'
+import { swedishNumberKind } from '@/lib/invariants/org-number'
+import { expandPersonnummerTo12 } from '@/lib/invariants/personal-number-shape'
 import { TICAPIError } from './tic-types'
 import { isLensDocumentCeased } from './lens-status'
 import { reserveTicCall, type TicCallContext } from '@/lib/tic-budget/budget'
@@ -148,22 +150,12 @@ export async function ticApiFetch<T>(endpoint: string, ctx: TicCallContext = {})
  * 10-digit form only ever fuzzy-matches, which is how a personnummer once
  * resolved to an unrelated foundation.
  *
- * Detection is unambiguous: a Swedish organisationsnummer always has a 3rd digit
- * >= 2, whereas a personnummer's 3rd+4th digits are the birth month (01-12). So
- * a 10-digit number whose 3rd digit is 0/1 and whose month reads 01-12 is a
- * personnummer and gets the century prefix; AB / förening / handelsbolag numbers
- * pass through untouched. Century (19 vs 20) uses the same heuristic as
- * `formatRedovisare`: a two-digit year greater than the current one is 1900s.
+ * A personnummer gets its century (expandPersonnummerTo12); AB / förening /
+ * handelsbolag numbers pass through untouched.
  */
 function toLensQueryNumber(cleaned: string): string {
-  if (!/^\d{10}$/.test(cleaned)) return cleaned
-  const month = parseInt(cleaned.substring(2, 4), 10)
-  const isPersonnummer = cleaned[2] <= '1' && month >= 1 && month <= 12
-  if (!isPersonnummer) return cleaned
-  const yearDigits = parseInt(cleaned.substring(0, 2), 10)
-  const currentTwoDigitYear = new Date().getFullYear() % 100
-  const prefix = yearDigits > currentTwoDigitYear ? '19' : '20'
-  return `${prefix}${cleaned}`
+  if (!/^\d{10}$/.test(cleaned) || swedishNumberKind(cleaned) !== 'person') return cleaned
+  return expandPersonnummerTo12(cleaned) ?? cleaned
 }
 
 /**

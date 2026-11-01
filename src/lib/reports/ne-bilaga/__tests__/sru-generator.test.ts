@@ -41,6 +41,7 @@ function makeDeclaration(opts: {
     companyInfo: {
       companyName: 'Östgöta Träförädling',
       orgNumber: '199001019802',
+      entityType: 'enskild_firma',
       addressLine1: 'Storgatan 1',
       postalCode: '111 22',
       city: 'Stockholm',
@@ -150,12 +151,26 @@ describe('NE-bilaga SRU generator', () => {
       expect(infoSru).toContain('#ORGNR 199001019802')
     })
 
-    it('infers 1900s for a 10-digit yy that would map to a child in the 2000s', () => {
-      // yy=24 for income year 2024: naive yy<=24 → 2024 (age 0); adult-age logic must pick 1924.
+    it('takes the most recent birth date not after today, the century moms and AGI file under', () => {
+      // Born 2008-12-15 (fabricated samordningsnummer): under 18 in the income
+      // year, and a century back would make the owner 117.
       const { infoSru } = generateNESRUSubmission(
-        makeDeclaration({ companyInfo: { orgNumber: '2401019808' } })
+        makeDeclaration({ companyInfo: { orgNumber: '0812759808' } })
       )
-      expect(infoSru).toContain('#ORGNR 192401019808')
+      expect(infoSru).toContain('#ORGNR 200812759808')
+    })
+
+    it('reads a plus as one century further back', () => {
+      const { infoSru } = generateNESRUSubmission(
+        makeDeclaration({ companyInfo: { orgNumber: '240161+9808' } })
+      )
+      expect(infoSru).toContain('#ORGNR 192401619808')
+    })
+
+    it('refuses a number that is no person, in place of a birth century on it', () => {
+      expect(() =>
+        generateNESRUSubmission(makeDeclaration({ companyInfo: { orgNumber: '5566778899' } }))
+      ).toThrow(/personnummer/i)
     })
   })
 

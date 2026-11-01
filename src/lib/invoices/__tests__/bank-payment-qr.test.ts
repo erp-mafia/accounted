@@ -289,9 +289,10 @@ describe('buildBankPaymentQrPayload: reference and identity', () => {
     expect(payload.iref).toBe('102343')
   })
 
-  it('formats a ten-digit org number as on the invoice and keeps a twelve-digit one', () => {
+  it('writes the org number as the invoice prints it, whichever form it is stored in', () => {
     expect(parsed(build()).cid).toBe('556677-8899')
-    expect(parsed(build({ company: { org_number: '198501011234' } })).cid).toBe('198501011234')
+    expect(parsed(build({ company: { org_number: '165566778899' } })).cid).toBe('556677-8899')
+    expect(parsed(build({ company: { org_number: '198003740118' } })).cid).toBe('800374-0118')
   })
 
   it('returns null without a mandatory name, org number or invoice number', () => {

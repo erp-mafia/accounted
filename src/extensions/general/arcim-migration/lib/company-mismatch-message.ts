@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 /** What a ProviderCompanyMismatchError carries, read structurally. */
 export interface CompanyMismatchFacts {
@@ -19,8 +19,8 @@ export interface CompanyMismatchFacts {
  * stays the static fallback for an envelope without these facts.
  */
 export function companyMismatchMessages(facts: CompanyMismatchFacts): { sv: string; en: string } {
-  const actual = formatOrgNumber(facts.actualOrgNumber)
-  const expected = formatOrgNumber(facts.expectedOrgNumber)
+  const actual = formatOrgNumberDisplay(facts.actualOrgNumber)
+  const expected = formatOrgNumberDisplay(facts.expectedOrgNumber)
   const name = facts.actualCompanyName?.trim() || null
   const openedSv = name ? `${name} (org.nr ${actual})` : `ett annat företag (org.nr ${actual})`
   const openedEn = name ? `${name} (org. no. ${actual})` : `another company (org. no. ${actual})`

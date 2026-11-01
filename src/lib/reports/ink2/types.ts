@@ -1,3 +1,5 @@
+import type { EntityType } from '@/types'
+
 /**
  * INK2R: Räkenskapsschema (balance sheet + income statement)
  * Field codes per Skatteverket spec and bas.se/kontoplaner/sru/
@@ -158,6 +160,7 @@ export interface INK2AccountMapping {
 export interface INK2CompanyInfo {
   companyName: string
   orgNumber: string | null
+  entityType: EntityType
   addressLine1: string | null
   postalCode: string | null
   city: string | null

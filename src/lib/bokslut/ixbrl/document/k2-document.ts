@@ -21,7 +21,7 @@
  * berättelse's concepts and its equity table.
  */
 
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { getEntryPoint } from '../taxonomy/entry-points'
 import { getRegistry } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput } from '../types'
@@ -52,7 +52,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   // One spelling of the org number wherever it appears (context identifier,
   // Organisationsnummer fact, page headers, title): NNNNNN-NNNN as in
   // Bolagsverket's examples, whichever format the company settings hold.
-  const orgNumber = formatOrgNumber(input.company.orgNumber)
+  const orgNumber = formatOrgNumberDisplay(input.company.orgNumber)
   const writer = new FactWriter(entryPoint, registry, orgNumber)
   const warnings: string[] = [...input.warnings]
 

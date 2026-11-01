@@ -6,6 +6,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NextResponse } from 'next/server'
 import { getCompanyRole } from '@/lib/auth/require-write'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { COMPANY_ADMIN_ROLES } from '@/lib/operations/access'
 import type { OperationContext } from '@/lib/operations/types'
@@ -32,10 +33,10 @@ export async function bolagetGateResponse(ctx: BolagetRouteContext): Promise<Nex
 }
 
 export async function companyForPdf(supabase: SupabaseClient, companyId: string): Promise<PdfCompany> {
-  const { data, error } = await supabase.from('companies').select('name, org_number').eq('id', companyId).maybeSingle()
+  const { data, error } = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
   if (error) throw new Error(`companies read failed: ${error.message}`)
-  const row = (data ?? {}) as { name?: string | null; org_number?: string | null }
-  return { name: row.name?.trim() || 'Bolaget', org_number: row.org_number ?? null }
+  const row = (data ?? {}) as { name?: string | null }
+  return { name: row.name?.trim() || 'Bolaget', org_number: await readCompanyOrgNumber(supabase, companyId) }
 }
 
 /** Whether the caller is an owner or admin: they print the aktiebok with full personnummer. */

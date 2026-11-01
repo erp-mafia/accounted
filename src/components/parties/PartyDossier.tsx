@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import { useLocale, useTranslations } from 'next-intl'
 import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -10,7 +10,8 @@ import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
 import type { Dossier, PartyRole, RegisterPeriod } from '@/lib/parties/register'
-import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { AccountNub } from './AccountNub'
 import { CounterpartyOpenItems } from './CounterpartyOpenItems'
 import { registryFacts, registryLabel, registryValue } from './RegistryFacts'
@@ -284,7 +285,7 @@ export function PartyDossier({
                     )}
                     <Row
                       label={t('fact_org')}
-                      value={p.orgNumber ? formatOrgNumber(p.orgNumber) : <span className="text-muted-foreground">{t('fact_missing')}</span>}
+                      value={p.orgNumber ? formatOrgNumberDisplay(p.orgNumber) : <span className="text-muted-foreground">{t('fact_missing')}</span>}
                       note={p.orgNumber && orgFact ? docsFor('org_number') : undefined}
                     />
                     <Row

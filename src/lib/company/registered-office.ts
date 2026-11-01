@@ -1,5 +1,5 @@
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
-import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import type { ScbFact } from '@/lib/parties/scb/map'
 import { createLogger } from '@/lib/logger'
 

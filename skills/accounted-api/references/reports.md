@@ -2424,7 +2424,7 @@ Response `200`:
     ink2s: Record<string, number | string>,
     breakdown: Record<string, { accounts: { accountNumber: string, accountName: string, amount: number }[], total: number }>,
     totals: { totalAssets: number, totalEquityLiabilities: number, operatingResult: number, aretsResultat: number },
-    companyInfo: { companyName: string, orgNumber: string | null, addressLine1: string | null, postalCode: string | null, city: string | null, email: string | null },
+    companyInfo: { companyName: string, orgNumber: string | null, entityType: string, addressLine1: string | null, postalCode: string | null, city: string | null, email: string | null },
     warnings: string[],
     sru_file: { download: string, content_type: "application/zip", files: string[] }
   },
@@ -2901,7 +2901,7 @@ Response `200`:
     fiscalYear: { fiscal_period_id: string, name: string, start: string, end: string, isClosed: boolean },
     rutor: Record<string, number>,
     breakdown: Record<string, { accounts: { accountNumber: string, accountName: string, amount: number }[], total: number }>,
-    companyInfo: { companyName: string, orgNumber: string | null, addressLine1: string | null, postalCode: string | null, city: string | null, email: string | null },
+    companyInfo: { companyName: string, orgNumber: string | null, entityType: string, addressLine1: string | null, postalCode: string | null, city: string | null, email: string | null },
     warnings: string[],
     sru_file: { download: string, content_type: "application/zip", files: string[] }
   },
@@ -2944,6 +2944,7 @@ Example response `200`:
     "companyInfo": {
       "companyName": "Anna Svensson Konsult",
       "orgNumber": "19800101-XXXX",
+      "entityType": "enskild_firma",
       "addressLine1": null,
       "postalCode": null,
       "city": null,

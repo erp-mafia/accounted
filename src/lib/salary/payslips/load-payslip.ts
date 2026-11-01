@@ -20,6 +20,7 @@ import {
   type PayslipEmployeeSource,
   type PayslipSectionSettings,
 } from '@/lib/salary/payslips/build-payslip-data'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
 import type { PayslipData } from '@/lib/salary/pdf/payslip-template'
 
@@ -56,7 +57,7 @@ export async function loadPayslip(
     supabase.from('companies').select('name, org_number').eq('id', args.companyId).maybeSingle(),
     supabase
       .from('company_settings')
-      .select('company_name, salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
+      .select('company_name, org_number, salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
       .eq('company_id', args.companyId)
       .maybeSingle(),
   ])
@@ -72,7 +73,7 @@ export async function loadPayslip(
 
   const sre = sreRes.data as unknown as LoadedPayslip['sre'] & { employee: PayslipEmployeeSource }
   const company = companyRes.data as { name: string; org_number: string | null }
-  const settings = (settingsRes.data ?? null) as (PayslipSectionSettings & { company_name?: string | null }) | null
+  const settings = (settingsRes.data ?? null) as (PayslipSectionSettings & { company_name?: string | null; org_number?: string | null }) | null
   return {
     ok: true,
     payslip: {
@@ -81,7 +82,7 @@ export async function loadPayslip(
       employee: sre.employee,
       // Truthiness, so an empty company_name falls through to the onboarding
       // name (getCompanyDisplayName's rule).
-      company: { name: settings?.company_name || company.name, org_number: company.org_number },
+      company: { name: settings?.company_name || company.name, org_number: effectiveOrgNumber(settings?.org_number, company.org_number) },
       settings,
       settingsError: settingsRes.error ?? null,
     },

@@ -82,6 +82,7 @@ describe('AGIKontrolleraIUSchema: an F-skatt payee\'s IU in FK123-FK128 (#91)', 
   // with a lower-case first letter, Tjänstebeskrivning 8.2) and parse it.
   const COMPANY = {
     orgNumber: '556123-4567',
+    entityType: 'aktiebolag' as const,
     companyName: 'Test AB',
     periodYear: 2026,
     periodMonth: 9,

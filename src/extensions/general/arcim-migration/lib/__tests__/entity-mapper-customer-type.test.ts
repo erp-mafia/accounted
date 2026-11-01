@@ -37,6 +37,23 @@ function makeCustomer(over: {
 }
 
 describe('mapCustomer: type inference & identity-number routing', () => {
+  it('a company with its 16 prefix and no country is Swedish, not an export customer', () => {
+    expect(mapCustomer(makeCustomer({ type: 'company', number: '165566778899' }), 'u', 'c').customer_type).toBe('swedish_business')
+    expect(invoiceStubCustomerType(makeCustomer({ number: '16556677-8899' }).party)).toBe('swedish_business')
+  })
+
+  it('a Swedish VAT number in the org number field is Swedish, not an export customer', () => {
+    expect(mapCustomer(makeCustomer({ type: 'company', number: '556677889901' }), 'u', 'c').customer_type).toBe('swedish_business')
+    expect(invoiceStubCustomerType(makeCustomer({ number: '556677889901' }).party)).toBe('swedish_business')
+    expect(mapCustomer(makeCustomer({ type: 'company', number: 'SE556677889901' }), 'u', 'c').customer_type).toBe('swedish_business')
+    expect(invoiceStubCustomerType(makeCustomer({ number: 'se 5566778899 01' }).party)).toBe('swedish_business')
+  })
+
+  it('a 12-digit number that is no Swedish number stays foreign', () => {
+    expect(mapCustomer(makeCustomer({ type: 'company', number: '556677889902' }), 'u', 'c').customer_type).toBe('non_eu_business')
+    expect(mapCustomer(makeCustomer({ type: 'company', number: '836677889901' }), 'u', 'c').customer_type).toBe('non_eu_business')
+  })
+
   it('12-digit personnummer (no VAT, provider type=company) → swedish_business, not non_eu', () => {
     const row = mapCustomer(makeCustomer({ type: 'company', number: '19700616-7113' }), 'u', 'c')
     expect(row.customer_type).toBe('swedish_business')

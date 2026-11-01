@@ -24,7 +24,7 @@ export const GET = v1ReportFileHandler({
     'A declaration with sruBlockers (an account without a ruta, R11 not the booked result, a booked periodiseringsfond or skatt) answers 422 TAX_DECL_NE_SRU_BLOCKED with the reason in details.reason: correct the books, do not retry.',
   ],
   contentType: 'application/zip',
-  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_NE_WRONG_LEGAL_FORM', 'TAX_DECL_NE_SRU_BLOCKED', 'TAX_DECL_GENERATION_FAILED'],
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'TAX_DECL_NE_WRONG_LEGAL_FORM', 'TAX_DECL_NE_SRU_BLOCKED', 'FILING_IDENTITY_REFUSED', 'TAX_DECL_GENERATION_FAILED'],
   query: z.object({ period_id: z.string().uuid().describe('The fiscal period (räkenskapsår) id.') }),
   build: (ctx, { period_id }) => getNeSruFile(ctx, period_id),
 })

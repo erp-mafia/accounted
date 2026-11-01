@@ -31,6 +31,7 @@ import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { parseEntityType } from '@/lib/company/entity-type'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { earliestExecutionDateIso, executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
@@ -215,13 +216,14 @@ function earliestPaidFrom(parts: SkattekontoSourceDue[]): string | null {
  * there is none; null when neither exists.
  */
 async function skattekontoOcr(supabase: SupabaseClient, companyId: string, log: Logger): Promise<string | null> {
-  const { data, error } = await supabase.from('companies').select('org_number, entity_type').eq('id', companyId).maybeSingle()
+  const { data, error } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
   if (error) throw error
-  const company = data as { org_number: string | null; entity_type: string | null } | null
+  const company = data as { entity_type: string | null } | null
+  const orgNumber = await readCompanyOrgNumber(supabase, companyId)
   try {
     // The form decides whether the redovisare is built from a personnummer
     // (toRedovisare12); an unknown one throws, never defaults.
-    return await resolveSkattekontoOcr(supabase, companyId, company?.org_number ?? '', parseEntityType(company?.entity_type))
+    return await resolveSkattekontoOcr(supabase, companyId, orgNumber ?? '', parseEntityType(company?.entity_type))
   } catch (err) {
     log.warn('skattekonto payment: no OCR number', { companyId, reason: (err as { message?: string })?.message })
     return null

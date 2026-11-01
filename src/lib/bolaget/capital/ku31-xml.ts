@@ -36,6 +36,8 @@
  * anything is written; buildKu31Xml refuses an input with errors.
  */
 
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
+
 export const KU31_SCHEMA_VERSION = '12.0'
 export const KU31_BLANKETT_NUMBER = '2322'
 export const KU31_NAMESPACE = 'http://xmls.skatteverket.se/se/skatteverket/ai/instans/infoForBeskattning/12.0'
@@ -152,7 +154,7 @@ export function validateKuCommon(input: KuFileCommon, prefix: 'KU31' | 'KU20'): 
   if (!Number.isInteger(input.income_year) || input.income_year < 2000 || input.income_year > 2099) {
     push('INCOME_YEAR', '203', 'Inkomståret är ogiltigt.')
   }
-  if (!/^\d{10}$/.test(input.payer_org_number) || !luhnValid(input.payer_org_number) || Number(input.payer_org_number[2]) < 2) {
+  if (!/^\d{10}$/.test(input.payer_org_number) || !luhnValid(input.payer_org_number) || !isLegalPersonOrgNumber(input.payer_org_number)) {
     // OrganisationsnummerTYPE: 16 followed by a third digit 2-9 (a legal person), and the check digit.
     push('PAYER_ORG_NUMBER', '201', 'Bolagets organisationsnummer saknas eller är ogiltigt. Kontrollera det under Inställningar, Företag.')
   }
