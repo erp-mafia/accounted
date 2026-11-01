@@ -15,6 +15,7 @@ import { addDaysIso, stockholmWallTimeToUtc, todayIsoStockholm } from '@/lib/dat
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import { createLogger, type Logger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
 import { markConnectionRevokedUpstream } from './revoked'
@@ -129,8 +130,6 @@ export interface StripeTransactionSyncSummary {
   /** Set when the connection turned out to be revoked upstream. */
   revoked?: boolean
 }
-
-const round = (n: number) => Math.round(n * 100) / 100
 
 /**
  * The Swedish calendar day of a Stripe timestamp. The verifikation carries
@@ -256,7 +255,7 @@ export function mapBalanceTransaction(
     {
       date,
       description,
-      amount: round(txn.amount / 100),
+      amount: roundOre(txn.amount / 100),
       currency,
       external_id: stripeExternalId(stripeAccountId, txn.id),
       import_source: STRIPE_IMPORT_SOURCE,
@@ -267,7 +266,7 @@ export function mapBalanceTransaction(
     rows.push({
       date,
       description: `Stripe-avgift (${description})`,
-      amount: round(-txn.fee / 100),
+      amount: roundOre(-txn.fee / 100),
       currency,
       external_id: stripeFeeExternalId(stripeAccountId, txn.id),
       import_source: STRIPE_IMPORT_SOURCE,

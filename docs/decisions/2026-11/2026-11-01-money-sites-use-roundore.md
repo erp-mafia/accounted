@@ -1,0 +1,1 @@
+[2026-11-01] Line sides, the VAT declaration, kassaflödesanalys, cash-flow tax and the Stripe sync round öre with roundOre (lib/money), not Math.round(x * 100) / 100: the naive form drops exact halves like 1.005 to 1.00. Founder approved; the other naive sites stay on the ratchet.

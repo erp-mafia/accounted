@@ -6,7 +6,7 @@ import type {
   VatRevenueAccountWithoutRuta,
   VatAccountWithoutRuta,
 } from '@/types'
-import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
@@ -92,13 +92,6 @@ export const VAT_INPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
  * on one side without the other fails there.
  */
 export const RC_INPUT_VAT_ACCOUNTS = ['2645', '2647'] as const
-
-/**
- * Round to 2 decimal places
- */
-function round(value: number): number {
-  return Math.round(value * 100) / 100
-}
 
 /**
  * Resolve the start/end dates for a VAT period.
@@ -459,11 +452,11 @@ export function rutorFromTotals(
   }
 
   for (const contribution of vatRutaContributions(totals, dynamicVatAccounts)) {
-    rutor[contribution.box] = round(rutor[contribution.box] + contribution.amount)
+    rutor[contribution.box] = roundOre(rutor[contribution.box] + contribution.amount)
   }
 
   // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
-  rutor.ruta49 = round(
+  rutor.ruta49 = roundOre(
     rutor.ruta10 + rutor.ruta11 + rutor.ruta12 +
     rutor.ruta30 + rutor.ruta31 + rutor.ruta32 +
     rutor.ruta60 + rutor.ruta61 + rutor.ruta62 -
@@ -549,7 +542,7 @@ function rcInputTotals(
   const pair: Record<string, { debit: number; credit: number }> = {}
   for (const account of RC_INPUT_VAT_ACCOUNTS) {
     const t = totals.get(account)
-    pair[account] = { debit: round(t?.debit ?? 0), credit: round(t?.credit ?? 0) }
+    pair[account] = { debit: roundOre(t?.debit ?? 0), credit: roundOre(t?.credit ?? 0) }
   }
   return pair
 }
@@ -653,15 +646,15 @@ export function customerLossVatAdjustment(rows: CustomerLossVatRow[]): CustomerL
       effective === 'confirmed' ? -1 : effective === 'recovered' ? 1 : 0
     if (sign === 0) continue
     const direction = row.kind === 'annulled' ? -sign : sign
-    if (effective === 'recovered') out.recoveredNet = round(out.recoveredNet + direction * (Number(row.net_amount) || 0))
+    if (effective === 'recovered') out.recoveredNet = roundOre(out.recoveredNet + direction * (Number(row.net_amount) || 0))
     for (const share of row.vat_by_rate ?? []) {
       const base = Number(share.base) || 0
       if (base === 0) continue
       const ruta = (share.account && CUSTOMER_LOSS_BASE_RUTA[share.account]) || 'ruta05'
-      out[ruta] = round(out[ruta] + direction * base)
+      out[ruta] = roundOre(out[ruta] + direction * base)
       if (ruta !== 'ruta05') continue
       const bucket = share.rate === 25 ? 'base25' : share.rate === 12 ? 'base12' : share.rate === 6 ? 'base6' : null
-      if (bucket) out[bucket] = round(out[bucket] + direction * base)
+      if (bucket) out[bucket] = roundOre(out[bucket] + direction * base)
     }
   }
   return out
@@ -672,10 +665,10 @@ export function applyCustomerLossVatAdjustment<T extends { ruta05: number; ruta0
   rutor: T,
   adjustment: CustomerLossVatAdjustment,
 ): T {
-  rutor.ruta05 = round(rutor.ruta05 + adjustment.ruta05)
-  rutor.ruta06 = round(rutor.ruta06 + adjustment.ruta06)
-  rutor.ruta07 = round(rutor.ruta07 + adjustment.ruta07)
-  rutor.ruta08 = round(rutor.ruta08 + adjustment.ruta08)
+  rutor.ruta05 = roundOre(rutor.ruta05 + adjustment.ruta05)
+  rutor.ruta06 = roundOre(rutor.ruta06 + adjustment.ruta06)
+  rutor.ruta07 = roundOre(rutor.ruta07 + adjustment.ruta07)
+  rutor.ruta08 = roundOre(rutor.ruta08 + adjustment.ruta08)
   return rutor
 }
 
@@ -769,7 +762,7 @@ export function revenueAccountsWithoutRuta(
     const t = totals.get(account)
     if (!t) continue
     const declaredElsewhere = account === CUSTOMER_LOSS_RECOVERY_ACCOUNT ? (customerLoss?.recoveredNet ?? 0) : 0
-    const amount = round(t.credit - t.debit - declaredElsewhere)
+    const amount = roundOre(t.credit - t.debit - declaredElsewhere)
     if (amount === 0) continue
     result.push({ account_number: account, account_name: name, amount })
   }
@@ -801,7 +794,7 @@ export function vatAccountsWithoutRuta(
     if (ACCOUNT_RUTA[account]) continue
     const t = totals.get(account)
     if (!t) continue
-    const amount = round(account < '2640' ? t.credit - t.debit : t.debit - t.credit)
+    const amount = roundOre(account < '2640' ? t.credit - t.debit : t.debit - t.credit)
     if (amount === 0) continue
     result.push({ account_number: account, account_name: name, amount })
   }
@@ -882,18 +875,18 @@ export async function computeVatDeclaration(
   for (const [account, rate] of [['3001', 'base25'], ['3002', 'base12'], ['3003', 'base6']] as const) {
     if (dynamicVatAccounts.explicitAccounts.has(account)) continue
     const t = totals.get(account)
-    if (t) revenueByRate[rate] = round(t.credit - t.debit)
+    if (t) revenueByRate[rate] = roundOre(t.credit - t.debit)
   }
   for (const [account, rate] of dynamicVatAccounts.rateByAccount) {
     const t = totals.get(account)
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
     if (!bucket) continue
-    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+    revenueByRate[bucket] = roundOre(revenueByRate[bucket] + (t.credit - t.debit))
   }
-  revenueByRate.base25 = round(revenueByRate.base25 + customerLoss.base25)
-  revenueByRate.base12 = round(revenueByRate.base12 + customerLoss.base12)
-  revenueByRate.base6 = round(revenueByRate.base6 + customerLoss.base6)
+  revenueByRate.base25 = roundOre(revenueByRate.base25 + customerLoss.base25)
+  revenueByRate.base12 = roundOre(revenueByRate.base12 + customerLoss.base12)
+  revenueByRate.base6 = roundOre(revenueByRate.base6 + customerLoss.base6)
   // Accounts the static map ALREADY sums into ruta 05 (3000, the 30xx
   // gruppkonto) but whose rate only exists as the konto's "Standard moms".
   // Rate-only on purpose: their balance is in ruta 05 either way, so adding
@@ -903,7 +896,7 @@ export async function computeVatDeclaration(
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
     if (!bucket) continue
-    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+    revenueByRate[bucket] = roundOre(revenueByRate[bucket] + (t.credit - t.debit))
   }
 
   // Entry counts by source type for metadata: aggregated by the RPC in the

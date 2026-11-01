@@ -6,6 +6,7 @@ import { fetchVoucherMovements, type CashFlowEntryScope } from './cash-flow-evid
 import type { TrialBalanceRow } from '@/types'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import {
   buildKassaflodesanalysYear,
   hasPeriodActivity,
@@ -144,11 +145,11 @@ export type KassaflodesanalysFullReport = KassaflodesanalysReport & {
   statement: KassaflodesanalysStatement
 }
 
-// Normalize -0 → 0 so callers (and tests) never observe a signed zero.
-// Math.round(0 * 100) / 100 happens to be 0, but Math.round(-0.001 * 100) / 100
-// returns -0 because Math.round preserves the sign of zero.
+// Normalize -0 → 0 so callers (and tests) never observe a signed zero:
+// rounding a tiny negative amount such as -0.001 gives -0, because
+// Math.round preserves the sign of zero.
 const r2 = (n: number) => {
-  const rounded = Math.round(n * 100) / 100
+  const rounded = roundOre(n)
   return rounded === 0 ? 0 : rounded
 }
 
