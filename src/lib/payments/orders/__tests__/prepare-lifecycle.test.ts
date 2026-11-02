@@ -314,6 +314,16 @@ describe('preparePaymentOrders', () => {
     expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
   })
 
+  it('pays a Saturday due date on the Friday before, not the Monday after (crm#1595)', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a', { due_date: '2026-11-07' })] }) // a Saturday
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'known' }] } })
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-11-02' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
+    expect(args.p_orders[0]).toMatchObject({ requested_execution_date: '2026-11-06' })
+    expect(result.data.warnings.filter((w) => w.code === 'date_moved')).toEqual([])
+  })
+
   it('moves a weekend or holiday date to the next banking day and says so', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { due_date: '2026-10-10' })] }) // a Saturday, already passed on the 11th
     db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'known' }] } })

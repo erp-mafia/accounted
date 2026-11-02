@@ -40,6 +40,17 @@ export function executionDateFor(wanted: string, today: string): string {
 }
 
 /**
+ * YYYY-MM-DD of the last banking day on or before the given YYYY-MM-DD: the
+ * day a payment due on a weekend or holiday leaves so it still lands by its
+ * due date instead of the next banking day after it.
+ */
+export function bankDayOnOrBeforeIso(iso: string): string {
+  const [year, month, day] = iso.split('-').map(Number)
+  // Local noon, as above.
+  return isBankingDay(new Date(year, month - 1, day, 12)) ? iso : previousBankDayIso(iso)
+}
+
+/**
  * YYYY-MM-DD of the last banking day strictly before the given YYYY-MM-DD.
  * A salary file to Swedbank asks for this day before payday: Swedbank's
  * requested execution date is its debit day, and a salary reaches the

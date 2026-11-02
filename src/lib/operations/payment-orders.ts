@@ -606,7 +606,8 @@ export const paymentOrdersPrepare = defineOperation({
     summary: 'Prepare draft bank payments (betalningar via banken) for supplier invoices, or one payment in to the skattekonto.',
     description:
       'Creates one draft payment order per payable supplier invoice, from one of the company\'s own bank accounts: the remaining ' +
-      'amount, the due date (or today when it has passed) unless execution_date is given, the supplier\'s bankgiro, plusgiro or bank ' +
+      'amount, the due date (the banking day before it when it falls on a weekend or holiday, or today when that has passed) unless ' +
+      'execution_date is given, the supplier\'s bankgiro, plusgiro or bank ' +
       'account, and the OCR or invoice number as reference. Nothing reaches the bank: a draft is approved by a person ' +
       '(POST /payment-orders/approve) and then signed with BankID on the Betalningar page in Accounted. The database decides each ' +
       'order\'s payee check (known, new, changed) from the supplier card, the invoice and payments a person already approved; new and ' +
@@ -671,7 +672,7 @@ export const paymentOrdersPrepare = defineOperation({
       .describe('The company bank account to pay from (cash_account_id from GET /payment-orders/availability, payable true).'),
     execution_date: isoDateSchema
       .optional()
-      .describe('YYYY-MM-DD for every order; defaults per invoice to the due date, or today when that has passed. Never in the past.'),
+      .describe('YYYY-MM-DD for every order; defaults per invoice to the due date, the banking day before it when it falls on a weekend or holiday, or today when that has passed. A non-banking day given here moves to the next banking day. Never in the past.'),
     use_stated_payee_for: z
       .array(z.string().uuid())
       .max(100)

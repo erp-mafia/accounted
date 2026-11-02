@@ -468,6 +468,14 @@ export default function NewSupplierInvoiceForm({
     [markSettled],
   )
 
+  const handleInvoiceTotalPrefilled = useCallback(
+    (total: number) => {
+      setFakturaTotalStr(formatAmount(total))
+      markSettled('faktura_total')
+    },
+    [markSettled],
+  )
+
   useEffect(() => {
     if (settledFields.size === 0) return
     const timer = setTimeout(() => setSettledFields(new Set()), 1200)
@@ -493,6 +501,7 @@ export default function NewSupplierInvoiceForm({
     toast,
     t,
     onFieldPrefilled: handleFieldPrefilled,
+    onInvoiceTotal: handleInvoiceTotalPrefilled,
     prefillAccount,
     accrualThresholdFor: (invoiceDate) =>
       accrualThresholdSek({
@@ -1341,14 +1350,6 @@ export default function NewSupplierInvoiceForm({
   // a disabled extension just 404s and the upload degrades to the plain
   // /api/documents path with no extraction. Manual entry is never blocked.
 
-  function afterUploadExtraction(extracted: InvoiceExtractionResult | null) {
-    setExtractionPhase('done')
-    if (extracted?.totals?.total != null) {
-      setFakturaTotalStr(formatAmount(extracted.totals.total))
-      markSettled('faktura_total')
-    }
-  }
-
   // Standalone-path guard: an extraction can land up to 90 s after upload,
   // and applyInboxItem overwrites scalars and replaces ALL rows. Auto-apply
   // only while the form is still pristine; once the user has typed, buffer
@@ -1362,7 +1363,7 @@ export default function NewSupplierInvoiceForm({
       return
     }
     applyInboxItem(item)
-    afterUploadExtraction(item.extracted_data)
+    setExtractionPhase('done')
   }
 
   function applyPendingExtraction() {
@@ -1370,7 +1371,7 @@ export default function NewSupplierInvoiceForm({
     if (!item) return
     setPendingExtraction(null)
     applyInboxItem(item)
-    afterUploadExtraction(item.extracted_data)
+    setExtractionPhase('done')
   }
 
   // A finished reading: fill the form, or say it could not be read and offer

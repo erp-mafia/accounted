@@ -74,3 +74,34 @@ describe('isWholeKronaRoundingOf', () => {
     expect(rounded.roundingItem).toMatchObject({ amount: 0.25, account_number: '3740', vat_rate: 0 })
   })
 })
+
+describe('an inbox arrival whose Fakturabelopp is the extracted total (crm#1595)', () => {
+  // The rows and the billed total of four supplier invoices that were
+  // registered at the rows' total instead of what they bill, because the
+  // inbox path left Fakturabelopp empty and öresavrundning stayed off.
+  const cases = [
+    { name: 'one 6 % row', rows: [row(4990, 0.06)], billed: 5289, exact: 5289.4, rounding: -0.4 },
+    { name: 'two 25 % rows', rows: [row(1686.37, 0.25), row(2248.88, 0.25)], billed: 4919, exact: 4919.06, rounding: -0.06 },
+    { name: 'one row rounded up', rows: [row(421.5, 0.25)], billed: 527, exact: 526.88, rounding: 0.12 },
+    {
+      name: 'ten 25 % rows',
+      rows: [345.96, 81.84, 90.77, 331.08, 65.47, 82.58, 475.42, 341.5, 267.1, 241.8].map((amount) => row(amount, 0.25)),
+      billed: 2904,
+      exact: 2904.4,
+      rounding: -0.4,
+    },
+  ]
+
+  it.each(cases)('$name: öresavrundning turns on and the payable is what the invoice bills', ({ rows, billed, exact, rounding }) => {
+    const exactAmounts = supplierInvoiceEditorAmounts(rows, 'SEK', false, false)
+    expect(exactAmounts.total).toBe(exact)
+    expect(isWholeKronaRoundingOf(exactAmounts.total, billed, 'SEK')).toBe(true)
+    const rounded = supplierInvoiceEditorAmounts(rows, 'SEK', false, true)
+    expect(rounded.figures.toPay).toBe(billed)
+    expect(rounded.roundingItem).toMatchObject({ account_number: '3740', amount: rounding, vat_rate: 0 })
+  })
+
+  it('stays off without a Fakturabelopp: the registration then books the rows', () => {
+    expect(isWholeKronaRoundingOf(5289.4, null, 'SEK')).toBe(false)
+  })
+})

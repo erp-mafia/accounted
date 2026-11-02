@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { earliestExecutionDateIso, executionDateFor, nextBankDayIso, previousBankDayIso } from '../bank-days'
+import { bankDayOnOrBeforeIso, earliestExecutionDateIso, executionDateFor, nextBankDayIso, previousBankDayIso } from '../bank-days'
 
 describe('nextBankDayIso', () => {
   it('keeps a banking day and moves a weekend to Monday', () => {
@@ -11,6 +11,15 @@ describe('nextBankDayIso', () => {
   it('skips a Swedish holiday', () => {
     expect(nextBankDayIso('2027-01-01')).toBe('2027-01-04') // Nyårsdagen is a Friday
     expect(nextBankDayIso('2026-12-25')).toBe('2026-12-28') // Juldagen, then annandag jul and a weekend
+  })
+})
+
+describe('bankDayOnOrBeforeIso', () => {
+  it('keeps a banking day and moves a weekend or holiday back to the banking day before', () => {
+    expect(bankDayOnOrBeforeIso('2026-11-06')).toBe('2026-11-06') // Friday
+    expect(bankDayOnOrBeforeIso('2026-11-07')).toBe('2026-11-06') // Saturday
+    expect(bankDayOnOrBeforeIso('2026-11-08')).toBe('2026-11-06') // Sunday
+    expect(bankDayOnOrBeforeIso('2027-01-01')).toBe('2026-12-30') // Nyårsdagen, after nyårsafton
   })
 })
 

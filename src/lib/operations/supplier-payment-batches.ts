@@ -172,7 +172,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
   docs: {
     summary: 'Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings.',
     description:
-      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company\'s bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company\'s own bank details are complete. The file pays from the company\'s primary bank account, the account salaries are booked on, with that account\'s IBAN and BIC; org number, and the bankgiro an LB file is sent from, come from company settings. Reads only; creates nothing.',
+      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, the banking day before it when it falls on a weekend or holiday, or today when that has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company\'s bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company\'s own bank details are complete. The file pays from the company\'s primary bank account, the account salaries are booked on, with that account\'s IBAN and BIC; org number, and the bankgiro an LB file is sent from, come from company settings. Reads only; creates nothing.',
     useWhen: 'Before creating a payment batch, to see what would be paid and what blocks it.',
     doNotUseFor:
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
@@ -357,7 +357,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
             .describe('Amount to pay in SEK; defaults to the invoice\'s remaining amount. Never above it.'),
           payment_date: isoDateSchema
             .optional()
-            .describe('Execution date YYYY-MM-DD; defaults to the due date, or today when that has passed.'),
+            .describe('Execution date YYYY-MM-DD; defaults to the due date, the banking day before it when it falls on a weekend or holiday, or today when that has passed.'),
         }),
       )
       .min(1)
