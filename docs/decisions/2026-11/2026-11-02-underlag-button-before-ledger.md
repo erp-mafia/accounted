@@ -1,0 +1,1 @@
+[2026-11-02] Hämta underlag shows on a Fortnox or Bokio connection row before the ledger import, disabled with a line saying the bookkeeping (or a SIE file) comes first: hidden, customers could not find it; enabled, every file would come back unmatched.

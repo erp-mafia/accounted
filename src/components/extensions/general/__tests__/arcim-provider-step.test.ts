@@ -87,8 +87,41 @@ describe('ProviderStep, a company without a completed ledger import (crm#1118)',
     expect(html).not.toContain(connectAnother)
   })
 
-  it('does not offer underlag before there are verifikat to link them to', () => {
-    expect(render(status(false))).not.toContain(fetchDocuments)
+  // Underlag link to imported verifikat by voucher number, so the import
+  // cannot run yet; a hidden button left a customer looking for it, so the
+  // row shows it disabled and says what comes first.
+  it('shows Hämta underlag disabled and says the bookkeeping comes first', () => {
+    const html = render(status(false))
+    expect(html).toContain(fetchDocuments)
+    const fetchButton = html.slice(html.lastIndexOf('<button', html.indexOf(fetchDocuments)), html.indexOf(fetchDocuments))
+    // The attribute, not the disabled: utility classes every Button carries.
+    expect(fetchButton).toMatch(/\sdisabled=""/)
+    expect(fetchButton).not.toContain('bg-primary')
+    expect(html).toContain(sv.extensions.ext_arcim_documents_fetch_after_ledger)
+    expect(html).not.toContain(sv.extensions.ext_arcim_documents_fetch_after_sie)
+  })
+
+  it('tells a Bokio connection the bookkeeping comes as a SIE file first', () => {
+    const html = render(status(false, [BOKIO_CONSENT]))
+    const fetchButton = html.slice(html.lastIndexOf('<button', html.indexOf(fetchDocuments)), html.indexOf(fetchDocuments))
+    expect(fetchButton).toMatch(/\sdisabled=""/)
+    expect(html).toContain(sv.extensions.ext_arcim_documents_fetch_after_sie)
+    expect(html).not.toContain(sv.extensions.ext_arcim_documents_fetch_after_ledger)
+  })
+
+  it('keeps Fortsätt importen as the row\'s first action', () => {
+    const html = render(status(false))
+    expect(html.indexOf(sv.extensions.ext_arcim_continue_import)).toBeLessThan(html.indexOf(fetchDocuments))
+  })
+
+  it('says nothing about the bookkeeping coming first once it is imported', () => {
+    expect(render(status(true))).not.toContain(sv.extensions.ext_arcim_documents_fetch_after_ledger)
+  })
+
+  it('says the same in English', () => {
+    const html = render(status(false), 'en')
+    expect(html).toContain(en.extensions.ext_arcim_documents_fetch_action)
+    expect(html).toContain(en.extensions.ext_arcim_documents_fetch_after_ledger)
   })
 })
 
