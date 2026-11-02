@@ -1,0 +1,1 @@
+[2026-11-02] A supplier invoice row takes a deductible moms amount (begränsat momsavdrag), not a free moms override: the non-deductible part goes to the row's cost account so 2440 stays the invoice total (crm#1617).

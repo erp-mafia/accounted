@@ -11,6 +11,7 @@
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
+import { bookLimitedDeduction, limitedDeductionApplies } from './limited-deduction'
 import type { StatedRateVat } from '@/lib/vat/document-vat'
 import type { SupplierInvoiceReverseChargeKind, VatTreatment } from '@/types'
 
@@ -35,6 +36,13 @@ export interface SupplierInvoiceLineItem {
   // 7533 D / 2514 K pair at 24.26 % of the line amount. Only offered on 741x
   // pension-premium accounts; never changes the invoice total.
   apply_slp?: boolean
+  // Begränsat momsavdrag: the share of the row's moms the person deducts,
+  // when it is less than all of it (personbil, representation). Present only
+  // while the row's panel is open; bookLimitedDeduction turns it into the
+  // booked row (lib/supplier-invoices/limited-deduction.ts).
+  vat_deduction_share?: number
+  // The ingående moms the row books, set only by bookLimitedDeduction.
+  vat_amount?: number
 }
 
 export interface SupplierInvoiceFormData {
@@ -154,12 +162,16 @@ export function buildSupplierInvoicePayload(
   opts: BuildSupplierInvoicePayloadOptions,
 ) {
   const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual, euSupplier } = opts
+  // A row with begränsat momsavdrag books its non-deductible moms as cost.
+  const bookedItems = bookLimitedDeduction(data.items, limitedDeductionApplies(data)).items
+  // The treatment is the invoice's, from its own rows: a row with no
+  // deductible moms books at 0 %, but the supplier still charged moms.
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
   const statedVat = data.reverse_charge ? null : opts.statedVat ?? null
   const { roundingItem, statedVatAccepted } = supplierInvoiceEditorAmounts(
-    data.items, data.currency, data.reverse_charge, oreRounding, statedVat,
+    bookedItems, data.currency, data.reverse_charge, oreRounding, statedVat,
   )
-  const items: SupplierInvoiceLineItem[] = roundingItem ? [...data.items, roundingItem] : data.items
+  const items: SupplierInvoiceLineItem[] = roundingItem ? [...bookedItems, roundingItem] : bookedItems
   const paidByPerson = isPersonPayer(data.payer)
   // When paid privately, due_date is irrelevant: but the API still requires
   // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
@@ -214,6 +226,8 @@ export function buildSupplierInvoicePayload(
       // the self-assessed rate travels on reverse_charge_rate (25% default).
       vat_rate: data.reverse_charge ? 0 : item.vat_rate,
       reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
+      // The deductible part of the row's moms (begränsat momsavdrag).
+      ...(!data.reverse_charge && item.vat_amount != null ? { vat_amount: item.vat_amount } : {}),
       // Periodisering: only sent when the row has a complete period AND the
       // flow supports it (kontantmetod/eget utlägg would be rejected by the
       // API: an AI prefill must never block those submits).
