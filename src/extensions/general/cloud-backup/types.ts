@@ -107,6 +107,12 @@ export interface CloudLastSync {
    * reconstructs from `folder_id`.
    */
   web_view_link?: string
+  /**
+   * The account the files were written to. Together with `folder_id` it says
+   * where `files` live: a Dropbox folder path is the same in every account.
+   * Absent on records from before it was written.
+   */
+  account_email?: string
   files?: CloudFileState[]
   total_size_bytes?: number
   // Legacy single-file layout fields.

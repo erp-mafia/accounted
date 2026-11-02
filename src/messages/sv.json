@@ -12398,7 +12398,7 @@
     "export_cloud_title": "Säkerhetskopia till Google Drive",
     "export_sie_dialog_description": "Ladda ner bokföringen som SIE4-fil för revisorn eller för flytt till ett annat system.",
     "cloud_row_title": "Molnsynkronisering",
-    "cloud_row_description": "Löpande säkerhetskopia av arkivet till Google Drive",
+    "cloud_row_description": "Löpande säkerhetskopia av arkivet till Google Drive eller Dropbox",
     "export_archive_title": "Komplett arkiv",
     "export_archive_description": "Hela bokföringen som ZIP: SIE, rapporter och alla underlag",
     "archive_dialog_description": "Ladda ner ett komplett arkiv till din dator, med SIE-filer, rapporter och alla underlag ordnade per verifikat. Arkivet är en kopia att spara, ingen återställningspunkt: för att börja om en migrering finns Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.",

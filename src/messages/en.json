@@ -12398,7 +12398,7 @@
     "export_cloud_title": "Cloud backup to Google Drive",
     "export_sie_dialog_description": "Download your bookkeeping as a SIE4 file for your accountant or for moving to another system.",
     "cloud_row_title": "Cloud sync",
-    "cloud_row_description": "Continuous backup of the archive to Google Drive",
+    "cloud_row_description": "Continuous backup of the archive to Google Drive or Dropbox",
     "export_archive_title": "Complete archive",
     "export_archive_description": "Your entire bookkeeping as a ZIP: SIE, reports and all supporting documents",
     "archive_dialog_description": "Download a complete archive to your computer, with SIE files, reports and all supporting documents organized per voucher. The archive is a copy to keep, not a restore point: to start a migration over, use Redo migration under Settings > Company > General > Danger zone.",
