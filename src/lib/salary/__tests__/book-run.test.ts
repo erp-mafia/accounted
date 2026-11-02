@@ -423,6 +423,62 @@ describe('previewPaidSalaryRunBooking', () => {
   })
 })
 
+// crm#1596: a board member whose only pay is a förmån. Nothing is paid,
+// withheld or expensed, so there is no salary voucher, but the avgifter on the
+// benefit are booked and the run is no nollkörning.
+describe('a run whose only amount is a förmånsvärde', () => {
+  const benefitOnlyRun = () => makeRun({ status: 'paid', total_gross: 0, total_tax: 0, total_net: 0, total_avgifter: 93.95 })
+  const benefitOnlySre = () =>
+    makeSre({
+      gross_salary: 0,
+      tax_withheld: 0,
+      net_salary: 0,
+      avgifter_amount: 93.95,
+      line_items: [
+        { item_type: 'benefit_other', amount: 299, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+      ],
+    })
+
+  it('books the avgifter voucher alone and leaves salary_entry_id unset', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: benefitOnlyRun() },
+      { data: [benefitOnlySre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: null,
+      avgifterEntry: { id: 'je-2' },
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({ entryIds: ['je-2'], nollkorning: false, salaryVoucherNumber: null }),
+    })
+    const runUpdate = findCalls('salary_runs', 'update').at(-1)?.[0] as Record<string, unknown>
+    expect(runUpdate).toMatchObject({ status: 'booked', avgifter_entry_id: 'je-2' })
+    expect(runUpdate).not.toHaveProperty('salary_entry_id')
+  })
+
+  it('previews only the arbetsgivaravgifter verifikat', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: benefitOnlyRun() }, { data: [benefitOnlySre()] }])
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({ nollkorning: false, would_post_entries: ['arbetsgivaravgifter'] }),
+    })
+  })
+})
+
 describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
   const claimLine = (claimId: string, amount: number) => ({
     item_type: 'expense_reimbursement',

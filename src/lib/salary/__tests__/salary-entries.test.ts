@@ -791,7 +791,48 @@ describe('salary entries: dimensions propagation (PR8)', () => {
 
     expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual(['Lön 2026-06'])
     expect(result.avgifterEntry).toBeNull()
-    expect(result.salaryEntry.id).toBe(fake.ledger[0].id)
+    expect(result.salaryEntry?.id).toBe(fake.ledger[0].id)
+  })
+
+  // crm#1596: a board member whose only pay is a förmån. Nothing is paid,
+  // withheld or expensed, so the salary voucher has no lines; it used to be
+  // posted anyway and the engine refused it as 0 = 0, so the avgifter on the
+  // benefit were never booked.
+  it('a run whose only amount is a förmånsvärde posts just its avgifter voucher', async () => {
+    const run = makeRun([
+      makeEmployee({
+        employment_type: 'board_member',
+        gross_salary: 0,
+        tax_withheld: 0,
+        net_salary: 0,
+        avgifter_amount: 93.95,
+        avgifter_basis: 299,
+        line_items: [
+          { item_type: 'benefit_other', amount: 299, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    expect(buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930').salaryLines).toEqual([])
+
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+
+    expect(mockedCreateEntry.mock.calls.map((call) => call[3].description)).toEqual(['Lön 2026-06: Arbetsgivaravgifter'])
+    expect(result.salaryEntry).toBeNull()
+    expect(result.avgifterEntry?.id).toBe(fake.ledger[0].id)
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(avgifter.lines.reduce((s, l) => s + l.debit_amount, 0)).toBeGreaterThan(0)
+    assertBalanced(avgifter)
+  })
+
+  it('refuses a run with no voucher to post instead of booking it without a verifikat', async () => {
+    const run = makeRun([
+      makeEmployee({ gross_salary: 0, tax_withheld: 0, net_salary: 0, avgifter_amount: 0, avgifter_basis: 0 }),
+    ])
+
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)).rejects.toThrow(
+      'inga rader att bokföra',
+    )
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
 
   it('opposite-signed avgifter buckets that net to zero still book, without a 0/0 liability line', async () => {
@@ -1389,7 +1430,7 @@ describe('salary entries: all vouchers or none, and a retry never posts one twic
       'Lön 2026-06: Arbetsgivaravgifter',
       'Lön 2026-06: Semesteravsättning',
     ])
-    expect(result.salaryEntry.id).toBe(fake.ledger[0].id)
+    expect(result.salaryEntry?.id).toBe(fake.ledger[0].id)
     expect(result.avgifterEntry?.id).toBe(fake.ledger[1].id)
     expect(result.vacationEntry?.id).toBe(fake.ledger[2].id)
     expect(result.pensionEntry).toBeNull()
@@ -1466,7 +1507,7 @@ describe('salary entries: all vouchers or none, and a retry never posts one twic
       'Lön 2026-06: Arbetsgivaravgifter',
       'Lön 2026-06: Semesteravsättning',
     ])
-    expect(retry.salaryEntry.id).toBe(firstSalaryId)
+    expect(retry.salaryEntry?.id).toBe(firstSalaryId)
     expect(retry.avgifterEntry?.id).toBe(fake.ledger[1].id)
     expect(retry.vacationEntry?.id).toBe(fake.ledger[2].id)
   })
@@ -1481,8 +1522,8 @@ describe('salary entries: all vouchers or none, and a retry never posts one twic
     expect(mockedCreateEntry).not.toHaveBeenCalled()
     expect(mockedCommit).not.toHaveBeenCalled()
     expect(fake.ledger).toHaveLength(3)
-    expect([again.salaryEntry.id, again.avgifterEntry?.id, again.vacationEntry?.id]).toEqual([
-      first.salaryEntry.id,
+    expect([again.salaryEntry?.id, again.avgifterEntry?.id, again.vacationEntry?.id]).toEqual([
+      first.salaryEntry?.id,
       first.avgifterEntry?.id,
       first.vacationEntry?.id,
     ])
