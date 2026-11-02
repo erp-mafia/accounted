@@ -6878,12 +6878,12 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_BATCH_DEBTOR_INCOMPLETE: {
     httpStatus: 400,
     message_sv:
-      'Företagets bankuppgifter för betalfilen är ofullständiga. Filen betalar från det primära bankkontot, kontot lönerna bokförs på: fyll i kontots IBAN (och BIC om det inte kan härledas) under Inställningar → Fakturor, Bankkonton för kundfakturor. Har företaget Swedbank behövs även SignerID och avtals-id (Corporate Pay) från Swedbank, och har det Nordea behövs Nordeas Signer ID.',
+      'Företagets bankuppgifter för betalfilen är ofullständiga. Filen betalar från det primära bankkontot, kontot lönerna bokförs på: fyll i kontots IBAN (och BIC om det inte kan härledas) under Inställningar → Fakturor, Bankkonton för kundfakturor. Har företaget Swedbank behövs även SignerID och avtals-id (Corporate Pay) från Swedbank, och har det Nordea behövs Nordeas Signer ID och avtals-ID (CCM-avtalet).',
     message_en:
-      'The company bank details the payment file needs are incomplete. The file pays from the primary bank account, the account salaries are booked on: enter that account\'s IBAN (and BIC if it cannot be derived) under Settings → Invoices, Bank accounts for customer invoices. A Swedbank company also needs the SignerID and Corporate Pay agreement id Swedbank assigned, and a Nordea company the Signer ID Nordea assigned.',
+      'The company bank details the payment file needs are incomplete. The file pays from the primary bank account, the account salaries are booked on: enter that account\'s IBAN (and BIC if it cannot be derived) under Settings → Invoices, Bank accounts for customer invoices. A Swedbank company also needs the SignerID and Corporate Pay agreement id Swedbank assigned, and a Nordea company the Signer ID and CCM agreement id Nordea assigned.',
     remediation: {
       description:
-        'details.missing names what is lacking. For iban and bic, details.account names the paying account (cash_account_id, name, ledger_account): fill in its IBAN or BIC, or make another bank account primary. org_number, swedbank_ids, nordea_signer_id and bankgiro are company settings.',
+        'details.missing names what is lacking. For iban and bic, details.account names the paying account (cash_account_id, name, ledger_account): fill in its IBAN or BIC, or make another bank account primary. org_number, swedbank_ids, nordea_signer_id, nordea_agreement_id and bankgiro are company settings.',
     },
   },
   SI_BATCH_CANCELLED: {
@@ -7719,9 +7719,9 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS: {
     httpStatus: 422,
     message_sv:
-      'Företagets bankuppgifter för betalfilen saknas eller är ogiltiga. ISO 20022 (pain.001) betalar från bankkontot som nettolönen bokförs på och behöver kontots IBAN och BIC, för Swedbank även SignerID och avtals-id (Corporate Pay) och för Nordea Signer ID; Bankgirot LB behöver företagets bankgironummer. Fyll i dem under Inställningar → Fakturor.',
+      'Företagets bankuppgifter för betalfilen saknas eller är ogiltiga. ISO 20022 (pain.001) betalar från bankkontot som nettolönen bokförs på och behöver kontots IBAN och BIC, för Swedbank även SignerID och avtals-id (Corporate Pay) och för Nordea Signer ID och avtals-ID (CCM-avtalet); Bankgirot LB behöver företagets bankgironummer. Fyll i dem under Inställningar → Fakturor.',
     message_en:
-      'The company bank details the payment file needs are missing or invalid. ISO 20022 (pain.001) pays from the bank account the net pay is booked on and needs that account\'s IBAN and BIC, for Swedbank also the SignerID and Corporate Pay agreement id, and for Nordea the Signer ID; Bankgirot LB needs the company bankgiro number. Fill them in under Settings → Invoices.',
+      'The company bank details the payment file needs are missing or invalid. ISO 20022 (pain.001) pays from the bank account the net pay is booked on and needs that account\'s IBAN and BIC, for Swedbank also the SignerID and Corporate Pay agreement id, and for Nordea the Signer ID and CCM agreement id; Bankgirot LB needs the company bankgiro number. Fill them in under Settings → Invoices.',
     remediation: {
       description:
         'details.problem names what is missing. For iban_missing and bic_missing, details.account names the paying account (cash_account_id, name, ledger_account): a booked run pays from the account its salary verifikat credits, any other run from the primary bank account. Fill in that account\'s IBAN or BIC, or (for a run not yet booked) make another bank account primary.',

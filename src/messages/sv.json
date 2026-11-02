@@ -1488,7 +1488,8 @@
     "debtor_account_missing_bic": "Betalfilen betalar från {account}, företagets primära bankkonto, men kontots bank (BIC) kunde inte avgöras.",
     "debtor_missing_org": "Företagets organisationsnummer saknas och måste anges som avsändaridentitet i betalfilen.",
     "debtor_missing_swedbank": "Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Båda får du av Swedbank.",
-    "debtor_missing_nordea": "Nordea kräver företagets Signer ID i betalfilen. Du får det av Nordea, och Nordea visar det också när en fil avvisas för fel Signer ID.",
+    "debtor_missing_nordea": "Nordea kräver företagets Signer ID och avtals-ID i betalfilen. Du får båda av Nordea, och Nordea visar Signer ID när en fil avvisas för fel Signer ID.",
+    "debtor_missing_nordea_agreement": "Nordea kräver företagets avtals-ID (CCM-avtalet) i betalfilen. Du får det av Nordea; i Nordea Business börjar det med NB, till exempel NB123456.",
     "debtor_missing_bankgiro": "Din bank tar bara emot Bankgirots LB-fil, som skickas från företagets bankgironummer. Lägg in bankgironumret.",
     "debtor_missing_link": "Öppna Inställningar → Fakturor",
     "debtor_missing_org_link": "Öppna Inställningar → Företag",
@@ -3353,9 +3354,11 @@
   },
   "settings_nordea_signer_id": {
     "heading": "Betalfiler till Nordea",
-    "help": "Nordea känner igen avsändaren av en betalfil på ditt Signer ID, inte på organisationsnumret. Utan rätt Signer ID nekar Nordea filen. Du får det av Nordea, och Nordea visar det också när en fil avvisas för fel Signer ID.",
+    "help": "Nordea känner igen en betalfil på två id:n som Nordea tilldelar, inte på organisationsnumret: ditt Signer ID och avtals-ID för ert CCM-avtal. Utan båda nekar Nordea filen. Du får dem av Nordea, och Nordea visar Signer ID när en fil avvisas för fel Signer ID.",
     "signer_id_label": "Signer ID",
-    "signer_id_help": "Bokstäver och siffror, till exempel NB10000123456. Tilldelas av Nordea och skrivs in som avsändare i betalfilen."
+    "signer_id_help": "Bokstäver och siffror, till exempel NB10000123456. Tilldelas av Nordea och skrivs in som avsändare i betalfilen.",
+    "agreement_id_label": "Avtals-ID",
+    "agreement_id_help": "Id:t för ert CCM-avtal med Nordea. I Nordea Business börjar det med NB, till exempel NB123456. Skrivs in som betalare i betalfilen."
   },
   "settings_payment_links": {
     "heading": "Betalningslänk",

@@ -408,7 +408,27 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(mockGeneratePain001).not.toHaveBeenCalled()
   })
 
-  it("names a Nordea company's Signer ID as the sender of the tax payment file", async () => {
+  it('returns 400 asking for the CCM agreement id when a Nordea company has only the Signer ID (crm#1530)', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'nordea_agreement_id' })
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error).toContain('Nordea kräver företagets avtals-ID')
+    expect(body.error).toContain('Inställningar → Fakturor')
+    expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
+  it("names a Nordea company's Signer ID as the sender and its agreement id as the debtor of the tax payment file", async () => {
     mockResolveBatchDebtor.mockResolvedValue({
       ok: true,
       debtor: {
@@ -419,6 +439,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
         bankgiro: '1234567',
         city: 'Stockholm',
         nordea_signer_id: 'NB10000123456',
+        nordea_agreement_id: 'NB123456',
       },
     })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
@@ -434,7 +455,11 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({ bic: 'NDEASESS', nordeaSignerId: 'NB10000123456' })
+    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({
+      bic: 'NDEASESS',
+      nordeaSignerId: 'NB10000123456',
+      nordeaAgreementId: 'NB123456',
+    })
   })
 
   it('keeps the period in every id, so two months never share an EndToEndId', async () => {

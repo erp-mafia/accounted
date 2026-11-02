@@ -74,6 +74,7 @@ import {
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
 import { eventBus } from '@/lib/events/bus'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
 import type { LockDateChangeVia } from '@/lib/events/types'
 
 /** The dashboard's settings body after validation: column names, all optional. */
@@ -189,6 +190,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     swedbank_signer_id: c.swedbank_signer_id,
     swedbank_corporate_pay_id: c.swedbank_corporate_pay_id,
     nordea_signer_id: c.nordea_signer_id,
+    nordea_agreement_id: c.nordea_agreement_id,
     invoice_payment_accounts: c.invoice_payment_accounts,
     accounting_method: c.accounting_method,
     defer_invoice_booking: c.defer_invoice_booking,
@@ -377,6 +379,7 @@ export async function updateCompanySettings(
     body.swedbank_signer_id !== undefined
     || body.swedbank_corporate_pay_id !== undefined
     || body.nordea_signer_id !== undefined
+    || body.nordea_agreement_id !== undefined
   if (
     !options.adminVerified
     || changesInvoiceEmailRecipients
@@ -829,19 +832,31 @@ export async function withEntityTypeFallback<T extends SettingsRow>(
 }
 
 /**
+ * The columns of the settings.get read, but nordea_agreement_id, which
+ * getCompanySettings reads beside them while its migration may still be on
+ * its way.
+ */
+const SETTINGS_READ_COLUMNS =
+  'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_article_number, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, self_billing_prefix, next_self_billing_number, self_billing_acceptance_text, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete'
+
+/**
  * The settings row for the API read (settings.get): every column a settings
  * operation can write plus the fixed identity. Literal select so the schema
  * guard can check each column; never '*', which would also hand an API
  * caller internal bookkeeping columns.
  */
 export async function getCompanySettings(ctx: OperationContext): Promise<OperationOutcome<SettingsRow>> {
-  const { data, error } = await ctx.supabase
+  let read = await ctx.supabase
     .from('company_settings')
-    .select(
-      'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_article_number, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, self_billing_prefix, next_self_billing_number, self_billing_acceptance_text, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete',
-    )
+    .select(`${SETTINGS_READ_COLUMNS}, nordea_agreement_id`)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
+  if (isMissingColumnError(read.error)) {
+    // Vercel serves this code up to a few hours before CI applies migration
+    // 20261102093417; the resource reads the absent id as null.
+    read = await ctx.supabase.from('company_settings').select(SETTINGS_READ_COLUMNS).eq('company_id', ctx.companyId).maybeSingle()
+  }
+  const { data, error } = read
   if (error) {
     ctx.log.error('company settings read failed', error)
     return { ok: false, code: 'UNKNOWN_ERROR', error }

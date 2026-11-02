@@ -1319,7 +1319,7 @@ describe('createSupplierPaymentBatch', () => {
   })
 
   it('refuses a Nordea debtor without its Signer ID, since Nordea refuses that file (crm#1530)', async () => {
-    for (const ids of [{}, { nordea_signer_id: null }, { nordea_signer_id: '  ' }, SWEDBANK_IDS]) {
+    for (const ids of [{}, { nordea_signer_id: null }, { nordea_signer_id: '  ', nordea_agreement_id: 'NB123456' }, SWEDBANK_IDS]) {
       const mock = createQueuedMockSupabase()
       mock.enqueueMany([{ data: companyRow }, { data: { ...settingsRow, bic: 'NDEASESS', ...ids } }])
 
@@ -1335,11 +1335,53 @@ describe('createSupplierPaymentBatch', () => {
     }
   })
 
-  it('snapshots the Nordea Signer ID, and the file names the sender by it with SchmeNm CUST', async () => {
+  it('refuses a Nordea debtor with the Signer ID but no CCM agreement id: Nordea rejects that file (crm#1530)', async () => {
+    for (const agreement of [{}, { nordea_agreement_id: null }, { nordea_agreement_id: ' ' }]) {
+      const mock = createQueuedMockSupabase()
+      mock.enqueueMany([
+        { data: companyRow },
+        { data: { ...settingsRow, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', ...agreement } },
+      ])
+
+      const result = await createSupplierPaymentBatch(
+        mock.supabase as unknown as SupabaseClient,
+        COMPANY_ID,
+        USER_ID,
+        { items: [{ supplier_invoice_id: 'inv-1' }] },
+      )
+
+      expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'nordea_agreement_id' })
+      expect(mock.supabase.rpc).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reads the settings again without the agreement id while its column is not there yet, and asks a Nordea company for it', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
       { data: companyRow },
+      { data: null, error: { code: '42703', message: 'column company_settings.nordea_agreement_id does not exist' } },
       { data: { ...settingsRow, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'nordea_agreement_id' })
+    const selects = mock.calls.filter((c) => c.table === 'company_settings' && c.method === 'select').map((c) => c.args[0])
+    expect(selects).toHaveLength(2)
+    expect(selects[0]).toContain('nordea_agreement_id')
+    expect(selects[1]).not.toContain('nordea_agreement_id')
+  })
+
+  it('snapshots both Nordea ids, and the file names the sender by the Signer ID (CUST) and the debtor by the agreement id (BANK)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } },
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
@@ -1358,7 +1400,11 @@ describe('createSupplierPaymentBatch', () => {
     const args = mock.supabase.rpc.mock.calls[0][1] as {
       p_debtor_snapshot: SupplierPaymentBatch['debtor_snapshot']
     }
-    expect(args.p_debtor_snapshot).toMatchObject({ bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' })
+    expect(args.p_debtor_snapshot).toMatchObject({
+      bic: 'NDEASESS',
+      nordea_signer_id: 'NB10000123456',
+      nordea_agreement_id: 'NB123456',
+    })
     expect(args.p_debtor_snapshot).not.toHaveProperty('swedbank_signer_id')
 
     const flat = renderSupplierPaymentBatchFile(batchRow({ debtor_snapshot: args.p_debtor_snapshot }), [
@@ -1367,13 +1413,16 @@ describe('createSupplierPaymentBatch', () => {
     const initiator = flat.match(/<InitgPty>.*?<\/InitgPty>/)![0]
     expect(initiator).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
     expect(initiator).not.toContain('5566778899')
+    const debtor = flat.match(/<Dbtr>.*?<\/Dbtr>/)![0]
+    expect(debtor).toContain('<Othr><Id>NB123456</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
+    expect(debtor).not.toContain('5566778899')
   })
 
   it("leaves a saved Nordea Signer ID out of another bank's snapshot", async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
       { data: companyRow },
-      { data: { ...settingsRow, nordea_signer_id: 'NB10000123456' } }, // ESSESESS: the company moved to SEB
+      { data: { ...settingsRow, nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } }, // ESSESESS: the company moved to SEB
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
@@ -1391,6 +1440,7 @@ describe('createSupplierPaymentBatch', () => {
     expect(result.ok).toBe(true)
     const args = mock.supabase.rpc.mock.calls[0][1] as { p_debtor_snapshot: Record<string, unknown> }
     expect(args.p_debtor_snapshot).not.toHaveProperty('nordea_signer_id')
+    expect(args.p_debtor_snapshot).not.toHaveProperty('nordea_agreement_id')
   })
 })
 

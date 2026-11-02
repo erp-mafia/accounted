@@ -45,7 +45,7 @@ interface Preview {
   excluded: Array<{ id: string; reason: string }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'nordea_signer_id' | 'bankgiro'
+  debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'nordea_signer_id' | 'nordea_agreement_id' | 'bankgiro'
   /** With debtor_missing iban or bic: the paying account (the primary bank account) that lacks it. */
   debtor_account?: PayingAccountSummary
 }
@@ -57,6 +57,7 @@ const DEBTOR_MISSING_MESSAGE = {
   org_number: 'debtor_missing_org',
   swedbank_ids: 'debtor_missing_swedbank',
   nordea_signer_id: 'debtor_missing_nordea',
+  nordea_agreement_id: 'debtor_missing_nordea_agreement',
   bankgiro: 'debtor_missing_bankgiro',
 } as const
 

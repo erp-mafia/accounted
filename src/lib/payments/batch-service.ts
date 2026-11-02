@@ -45,6 +45,7 @@ import type { StatedPayeeSource } from './payee-change'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Debtor, type SupplierPain001Payment } from './pain001-supplier'
 import { resolveBankFileIds } from './initiating-party'
+import { tolerateMissingNordeaAgreementId } from './nordea-agreement-read'
 import { swedbankIso2PaysPayee } from './swedbank'
 import { PAYMENT_ATTEST_GATE } from '@/lib/composition/payment-attest-gate'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -57,6 +58,14 @@ import type {
 } from '@/types'
 
 const log = createLogger('payments/batch-service')
+
+/**
+ * The company_settings columns the pain.001 debtor is resolved from, but
+ * nordea_agreement_id, which resolveBatchDebtor reads beside them while its
+ * migration may still be on its way (tolerateMissingNordeaAgreementId).
+ */
+const DEBTOR_SETTINGS_COLUMNS =
+  'company_name, org_number, city, iban, bic, bankgiro, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id'
 
 type InvoiceRow = BatchInvoiceFacts &
   StatedPayeeSource & {
@@ -99,19 +108,24 @@ export interface BatchDebtor {
    */
   swedbank_signer_id?: string
   swedbank_corporate_pay_id?: string
-  /** Nordea's Signer ID: set for a Nordea debtor only (lib/payments/nordea.ts). */
+  /**
+   * Nordea's Signer ID and CCM agreement id: set for a Nordea debtor only,
+   * and then always both (lib/payments/nordea.ts).
+   */
   nordea_signer_id?: string
+  nordea_agreement_id?: string
 }
 
 /**
  * The company setting a payment file cannot be made without. iban and bic:
  * the paying account (lib/payments/paying-account.ts) has no IBAN, or its
  * bank cannot be named. swedbank_ids: the debtor's bank is Swedbank and its
- * SignerID or Corporate Pay agreement id is missing; nordea_signer_id: the
- * debtor's bank is Nordea and its Signer ID is missing. Both banks refuse a
- * file without them at upload (lib/payments/initiating-party.ts).
+ * SignerID or Corporate Pay agreement id is missing; nordea_signer_id and
+ * nordea_agreement_id: the debtor's bank is Nordea and its Signer ID, or
+ * else its CCM agreement id, is missing. Both banks refuse a file without
+ * them (lib/payments/initiating-party.ts).
  */
-export type DebtorMissing = 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'nordea_signer_id'
+export type DebtorMissing = 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'nordea_signer_id' | 'nordea_agreement_id'
 
 /** A refused debtor: what is missing and, for iban and bic, the paying account that lacks it. */
 export interface DebtorRefusal {
@@ -201,11 +215,15 @@ export async function resolveBatchDebtor(
 ): Promise<DebtorResolution> {
   const [{ data: company }, { data: settings }] = await Promise.all([
     supabase.from('companies').select('name, org_number').eq('id', companyId).single(),
-    supabase
-      .from('company_settings')
-      .select('company_name, org_number, city, iban, bic, bankgiro, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id')
-      .eq('company_id', companyId)
-      .single(),
+    tolerateMissingNordeaAgreementId(
+      () =>
+        supabase
+          .from('company_settings')
+          .select(`${DEBTOR_SETTINGS_COLUMNS}, nordea_agreement_id`)
+          .eq('company_id', companyId)
+          .single(),
+      () => supabase.from('company_settings').select(DEBTOR_SETTINGS_COLUMNS).eq('company_id', companyId).single(),
+    ),
   ])
 
   const paying = await resolvePayingAccount(supabase, companyId, log, { settings: settings ?? null })
@@ -217,7 +235,7 @@ export async function resolveBatchDebtor(
 
   const fileIds = resolveBankFileIds(bic, settings)
   if (!fileIds.ok) return { ok: false, missing: fileIds.missing }
-  const { swedbank, nordeaSignerId } = fileIds.ids
+  const { swedbank, nordeaSignerId, nordeaAgreementId } = fileIds.ids
 
   const bankgiroRaw = settings?.bankgiro ?? ''
   const bankgiro = validateBankgiroNumber(bankgiroRaw) ? bankgiroRaw.replace(/\D/g, '') : null
@@ -237,7 +255,9 @@ export async function resolveBatchDebtor(
             swedbank_corporate_pay_id: swedbank.corporatePayId,
           }
         : {}),
-      ...(nordeaSignerId ? { nordea_signer_id: nordeaSignerId } : {}),
+      ...(nordeaSignerId && nordeaAgreementId
+        ? { nordea_signer_id: nordeaSignerId, nordea_agreement_id: nordeaAgreementId }
+        : {}),
     },
   }
 }
@@ -836,9 +856,10 @@ export function renderSupplierPaymentBatchFile(
  * The pain.001 debtor of a resolved debtor or a stored snapshot, for the
  * batch file and the tax payment file alike, so a bank-assigned id stored in
  * the snapshot always reaches the file. Only a Swedbank batch made since
- * 2026-10-11 has both Swedbank ids, and only a Nordea batch made since
- * crm#1530 the Signer ID; an older snapshot regenerates exactly as it was
- * first downloaded.
+ * 2026-10-11 has both Swedbank ids, only a Nordea batch made since
+ * crm#1530 the Signer ID, and only one made since 2026-11-02 the CCM
+ * agreement id; an older snapshot regenerates exactly as it was first
+ * downloaded.
  */
 export function supplierPain001Debtor(debtor: SupplierPaymentBatchDebtor): SupplierPain001Debtor {
   return {
@@ -853,6 +874,7 @@ export function supplierPain001Debtor(debtor: SupplierPaymentBatchDebtor): Suppl
         ? { signerId: debtor.swedbank_signer_id, corporatePayId: debtor.swedbank_corporate_pay_id }
         : null,
     nordeaSignerId: debtor.nordea_signer_id || null,
+    nordeaAgreementId: debtor.nordea_agreement_id || null,
   }
 }
 

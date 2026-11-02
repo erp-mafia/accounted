@@ -9,7 +9,7 @@ import {
   SWEDBANK_CORPORATE_PAY_ID_PATTERN,
   SWEDBANK_SIGNER_ID_PATTERN,
 } from '@/lib/payments/swedbank'
-import { NORDEA_SIGNER_ID_PATTERN } from '@/lib/payments/nordea'
+import { NORDEA_AGREEMENT_ID_PATTERN, NORDEA_SIGNER_ID_PATTERN } from '@/lib/payments/nordea'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import {
   defaultVatRateForTreatment,
@@ -3855,6 +3855,11 @@ export const UpdateSettingsSchema = z.object({
   nordea_signer_id: bankFileIdSchema(
     NORDEA_SIGNER_ID_PATTERN,
     'Signer ID får bara innehålla bokstäver och siffror, högst 35 tecken',
+  ),
+  // Nordea's CCM agreement id for pain.001 files, Dbtr with SchmeNm BANK (lib/payments/nordea.ts).
+  nordea_agreement_id: bankFileIdSchema(
+    NORDEA_AGREEMENT_ID_PATTERN,
+    'Avtals-ID får bara innehålla bokstäver och siffror, högst 35 tecken',
   ),
   invoice_payment_accounts: InvoicePaymentAccountsSchema.optional(),
   accounting_method: AccountingMethodSchema.optional(),

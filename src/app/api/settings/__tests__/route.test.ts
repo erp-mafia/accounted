@@ -892,6 +892,53 @@ describe('PUT /api/settings', () => {
     expect(findCall('company_settings', 'update')).toBeUndefined()
   })
 
+  // Nordea's CCM agreement id (crm#1530): which agreement Nordea debits under, so owner/admin only.
+  it('saves the Nordea agreement id normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', nordea_agreement_id: 'NB123456' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: ' nb-123 456 ' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ nordea_agreement_id: 'NB123456' })
+  })
+
+  it('rejects a Nordea agreement id change from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: 'NB123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects a Nordea agreement id with other characters than letters and digits', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: 'NB/123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('Avtals-ID får bara innehålla bokstäver och siffror')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
 

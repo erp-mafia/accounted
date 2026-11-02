@@ -180,6 +180,33 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     expect(select?.args[0]).not.toBe('*')
   })
 
+  it("returns Nordea's agreement id, and reads without it while its column is not there yet (crm#1530)", async () => {
+    const withColumn = makeClient({
+      company_members: OWNER,
+      company_settings: { data: { ...STORED, nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } },
+    })
+    mockServiceClient.mockReturnValue(withColumn)
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' })
+
+    // Vercel serves the code before CI applies the migration: 42703 once, then the read without the column.
+    const beforeMigration = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: null, error: { code: '42703', message: 'column company_settings.nordea_agreement_id does not exist' } },
+        { data: STORED },
+      ],
+    })
+    mockServiceClient.mockReturnValue(beforeMigration)
+    const gap = await getSettings(request(BASE), params)
+    expect(gap.status).toBe(200)
+    expect((await gap.json()).data).toMatchObject({ bankgiro: '991-2346', nordea_agreement_id: null })
+    const selects = beforeMigration.calls.filter((c) => c.table === 'company_settings' && c.method === 'select')
+    expect(String(selects[0].args[0])).toContain('nordea_agreement_id')
+    expect(String(selects[1].args[0])).not.toContain('nordea_agreement_id')
+  })
+
   it('a viewer may read', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'viewer' } }, company_settings: { data: STORED } }),
