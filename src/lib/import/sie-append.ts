@@ -218,8 +218,14 @@ export function selectSIEAppendEntries(
       result.invalid.push({ sourceId: entry.sourceId, reason: 'unbalanced' })
       continue
     }
+    // An append holds no numbers for skipped vouchers (crm#1599): its numbers
+    // continue the year's series, and a skipped voucher may be one the books
+    // already hold (cancelled in the source after it was imported), which
+    // only the books could tell. A hold here could document a booked voucher
+    // as never booked.
+    const { numberGap: _held, ...appended } = entry
     const target = options.seriesMap?.[entry.series]
-    result.entries.push(target && target !== entry.series ? { ...entry, series: target } : entry)
+    result.entries.push(target && target !== entry.series ? { ...appended, series: target } : appended)
   }
   return result
 }

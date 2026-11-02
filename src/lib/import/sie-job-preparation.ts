@@ -5,7 +5,8 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
-import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, validateIBBalance } from './sie-import'
+import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, validateIBBalance,
+  type SIEPendingNumberGaps } from './sie-import'
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
 import { dimensionBagKey } from '@/lib/bookkeeping/dimension-carry'
@@ -42,6 +43,8 @@ interface PreparationTotals {
   skippedCounts:{empty:number;unbalanced:number;unmapped:number;singleLine:number;total:number}
   /** An append (sie-append.ts): the file's vouchers left out because the books hold them. */
   append?:SIEAppendCounts
+  /** Skipped vouchers whose number the next group's first booked voucher of the series holds. */
+  pendingNumberGaps?:SIEPendingNumberGaps
 }
 export interface SIEAppendCounts { present:number; possibleDuplicatesSkipped:number; possibleDuplicatesIncluded:number }
 
@@ -323,7 +326,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     validateSIEReportingMappings({...snapshot.parsed,vouchers},accountMap,input.options)
     const prepared = input.options.importTransactions ? prepareSIEVouchers({...snapshot.parsed,vouchers},
       accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,
-        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds}) : null
+        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds,pendingNumberGaps:totals.pendingNumberGaps}) : null
+    if (prepared) totals.pendingNumberGaps = prepared.pendingNumberGaps
     let entries = prepared?.preparedEntries ?? []
     if (append && prepared) {
       const groupStart = sourceOrdinal

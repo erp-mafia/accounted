@@ -103,6 +103,19 @@ describe('planSIEAppend', () => {
     expect(planRequests[0]).toMatchObject({ p_company_id: 'company-1', p_period_id: 'period-2026', p_source_program: 'Fortnox' })
   })
 
+  it('asks the books with the numbers a voucher holds, and adds it without them (crm#1599)', async () => {
+    // A2 cancelled in the source: every row struck, nothing to book.
+    const cancelled = ['#VER A 2 20260305 "Makulerad"', '{', '#BTRANS 1930 {} 200.00', '#BTRANS 3001 {} -200.00', '}']
+    const A3 = ver('A', '3', '20260306', 'Faktura 3', [['1930', '300.00'], ['3001', '-300.00']])
+    const plan = await planSIEAppend(books({ verdicts: { A1: 'present' } }), 'company-1', parseSIEFile(sie(A1, cancelled, A3)), mappings)
+    expect(plan.refusal).toBeNull()
+    // The plan sees the hold: sie_append_plan matches a voucher whose stored
+    // hash kept numberGap (written before the writer left it out) as well.
+    const sent = planRequests.flatMap((r) => r.p_entries as SIEPreparedEntry[])
+    expect(sent.map((e) => [e.sourceId, e.numberGap?.count ?? 0])).toEqual([['A1', 0], ['A3', 1]])
+    expect(plan.counts).toMatchObject({ new: 1, toAdd: 1 })
+  })
+
   it('skips a possible duplicate by default and books it when the user includes it', async () => {
     const parsed = () => parseSIEFile(sie(A1, CARD))
     const config = { verdicts: { A1: 'present', '#2': 'possible_duplicate' } as Record<string, SIEAppendVerdict> }
@@ -203,6 +216,13 @@ describe('selectSIEAppendEntries', () => {
     expect(result.conflicts).toEqual([{ sourceId: 'A2', voucher: 'A1' }])
     expect(result.possibleDuplicatesSkipped).toBe(1)
     expect(result.entries.map((e) => [e.sourceId, e.series])).toEqual([['K4', 'A']])
+  })
+
+  it('writes an appended voucher without numberGap: an append holds no numbers (crm#1599)', () => {
+    const held = { ...entry(51, 'A51'), numberGap: { count: 1, explanation: 'SIE-import: A50 bokfördes inte.' } }
+    const result = selectSIEAppendEntries([held], new Map([[51, row(51, 'new')]]), () => balanced as never, map, {})
+    expect(result.entries.map((e) => e.sourceId)).toEqual(['A51'])
+    expect(result.entries[0]).not.toHaveProperty('numberGap')
   })
 
   it('throws when the books gave no verdict for an entry', () => {
