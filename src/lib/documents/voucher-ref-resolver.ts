@@ -7,7 +7,9 @@
  * the `import_sie_journal_entries` RPC straight from #VER. That pair is the only
  * safe join key back to the old system. Matching on our own `voucher_number`
  * instead silently attaches underlag to the wrong verifikat as soon as the
- * import skipped an empty or unbalanced voucher, which it routinely does.
+ * numbers differ: an import written before crm#1599 closed the gap of every
+ * voucher it skipped (empty, voided, unbalanced), and an append or a
+ * replacement continues the series.
  *
  * Two consumers, one resolution truth:
  *  - the provider migration sweep (Bokio/Fortnox), which knows each attachment's

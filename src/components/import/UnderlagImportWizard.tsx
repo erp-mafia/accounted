@@ -122,10 +122,12 @@ export function setIncludeAll<T extends SelectableRow>(rows: readonly T[], selec
 }
 
 /**
- * The source label, when it differs from our own. The SIE import renumbers
- * per series and skips empty or voided vouchers, so source A46 routinely lands
- * on A45 here. Matching is on the source number (the one the filename carries),
- * so showing only our number reads as "mapped one too low" (crm#122).
+ * The source label, when it differs from our own. An SIE import written
+ * before crm#1599 skipped empty or voided vouchers without holding their
+ * numbers, so source A46 routinely landed on A45 here, and an append or a
+ * replacement continues the series. Matching is on the source number (the
+ * one the filename carries), so showing only our number reads as "mapped one
+ * too low" (crm#122).
  */
 function differingSourceLabel(candidate: UnderlagPlanCandidate): string | null {
   const source = candidate.source_voucher_label
