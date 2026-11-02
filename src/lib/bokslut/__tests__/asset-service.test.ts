@@ -232,7 +232,7 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     opts: {
       postedCount?: number
       otherAssetEntryIds?: string[]
-      accumulatedCredits?: { journal_entry_id: string }[]
+      accumulatedCredits?: { journal_entry_id: string; source_type?: string }[]
       accountingFramework?: AccountingFramework | null
     } = {},
   ) {
@@ -275,32 +275,61 @@ describe('updateAsset: acquisition-basis correction guard', () => {
         }
         if (table === 'journal_entries') {
           // Entries step of the two-step fetch: derive the entry ids from the
-          // line fixtures so the chunked line query has ids to ask for.
-          const entryIds = [
-            ...new Set((opts.accumulatedCredits ?? []).map((l) => l.journal_entry_id)),
-          ]
+          // line fixtures so the chunked line query has ids to ask for, and
+          // apply the source_type exclusion the service puts on this step
+          // (fixtures default to 'manual', i.e. a hand-posted verifikat).
+          const excludedSourceTypes = new Set<string>()
           const chain: Record<string, unknown> = {}
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
+          chain.not = vi.fn((column: string, operator: string, value: string) => {
+            if (column === 'source_type' && operator === 'in') {
+              for (const raw of value.replace(/^\(|\)$/g, '').split(',')) {
+                excludedSourceTypes.add(raw.trim().replace(/^"|"$/g, ''))
+              }
+            }
+            return chain
+          })
           chain.order = vi.fn(() => chain)
           chain.range = vi.fn(() => chain)
-          chain.then = (resolve: (v: unknown) => void) =>
-            resolve({
+          chain.then = (resolve: (v: unknown) => void) => {
+            const sourceTypeById = new Map(
+              (opts.accumulatedCredits ?? []).map((l) => [
+                l.journal_entry_id,
+                l.source_type ?? 'manual',
+              ]),
+            )
+            const entryIds = [...sourceTypeById.entries()]
+              .filter(([, sourceType]) => !excludedSourceTypes.has(sourceType))
+              .map(([id]) => id)
+            return resolve({
               data: entryIds.length > 0 ? entryIds.map((id) => ({ id })) : [{ id: 'entry-none' }],
               error: null,
             })
+          }
           return chain
         }
         if (table === 'journal_entry_lines') {
+          // Lines are fetched for the entry ids the entries step returned, so
+          // the fixtures are filtered by the ids actually asked for.
+          const requestedEntryIds: string[] = []
           const chain: Record<string, unknown> = {}
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
           chain.gt = vi.fn(() => chain)
-          chain.in = vi.fn(() => chain)
+          chain.in = vi.fn((_column: string, ids: string[]) => {
+            requestedEntryIds.push(...ids)
+            return chain
+          })
           chain.order = vi.fn(() => chain)
           chain.range = vi.fn(() => chain)
           chain.then = (resolve: (v: unknown) => void) =>
-            resolve({ data: opts.accumulatedCredits ?? [], error: null })
+            resolve({
+              data: (opts.accumulatedCredits ?? []).filter((l) =>
+                requestedEntryIds.includes(l.journal_entry_id),
+              ),
+              error: null,
+            })
           return chain
         }
         const chain: Record<string, unknown> = {}
@@ -461,6 +490,44 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     })
     expect(result.acquisition_date).toBe('2025-08-15')
     expect(captured.update).toMatchObject({ acquisition_date: '2025-08-15' })
+  })
+
+  it('allows a correction when the only 1259 credits are imported history', async () => {
+    // A migration carries the previous system's avskrivningar in as 'import'
+    // vouchers (and its ingående balans as 'opening_balance') crediting 1259.
+    // Those credits are the asset's opening_accumulated_depreciation, were
+    // never derived from this register's basis, and must not block a
+    // correction. Counting them blocked every asset in a migrated company
+    // from a recategorization forever.
+    const { supabase, captured } = mockForUpdate(makeAssetRow(), {
+      postedCount: 0,
+      otherAssetEntryIds: [],
+      accumulatedCredits: [
+        { journal_entry_id: 'import-entry-1', source_type: 'import' },
+        { journal_entry_id: 'import-ib-1', source_type: 'opening_balance' },
+      ],
+    })
+    const result = await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
+      category: 'equipment',
+    })
+    expect(result.category).toBe('equipment')
+    expect(captured.update).toMatchObject({ category: 'equipment' })
+  })
+
+  it('still blocks when a hand-posted credit sits alongside imported history', async () => {
+    // Excluding imported vouchers must not disarm the scan: a manual
+    // avskrivningsverifikat in the same company still locks the basis.
+    const { supabase } = mockForUpdate(makeAssetRow(), {
+      postedCount: 0,
+      otherAssetEntryIds: [],
+      accumulatedCredits: [
+        { journal_entry_id: 'import-entry-1', source_type: 'import' },
+        { journal_entry_id: 'manual-entry-1', source_type: 'manual' },
+      ],
+    })
+    await expect(
+      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_date: '2025-08-15' }),
+    ).rejects.toBeInstanceOf(AssetCorrectionBlockedError)
   })
 })
 

@@ -350,6 +350,14 @@ export async function hasPostedDepreciation(
 }
 
 /**
+ * Source types that mark an entry as history carried over from a PREVIOUS
+ * system rather than one of Accounted's own postings: a migrated voucher
+ * lands as 'import', a migrated ingående balans as 'opening_balance'
+ * (lib/import/sie-import.ts).
+ */
+const PREVIOUS_SYSTEM_SOURCE_TYPES = ['import', 'opening_balance'] as const
+
+/**
  * Catch depreciation that was posted by hand (a manual avskrivningsverifikat),
  * which leaves no depreciation_schedules row and so slips past
  * hasPostedDepreciation. We look at the ledger instead: any posted CREDIT to
@@ -362,6 +370,16 @@ export async function hasPostedDepreciation(
  * block. What remains is depreciation tied to this asset (engine or manual)
  * plus the rare case of a manual sibling entry on a shared account, there we
  * err toward blocking, which is the safe direction for a basis correction.
+ *
+ * Imported history is excluded from the scan. Credits on 12x9 that arrived
+ * with a migration are the accumulated depreciation the PREVIOUS system
+ * booked, which is exactly what opening_accumulated_depreciation describes.
+ * They were never derived from this register's basis, so changing the basis
+ * cannot desync them and must not be refused over them. Counting them blocks
+ * every asset in a migrated company from a correction forever: one company's
+ * migration left 197 imported credits on 1299, and with no engine schedules
+ * to attribute them to, each one looked like hand-posted depreciation of
+ * whichever asset was being corrected.
  */
 async function hasManualDepreciationPosted(
   supabase: SupabaseClient,
@@ -396,7 +414,10 @@ async function hasManualDepreciationPosted(
       supabase,
       lineColumns: 'journal_entry_id',
       filterEntries: (q: EntryLinesQuery) =>
-        q.eq('company_id', companyId).eq('status', 'posted'),
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .not('source_type', 'in', `(${PREVIOUS_SYSTEM_SOURCE_TYPES.join(',')})`),
       filterLines: (q: EntryLinesQuery) =>
         q.eq('account_number', asset.bas_accumulated_account).gt('credit_amount', 0),
       attachEntriesAs: null,
@@ -457,11 +478,11 @@ export async function updateAsset(
     }
     // Engine-driven (depreciation_schedules) OR hand-posted (ledger): either
     // means the basis has driven postings and a correction must go via storno.
-    // The opening amount is the exception to the ledger scan: it describes
-    // depreciation that IS on the ledger's 12x9 account from the previous
-    // system (imported vouchers or opening balance), so a posted credit there
-    // is expected, not a reason to refuse. Only Accounted's own postings,
-    // which the engine planned from the old opening amount, lock it.
+    // Imported history is not such a posting: a migrated voucher's credit on
+    // the 12x9 account is the previous system's accumulated depreciation, the
+    // very thing opening_accumulated_depreciation describes, and it was never
+    // derived from this register's basis. The ledger scan excludes it, so only
+    // Accounted's own postings lock the acquisition basis.
     if (await hasPostedDepreciation(supabase, companyId, assetId)) {
       throw new AssetCorrectionBlockedError('depreciation_posted')
     }
