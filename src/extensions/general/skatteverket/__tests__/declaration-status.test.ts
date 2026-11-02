@@ -35,12 +35,22 @@ vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: (...a: unknown[]) => mockWriteAudit(...a),
 }))
 
+const mockRecordVatFilingConfirmed = vi.fn()
+const mockSettingsGet = vi.fn()
+const mockSettingsSet = vi.fn()
+vi.mock('@/lib/vat/filing-record-store', () => ({
+  recordVatFilingConfirmed: (...a: unknown[]) => mockRecordVatFilingConfirmed(...a),
+}))
+
 vi.mock('@/lib/extensions/context-factory', () => ({
   createExtensionContext: () => ({
     supabase: {},
     companyId: 'company-1',
     userId: 'user-1',
-    settings: { set: vi.fn().mockResolvedValue(undefined) },
+    settings: {
+      get: (...a: unknown[]) => mockSettingsGet(...a),
+      set: (...a: unknown[]) => mockSettingsSet(...a),
+    },
     log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   }),
 }))
@@ -73,6 +83,8 @@ beforeEach(() => {
     source: 'user',
     tokenUserId: 'user-2',
   })
+  mockRecordVatFilingConfirmed.mockResolvedValue({ record: {}, created: true, changed: true })
+  mockSettingsGet.mockResolvedValue(null)
 })
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.SKATTEVERKET_ENABLED
@@ -245,6 +257,137 @@ describe('fetchVatDeclarationStatus', () => {
     })
     expect(result).toMatchObject({
       ok: false, code: 'SKATTEVERKET_ACCESS_DENIED', http_status: 403,
+    })
+  })
+
+  // crm#1607: an agent signed with BankID, read the kvittens through this
+  // service, and the filing record (Moms page step 4, list_vat_filings) still
+  // waited for the two-hourly kvittens cron.
+  describe('records a locked submission Skatteverket now has on file (crm#1607)', () => {
+    const locked = (extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        status: 'draft_locked',
+        redovisare: '165560000167',
+        redovisningsperiod: '202610',
+        periodType: 'monthly',
+        year: 2026,
+        period: 10,
+        signeringsLank: 'https://skatteverket.se/sign',
+        ...extra,
+      })
+
+    it('a submitted declaration confirms the period at once, not on the next cron run', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockSkvRequestWithAuth.mockResolvedValueOnce(
+        skvJson(200, { kvittensnummer: 'K-1', tidpunkt: '2026-11-02T11:55:43' }),
+      )
+      const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10, state: 'submitted',
+      })
+      expect(result).toMatchObject({ ok: true, submitted: { kvittensnummer: 'K-1' } })
+      expect(mockSettingsGet).toHaveBeenCalledWith('submission_202610')
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledTimes(1)
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(supabase, 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10,
+      })
+    })
+
+    // A locked ändringsdeklaration over a period already on file: the period
+    // is filed (that is what the record says), but the correction is not
+    // signed yet. The stored state is never touched here, so its signing
+    // link stays on the Moms page; flipping it to 'signed' and the kvittens
+    // email stay with the cron.
+    it('never writes the stored state: a locked correction keeps its signing link', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockSkvRequestWithAuth
+        .mockResolvedValueOnce(skvJson(200, { kvittensnummer: 'K-original' }))
+        .mockResolvedValueOnce(skvJson(200, { beslut: 'FASTSTALLT' }))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10,
+      })
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledTimes(1)
+      expect(mockSettingsSet).not.toHaveBeenCalled()
+    })
+
+    it('a beslut alone also confirms it', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(200, { beslut: 'X' }))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10, state: 'decided',
+      })
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledTimes(1)
+    })
+
+    it('the cadence is the one filed, not the one asked: quarterly 1 shares 202603 with monthly 3', async () => {
+      mockSettingsGet.mockResolvedValue(
+        locked({ redovisningsperiod: '202603', periodType: 'monthly', period: 3 }),
+      )
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(200, { skatt: 1 }))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'quarterly', year: 2026, period: 1, state: 'submitted',
+      })
+      expect(mockSettingsGet).toHaveBeenCalledWith('submission_202603')
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(supabase, 'company-1', {
+        periodType: 'monthly', year: 2026, period: 3,
+      })
+    })
+
+    it('yearly is recorded as period 1, as the cron does', async () => {
+      mockResolvePeriodDates.mockResolvedValue({ start: '2025-07-01', end: '2026-06-30' })
+      mockSettingsGet.mockResolvedValue(
+        locked({ redovisningsperiod: '202606', periodType: 'yearly', period: 6 }),
+      )
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(200, { skatt: 1 }))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'yearly', year: 2026, period: 1, state: 'submitted',
+      })
+      expect(mockRecordVatFilingConfirmed).toHaveBeenCalledWith(supabase, 'company-1', {
+        periodType: 'yearly', year: 2026, period: 1,
+      })
+    })
+
+    it.each([
+      ['no stored state (filed outside the app)', null],
+      ['a draft not yet locked', JSON.stringify({ status: 'draft_saved', periodType: 'monthly', year: 2026, period: 10 })],
+      ['an already signed state', JSON.stringify({ status: 'signed', periodType: 'monthly', year: 2026, period: 10 })],
+      ['a locked state from the older routes, without picker params', JSON.stringify({ status: 'draft_locked' })],
+    ])('%s records nothing', async (_label, stored) => {
+      mockSettingsGet.mockResolvedValue(stored)
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(200, { skatt: 1 }))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10, state: 'submitted',
+      })
+      expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+    })
+
+    it('nothing on file at Skatteverket records nothing', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockSkvRequestWithAuth
+        .mockResolvedValueOnce(skvJson(404, {}))
+        .mockResolvedValueOnce(skvJson(404, {}))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10,
+      })
+      expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+    })
+
+    it('an upstream failure records nothing', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(500, {}))
+      await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10,
+      })
+      expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+    })
+
+    it('a failed record write never fails the status answer', async () => {
+      mockSettingsGet.mockResolvedValue(locked())
+      mockRecordVatFilingConfirmed.mockRejectedValueOnce(new Error('db down'))
+      mockSkvRequestWithAuth.mockResolvedValueOnce(skvJson(200, { skatt: 1 }))
+      const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 10, state: 'submitted',
+      })
+      expect(result).toMatchObject({ ok: true, submitted: { skatt: 1 } })
     })
   })
 })
