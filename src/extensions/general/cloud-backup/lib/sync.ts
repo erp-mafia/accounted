@@ -283,6 +283,22 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       .order('id', { ascending: true })
       .range(from, to)
   )
+  // Inline rättelse and dimension retag rewrite lines without touching the
+  // entry row, so their logs are what tell a year archive its lines changed.
+  const lineChanges = (
+    await Promise.all(
+      (['journal_entry_rattelse_log', 'dimension_retag_log'] as const).map((table) =>
+        fetchAllRows<{ journal_entry_id: string; created_at: string }>(({ from, to }) =>
+          supabase
+            .from(table)
+            .select('journal_entry_id, created_at')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      )
+    )
+  ).flat()
   const latestAuditAt = await fetchLatestAuditAt(supabase, companyId)
 
   const entryToPeriod = new Map(entries.map((e) => [e.id, e.fiscal_period_id]))
@@ -309,6 +325,15 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     stats.entryCount++
     if (entry.updated_at && entry.updated_at > stats.maxEntryUpdated) {
       stats.maxEntryUpdated = entry.updated_at
+    }
+  }
+  // A line change counts as a change to its entry: only one newer than every
+  // entry update moves the fingerprint, so other years keep theirs.
+  for (const change of lineChanges) {
+    const periodId = entryToPeriod.get(change.journal_entry_id)
+    const stats = periodId ? statsByPeriod.get(periodId) : undefined
+    if (stats && change.created_at > stats.maxEntryUpdated) {
+      stats.maxEntryUpdated = change.created_at
     }
   }
   const baseStats = emptyStats()
@@ -430,8 +455,15 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     companyId,
     keys.lastSync
   )
+  // File state only counts for the destination it was written to. After the
+  // user trashed the folder (Drive makes a new one), reconnected another
+  // account, or the company was renamed (a new Dropbox path), every file is
+  // missing there and must be uploaded again, not skipped as unchanged.
+  const sameDestination =
+    previous?.folder_id === target.folderId &&
+    (!previous.account_email || previous.account_email === current.account_email)
   const stateByKey = new Map<string, CloudFileState>()
-  for (const file of previous?.files ?? []) {
+  for (const file of sameDestination ? (previous.files ?? []) : []) {
     stateByKey.set(fileKey(file), file)
   }
 
@@ -441,6 +473,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       at: new Date().toISOString(),
       folder_id: target.folderId,
       web_view_link: target.webViewLink,
+      account_email: current.account_email,
       files,
       total_size_bytes: files.reduce((sum, f) => sum + f.size_bytes, 0),
     }
