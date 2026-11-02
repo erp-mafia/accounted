@@ -116,6 +116,21 @@ describe('evaluateInvoiceForBatch', () => {
     expect(result.eligible && result.defaults.payment_date).toBe('2026-08-20')
   })
 
+  it('pays a weekend or holiday due date on the banking day before it, never after (crm#1595)', () => {
+    // A bank pays a non-banking day on the next banking day: a Saturday due
+    // date paid on Monday is paid late.
+    const due = (due_date: string, today: string) => {
+      const result = evaluateInvoiceForBatch(invoice({ due_date }), supplier, { today })
+      return result.eligible ? result.defaults.payment_date : null
+    }
+    expect(due('2026-11-07', '2026-11-02')).toBe('2026-11-06') // Saturday: Friday
+    expect(due('2026-11-08', '2026-11-02')).toBe('2026-11-06') // Sunday: Friday
+    expect(due('2026-12-25', '2026-12-01')).toBe('2026-12-23') // juldagen: julafton is no banking day either
+    expect(due('2026-11-06', '2026-11-02')).toBe('2026-11-06') // a banking day stays
+    expect(due('2026-11-07', '2026-11-06')).toBe('2026-11-06') // its Friday is today: today
+    expect(due('2026-11-08', '2026-11-07')).toBe('2026-11-07') // its Friday has passed: today, as an overdue invoice
+  })
+
   it('defaults the payment date to today when the due date has passed', () => {
     const result = evaluateInvoiceForBatch(
       invoice({ due_date: '2026-07-07', status: 'overdue' }),

@@ -35,6 +35,13 @@ interface UseInboxPrefillParams {
   /** Called for each scalar form field the extraction filled (settle tint hosts). */
   onFieldPrefilled?: (field: string) => void
   /**
+   * The total the document bills (its Att betala), for the editor's
+   * Fakturabelopp: what switches öresavrundning on when the lines' total
+   * rounds to it. Every arrival path gets it, the inbox item as well as the
+   * upload (crm#1595).
+   */
+  onInvoiceTotal?: (total: number) => void
+  /**
    * The cost account every read line starts on (the Inkorg's booking plan:
    * the account of what was bought). Without it a line's account stays
    * empty for the person or the supplier default.
@@ -69,6 +76,7 @@ export function useInboxPrefill({
   toast,
   t,
   onFieldPrefilled,
+  onInvoiceTotal,
   prefillAccount = null,
   accrualThresholdFor,
 }: UseInboxPrefillParams) {
@@ -194,6 +202,8 @@ export function useInboxPrefill({
         )
         onFieldPrefilled?.('items')
       }
+      const total = extracted.totals?.total
+      if (typeof total === 'number' && Number.isFinite(total)) onInvoiceTotal?.(total)
 
       // Treat the AI prefill as the new baseline: otherwise the unsaved-
       // changes prompt fires the moment the user navigates away, even if
@@ -203,7 +213,7 @@ export function useInboxPrefill({
       setApplyCount((c) => c + 1)
       return true
     },
-    [setValue, replace, reset, getValues, onFieldPrefilled, prefillAccount],
+    [setValue, replace, reset, getValues, onFieldPrefilled, onInvoiceTotal, prefillAccount],
   )
 
   // One-shot: load inbox item and prefill form. Runs after suppliers are

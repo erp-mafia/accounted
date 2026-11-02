@@ -33,7 +33,7 @@ import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 export interface PreparePaymentOrdersInput {
   supplierInvoiceIds: string[]
   cashAccountId: string
-  /** YYYY-MM-DD. Defaults per invoice: the due date, or today when it has passed. */
+  /** YYYY-MM-DD. Defaults per invoice: the due date, the banking day before it on a weekend or holiday, or today when that has passed. */
   executionDate?: string | null
   /** Invoice ids where the person chose the account the invoice states over the supplier card. */
   useStatedPayeeFor?: string[]

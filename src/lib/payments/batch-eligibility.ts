@@ -17,6 +17,7 @@
  */
 
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { bankDayOnOrBeforeIso } from './bank-days'
 import type { PayeeHold } from './payee-change'
 import {
   resolvePaymentReference,
@@ -114,6 +115,18 @@ export type BatchInvoiceEvaluation =
     }
   | { eligible: false; reason: BatchExclusionReason }
 
+/**
+ * The day a supplier invoice is paid unless someone picks another: its due
+ * date, or the last banking day before it when it falls on a weekend or
+ * holiday. A bank pays a non-banking day on the next banking day, which is
+ * after the due date (crm#1595). A due date that has passed, or whose banking
+ * day has, pays as soon as the bank can execute: today.
+ */
+export function defaultPaymentDate(dueDate: string, today: string): string {
+  const onOrBefore = bankDayOnOrBeforeIso(dueDate)
+  return onOrBefore > today ? onOrBefore : today
+}
+
 export function evaluateInvoiceForBatch(
   invoice: BatchInvoiceFacts,
   supplier: SupplierPayeeSource & { city?: string | null },
@@ -150,9 +163,7 @@ export function evaluateInvoiceForBatch(
     eligible: true,
     defaults: {
       amount: roundOre(invoice.remaining_amount),
-      // A due date in the future is honored; a passed one pays as soon as the
-      // bank can execute.
-      payment_date: invoice.due_date > options.today ? invoice.due_date : options.today,
+      payment_date: defaultPaymentDate(invoice.due_date, options.today),
     },
     payee: resolution.payee,
     reference,

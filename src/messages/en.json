@@ -16184,7 +16184,7 @@
     "confirm_and_sign": "Confirm and sign",
     "title_confirm": "Confirm the payee account",
     "account_from": "From",
-    "date_default": "Payment date: the due date, at the earliest the next banking day",
+    "date_default": "Payment date: the due date, or the banking day before it when it falls on a weekend or holiday, at the earliest the next banking day",
     "date_chosen": "Payment date: {date} for all",
     "change_date": "Change",
     "reset_date": "Per invoice",
