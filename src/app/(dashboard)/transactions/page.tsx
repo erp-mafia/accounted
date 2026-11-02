@@ -67,6 +67,7 @@ import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
+  HistoryFilter,
   SourceFilter,
   CategorizeHandler,
   PotentialVoucher,
@@ -496,6 +497,7 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mode, setMode] = useState<ViewMode>('inbox')
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
@@ -974,16 +976,20 @@ export default function TransactionsPage() {
   // rows merged in for the inbox would otherwise render as sparse, gap-ridden
   // months below the window and read as missing bookkeeping. Same-date rows at
   // the boundary may slip in; they are real rows of that date, so harmless.
+  // Under Ignorerade every ignored row in state shows, window or not: that
+  // list is sparse by nature and reads as nothing missing.
   const historyTransactions = useMemo(
     () =>
       transactions.filter(
         (t) =>
-          (!pagedThroughDate || t.date >= pagedThroughDate) &&
+          (!pagedThroughDate ||
+            t.date >= pagedThroughDate ||
+            (historyFilter === 'ignored' && t.is_ignored)) &&
           // Server-side scope catches up on refetch; this keeps the view
           // correct in the transition frame after a filter change.
           isWithinBounds(t.date, periodBounds),
       ),
-    [transactions, pagedThroughDate, periodBounds],
+    [transactions, pagedThroughDate, periodBounds, historyFilter],
   )
 
   // SKV rows shown in the history view, narrowed to the active period. The
@@ -1341,7 +1347,7 @@ export default function TransactionsPage() {
         return { data: ((data ?? []) as TransactionWithInvoice[]).map(withLivePointer) }
       }
 
-      const [{ data: txData, error: txError }, pendingRows] = await Promise.all([
+      const [{ data: txData, error: txError }, pendingRows, ignoredRows] = await Promise.all([
         // A refresh after "Visa fler" reloads the whole window the user paged
         // through. One request is cut at 1,000 rows, which shrank a larger
         // window and hid the button although older rows remained, so the
@@ -1369,6 +1375,29 @@ export default function TransactionsPage() {
           console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
           return null
         }),
+        // Alla → Ignorerade promises every ignored row of the period, the
+        // place the ignore texts send users to restore one (crm#1612), so
+        // they all load, not only those inside the window. They are few.
+        fetchAllRows<TransactionWithInvoice>(({ from, to }) => {
+          let ignoredQuery = supabase
+            .from('transactions')
+            .select(TRANSACTION_WINDOW_SELECT)
+            .eq('company_id', companyId)
+            .eq('is_ignored', true)
+          if (periodBounds) {
+            ignoredQuery = ignoredQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+          }
+          return ignoredQuery
+            .order('date', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, to)
+        }).then(
+          (rows) => rows.map(withLivePointer),
+          (error: unknown) => {
+            console.error('[transactions] ignored rows fetch failed; Ignorerade may be missing older rows', error)
+            return null
+          },
+        ),
       ])
 
       // A newer fetch (scope change, refresh) started while this one was in
@@ -1381,16 +1410,19 @@ export default function TransactionsPage() {
         return
       }
 
-      if (pendingRows === null) {
-        // Partial load: the windowed rows render, but older pending rows are
-        // absent. Say so instead of presenting a complete-looking inbox.
+      if (pendingRows === null || ignoredRows === null) {
+        // Partial load: the windowed rows render, but older pending (or
+        // ignored) rows are absent. Say so instead of presenting a
+        // complete-looking list.
         toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
       }
 
       const rows = txData || []
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
-      const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
+      // Never pending (the backlog excludes ignored rows), so no overlap there.
+      const olderIgnored = (ignoredRows ?? []).filter((r) => !windowIds.has(r.id))
+      const allRows = [...rows, ...olderPending, ...olderIgnored].sort((a, b) => b.date.localeCompare(a.date))
       const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
         fetchPotentialMatches(supabase, companyId, allRows),
         fetchExpensePayoutMatches(supabase, companyId, allRows),
@@ -1877,6 +1909,9 @@ export default function TransactionsPage() {
       ? tx.is_business !== null || tx.is_ignored
       : Boolean(skvRow?.journal_entry_id || skvRow?.is_ignored)
     if (outsideInbox && mode === 'inbox') setMode('history')
+    // The history chip must show it too: an ignored row lives under
+    // Ignorerade, which also reaches past the loaded window (crm#1612).
+    if (outsideInbox) setHistoryFilter(tx?.is_ignored ? 'ignored' : 'all')
 
     // A deep link must land on a visible row: when the remembered source
     // filter would hide the highlighted transaction, widen to 'all' in
@@ -2485,12 +2520,12 @@ export default function TransactionsPage() {
   async function handleIgnoreTransaction(tx: TransactionWithInvoice) {
     // Mirrors BankReconciliationView's ignore flow: Ignorera is fully
     // reversible, but the row vanishes immediately: confirmation before the
-    // write plus an Ångra toast gives two recovery affordances. The
-    // "Ignorerade transaktioner" card on Rapporter → Bankavstämning is the
-    // standing third.
+    // write plus an Ångra toast gives two recovery affordances. Alla →
+    // Ignorerade on this page (Återställ per row) is the standing third, and
+    // the account's Ignorerade band under Konton a fourth (crm#1612).
     const ok = await confirm({
       title: 'Ignorera transaktionen?',
-      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
+      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den när som helst under Alla → Ignorerade.`,
       confirmLabel: 'Ignorera',
       cancelLabel: 'Avbryt',
       variant: 'warning',
@@ -4002,15 +4037,21 @@ export default function TransactionsPage() {
     }
     setBatchProgress(null)
     if (failed === 0) {
-      // Restore lives where the rows now live: Bankavstämning for bank rows,
-      // the Skattekonto page for skattekonto rows.
+      // Restore lives where the rows now live: Alla → Ignorerade on this page
+      // for bank rows, the Skattekonto page for skattekonto rows.
       toast({
         title: t('batch_done_title'),
         description: t('batch_ignore_done_description', { count: successes }),
         action:
           ignoredBank.size > 0 ? (
-            <ToastAction altText={t('batch_ignore_open_reconciliation_alt')} asChild>
-              <Link href="/reconciliation">{t('batch_ignore_open_reconciliation')}</Link>
+            <ToastAction
+              altText={t('batch_ignore_show_ignored_alt')}
+              onClick={() => {
+                setHistoryFilter('ignored')
+                setMode('history')
+              }}
+            >
+              {t('batch_ignore_show_ignored')}
             </ToastAction>
           ) : (
             <ToastAction altText={t('batch_ignore_open_skattekonto_alt')} asChild>
@@ -4831,6 +4872,9 @@ export default function TransactionsPage() {
           exitingIds={exitingIds}
           searchTerm={searchTerm}
           sourceFilter={effectiveSourceFilter}
+          filter={historyFilter}
+          onFilterChange={setHistoryFilter}
+          onUnignore={(id) => void handleUnignoreTransaction(id)}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
@@ -4848,8 +4892,8 @@ export default function TransactionsPage() {
       )}
 
       {/* Footer status line (concept): what the current scope hides, the
-          bank sync status (silent while healthy) and the Bankavstämning path
-          (the ignore flows point users there). The count of rows to handle
+          bank sync status (silent while healthy) and the way to Konton, where
+          each bank account is reconciled. The count of rows to handle
           lives on the segment chip and the sync action in the header split
           button, so neither repeats here. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
@@ -4875,10 +4919,10 @@ export default function TransactionsPage() {
         )}
         <BankSyncStatusChip />
         <Link
-          href="/reconciliation"
+          href="/accounts"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
-          Bankavstämning →
+          {t('footer_accounts_link')}
         </Link>
       </div>
 

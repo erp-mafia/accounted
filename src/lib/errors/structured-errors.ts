@@ -1051,9 +1051,9 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TRANSACTION_MOVE_BOOKED: {
     httpStatus: 409,
     message_sv:
-      'Transaktionen är bokförd eller kopplad till en verifikation och kan inte flyttas till ett annat konto. Koppla bort den under Rapporter → Bankavstämning, eller storna verifikationen först.',
+      'Transaktionen är bokförd eller kopplad till en verifikation och kan inte flyttas till ett annat konto. Koppla bort den under Konton, på bankkontot, eller storna verifikationen först.',
     message_en:
-      'The transaction is booked or linked to a voucher and cannot be moved to another account. Unlink it under Reports → Bank reconciliation, or reverse (storno) the voucher first.',
+      'The transaction is booked or linked to a voucher and cannot be moved to another account. Unlink it under Accounts, on the bank account, or reverse (storno) the voucher first.',
   },
   TRANSACTION_MOVE_UNKNOWN_ACCOUNT: {
     httpStatus: 404,
@@ -4965,9 +4965,9 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   TRANSACTION_DELETE_BOOKED: {
     httpStatus: 409,
     message_sv:
-      'Transaktionen är redan bokförd eller kopplad till en verifikation och kan inte raderas. Koppla bort den under Rapporter → Bankavstämning om kopplingen är fel, eller storna verifikationen.',
+      'Transaktionen är redan bokförd eller kopplad till en verifikation och kan inte raderas. Koppla bort den under Konton, på bankkontot, om kopplingen är fel, eller storna verifikationen.',
     message_en:
-      'The transaction is already booked or linked to a journal entry and cannot be deleted. Unlink it under Reports → Bank reconciliation if the link is wrong, or reverse (storno) the voucher.',
+      'The transaction is already booked or linked to a journal entry and cannot be deleted. Unlink it under Accounts, on the bank account, if the link is wrong, or reverse (storno) the voucher.',
   },
   TRANSACTION_DELETE_IMPORTED: {
     httpStatus: 409,
@@ -4979,9 +4979,9 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   TRANSACTION_DELETE_HAS_AUDIT_TRAIL: {
     httpStatus: 409,
     message_sv:
-      'Transaktionen kan inte raderas eftersom den har en kopplad matchningshistorik (räkenskapsinformation, BFL 7 kap.). Matcha den mot en befintlig verifikation, eller ignorera den under Rapporter → Bankavstämning om du inte vill bokföra den.',
+      'Transaktionen kan inte raderas eftersom den har en kopplad matchningshistorik (räkenskapsinformation, BFL 7 kap.). Matcha den mot en befintlig verifikation, eller ignorera den under Transaktioner om du inte vill bokföra den.',
     message_en:
-      'The transaction cannot be deleted because it has linked match-history records (accounting information, BFL ch. 7). Match it to an existing voucher, or ignore it under Reports → Bank reconciliation if you do not want to book it.',
+      'The transaction cannot be deleted because it has linked match-history records (accounting information, BFL ch. 7). Match it to an existing voucher, or ignore it under Transactions if you do not want to book it.',
   },
   TRANSACTION_DELETE_FAILED: {
     httpStatus: 500,

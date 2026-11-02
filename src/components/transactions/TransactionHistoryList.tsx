@@ -1,6 +1,5 @@
 'use client'
 
-import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +18,10 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
+import {
+  bankRowMatchesHistoryFilter,
+  skattekontoRowMatchesHistoryFilter,
+} from '@/lib/transactions/history-filter'
 import {
   ArrowsRightLeftIcon,
   BuildingLibraryIcon,
@@ -58,6 +61,12 @@ interface TransactionHistoryListProps {
   /** Page-level source chip selection (the toolbar ContextPicker on
    *  /transactions, shared with the inbox mode). */
   sourceFilter: SourceFilter
+  /** The Alla/Företag/Privat/Ignorerade chip. Held by the page so the ignore
+   *  toast can open Ignorerade directly. */
+  filter: HistoryFilter
+  onFilterChange: (filter: HistoryFilter) => void
+  /** Restore an ignored bank row (DELETE /api/transactions/[id]/ignore). */
+  onUnignore?: (id: string) => void
   /** Underlag status per journal_entry_id (computeJeUnderlagStatus): drives
    *  the per-row "Underlag"/"Underlag saknas" badges on booked rows. */
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
@@ -86,7 +95,8 @@ interface TransactionHistoryListProps {
  * "Alla" view: every transaction (booked and not), rendered in the same
  * dry-table language as the inbox so the two modes read as one page.
  * Bokförd is the normal state (muted text); an unbooked row shows its
- * action (Bokför, Matcha) and nothing else, one signal per row.
+ * action (Bokför, Matcha) and nothing else, one signal per row; an ignored
+ * row says Ignorerad and offers Återställ.
  */
 export default function TransactionHistoryList({
   transactions,
@@ -94,6 +104,9 @@ export default function TransactionHistoryList({
   exitingIds,
   searchTerm = '',
   sourceFilter,
+  filter,
+  onFilterChange,
+  onUnignore,
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
@@ -109,11 +122,8 @@ export default function TransactionHistoryList({
   giroCounterpartyFor,
 }: TransactionHistoryListProps) {
   const t = useTranslations('tx_history')
-  const [filter, setFilter] = useState<HistoryFilter>('all')
 
-  // The bank/private filter doesn't apply to SKV rows: they have no
-  // is_business flag. So when the filter is 'business' or 'private' we
-  // implicitly hide SKV.
+  // Which chip shows which row: lib/transactions/history-filter.
   const bankFiltered = transactions.filter((tx) => {
     if (
       sourceFilter.startsWith('acct:') &&
@@ -123,15 +133,11 @@ export default function TransactionHistoryList({
     }
     if (sourceFilter === 'bank:other' && tx.cash_account_id != null) return false
     const matchesSearch = tx.description.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesFilter =
-      filter === 'all' ||
-      (filter === 'business' && tx.is_business === true) ||
-      (filter === 'private' && tx.is_business === false)
-    return matchesSearch && matchesFilter
+    return matchesSearch && bankRowMatchesHistoryFilter(tx, filter)
   })
 
   const skvFiltered = skvRows.filter((r) => {
-    if (filter !== 'all') return false
+    if (!skattekontoRowMatchesHistoryFilter(r, filter)) return false
     return r.transaktionstext.toLowerCase().includes(searchTerm.toLowerCase())
   })
 
@@ -159,15 +165,16 @@ export default function TransactionHistoryList({
     { key: 'all', labelKey: 'filter_all' },
     { key: 'business', labelKey: 'filter_business' },
     { key: 'private', labelKey: 'filter_private' },
+    { key: 'ignored', labelKey: 'filter_ignored' },
   ]
 
   return (
     <div className="space-y-4">
-      {/* Business/private seg; the source chip lives in the page toolbar. */}
+      {/* Business/private/ignored seg; the source chip lives in the page toolbar. */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={filter}
-          onChange={setFilter}
+          onChange={onFilterChange}
           options={FILTERS.map(({ key, labelKey }) => ({ value: key, label: t(labelKey) }))}
         />
       </div>
@@ -176,7 +183,9 @@ export default function TransactionHistoryList({
         <DataListEmpty
           icon={<ArrowsRightLeftIcon className="h-6 w-6" />}
           title={t('empty_title')}
-          description={searchTerm ? t('empty_search') : t('empty_filter')}
+          description={
+            searchTerm ? t('empty_search') : filter === 'ignored' ? t('empty_ignored') : t('empty_filter')
+          }
         />
       ) : (
         /* Negative margin + matching padding: keeps the columns flush with
@@ -206,6 +215,7 @@ export default function TransactionHistoryList({
                     onDetachDocument={onDetachDocument}
                     onOpenMatchVoucher={onOpenMatchVoucher}
                     onDelete={onDelete}
+                    onUnignore={onUnignore}
                     giroCounterparty={giroCounterpartyFor?.(item.data) ?? null}
                   />
                 ) : (
@@ -225,9 +235,10 @@ export default function TransactionHistoryList({
       {/* Pagination pages BANK rows: keep it reachable whenever more exist,
           even when the current page has no rows matching an acct:/bank:other
           scope (filtered.length would hide the only way to older matches),
-          and drop it for the skattekonto scope where it cannot change the
+          and drop it for the skattekonto scope and under Ignorerade (the page
+          loads every ignored row of the period) where it cannot change the
           visible list. */}
-      {hasMore && onLoadMore && !searchTerm && sourceFilter !== 'skatteverket' && (
+      {hasMore && onLoadMore && !searchTerm && sourceFilter !== 'skatteverket' && filter !== 'ignored' && (
         <div className="flex justify-center">
           <Button variant="outline" onClick={onLoadMore} loading={isLoadingMore}>
             {isLoadingMore ? t('loading_more') : t('load_more')}
@@ -248,6 +259,7 @@ function BankHistoryRow({
   onDetachDocument,
   onOpenMatchVoucher,
   onDelete,
+  onUnignore,
   giroCounterparty = null,
 }: {
   transaction: TransactionWithInvoice
@@ -260,6 +272,7 @@ function BankHistoryRow({
   onDetachDocument?: (transaction: TransactionWithInvoice) => void
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
+  onUnignore?: (id: string) => void
 }) {
   const t = useTranslations('tx_history')
   const tDetach = useTranslations('tx_detach')
@@ -283,8 +296,11 @@ function BankHistoryRow({
   // ignore-only. Mirrors the server guard in DELETE /api/transactions/[id].
   const canDelete = !isBooked && !isImportedTransaction(transaction)
   const isLinkedToInvoice = !!transaction.invoice_id
+  // Ignored: neither booked nor waiting. It says so and offers Återställ
+  // instead of Bokför (crm#1612); booking or matching it starts by restoring.
+  const isIgnored = transaction.is_ignored === true && !isBooked
   const hasInvoiceMatch =
-    !isLinkedToInvoice && !!transaction.potential_invoice && !isBooked
+    !isLinkedToInvoice && !!transaction.potential_invoice && !isBooked && !isIgnored
 
   // Underlag status: see computeJeUnderlagStatus. Unknown/not-yet-loaded JE
   // renders neither badge (no false "saknas" flash while the enrichment loads).
@@ -301,7 +317,7 @@ function BankHistoryRow({
   })
   // Same affordance as the inbox card: an unbooked row may need to be linked
   // to an already-booked voucher (e.g. the other leg of a transfer).
-  const showMatchVoucherItem = canWrite && !isBooked && !!onOpenMatchVoucher
+  const showMatchVoucherItem = canWrite && !isBooked && !isIgnored && !!onOpenMatchVoucher
   const correctionEntryId = isBooked && canWrite ? primaryEntryId : null
   const showOverflowMenu =
     hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showDetachItem || showMatchVoucherItem
@@ -411,6 +427,19 @@ function BankHistoryRow({
                   </Link>
                 )
               })}
+            </>
+          ) : isIgnored ? (
+            <>
+              <span className="text-muted-foreground">{t('ignored_badge')}</span>
+              {canWrite && onUnignore && (
+                <button
+                  type="button"
+                  className={QUIET_LINK_CLASS}
+                  onClick={() => onUnignore(transaction.id)}
+                >
+                  {t('unignore')}
+                </button>
+              )}
             </>
           ) : isPrivate ? (
             <span className="text-muted-foreground">{t('private_badge')}</span>

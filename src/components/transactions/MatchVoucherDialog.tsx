@@ -270,7 +270,7 @@ export function MatchVoucherDialog({
         {accountFallback && (
           <p className="text-xs text-muted-foreground">
             Avstämning mot 1930. Hör transaktionen till ett annat bankkonto? Stäm av
-            det under Rapporter → Bankavstämning.
+            det under Konton.
           </p>
         )}
 
