@@ -378,6 +378,7 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
   ],
   continue: [
     'POST /api/attest/:token/decision',
+    'POST /api/attest/lista/:token/decisions',
     'POST /api/betala/:token/signing',
     'POST /api/betala/:token/signing/:id/poll',
     'POST /api/betala/:token/signing/:id/restart',

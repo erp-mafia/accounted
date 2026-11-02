@@ -44,6 +44,7 @@ import {
   type AttestationRecord,
   type AttestDecision,
   type AttestInvoiceFacts,
+  type AttestLevels,
   type AttestPolicy,
   type AttestProgress,
   type AttestSource,
@@ -580,6 +581,52 @@ export async function loadAttestPeople(service: SupabaseClient, userIds: string[
   return people
 }
 
+export interface AttestViewer {
+  may_approve: boolean
+  may_reject: boolean
+  /** Why not, when the person may not decide: already_approved, not_pending, already_given, not_member, or the rules' reason. */
+  reason: string | null
+}
+
+/**
+ * What `userId` may do with the invoice now: approve, reject, or why
+ * neither. The invoice page and both mail link pages read it, so a page
+ * never offers a decision the service would refuse. `members` are the
+ * company's members who keep the books; `levels` the limits and the key the
+ * decision would come through.
+ */
+export function attestViewerOf(
+  policy: AttestPolicy,
+  accountingMethod: string | null,
+  invoice: AttestInvoiceFacts & { status: string; approved_at: string | null },
+  attestations: readonly AttestationRecord[],
+  userId: string,
+  members: ReadonlySet<string>,
+  levels: AttestLevels,
+): AttestViewer {
+  const activeMembers = policy.enabled ? members : undefined
+  const pending = canApproveSupplierInvoice(invoice)
+  const approval = pending ? ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, activeMembers, levels) : null
+  const rejection = pending ? ruleOnRejection(policy, accountingMethod, invoice, userId, activeMembers) : null
+  const isWriter = members.has(userId)
+  const reason = !pending
+    ? invoice.approved_at
+      ? 'already_approved'
+      : 'not_pending'
+    : approval?.kind === 'refused'
+      ? approval.code === 'ATTEST_ALREADY_GIVEN'
+        ? 'already_given'
+        : approval.reason
+      : !isWriter
+        ? 'not_member'
+        : null
+  return {
+    may_approve: !!approval && approval.kind !== 'refused' && isWriter,
+    may_reject: !!rejection && rejection.kind !== 'refused' && isWriter,
+    reason,
+  }
+}
+
 /**
  * Where the attest of one invoice stands, for the invoice page, the mail's
  * link page and GET .../supplier-invoices/:id/attestations: the policy as it
@@ -611,25 +658,7 @@ export async function getSupplierInvoiceAttestState(
   ])
   const person = (id: string): AttestPerson => people.get(id) ?? { user_id: id, name: null, email: null }
 
-  const pending = canApproveSupplierInvoice(invoice)
-  const approval = pending
-    ? ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, activeMembers, { limits, ...attestKey() })
-    : null
-  const rejection = pending ? ruleOnRejection(policy, accountingMethod, invoice, userId, activeMembers) : null
-  const isWriter = members.has(userId)
-  const mayApprove = !!approval && approval.kind !== 'refused' && isWriter
-  const mayReject = !!rejection && rejection.kind !== 'refused' && isWriter
-  const reason = !pending
-    ? invoice.approved_at
-      ? 'already_approved'
-      : 'not_pending'
-    : approval?.kind === 'refused'
-      ? approval.code === 'ATTEST_ALREADY_GIVEN'
-        ? 'already_given'
-        : approval.reason
-      : !isWriter
-        ? 'not_member'
-        : null
+  const viewer = attestViewerOf(policy, accountingMethod, invoice, attestations, userId, members, { limits, ...attestKey() })
   const rejected = latestRejection(attestations)
   const attested = !!invoice.approved_at
 
@@ -665,7 +694,7 @@ export async function getSupplierInvoiceAttestState(
         decided_at: a.decided_at,
         step: a.step ?? null,
       })),
-      viewer: { may_approve: mayApprove, may_reject: mayReject, reason },
+      viewer,
     },
   }
 }

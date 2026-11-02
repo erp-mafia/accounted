@@ -116,6 +116,7 @@ const RETAINED = new Set([
   'booking_review_stamps.reviewed_by', // Who reviewed and booked a verifikat a booking review rule matched; the company keeps the record.
   'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
   'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
+  'supplier_invoice_attest_batches.attester_user_id', // The attester a batched attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.
   'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
   'supplier_payee_confirmations.decided_by', // Who confirmed or rejected a supplier account; the company keeps the payment control record.

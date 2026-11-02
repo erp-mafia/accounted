@@ -5,7 +5,9 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { NO_ATTEST_POLICY, paymentWaitsForAttest, type AttestInvoiceFacts, type AttestLimits, type AttestPolicy } from './attest-policy'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { NO_ATTEST_POLICY, paymentWaitsForAttest, type AttestationRecord, type AttestInvoiceFacts, type AttestLimits, type AttestPolicy } from './attest-policy'
 import { companyAttestsSupplierInvoices } from './lifecycle'
 
 export const POLICY_COLUMNS = 'company_id, enabled, threshold_amount, mode, attesters, preparer_may_attest, two_step_from_sek, updated_by, updated_at'
@@ -110,4 +112,36 @@ export async function loadCompanyAttestsSupplierInvoices(supabase: SupabaseClien
   const { data, error } = await supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle()
   if (error) return true
   return companyAttestsSupplierInvoices((data as { accounting_method?: string | null } | null)?.accounting_method ?? null)
+}
+
+/**
+ * Every decision on the invoices, by invoice id, oldest first. Paged
+ * (fetchAllRows: PostgREST caps one read at 1000 rows) and ordered by
+ * decided_at, so a long trail never loses its latest rejection. Throws on a
+ * failed read.
+ */
+export async function loadAttestTrails(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceIds: readonly string[],
+): Promise<Map<string, AttestationRecord[]>> {
+  const trails = new Map<string, AttestationRecord[]>()
+  for (const part of chunk([...new Set(invoiceIds)], 150)) {
+    const rows = await fetchAllRows<AttestationRecord & { supplier_invoice_id: string }>(({ from, to }) =>
+      supabase
+        .from('supplier_invoice_attestations')
+        .select('id, supplier_invoice_id, user_id, decision, comment, source, decided_at')
+        .eq('company_id', companyId)
+        .in('supplier_invoice_id', part)
+        .order('decided_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const row of rows) {
+      const trail = trails.get(row.supplier_invoice_id) ?? []
+      trail.push(row)
+      trails.set(row.supplier_invoice_id, trail)
+    }
+  }
+  return trails
 }

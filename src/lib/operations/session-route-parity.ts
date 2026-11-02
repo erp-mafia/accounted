@@ -69,6 +69,7 @@ const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder si
 const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
 const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
 const ATTEST_LINK = 'token route of the attest mail\'s link (/attest/<token>): the attester decides in person, authenticated by the link; the same decision is POST /api/v1/.../supplier-invoices/:id/approve or /reject'
+const ATTEST_LIST_LINK = 'token route of the batched attest mail\'s list link (/attest/lista/<token>): the attester decides each invoice in person, authenticated by the link; the same decisions are POST /api/v1/.../supplier-invoices/:id/approve or /reject'
 const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<token>): the firmatecknare signs the payments in person with BankID, authenticated by the link, no machine door signs'
 const SIGNING_CEREMONY = 'BankID signing of a document: the signer signs in person, by the link (/signera/<token>) or as the member named; agents and API clients request, chase and read, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
@@ -605,6 +606,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PUT /api/supplier-invoices/attest-policy': covered([`PUT ${V}/supplier-invoices/attest-policy`], 'owners and admins; no MCP tool: who controls payments is a person\'s decision'),
   'PUT /api/supplier-invoices/attest-policy/mail': uiOnly(PREFS),
   'POST /api/attest/:token/decision': uiOnly(ATTEST_LINK),
+  'POST /api/attest/lista/:token/decisions': uiOnly(ATTEST_LIST_LINK),
   'POST /api/supplier-invoices/:id/book': covered([`POST ${V}/supplier-invoices/:id/book`, 'gnubok_book_supplier_invoice']),
   'POST /api/supplier-invoices/:id/mark-paid': covered([`POST ${V}/supplier-invoices/:id/mark-paid`]),
   'POST /api/supplier-invoices/:id/credit': covered([`POST ${V}/supplier-invoices/:id/credit`, 'gnubok_credit_supplier_invoice']),

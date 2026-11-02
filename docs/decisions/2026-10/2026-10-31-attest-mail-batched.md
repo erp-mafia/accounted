@@ -1,0 +1,1 @@
+[2026-10-31] The attest mail is batched: one mail per attester and company round, 15 minutes after the last registration, reminders 3 days and 1 day before due, and the registrant told when the due date passes or nobody can attest: ten registered invoices meant ten client mails (crm#1569).
