@@ -91,7 +91,12 @@ describe('the document hold', () => {
 
   it('a booking door reads the same hold', async () => {
     await expect(readInboxItemBookingState(supabase, companyId, held)).resolves.toEqual({ state: 'booked', journal_entry_id: heldBy, supplier_invoice_id: null })
-    await expect(readInboxItemBookingState(supabase, companyId, reversed)).resolves.toEqual({ state: 'open', replaces: null })
+    await expect(readInboxItemBookingState(supabase, companyId, reversed)).resolves.toEqual({
+      state: 'open',
+      replaces: null,
+      // The underlag rides along, so the voucher executor can run the FX check.
+      extracted_data: expect.objectContaining({ totals: { total: 500 } }),
+    })
   })
 })
 

@@ -801,6 +801,42 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(result.data).toMatchObject({ journal_entry_id: 'je-link-fails', inbox_linked: true })
   })
 
+  it('inbox-direct: refuses a foreign underlag booked at its face amount as kronor, before posting (crm#1146)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: {
+        created_journal_entry_id: null,
+        created_supplier_invoice_id: null,
+        extracted_data: { invoice: { currency: 'EUR' }, totals: { total: 100 } },
+      },
+      error: null,
+    }) // the inbox item: open, an EUR receipt for 100
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'EUR-kvitto som kronor',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // A 400 refusal: the op is consumed (rejected in the row), the call failed.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT')
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
   it('inbox-direct: refuses with 409 before posting when the item is already booked (accounted#14)', async () => {
     // Staging checked the item, but another booking landed before approval:
     // approving this op used to post a second verifikat for the same underlag.
