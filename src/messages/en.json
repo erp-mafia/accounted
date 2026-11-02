@@ -8835,6 +8835,8 @@
     "ext_arcim_documents_error_reference": "Reference: {requestId}",
     "ext_arcim_documents_provider_message": "{provider} answered: {message}",
     "ext_arcim_documents_fetch_action": "Fetch documents",
+    "ext_arcim_documents_fetch_after_ledger": "Import the bookkeeping first, then you can fetch the documents.",
+    "ext_arcim_documents_fetch_after_sie": "Upload the bookkeeping as a SIE file first, then you can fetch the documents.",
     "ext_arcim_key_idle": "The migration is finished and the {provider} key is no longer used. Accounted only reads from {provider} and never changes anything there. You can remove the key and connect again if you need to fetch more.",
     "ext_arcim_key_in_use_rows": "The key is still used to fetch invoice rows that are missing. Accounted only reads from {provider} and never changes anything there.",
     "ext_arcim_key_remove": "Remove the key",

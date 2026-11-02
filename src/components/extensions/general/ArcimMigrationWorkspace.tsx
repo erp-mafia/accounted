@@ -859,6 +859,7 @@ export function ProviderStep({
               const providerInfo = ARCIM_PROVIDERS.find(p => p.id === consent.provider)
               const completedImports = connectionStatus?.sieImports.filter(i => i.status === 'completed') ?? []
               const lastImport = connectionStatus?.latestCompletedSieImport ?? completedImports[0]
+              const underlagWaitsForLedger = !hasSieImport && supportsUnderlagImport(consent.provider)
 
               return (
                 <div key={consent.id} className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-4">
@@ -907,6 +908,15 @@ export function ProviderStep({
                         {t('ext_arcim_key_in_use_rows', { provider: providerInfo?.name ?? consent.provider })}
                       </p>
                     )}
+                    {underlagWaitsForLedger && (
+                      <p id={`underlag-after-ledger-${consent.id}`} className="mt-0.5 text-xs text-muted-foreground">
+                        {/* Visma and Bokio cannot fetch the ledger: theirs
+                            comes in as a SIE file, so the line says so. */}
+                        {t(sieViaApi(consent.provider)
+                          ? 'ext_arcim_documents_fetch_after_ledger'
+                          : 'ext_arcim_documents_fetch_after_sie')}
+                      </p>
+                    )}
                   </div>
                   {/* Full width on a phone, so the buttons wrap under the name
                       instead of squeezing the date into a column; the
@@ -918,7 +928,10 @@ export function ProviderStep({
                         consent, without repeating the migration. Not before
                         a ledger import: underlag link to the imported
                         verifikat by voucher number, so with none there every
-                        file comes back unmatched. It comes first and filled:
+                        file comes back unmatched. Until then it stays on the
+                        row, disabled and after the row's other button, with
+                        a line saying the bookkeeping comes first: a hidden
+                        button left customers looking for it. It comes first and filled:
                         customers re-ran the whole migration to get their
                         files (PH 185, PH 180), so the safe way to get more
                         from the source has to be the obvious one, and the
@@ -958,6 +971,17 @@ export function ProviderStep({
                       >
                         <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
                         {connectionAction(consent.provider)}
+                      </Button>
+                    )}
+                    {underlagWaitsForLedger && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled
+                        aria-describedby={`underlag-after-ledger-${consent.id}`}
+                      >
+                        <PaperClipIcon className="mr-1.5 h-3.5 w-3.5" />
+                        {t('ext_arcim_documents_fetch_action')}
                       </Button>
                     )}
                     {/* A key nothing needs any more gets a named way out
