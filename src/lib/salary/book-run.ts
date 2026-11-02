@@ -50,6 +50,7 @@ import {
   settleExpenseClaimsForBookedRun,
 } from '@/lib/salary/expense-claim-lines'
 import {
+  buildSalaryRunEntryLines,
   createSalaryRunEntries,
   salaryRunDataFromRows,
   type SalaryRosterRow,
@@ -195,7 +196,7 @@ export async function releaseSalaryRunBooking(
 
 /** The run's posted vouchers, as createSalaryRunEntries returns them. */
 export interface SalaryRunVoucherIds {
-  salaryEntry: { id: string }
+  salaryEntry: { id: string } | null
   avgifterEntry: { id: string } | null
   vacationEntry: { id: string } | null
   pensionEntry: { id: string } | null
@@ -224,8 +225,12 @@ export async function markClaimedRunBooked(
     booking_claimed_at: null,
   }
   if (vouchers) {
-    updates.salary_entry_id = vouchers.salaryEntry.id
-    entryIds.push(vouchers.salaryEntry.id)
+    // No salary voucher for a run whose only amounts are a förmånsvärde and
+    // its avgifter (crm#1596): nothing is paid, withheld or expensed.
+    if (vouchers.salaryEntry) {
+      updates.salary_entry_id = vouchers.salaryEntry.id
+      entryIds.push(vouchers.salaryEntry.id)
+    }
     // No avgifter voucher for a run without avgifter (utlägg-only, F-skatt).
     if (vouchers.avgifterEntry) {
       updates.avgifter_entry_id = vouchers.avgifterEntry.id
@@ -500,7 +505,7 @@ async function bookClaimedRun(
     log.warn('vacation ledger sync failed after booking', { message: ledgerSync.message })
   }
 
-  const voucherNumber = (vouchers.salaryEntry as { voucher_number?: string | number | null }).voucher_number
+  const voucherNumber = (vouchers.salaryEntry as { voucher_number?: string | number | null } | null)?.voucher_number
   return {
     ok: true,
     data: {
@@ -618,7 +623,12 @@ export async function previewPaidSalaryRunBooking(
       ...base,
       nollkorning: false,
       would_post_entries: [
-        'salary (gross + tax withholding + net payment)',
+        // The booking's own line builder decides, so a run whose only amount
+        // is a förmånsvärde previews no salary voucher (crm#1596). The
+        // description and bank account name lines, they never add or drop one.
+        ...(buildSalaryRunEntryLines(engineInput, '', '').salaryLines.length > 0
+          ? ['salary (gross + tax withholding + net payment)']
+          : []),
         ...(engineInput.employees.some((employee) => Math.round(employee.avgifter_amount * 100) !== 0)
           ? ['arbetsgivaravgifter']
           : []),
@@ -637,7 +647,7 @@ export async function previewPaidSalaryRunBooking(
           ? ['pension provision and SLP']
           : []),
       ],
-      note: 'A live call validates all 2-4 verifikationer before posting the first (createSalaryRunEntries). Voucher numbers are assigned at commit time.',
+      note: 'A live call validates all 1-4 verifikationer before posting the first (createSalaryRunEntries). Voucher numbers are assigned at commit time.',
     },
   }
 }

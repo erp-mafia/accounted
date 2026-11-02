@@ -949,7 +949,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // calculated" still differs from "calculated to 0" (a nollkörning).
   const isCalculated = calculationState === 'current'
   const isStale = calculationState === 'stale'
-  const isNollkorning = isCalculated && Math.round((run.total_gross ?? 0) * 100) === 0
+  // A förmånsvärde alone is still reported (its individuppgift, avgifter on
+  // it), so a run with one is no nollkörning even at gross 0 (crm#1596).
+  const isNollkorning =
+    isCalculated &&
+    Math.round((run.total_gross ?? 0) * 100) === 0 &&
+    employees.every((sre) => Math.round((sre.benefit_values ?? 0) * 100) === 0)
   // A run that pays out nothing (a nollkörning, or one fully consumed by a
   // nettolöneavdrag) has no payment-file line and no payout to perform. The
   // pay step collapses to a plain "continue" and the payment-file panel is

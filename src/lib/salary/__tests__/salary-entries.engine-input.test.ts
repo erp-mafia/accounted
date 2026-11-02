@@ -291,7 +291,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
     const { supabase, findCalls } = supabaseFor(scenario, opts)
     const outcome = await createSalaryRunEntries(supabase as never, COMPANY, USER, scenario.run).then(
       (r) => ({
-        salaryEntry: r.salaryEntry.id,
+        salaryEntry: r.salaryEntry?.id,
         avgifterEntry: r.avgifterEntry?.id ?? null,
         vacationEntry: r.vacationEntry?.id ?? null,
         pensionEntry: r.pensionEntry?.id ?? null,

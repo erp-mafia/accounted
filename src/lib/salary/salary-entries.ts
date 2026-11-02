@@ -396,7 +396,7 @@ export async function createSalaryRunEntries(
   userId: string,
   run: SalaryRunData
 ): Promise<{
-  salaryEntry: JournalEntry
+  salaryEntry: JournalEntry | null
   avgifterEntry: JournalEntry | null
   vacationEntry: JournalEntry | null
   pensionEntry: JournalEntry | null
@@ -427,12 +427,19 @@ export async function createSalaryRunEntries(
 
   await activateSalaryAccounts(supabase, companyId, userId, built)
 
-  // The run's vouchers in posting order. Avgifter exists only when the run
-  // has any, vacation only when something accrues, pension only with
-  // löneväxling (per deductions-lonevaxling.md: pension = löneväxling × 1.058
-  // on 7410/2740, SLP = pension × 24.26% on 7533/2514). A voucher that is not
-  // in the set is absent, so a retry neither posts nor expects it.
-  const vouchers: SalaryRunVoucher[] = [{ slot: 'salary', description: desc, lines: built.salaryLines }]
+  // The run's vouchers in posting order. Each exists only when it has lines:
+  // salary only with pay, tax or a payout (a run whose only amount is a
+  // förmånsvärde has none, since benefits book no salary line, crm#1596),
+  // avgifter only when the run has any, vacation only when something
+  // accrues, pension only with löneväxling (per deductions-lonevaxling.md:
+  // pension = löneväxling × 1.058 on 7410/2740, SLP = pension × 24.26% on
+  // 7533/2514). A voucher that is not in the set is absent, so a retry
+  // neither posts nor expects it. The journal preview route drops the same
+  // empty vouchers.
+  const vouchers: SalaryRunVoucher[] = []
+  if (built.salaryLines.length > 0) {
+    vouchers.push({ slot: 'salary', description: desc, lines: built.salaryLines })
+  }
   if (built.avgifterLines.length > 0) {
     vouchers.push({ slot: 'avgifter', description: `${desc}: Arbetsgivaravgifter`, lines: built.avgifterLines })
   }
@@ -441,6 +448,13 @@ export async function createSalaryRunEntries(
   }
   if (built.pensionLines.length > 0) {
     vouchers.push({ slot: 'pension', description: `${desc}: Pensionsavsättning`, lines: built.pensionLines })
+  }
+  // A run with nothing to post is a nollkörning, which bookLoadedRun books
+  // without calling here. Reaching this with no voucher means the run's
+  // totals and its rows disagree: refuse rather than mark it booked with no
+  // verifikat at all.
+  if (vouchers.length === 0) {
+    throw new Error('Lönekörningen har belopp men inga rader att bokföra. Beräkna om körningen och försök igen.')
   }
 
   // What an earlier, interrupted attempt already posted for this run is
@@ -485,15 +499,8 @@ export async function createSalaryRunEntries(
       })
     }
   }
-  const salaryEntry = bySlot.get('salary')
-  if (!salaryEntry) {
-    // Unreachable: the salary slot is always in the set and is either
-    // adopted or just created. Kept so the return type needs no assertion.
-    throw new Error('Lönekörningens verifikationer kunde inte bokföras.')
-  }
-
   return {
-    salaryEntry,
+    salaryEntry: bySlot.get('salary') ?? null,
     avgifterEntry: bySlot.get('avgifter') ?? null,
     vacationEntry: bySlot.get('vacation') ?? null,
     pensionEntry: bySlot.get('pension') ?? null,
