@@ -573,6 +573,62 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.compliance_warning).toBeUndefined()
   })
 
+  describe('a foreign underlag (crm#1146, accounted#58 X4)', () => {
+    function enqueueUpToInbox(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
+      enqueue({ data: { id: 'fp-1', is_closed: false, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' }, error: null })
+      enqueue({
+        data: [
+          { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true },
+          { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+        ],
+        error: null,
+      })
+      enqueue({
+        data: {
+          id: 'inbox-eur',
+          document_id: 'doc-eur',
+          created_journal_entry_id: null,
+          created_supplier_invoice_id: null,
+          extracted_data: { invoice: { currency: 'EUR' }, totals: { total: 100 } },
+        },
+        error: null,
+      }) // invoice_inbox_items lookup
+    }
+    const stage = (supabase: unknown, amount: number) =>
+      createVoucher.execute(
+        {
+          entry_date: '2026-05-12',
+          description: 'Kvitto i EUR',
+          fiscal_period_id: 'fp-1',
+          inbox_item_id: 'inbox-eur',
+          lines: [
+            { account_number: '5410', debit_amount: amount, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 0, credit_amount: amount },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+
+    it('refuses a line carrying the document total as kronor, before anything is staged', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueueUpToInbox(enqueue)
+      await expect(stage(supabase, 100)).rejects.toMatchObject({ code: 'INBOX_BOOK_DIRECT_FX_FACE_AMOUNT' })
+      expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    })
+
+    it('stages kronor typed by hand', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueueUpToInbox(enqueue)
+      enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+      enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+      enqueue({ data: { id: 'op-eur' }, error: null }) // pending_operations insert
+      const result = (await stage(supabase, 1150.4)) as { staged: boolean }
+      expect(result.staged).toBe(true)
+    })
+  })
+
   it('inbox item without a stored document: no attach claim, inbox-variant warning', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

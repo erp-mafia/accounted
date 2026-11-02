@@ -167,7 +167,12 @@ export async function claimInboxItemOrReverseEntry(
 export type InboxItemBookingState =
   | { state: 'missing' }
   /** Bookable. `replaces` is a stale pointer at a reversed verifikat, or null. */
-  | { state: 'open'; replaces: string | null }
+  | {
+      state: 'open'
+      replaces: string | null
+      /** The item's extracted underlag, for a door's own checks (readInboxItemBookingState only). */
+      extracted_data?: unknown
+    }
   | { state: 'booked'; journal_entry_id: string | null; supplier_invoice_id: string | null }
   | { state: 'error'; error: { message: string } }
 
@@ -186,13 +191,15 @@ export async function readInboxItemBookingState(
 ): Promise<InboxItemBookingState> {
   const { data: item, error } = await supabase
     .from('invoice_inbox_items')
-    .select(`created_journal_entry_id, created_supplier_invoice_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+    .select(`created_journal_entry_id, created_supplier_invoice_id, extracted_data, ${INBOX_ITEM_DOCUMENT_HOLD}`)
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) return { state: 'error', error }
   if (!item) return { state: 'missing' }
-  return bookingStateOfItem(supabase, companyId, withDocumentHold(item as unknown as InboxItemBookingRow))
+  const booking = await bookingStateOfItem(supabase, companyId, withDocumentHold(item as unknown as InboxItemBookingRow))
+  const extracted = (item as { extracted_data?: unknown }).extracted_data
+  return booking.state === 'open' && extracted != null ? { ...booking, extracted_data: extracted } : booking
 }
 
 export interface InboxItemBookingRow extends DocumentHoldRow {

@@ -50,6 +50,7 @@ import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoic
 import type { AttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { claimInboxItemOrReverseEntry, readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
+import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
@@ -4873,6 +4874,18 @@ async function commitCreateVoucher(
       }
     }
     replacesEntryId = booking.replaces
+    // A foreign underlag booked with its own total as a kronor line posts
+    // 100 EUR as 100 kr (crm#1146): the book-direct route and its dialog
+    // refuse it, and so does this door, at staging and again here.
+    const fxRefusal = bookDirectFxRefusal(booking.extracted_data as Parameters<typeof bookDirectFxRefusal>[0], null, lines)
+    if (fxRefusal === 'face_amount') {
+      return {
+        error: getErrorEntry('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT')?.message_sv ?? 'Beloppen är underlagets belopp i utländsk valuta, inte kronor.',
+        errorCode: 'INBOX_BOOK_DIRECT_FX_FACE_AMOUNT',
+        status: 400,
+        data: { currency: bookDirectDocumentCurrency(booking.extracted_data as Parameters<typeof bookDirectDocumentCurrency>[0]) },
+      }
+    }
     // The other half of this purchase is booked already: approving would book it twice.
     const pairBooked = await refuseWhenPairBooked(supabase, companyId, inboxItemId)
     if (pairBooked) return { error: pairBooked.messageSv, errorCode: pairBooked.code, status: 409, data: pairBooked.details }

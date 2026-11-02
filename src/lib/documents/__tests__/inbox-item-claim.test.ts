@@ -97,6 +97,13 @@ describe('readInboxItemBookingState', () => {
     expect(findCalls('journal_entries', 'select')).toEqual([])
   })
 
+  it('an open item carries its extracted underlag for the door\'s own checks', async () => {
+    const { sb, enqueue } = client()
+    const extracted = { invoice: { currency: 'EUR' }, totals: { total: 100 } }
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, extracted_data: extracted } })
+    expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({ state: 'open', replaces: null, extracted_data: extracted })
+  })
+
   it('a supplier invoice books the item', async () => {
     const { sb, enqueue } = client()
     enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: 'si-1' } })

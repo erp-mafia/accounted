@@ -771,6 +771,7 @@ import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/li
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
+import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -25575,7 +25576,7 @@ export const tools: McpTool[] = [
       if (inboxItemId) {
         const { data: inbox, error: inboxErr } = await supabase
           .from('invoice_inbox_items')
-          .select(`id, document_id, created_journal_entry_id, created_supplier_invoice_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+          .select(`id, document_id, created_journal_entry_id, created_supplier_invoice_id, extracted_data, ${INBOX_ITEM_DOCUMENT_HOLD}`)
           .eq('id', inboxItemId)
           .eq('company_id', companyId)
           .single()
@@ -25597,6 +25598,17 @@ export const tools: McpTool[] = [
         const heldBy = withDocumentHold(inbox as unknown as DocumentHoldRow).document_journal_entry_id
         if (heldBy) {
           throw codedRefusal('INBOX_ITEM_ALREADY_BOOKED', `Verifikat ${heldBy} already holds this item's document. Leave inbox_item_id out to book a verifikat of its own.`)
+        }
+        // A foreign underlag booked with its own total as a kronor line posts
+        // 100 EUR as 100 kr (crm#1146): the book-direct route and its dialog
+        // refuse it, and so does this door (the executor checks again).
+        const extracted = (inbox as { extracted_data?: unknown }).extracted_data as Parameters<typeof bookDirectFxRefusal>[0]
+        if (bookDirectFxRefusal(extracted, null, lines) === 'face_amount') {
+          const currency = bookDirectDocumentCurrency(extracted)
+          throw codedRefusal(
+            'INBOX_BOOK_DIRECT_FX_FACE_AMOUNT',
+            `The amounts are the document's amounts in ${currency}, not SEK: a line carries the document total as kronor. Restage with the lines in SEK (the SEK amount of the bank transaction that paid it), or correct the currency on the inbox item if it is wrong.`,
+          )
         }
         inboxDocumentId = (inbox.document_id as string | null) ?? null
       }
