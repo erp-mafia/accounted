@@ -3,13 +3,22 @@ import type { ExtensionSettings } from '@/lib/extensions/types'
 import type { ImportDocumentsResult } from '../import-documents'
 import {
   DOCUMENT_IMPORT_RUN_KEY,
+  DOCUMENT_IMPORT_SERVER_MAX_FAILURES,
   continuationCursor,
+  documentImportContinuesOnServer,
+  documentImportDrivenByServer,
+  documentImportRunConnection,
+  documentImportRunFacts,
   documentImportRunStatus,
+  documentImportRunStillCurrent,
+  documentImportServerMayClaim,
   foldDocumentImportSlice,
   markDocumentImportNeedsReconnect,
+  parseDocumentImportRun,
   readDocumentImportRun,
   recordDocumentImportNeedsReconnect,
   recordDocumentImportSlice,
+  type DocumentImportRunFacts,
   type DocumentImportRunSummary,
 } from '../document-import-run'
 
@@ -32,6 +41,9 @@ function slice(overrides: Partial<ImportDocumentsResult> = {}): ImportDocumentsR
     ...overrides,
   }
 }
+
+/** The slice source of the run's own tab, which sends back the run id `run`. */
+const tab = (run: string) => ({ driver: 'browser' as const, run })
 
 /** extension_data as a key-value map, the way the settings accessor reads it. */
 function memorySettings(initial: Record<string, unknown> = {}) {
@@ -107,14 +119,14 @@ describe('foldDocumentImportSlice', () => {
     const first = foldDocumentImportSlice(null, slice(), null, 't1')
 
     // The run id the tab sends back is the run's startedAt.
-    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', 't1')).toMatchObject({
+    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', tab('t1'))).toMatchObject({
       startedAt: 't1',
       scanned: 80,
       nextCursor: 'file-90',
     })
     // Without the run id, or with another run's, only the exact point joins.
     expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2')).toBeNull()
-    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', 't0')).toBeNull()
+    expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', tab('t0'))).toBeNull()
   })
 
   it('leaves a newer run alone when a tab still looping on an older run sends a slice (review of !1172)', () => {
@@ -124,7 +136,7 @@ describe('foldDocumentImportSlice', () => {
 
     // The older run's tab continues from file-600. Joining would move the
     // newer run past file-200..file-600, files it has not handled.
-    expect(foldDocumentImportSlice(newer, slice({ nextCursor: 'file-800' }), 'file-600', 't2', 't0')).toBeNull()
+    expect(foldDocumentImportSlice(newer, slice({ nextCursor: 'file-800' }), 'file-600', 't2', tab('t0'))).toBeNull()
     expect(foldDocumentImportSlice(newer, slice({ nextCursor: 'file-800' }), 'file-600', 't2')).toBeNull()
   })
 
@@ -205,24 +217,24 @@ describe('a slice the tab retries after losing its answer (crm#1581)', () => {
     expect(run).toBe('t1')
     // Slice 2 (file-040 -> file-080) was folded, but the laptop slept before
     // the tab got the answer, so the tab still holds file-040.
-    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-080' }), 'file-040', 't2', run)
+    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-080' }), 'file-040', 't2', tab(run))
     const afterLostAnswer = await readDocumentImportRun(settings)
 
     // On waking, the tab retries file-040. The fold alone refuses that cursor:
     // it overlaps what the run counted. This is the slice that froze the run.
-    expect(foldDocumentImportSlice(afterLostAnswer, slice(), 'file-040', 't3', run)).toBeNull()
+    expect(foldDocumentImportSlice(afterLostAnswer, slice(), 'file-040', 't3', tab(run))).toBeNull()
 
     // The route starts the run's own retry at the saved point instead, and the run takes it.
     const start = continuationCursor(afterLostAnswer, 'fortnox', 'file-040')
     expect(start).toBe('file-080')
-    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-120' }), start, 't3', run)
+    await recordDocumentImportSlice(settings, slice({ nextCursor: 'file-120' }), start, 't3', tab(run))
     // The tab's next slice continues from the answer it got, file-120.
     await recordDocumentImportSlice(
       settings,
       slice({ partial: false, nextCursor: null }),
       continuationCursor(await readDocumentImportRun(settings), 'fortnox', 'file-120'),
       't4',
-      run,
+      tab(run),
     )
 
     expect(await readDocumentImportRun(settings)).toMatchObject({
@@ -328,5 +340,201 @@ describe('documentImportRunStatus', () => {
     expect(documentImportRunStatus(unfinished, at('2026-10-15T05:54:00Z')).stalled).toBe(false)
     const done = { ...unfinished, complete: true, nextCursor: null }
     expect(documentImportRunStatus(done, at('2026-10-25T00:00:00Z')).stalled).toBe(false)
+  })
+
+  it('says the server carries a silent run on only when the facts let it (crm#1581)', () => {
+    const facts: DocumentImportRunFacts = {
+      connection: { id: 'consent-1', createdAt: '2026-10-15T05:00:00Z' },
+      ledgerImportedAt: '2026-10-15T05:30:00Z',
+    }
+    const later = at('2026-10-15T07:41:00Z')
+
+    expect(documentImportRunStatus(unfinished, later, facts)).toMatchObject({ stalled: true, continuesOnServer: true })
+    // Without the facts nothing is known about the connection: never promised.
+    expect(documentImportRunStatus(unfinished, later).continuesOnServer).toBe(false)
+    expect(documentImportRunStatus(unfinished, later, { ...facts, connection: null }).continuesOnServer).toBe(false)
+  })
+
+  it('calls a run a worker holds moving, though its latest fold is old (crm#1581)', () => {
+    // The worker folds its slice only at the end, ten minutes or more after the claim.
+    const held = { ...unfinished, lease: { owner: 'worker-1', until: '2026-10-15T07:50:00Z' } }
+
+    expect(documentImportRunStatus(held, at('2026-10-15T07:41:00Z')).stalled).toBe(false)
+    // A lease that ran out holds nothing.
+    expect(documentImportRunStatus(held, at('2026-10-15T07:51:00Z')).stalled).toBe(true)
+  })
+})
+
+/** A Fortnox run like Hreidur AB's: 2 740 of 17 219, its tab silent since. */
+function stoppedRun(overrides: Partial<DocumentImportRunSummary> = {}): DocumentImportRunSummary {
+  return {
+    provider: 'fortnox',
+    startedAt: '2026-10-31T10:37:18.805Z',
+    updatedAt: '2026-10-31T11:10:08.167Z',
+    complete: false,
+    total: 17219,
+    scanned: 2740,
+    linked: 762,
+    skipped: 2,
+    unmatched: 1976,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: 'file-2740',
+    needsReconnect: false,
+    ...overrides,
+  }
+}
+
+const at = (iso: string) => Date.parse(iso)
+const DAY_LATER = at('2026-11-01T11:10:00Z')
+const CURRENT: DocumentImportRunFacts = {
+  connection: { id: 'consent-1', createdAt: '2026-10-31T10:03:26Z' },
+  ledgerImportedAt: '2026-10-31T10:16:32Z',
+}
+
+describe('who drives the run (crm#1581)', () => {
+  it('records the driver and the connection of each slice, and keeps the connection of the run', () => {
+    const first = foldDocumentImportSlice(null, slice(), null, 't1', { driver: 'browser', consentId: 'consent-1' })
+    expect(first).toMatchObject({ driver: 'browser', consentId: 'consent-1' })
+
+    const second = foldDocumentImportSlice(first, slice(), 'file-40', 't2', { driver: 'server' })
+    expect(second).toMatchObject({ driver: 'server', consentId: 'consent-1', scanned: 80 })
+  })
+
+  it('takes the tab as the driver when none is named', () => {
+    expect(foldDocumentImportSlice(null, slice(), null, 't1')?.driver).toBe('browser')
+  })
+
+  it('starts the server count over once a slice answers or the provider refuses', () => {
+    const held = stoppedRun({ lease: { owner: 'worker-1', until: 't9' }, serverFailures: 3, serverRetryAt: 't8' })
+
+    const folded = foldDocumentImportSlice(held, slice(), 'file-2740', 't2', { driver: 'server' })
+    expect(folded).not.toHaveProperty('lease')
+    expect(folded).not.toHaveProperty('serverFailures')
+    expect(folded).not.toHaveProperty('serverRetryAt')
+
+    const marked = markDocumentImportNeedsReconnect(held, 'fortnox', 'file-2740', 't3')
+    expect(marked).toMatchObject({ needsReconnect: true, nextCursor: 'file-2740' })
+    expect(marked).not.toHaveProperty('lease')
+    expect(marked).not.toHaveProperty('serverFailures')
+  })
+
+  it('reads the server fields back, and nothing that only looks like them', () => {
+    const held = stoppedRun({ driver: 'server', consentId: 'consent-1', lease: { owner: 'w', until: 't' }, serverFailures: 1, serverRetryAt: 't' })
+    expect(parseDocumentImportRun(held)).toEqual(held)
+    expect(parseDocumentImportRun({ ...held, driver: 'cron' })).toBeNull()
+    expect(parseDocumentImportRun({ ...held, lease: { owner: 'w' } })).toBeNull()
+    expect(parseDocumentImportRun({ ...held, serverFailures: '1' })).toBeNull()
+  })
+})
+
+describe('documentImportRunConnection', () => {
+  const fortnox = { id: 'consent-1', provider: 'fortnox' }
+  const otherFortnox = { id: 'consent-2', provider: 'fortnox' }
+  const bokio = { id: 'consent-3', provider: 'bokio' }
+
+  it('takes the connection the run recorded', () => {
+    expect(documentImportRunConnection(stoppedRun({ consentId: 'consent-2' }), [fortnox, otherFortnox])).toBe(otherFortnox)
+    expect(documentImportRunConnection(stoppedRun({ consentId: 'consent-9' }), [fortnox])).toBeNull()
+  })
+
+  it('takes the only accepted connection of the provider for a run that recorded none', () => {
+    expect(documentImportRunConnection(stoppedRun(), [fortnox, bokio])).toBe(fortnox)
+    expect(documentImportRunConnection(stoppedRun(), [fortnox, otherFortnox])).toBeNull()
+    expect(documentImportRunConnection(stoppedRun(), [bokio])).toBeNull()
+  })
+})
+
+describe('documentImportRunFacts', () => {
+  const fortnox = { id: 'consent-1', provider: 'fortnox', createdAt: '2026-10-01T08:00:00Z' }
+
+  it("reads the run's connection and when the latest ledger import landed", () => {
+    expect(
+      documentImportRunFacts(stoppedRun({ consentId: 'consent-1' }), [fortnox], {
+        imported_at: '2026-10-02T09:00:00Z',
+        created_at: '2026-10-02T08:59:00Z',
+      }),
+    ).toEqual({
+      connection: { id: 'consent-1', createdAt: '2026-10-01T08:00:00Z' },
+      ledgerImportedAt: '2026-10-02T09:00:00Z',
+    })
+  })
+
+  it('dates a ledger row from before imported_at by its creation, and names no connection the run cannot', () => {
+    expect(
+      documentImportRunFacts(stoppedRun({ consentId: 'consent-9' }), [fortnox], {
+        imported_at: null,
+        created_at: '2026-10-02T08:59:00Z',
+      }),
+    ).toEqual({ connection: null, ledgerImportedAt: '2026-10-02T08:59:00Z' })
+    expect(documentImportRunFacts(stoppedRun(), [fortnox], null)).toEqual({
+      connection: { id: 'consent-1', createdAt: '2026-10-01T08:00:00Z' },
+      ledgerImportedAt: null,
+    })
+  })
+})
+
+describe('documentImportRunStillCurrent', () => {
+  it('holds while the connection and the ledger are older than the run', () => {
+    expect(documentImportRunStillCurrent(stoppedRun(), CURRENT)).toBe(true)
+    expect(documentImportRunStillCurrent(stoppedRun(), { ...CURRENT, ledgerImportedAt: null })).toBe(true)
+  })
+
+  it('fails once the connection was made, or a ledger import landed, after the run started', () => {
+    expect(documentImportRunStillCurrent(stoppedRun(), { ...CURRENT, connection: { id: 'c', createdAt: '2026-10-31T12:00:00Z' } })).toBe(false)
+    expect(documentImportRunStillCurrent(stoppedRun(), { ...CURRENT, ledgerImportedAt: '2026-10-31T11:00:00Z' })).toBe(false)
+    expect(documentImportRunStillCurrent(stoppedRun(), { ...CURRENT, connection: null })).toBe(false)
+  })
+})
+
+describe('documentImportServerMayClaim', () => {
+  it('takes a run its tab left silent past the stall mark', () => {
+    expect(documentImportServerMayClaim(stoppedRun(), DAY_LATER)).toBe(true)
+    expect(documentImportContinuesOnServer(stoppedRun(), DAY_LATER, CURRENT)).toBe(true)
+  })
+
+  it('leaves a run its tab still drives, and keeps driving one it drove itself', () => {
+    const fresh = at('2026-10-31T11:12:00Z')
+    expect(documentImportServerMayClaim(stoppedRun(), fresh)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun({ driver: 'server' }), fresh)).toBe(true)
+  })
+
+  it('waits for a lease another worker holds, and takes one that ran out', () => {
+    const lease = (until: string) => ({ owner: 'worker-2', until })
+    expect(documentImportServerMayClaim(stoppedRun({ lease: lease('2026-11-01T11:15:00Z') }), DAY_LATER)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun({ lease: lease('2026-11-01T11:05:00Z') }), DAY_LATER)).toBe(true)
+  })
+
+  it('waits out a failed attempt, and stops after five in a row', () => {
+    expect(documentImportServerMayClaim(stoppedRun({ serverFailures: 1, serverRetryAt: '2026-11-01T11:15:00Z' }), DAY_LATER)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun({ serverFailures: 1, serverRetryAt: '2026-11-01T11:05:00Z' }), DAY_LATER)).toBe(true)
+    expect(documentImportServerMayClaim(stoppedRun({ serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES }), DAY_LATER)).toBe(false)
+  })
+
+  it('never takes a finished run, one waiting on a reconnect, or one left for two weeks', () => {
+    expect(documentImportServerMayClaim(stoppedRun({ complete: true, nextCursor: null }), DAY_LATER)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun({ needsReconnect: true }), DAY_LATER)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun({ nextCursor: null }), DAY_LATER)).toBe(false)
+    expect(documentImportServerMayClaim(stoppedRun(), at('2026-11-15T11:11:00Z'))).toBe(false)
+  })
+})
+
+describe('documentImportDrivenByServer', () => {
+  it('holds while a worker holds the run or the server answered its latest slice moments ago', () => {
+    expect(documentImportDrivenByServer(stoppedRun({ lease: { owner: 'w', until: '2026-11-01T11:15:00Z' } }), DAY_LATER)).toBe(true)
+    const justNow = stoppedRun({ driver: 'server', updatedAt: '2026-11-01T11:08:00Z' })
+    expect(documentImportDrivenByServer(justNow, DAY_LATER)).toBe(true)
+  })
+
+  it("hands the run back to the tab once the server went quiet, waits to retry, or gave up", () => {
+    expect(documentImportDrivenByServer(stoppedRun(), DAY_LATER)).toBe(false)
+    expect(documentImportDrivenByServer(stoppedRun({ driver: 'server' }), DAY_LATER)).toBe(false)
+    const recent = { driver: 'server' as const, updatedAt: '2026-11-01T11:08:00Z' }
+    expect(documentImportDrivenByServer(stoppedRun({ ...recent, serverRetryAt: '2026-11-01T11:15:00Z' }), DAY_LATER)).toBe(false)
+    expect(documentImportDrivenByServer(stoppedRun({ ...recent, serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES }), DAY_LATER)).toBe(false)
+    expect(documentImportDrivenByServer(stoppedRun({ ...recent, needsReconnect: true }), DAY_LATER)).toBe(false)
   })
 })

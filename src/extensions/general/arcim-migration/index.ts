@@ -47,10 +47,14 @@ import {
 } from './lib/import-documents'
 import {
   continuationCursor,
+  documentImportDrivenByServer,
+  documentImportRunFacts,
   documentImportRunStatus,
+  documentImportRunStillCurrent,
   readDocumentImportRun,
   recordDocumentImportNeedsReconnect,
   recordDocumentImportSlice,
+  type DocumentImportRunSummary,
 } from './lib/document-import-run'
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -403,7 +407,20 @@ export const arcimMigrationExtension: Extension = {
           const latestDocumentRun = ctx.settings
             ? await readDocumentImportRun(ctx.settings).catch(() => null)
             : null
-          const latestDocumentImport = latestDocumentRun ? documentImportRunStatus(latestDocumentRun) : null
+          // Whether the server picks a silent run up again reads the same
+          // facts its worker does: the run's connection and the latest ledger
+          // import (document-import-continuation.ts).
+          const latestDocumentImport = latestDocumentRun
+            ? documentImportRunStatus(
+              latestDocumentRun,
+              Date.now(),
+              documentImportRunFacts(
+                latestDocumentRun,
+                consents.map(c => ({ id: c.id, provider: c.provider as string, createdAt: c.createdAt ?? null })),
+                latestCompletedSieImport ?? null,
+              ),
+            )
+            : null
 
           return NextResponse.json({
             consents: consents.map(c => ({
@@ -2068,25 +2085,74 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
         }
 
-        // The run the server keeps owns the resume point of its own tab: a
-        // continuation never starts before the point it reached, even when
-        // the tab lost the answer that got there and retries an earlier
-        // cursor (crm#1581). Only the run's own tab (same run id): a tab
-        // still looping on an older run must not jump into a newer one, or
-        // the newer run would skip the files in between. Read once before the
-        // slice; the fold reads it again, so a run that another tab moved
-        // meanwhile is not counted twice.
-        const savedRun =
-          !dryRun && cursor !== null && run !== null && ctx.settings
-            ? await readDocumentImportRun(ctx.settings).catch((readError) => {
-                // Without it the slice starts at the tab's cursor, as before.
-                log.warn('arcim import-documents saved run not read', {
+        // The run the server keeps, read once before the slice for two rules
+        // (crm#1581). An unreadable summary lets the slice run as it always
+        // has, from the tab's cursor: at worst it repeats files the server is
+        // on, which converge on one row.
+        const kept =
+          !dryRun && ctx.settings
+            ? await readDocumentImportRun(ctx.settings).catch((readError: unknown) => {
+                log.warn('arcim import-documents could not read the kept run', {
                   reason: readError instanceof Error ? readError.message : 'unknown',
                 })
                 return null
               })
             : null
-        const ownRun = savedRun?.startedAt === run ? savedRun : null
+        // Whether the server keeps the run for this request's connection, on
+        // the facts its worker reads. A request on another connection, or
+        // after a newer connection or ledger import, starts a run of its own:
+        // the worker would let go of the kept one anyway, and the new run's
+        // fold replaces the summary, so the worker's next compare-and-set
+        // finds the row moved and stops. Facts that cannot be read leave the
+        // server's hold standing.
+        const serverKeepsRun = async (run: DocumentImportRunSummary, requestConsentId: string) => {
+          try {
+            const [allConsents, ledger] = await Promise.all([
+              listConsents(companyId),
+              supabase
+                .from('sie_imports')
+                .select('imported_at, created_at')
+                .eq('company_id', companyId)
+                .eq('status', 'completed')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+            ])
+            if (ledger.error) throw new Error(ledger.error.message)
+            const facts = documentImportRunFacts(
+              run,
+              allConsents
+                .filter(c => c.status === 1)
+                .map(c => ({ id: c.id, provider: c.provider as string, createdAt: c.createdAt ?? null })),
+              ledger.data as { imported_at: string | null; created_at: string | null } | null,
+            )
+            return facts.connection?.id === requestConsentId && documentImportRunStillCurrent(run, facts)
+          } catch (factsError) {
+            log.warn('arcim import-documents could not read the run facts', {
+              reason: factsError instanceof Error ? factsError.message : 'unknown',
+            })
+            return true
+          }
+        }
+        // The server carries a run on once its tab leaves it silent. While it
+        // does, a tab's slice would be a second chain over the same files:
+        // the page is told the run goes on without it.
+        if (kept && documentImportDrivenByServer(kept, Date.now()) && (await serverKeepsRun(kept, consentId))) {
+          log.info('arcim import-documents refused: the server is continuing the run', {
+            cursor,
+            scanned: kept.scanned,
+            total: kept.total,
+          })
+          return errorResponseFromCode('PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER', moduleLog)
+        }
+        // The kept run owns the resume point of its own tab: a continuation
+        // never starts before the point it reached, even when the tab lost
+        // the answer that got there and retries an earlier cursor. Only the
+        // run's own tab (same run id): a tab still looping on an older run
+        // must not jump into a newer one, or the newer run would skip the
+        // files in between. The fold reads the run again, so a run that
+        // another tab moved meanwhile is not counted twice.
+        const ownRun = cursor !== null && run !== null && kept?.startedAt === run ? kept : null
 
         try {
           const result = await importProviderDocuments({
@@ -2120,14 +2186,16 @@ export const arcimMigrationExtension: Extension = {
           // the slice.
           let recorded: { startedAt: string } | null = null
           if (!dryRun && ctx.settings) {
-            recorded = await recordDocumentImportSlice(ctx.settings, result, startCursor, undefined, run).catch(
-              (recordError) => {
-                log.warn('arcim import-documents run summary not stored', {
-                  reason: recordError instanceof Error ? recordError.message : 'unknown',
-                })
-                return null
-              },
-            )
+            recorded = await recordDocumentImportSlice(ctx.settings, result, startCursor, undefined, {
+              driver: 'browser',
+              consentId,
+              run,
+            }).catch((recordError) => {
+              log.warn('arcim import-documents run summary not stored', {
+                reason: recordError instanceof Error ? recordError.message : 'unknown',
+              })
+              return null
+            })
           }
           // The run this slice counts for, for the tab to send back with its
           // next slice: the one it joined or started, else the one it named.

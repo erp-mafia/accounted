@@ -58,6 +58,7 @@
 */2 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/sweep/cron
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/underlag-reconcile/cron
 * * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/worker/cron
+* * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/document-import/cron
 20 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/complete-invoice-lines/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/cleanup/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/register-repair/cron

@@ -143,6 +143,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/document-import/cron",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/extensions/arcim-migration/complete-invoice-lines/cron",
       "schedule": "20 * * * *"
     },

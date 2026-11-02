@@ -1,0 +1,1 @@
+[2026-11-01] The server continues an underlag run its tab left silent for 10 minutes, from the saved cursor, sweeping to the function deadline, one driver at a time (lease, compare-and-set, 409 to the tab): a 17 219-file Fortnox run only moved while the laptop was awake (crm#1581).

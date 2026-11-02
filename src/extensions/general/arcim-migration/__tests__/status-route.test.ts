@@ -372,8 +372,8 @@ describe('GET /status: latest underlag run (crm#1410)', () => {
     nextCursor: null,
   }
 
-  async function latestDocumentImport(stored: unknown) {
-    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+  async function latestDocumentImport(stored: unknown, latestCompleted: Row | null = null) {
+    const { supabase } = buildSupabase({ history: [], latestCompleted })
     const ctx = buildCtx(supabase)
     const get = vi.fn().mockResolvedValue(stored)
     ;(ctx as unknown as { settings: unknown }).settings = { get, set: vi.fn(), clear: vi.fn() }
@@ -387,12 +387,50 @@ describe('GET /status: latest underlag run (crm#1410)', () => {
     const { body, get } = await latestDocumentImport(STORED_RUN)
 
     expect(get).toHaveBeenCalledWith('document_import_run')
-    expect(body.latestDocumentImport).toEqual({ ...STORED_RUN, stalled: false })
+    expect(body.latestDocumentImport).toEqual({ ...STORED_RUN, stalled: false, continuesOnServer: false })
   })
 
   it('answers null before any run, and for a value that is not a run', async () => {
     expect((await latestDocumentImport(null)).body.latestDocumentImport).toBeNull()
     expect((await latestDocumentImport({ linked: 3 })).body.latestDocumentImport).toBeNull()
+  })
+
+  describe('a silent run the server picks up again (crm#1581)', () => {
+    const silent = {
+      ...STORED_RUN,
+      startedAt: minutesAgo(25 * 60),
+      updatedAt: minutesAgo(24 * 60),
+      complete: false,
+      scanned: 2740,
+      nextCursor: 'file-2740',
+      needsReconnect: false,
+    }
+    const fortnoxConsent = (createdAt: string) => ({
+      id: 'consent-1', provider: 'fortnox', status: 1, companyName: 'Hreidur AB', createdAt,
+    })
+
+    // A connection makes the route read the key's use too; it says nothing here.
+    beforeEach(() => {
+      ;(readProviderKeyUseFacts as Mock).mockRejectedValue(new Error('not under test'))
+    })
+
+    it('says so when its connection and the ledger are older than the run', async () => {
+      ;(listConsents as Mock).mockResolvedValue([fortnoxConsent(minutesAgo(26 * 60))])
+
+      const { body } = await latestDocumentImport(silent, sieRow('sie-1', 'completed', minutesAgo(25.5 * 60)))
+
+      expect(body.latestDocumentImport).toMatchObject({ stalled: true, continuesOnServer: true })
+    })
+
+    it('does not once a ledger import landed after it started, or no connection is known', async () => {
+      ;(listConsents as Mock).mockResolvedValue([fortnoxConsent(minutesAgo(26 * 60))])
+      const afterLedger = await latestDocumentImport(silent, sieRow('sie-2', 'completed', minutesAgo(60)))
+      expect(afterLedger.body.latestDocumentImport).toMatchObject({ stalled: true, continuesOnServer: false })
+
+      ;(listConsents as Mock).mockResolvedValue([])
+      const noConnection = await latestDocumentImport(silent)
+      expect(noConnection.body.latestDocumentImport).toMatchObject({ continuesOnServer: false })
+    })
   })
 })
 

@@ -5721,6 +5721,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte importera underlag från leverantören.',
     message_en: 'Failed to import documents from provider.',
   },
+  // crm#1581: the server carries a run on once its tab leaves it silent; a
+  // second chain from a tab would only go over the same files again.
+  PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER: {
+    httpStatus: 409,
+    message_sv: 'Hämtningen av underlag pågår redan och fortsätter av sig själv. Du kan stänga fliken.',
+    message_en: 'The document import is already running and carries on by itself. You can close this tab.',
+  },
   // Same-origin storage proxy (/api/storage): signed Storage URLs served
   // from the app's own host for agent sandboxes that only reach the MCP host.
   STORAGE_PROXY_UNSUPPORTED_PATH: {

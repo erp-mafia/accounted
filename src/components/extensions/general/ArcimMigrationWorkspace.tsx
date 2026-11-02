@@ -61,6 +61,7 @@ import {
   parseArcimDocumentResumeMarker,
   PROVIDER_CONNECTION_REFUSED_CODES,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
+  PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER,
   requestArcimDocumentImport,
   resumableDocumentImport,
   runArcimDocumentImportToCompletion,
@@ -731,7 +732,9 @@ export function DocumentImportRunLine({ run }: { run: DocumentImportRunStatus })
       <p className={line}>
         {note.kind === 'stopped'
           ? t('ext_arcim_documents_last_run_stopped', { date: formatDate(note.date), scanned: note.scanned, total: note.total })
-          : t('ext_arcim_documents_last_run_running', { scanned: note.scanned, total: note.total })}
+          : note.kind === 'resuming'
+            ? t('ext_arcim_documents_last_run_resuming', { scanned: note.scanned, total: note.total })
+            : t('ext_arcim_documents_last_run_running', { scanned: note.scanned, total: note.total })}
       </p>
     )
   }
@@ -2652,6 +2655,10 @@ export function DocumentImportFollowUp({
     // neither reconnecting nor retrying can succeed: state it and offer nothing.
     const scopesUnavailable =
       state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
+    // The server carries this run on by itself (crm#1581): nothing failed and
+    // there is nothing for this tab to retry.
+    const runningOnServer =
+      state.problem?.code === PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER
     // What the source answered and the request id are for support: one level
     // down, never the main line.
     const technical = [
@@ -2668,7 +2675,14 @@ export function DocumentImportFollowUp({
       </DocumentDisclosure>
     )
 
-    if (scopesUnavailable) {
+    if (runningOnServer) {
+      body = (
+        <DocumentState
+          lead={t('ext_arcim_documents_running_on_server', { provider })}
+          sub={t('ext_arcim_documents_running_on_server_hint')}
+        />
+      )
+    } else if (scopesUnavailable) {
       // Waiting on Fortnox, not a fault: neutral, and the way forward
       // meanwhile is the file upload.
       body = (

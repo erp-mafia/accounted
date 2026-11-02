@@ -812,6 +812,19 @@ describe('the latest run under its connection (crm#1410)', () => {
     expect(documentImportRunNote(unfinished)).toMatchObject({ kind: 'running', scanned: 1897 })
   })
 
+  it('says a silent run the server picks up again goes on by itself (crm#1581)', () => {
+    const silent = { ...run, complete: false, scanned: 2740, total: 17219, nextCursor: 'file-2740', stalled: true }
+
+    expect(documentImportRunNote({ ...silent, continuesOnServer: true })).toEqual({
+      kind: 'resuming', date: '2026-10-22T09:20:11Z', scanned: 2740, total: 17219,
+    })
+    // Only "Hämta underlag" moves one the server leaves, or one an older server described.
+    expect(documentImportRunNote({ ...silent, continuesOnServer: false })).toMatchObject({ kind: 'stopped' })
+    expect(documentImportRunNote(silent)).toMatchObject({ kind: 'stopped' })
+    // A run still moving is running, whoever drives it.
+    expect(documentImportRunNote({ ...silent, stalled: false, continuesOnServer: true })).toMatchObject({ kind: 'running' })
+  })
+
   it('says a run the provider refused waits for a reconnect, before calling it stopped (B11)', () => {
     const refused = { ...run, complete: false, scanned: 1200, total: 4610, nextCursor: 'file-1200', needsReconnect: true }
 
