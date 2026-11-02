@@ -241,6 +241,14 @@
     {
       "path": "/api/reports/ledger-account-days/build/cron",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/supplier-invoices/attest-mail/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/supplier-invoices/attest-mail/follow-up/cron",
+      "schedule": "15 6 * * *"
     }
   ]
 }

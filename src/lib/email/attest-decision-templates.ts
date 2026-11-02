@@ -1,4 +1,5 @@
 import { getBranding } from '@/lib/branding/service'
+import { attestMailHtml, attestMailList, attestMailParagraph, escapeHtml } from '@/lib/email/attest-mail-layout'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 /** The template's name, as the send log speaks of it. */
@@ -30,12 +31,6 @@ export interface AttestDecisionEmailData {
   reason: 'registrant' | 'fallback'
   /** Brand override (WL-13): the app name of the company's brand. Absent = platform default. */
   appName?: string
-}
-
-const SANS = `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 function invoiceLabel(invoice: AttestDecisionEmailInvoice): string {
@@ -87,16 +82,13 @@ function footer(data: AttestDecisionEmailData, appName: string): string {
 export function generateAttestDecisionEmailHtml(data: AttestDecisionEmailData): string {
   const appName = data.appName ?? getBranding().appName
   const { approved, rejected } = split(data)
-  const subject = escapeHtml(generateAttestDecisionEmailSubject(data))
   const list = (items: AttestDecisionEmailInvoice[], withComment: boolean) =>
-    `<ul style="margin: 0 0 16px 0; padding-left: 20px; font-size: 15px;">${items
-      .map(
+    attestMailList(
+      items.map(
         (i) =>
-          `<li style="margin: 0 0 6px 0;">${escapeHtml(invoiceLine(i))}${
-            withComment && i.comment ? `<br><span style="color: #666;">Kommentar: ${escapeHtml(i.comment)}</span>` : ''
-          }</li>`,
-      )
-      .join('')}</ul>`
+          `${escapeHtml(invoiceLine(i))}${withComment && i.comment ? `<br><span style="color: #666;">Kommentar: ${escapeHtml(i.comment)}</span>` : ''}`,
+      ),
+    )
   const approvedBlock =
     approved.length > 0
       ? `<p style="margin: 0 0 8px 0; font-size: 15px;"><strong>Redo att betala</strong>: attesterade och kan betalas nu.</p>${list(approved, false)}`
@@ -105,32 +97,15 @@ export function generateAttestDecisionEmailHtml(data: AttestDecisionEmailData): 
     rejected.length > 0
       ? `<p style="margin: 0 0 8px 0; font-size: 15px;"><strong>Nekade</strong>: betalas inte.</p>${list(rejected, true)}`
       : ''
-  const url = escapeHtml(data.listUrl)
-
-  return `
-<!DOCTYPE html>
-<html lang="sv">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${subject}</title>
-</head>
-<body style="margin: 0; padding: 0; font-family: ${SANS}; line-height: 1.6; color: #374151; background-color: #f5f4f1;">
-  <div style="max-width: 520px; margin: 0 auto; padding: 40px 20px;">
-    <div style="background: #ffffff; border-radius: 12px; padding: 40px 32px; border: 1px solid #e5e5e5;">
-      <p style="margin: 0 0 4px 0; font-size: 13px; color: #888; letter-spacing: 0.05em;">${escapeHtml(appName.toUpperCase())}</p>
-      <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 600; color: #111;">${subject}</h1>
-      <p style="margin: 0 0 16px 0; font-size: 15px;">${escapeHtml(data.attesterName)} har svarat på attesten för ${escapeHtml(data.companyName)}.</p>
+  return attestMailHtml({
+    title: generateAttestDecisionEmailSubject(data),
+    bodyHtml: `${attestMailParagraph(`${data.attesterName} har svarat på attesten för ${data.companyName}.`)}
       ${approvedBlock}
-      ${rejectedBlock}
-      <div style="margin: 28px 0;">
-        <a href="${url}" style="display: inline-block; background: #111; color: #fff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px; font-weight: 500;">Öppna leverantörsfakturorna</a>
-      </div>
-      <p style="margin: 0; font-size: 13px; color: #999;">${escapeHtml(footer(data, appName))}</p>
-    </div>
-  </div>
-</body>
-</html>`
+      ${rejectedBlock}`,
+    button: { label: 'Öppna leverantörsfakturorna', url: data.listUrl },
+    footer: footer(data, appName),
+    appName,
+  })
 }
 
 export function generateAttestDecisionEmailText(data: AttestDecisionEmailData): string {

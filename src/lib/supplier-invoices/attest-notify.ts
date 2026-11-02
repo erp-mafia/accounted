@@ -4,12 +4,19 @@
  * Two surfaces. The worklist row ("Attestera {leverantör} {belopp}" on Hem)
  * is derived from the policy and the trail on every read
  * (listSupplierInvoiceAttestsDue), so it needs nothing written here. The
- * mail is sent from here, once per registration, to each attester whose
- * approval would count (attestProgress.remaining: with limits, only those
- * whose limit covers the invoice unless it needs two attesters) and who has
- * not switched the mail off
- * (notification_settings.attest_request_email_enabled, default on), with
- * Godkänn / Neka links that work without a login (attest-links.ts).
+ * mail goes to each attester whose approval would count
+ * (attestProgress.remaining: with limits, only those whose limit covers the
+ * invoice unless it needs two attesters) and who has not switched the mail
+ * off (notification_settings.attest_request_email_enabled, default on).
+ *
+ * Batched (crm#1569): a registration only queues the invoice
+ * (queueAttestRequest); the request job (attest-mail-run.ts) sends each
+ * attester one mail per company and round, listing every invoice waiting on
+ * them, once the company has registered nothing new for 15 minutes. Until
+ * the migration has reached the database, a registration mails the
+ * attesters at once, one invoice per mail, with the Godkänn / Neka links of
+ * that invoice (notifyAttestersOfInvoice, attest-links.ts): the way every
+ * registration was told before.
  *
  * Bound to supplier_invoice.registered (the attest-notify consumer in
  * lib/composition/event-consumers.ts, which lib/init subscribes). Never
@@ -24,8 +31,9 @@ import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
+import { queueAttestRequest } from './attest-batches'
 import { attestLinkUrl, markAttestLinkMailed, mintAttestLink } from './attest-links'
-import { attestProgress, invoiceNeedsAttest } from './attest-policy'
+import { attestProgress, invoiceNeedsAttest, type AttestInvoiceFacts } from './attest-policy'
 import { loadActiveAttestMembers, loadAttestLimits, loadAttestPeople, loadAttestPolicy } from './attest-service'
 
 const log = createLogger('supplier-invoices/attest-notify')
@@ -134,15 +142,51 @@ export async function notifyAttestersOfInvoice(
   return result
 }
 
+export type AskAttestersResult = { outcome: 'not_needed' } | { outcome: 'queued' } | ({ outcome: 'mailed' } & AttestNotifyResult)
+
+/**
+ * A registration: when the policy governs the invoice and it waits for
+ * attest, queue it for the batched request; before the migration, mail the
+ * attesters about it on its own.
+ */
+export async function askAttestersOfInvoice(
+  service: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  logger: Logger = log,
+): Promise<AskAttestersResult> {
+  const policy = await loadAttestPolicy(service, companyId)
+  if (!policy.enabled) return { outcome: 'not_needed' }
+  const [{ data: invoiceRow, error: invoiceError }, { data: settingsRow, error: settingsError }] = await Promise.all([
+    service
+      .from('supplier_invoices')
+      .select('id, user_id, status, approved_at, is_credit_note, currency, total, total_sek, exchange_rate')
+      .eq('company_id', companyId)
+      .eq('id', invoiceId)
+      .maybeSingle(),
+    service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+  ])
+  if (invoiceError) throw invoiceError
+  if (settingsError) throw settingsError
+  const invoice = invoiceRow as unknown as (AttestInvoiceFacts & { status: string; approved_at: string | null }) | null
+  if (!invoice || invoice.approved_at || !['registered', 'overdue'].includes(invoice.status)) return { outcome: 'not_needed' }
+  const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
+  if (!invoiceNeedsAttest(policy, accountingMethod, { ...invoice, total: Number(invoice.total) })) return { outcome: 'not_needed' }
+
+  if ((await queueAttestRequest(service, companyId, invoiceId)) === 'queued') return { outcome: 'queued' }
+  return { outcome: 'mailed', ...(await notifyAttestersOfInvoice(service, companyId, invoiceId, logger)) }
+}
+
 /**
  * The supplier_invoice.registered handler. A failure throws to the event bus,
  * which logs it as an error with the event type and this consumer's name and
  * keeps it from the registration and the other consumers (lib/events/bus.ts):
- * nothing sends the attest mail again, so it must reach error tracking.
+ * an invoice that was neither queued nor mailed is never asked again, so it
+ * must reach error tracking.
  */
 export async function handleSupplierInvoiceRegistered(payload: EventPayload<'supplier_invoice.registered'>): Promise<void> {
   const { supplierInvoice, companyId } = payload
-  await notifyAttestersOfInvoice(createServiceClient(), companyId, supplierInvoice.id)
+  await askAttestersOfInvoice(createServiceClient(), companyId, supplierInvoice.id)
 }
 
 /** Subscribes the handler on its own; lib/init subscribes it through EVENT_CONSUMERS. */

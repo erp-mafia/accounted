@@ -33,9 +33,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { sendAttestDecisionMail } from '@/lib/email/send-attest-decision'
 import type { AttestDecisionEmailInvoice } from '@/lib/email/attest-decision-templates'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { createLogger, type Logger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadAttestAudience } from './attest-audience'
 import { invoiceNeedsAttest, type AttestDecision, type AttestInvoiceFacts } from './attest-policy'
 import { loadAttestPolicy } from './attest-policy-read'
 
@@ -99,23 +99,15 @@ export async function notifyAttestDecisions(
   const policy = await loadAttestPolicy(service, companyId)
   if (!policy.enabled) return result
 
-  const [
-    { data: invoiceRows, error: invoiceError },
-    { data: settingsRow, error: settingsError },
-    { data: companyRow, error: companyError },
-    { data: memberRows, error: memberError },
-  ] =
-    await Promise.all([
-      service
-        .from('supplier_invoices')
-        .select('id, user_id, approved_at, is_credit_note, currency, total, total_sek, exchange_rate, supplier_invoice_number, arrival_number, due_date, supplier:suppliers(name)')
-        .eq('company_id', companyId)
-        .in('id', [...new Set(decisions.map((d) => d.invoiceId))]),
-      service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
-      service.from('companies').select('name, team_id').eq('id', companyId).maybeSingle(),
-      service.from('company_members').select('user_id, role').eq('company_id', companyId),
-    ])
-  const readError = invoiceError ?? settingsError ?? companyError ?? memberError
+  const [{ data: invoiceRows, error: invoiceError }, { data: settingsRow, error: settingsError }] = await Promise.all([
+    service
+      .from('supplier_invoices')
+      .select('id, user_id, approved_at, is_credit_note, currency, total, total_sek, exchange_rate, supplier_invoice_number, arrival_number, due_date, supplier:suppliers(name)')
+      .eq('company_id', companyId)
+      .in('id', [...new Set(decisions.map((d) => d.invoiceId))]),
+    service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+  ])
+  const readError = invoiceError ?? settingsError
   if (readError) throw readError
   const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
   const invoices = new Map(
@@ -131,32 +123,10 @@ export async function notifyAttestDecisions(
   })
   if (told.length === 0) return result
 
-  const company = companyRow as { name: string | null; team_id: string | null } | null
-  const writers = new Map(
-    ((memberRows ?? []) as Array<{ user_id: string; role: string }>)
-      .filter((m) => isBookkeepingWriterRole(m.role))
-      .map((m) => [m.user_id, m.role] as const),
-  )
-  const byraTeam = new Set<string>()
-  if (company?.team_id) {
-    const { data: team, error: teamError } = await service.from('teams').select('kind').eq('id', company.team_id).maybeSingle()
-    if (teamError) throw teamError
-    if ((team as { kind?: string } | null)?.kind === 'byra') {
-      const { data: teamRows, error: teamMembersError } = await service.from('team_members').select('user_id').eq('team_id', company.team_id)
-      if (teamMembersError) throw teamMembersError
-      for (const row of (teamRows ?? []) as Array<{ user_id: string }>) byraTeam.add(row.user_id)
-    }
-  }
-  const peopleIds = [...new Set([attesterId, ...writers.keys(), ...[...invoices.values()].map((i) => i.user_id)])]
-  const { data: profileRows, error: profileError } = await service.from('profiles').select('id, email, full_name').in('id', peopleIds)
-  if (profileError) throw profileError
-  const people = new Map(
-    ((profileRows ?? []) as Array<{ id: string; email: string | null; full_name: string | null }>).map((p) => [
-      p.id,
-      { email: p.email?.trim() || null, name: p.full_name?.trim() || null },
-    ]),
-  )
-  const reachable = new Set([...people].filter(([, p]) => p.email).map(([id]) => id))
+  const { companyName, writers, byraTeam, people, reachable } = await loadAttestAudience(service, companyId, [
+    attesterId,
+    ...[...invoices.values()].map((i) => i.user_id),
+  ])
 
   // One mail per recipient, carrying every invoice of theirs in this answer.
   const byRecipient = new Map<string, { reason: 'registrant' | 'fallback'; invoices: AttestDecisionEmailInvoice[] }>()
@@ -188,7 +158,6 @@ export async function notifyAttestDecisions(
   const baseUrl = (await getBaseUrlForCompany(companyId)).replace(/\/+$/, '')
   const attester = people.get(attesterId)
   const attesterName = attester?.name ?? attester?.email ?? 'Attestanten'
-  const companyName = company?.name?.trim() || 'Företaget'
   for (const [recipientId, entry] of byRecipient) {
     const email = people.get(recipientId)?.email
     if (!email) continue

@@ -12,7 +12,7 @@ const service = createTableMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => service.supabase, createClient: vi.fn() }))
 
 import { eventBus } from '@/lib/events/bus'
-import { notifyAttestersOfInvoice, registerAttestNotificationHandler } from '../attest-notify'
+import { askAttestersOfInvoice, notifyAttestersOfInvoice, registerAttestNotificationHandler } from '../attest-notify'
 
 const POLICY = { company_id: 'c1', enabled: true, threshold_amount: 1000, mode: 'any', attesters: ['anna', 'bo', 'cilla'], preparer_may_attest: false, updated_by: null, updated_at: null }
 const INVOICE = {
@@ -109,5 +109,42 @@ describe('notifyAttestersOfInvoice', () => {
       handler: 'handleSupplierInvoiceRegistered',
       companyId: 'c1',
     }))
+  })
+})
+
+describe('askAttestersOfInvoice: a registration queues the batched mail (crm#1569)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    sendAttestRequestMail.mockResolvedValue({ emailSent: true })
+  })
+
+  it('queues an invoice that waits for attest and mails nobody at registration', async () => {
+    seed({ supplier_invoice_attest_mail_state: { data: null } })
+    expect(await askAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')).toEqual({ outcome: 'queued' })
+    expect(service.payloads('supplier_invoice_attest_mail_state', 'upsert')).toEqual([{ supplier_invoice_id: 'inv-1', company_id: 'c1' }])
+    expect(service.findCall('supplier_invoice_attest_mail_state', 'upsert')?.[1]).toEqual({ onConflict: 'supplier_invoice_id', ignoreDuplicates: true })
+    expect(sendAttestRequestMail).not.toHaveBeenCalled()
+  })
+
+  it('mails the attesters about the invoice on its own while the migration has not reached the database', async () => {
+    seed({ supplier_invoice_attest_mail_state: { error: { code: 'PGRST205', message: 'Could not find the table' } } })
+    const result = await askAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')
+    expect(result).toEqual({ outcome: 'mailed', mailed: 1, skipped_opted_out: 1, skipped_no_email: 0 })
+    expect(sendAttestRequestMail).toHaveBeenCalledTimes(1)
+  })
+
+  it('queues nothing when the policy is off, the invoice is under the threshold, attested, or the company keeps kontantmetoden', async () => {
+    for (const overrides of [
+      { company_attest_policies: { data: { ...POLICY, enabled: false } } },
+      { supplier_invoices: { data: { ...INVOICE, total: 999 } } },
+      { supplier_invoices: { data: { ...INVOICE, approved_at: '2026-10-01T09:00:00Z' } } },
+      { company_settings: { data: { accounting_method: 'cash' } } },
+    ]) {
+      seed({ supplier_invoice_attest_mail_state: { data: null }, ...overrides })
+      expect(await askAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')).toEqual({ outcome: 'not_needed' })
+      expect(service.payloads('supplier_invoice_attest_mail_state', 'upsert')).toEqual([])
+    }
+    expect(sendAttestRequestMail).not.toHaveBeenCalled()
   })
 })

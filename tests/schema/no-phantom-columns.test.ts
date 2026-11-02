@@ -312,7 +312,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // row is built once by componentInsertRow so create, add and the full-list
 // patch write the same columns, and a component update writes only the
 // fields that changed (a changed estimate must pass a posted, locked basis).
-const UNRESOLVED_CEILING = 450
+// 451 (2026-11-01, batched attest mail, crm#1569): +1 for storeAttestBatches
+// (lib/supplier-invoices/attest-batches.ts): the link rows of one round, one
+// per attester, are inserted in one request built by a map, so the round is
+// on record whole or not at all before any mail goes out. Every other select,
+// payload and filter of the attest mail is a literal; the lease is a plain
+// lt() against a '-infinity' default, not an .or().
+const UNRESOLVED_CEILING = 451
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

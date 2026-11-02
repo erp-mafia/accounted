@@ -16,10 +16,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
+import { contentDisposition } from '@/lib/api/content-disposition'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { readLiveMembership } from '@/lib/company/company-access'
+import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { OperationContext } from '@/lib/operations/types'
@@ -30,8 +32,15 @@ import { getSupplierInvoiceAttestState, loadAttestPeople } from './attest-servic
 // a few reloads. Process-local, like the signatory link's limiter.
 const limiter = createTokenRateLimiter({ max: 30, windowMs: 10 * 60_000 })
 
-/** The link's attester still writes in a company that is still live: what opens the link, page and routes alike. */
-export async function attesterCanStillDecide(service: SupabaseClient, link: AttestLinkRow): Promise<boolean> {
+/**
+ * The link's attester still writes in a company that is still live: what opens
+ * the link, page and routes alike, for the per-invoice link and the batched
+ * mail's list link (attest-batch-route.ts) both.
+ */
+export async function attesterCanStillDecide(
+  service: SupabaseClient,
+  link: Pick<AttestLinkRow, 'attester_user_id' | 'company_id'>,
+): Promise<boolean> {
   const membership = await readLiveMembership(service, link.attester_user_id, link.company_id)
   return membership !== null && isBookkeepingWriterRole(membership.role)
 }
@@ -172,4 +181,53 @@ export async function describeAttestLink(service: SupabaseClient, link: AttestLi
 
 export function attestLinkJson(data: unknown): NextResponse {
   return NextResponse.json({ data }, { headers: { 'Cache-Control': 'private, no-store' } })
+}
+
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+}
+
+/**
+ * The supplier's own invoice document, for the attest pages a mail's link
+ * opens without a login: only the document of the invoice the caller's link
+ * covers; streamed inline the way /api/documents/:id/inline does, under the
+ * opaque CSP for anything that is not a PDF or a picture.
+ */
+export async function attestInvoiceDocumentResponse(
+  service: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  log: Logger,
+  requestId: string,
+): Promise<Response> {
+  const { data: invoice } = await service.from('supplier_invoices').select('document_id').eq('company_id', companyId).eq('id', invoiceId).maybeSingle()
+  const documentId = (invoice as { document_id: string | null } | null)?.document_id
+  if (!documentId) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'attest link invoice without a document' })
+  const { data: doc } = await service
+    .from('document_attachments')
+    .select('id, file_name, mime_type, storage_path')
+    .eq('company_id', companyId)
+    .eq('id', documentId)
+    .maybeSingle()
+  const row = doc as { file_name: string; mime_type: string | null; storage_path: string } | null
+  if (!row) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'attest link document missing' })
+  const { data: blob, error } = await service.storage.from('documents').download(row.storage_path)
+  if (error || !blob) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'attest link document not downloadable' })
+  const ext = row.file_name.toLowerCase().split('.').pop() ?? ''
+  const contentType =
+    row.mime_type && row.mime_type !== 'application/octet-stream' ? row.mime_type : EXTENSION_MIME_MAP[ext] ?? 'application/octet-stream'
+  return new NextResponse(blob, {
+    status: 200,
+    headers: {
+      'Content-Type': contentType,
+      'Content-Disposition': contentDisposition('inline', row.file_name),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...(inlineSafeMimeType(contentType) ? {} : { 'Content-Security-Policy': OPAQUE_DOCUMENT_CSP }),
+    },
+  })
 }
