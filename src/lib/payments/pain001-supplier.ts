@@ -92,11 +92,22 @@
  * A Swedbank debtor without the ids (a batch created before 2026-10-11)
  * renders in the MIG 1.0 form, byte for byte, so a stored file never changes.
  *
- * Nordea (debtor.nordeaSignerId set): InitgPty/Id/OrgId/Othr/Id is the Signer
- * ID with SchmeNm/Cd CUST, which Nordea's upload checks against the file
- * agreement (lib/payments/nordea.ts, crm#1530); the rest of the file keeps
- * the form above. Which id InitgPty carries is decided for every bank in
- * lib/payments/initiating-party.ts.
+ * Nordea (lib/payments/nordea.ts, crm#1530). InitgPty/Id/OrgId/Othr/Id is
+ * the Signer ID with SchmeNm/Cd CUST (debtor.nordeaSignerId), which Nordea's
+ * upload checks against the file agreement. With the CCM agreement id
+ * (debtor.nordeaAgreementId) the file takes the form of Nordea's Corporate
+ * Access Payables guide and its Sweden examples:
+ *
+ *  - Dbtr/Id/OrgId/Othr/Id is the agreement id with SchmeNm/Cd BANK
+ *    ("mandatory"): Nordea matches the file to the agreement by it, and
+ *    rejected the org number after upload.
+ *  - Dbtr/PstlAdr always, Ctry SE ("Debtor Name, Country and Identification
+ *    are required"), TwnNm when known.
+ *  - PmtTpInf SvcLvl NURG + CtgyPurp SUPP, as the examples write them.
+ *
+ * A Nordea batch made before the agreement id was stored renders as it was
+ * first downloaded. Which ids InitgPty and Dbtr carry is decided for every
+ * bank in lib/payments/initiating-party.ts.
  *
  * Per BFL: the generated file is rakenskapsinformation (underlag) for the
  * payments it initiates. Subject to 7-year retention.
@@ -106,7 +117,7 @@ import { escapeXml } from '@/lib/xml/escape'
 import { formatPainAmount, max35, painControlSum, suffixId } from './pain001-format'
 import { creditorAccountForm, domesticCreditorAccount, type CreditorAccountForm } from './creditor-account'
 import { sanitizeMigText } from './mig-text'
-import { initiatingPartyId } from './initiating-party'
+import { debtorPartyId, initiatingPartyId } from './initiating-party'
 import { SWEDBANK_BIC, type SwedbankFileIds } from './swedbank'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
 
@@ -137,6 +148,13 @@ export interface SupplierPain001Debtor {
    * their original form.
    */
   nordeaSignerId?: string | null
+  /**
+   * Nordea's CCM agreement id: present only for a Nordea debtor, written as
+   * the Dbtr id, and the file then takes Nordea's form (see the header).
+   * Absent on batches created before it was stored, which render in their
+   * original form.
+   */
+  nordeaAgreementId?: string | null
 }
 
 export interface SupplierPain001Payment {
@@ -212,6 +230,8 @@ export function generateSupplierPain001(
   }
   // Swedbank's ISO 2.0 form, chosen by the presence of both Swedbank ids.
   const swedbank = debtor.swedbank ?? null
+  // Nordea's form, chosen by the presence of the CCM agreement id.
+  const nordea = !swedbank && Boolean(debtor.nordeaAgreementId)
   const text = (value: string) => sanitizeMigText(value, swedbank ? { apostrophe: false } : {})
   // The company bankgiro is a debit account only where the debtor's bank takes
   // one for a bankgiro payment; at Danske Bank and Nordea, and in a Swedbank
@@ -286,9 +306,10 @@ export function generateSupplierPain001(
     lines.push('      <BtchBookg>true</BtchBookg>')
     lines.push(`      <NbOfTxs>${group.length}</NbOfTxs>`)
     lines.push(`      <CtrlSum>${formatPainAmount(groupTotal)}</CtrlSum>`)
-    if (swedbank) {
-      // Appendix, Supplier Payments: "requested using the CategoryPurpose code
-      // of SUPP (Supplier Payment) and ServiceLevel code NURG". XSD order:
+    if (swedbank || nordea) {
+      // Swedbank's Appendix, Supplier Payments: "requested using the
+      // CategoryPurpose code of SUPP (Supplier Payment) and ServiceLevel code
+      // NURG"; Nordea's Sweden examples write the same pair. XSD order:
       // PmtTpInf after CtrlSum, SvcLvl before CtgyPurp.
       lines.push('      <PmtTpInf>')
       lines.push('        <SvcLvl><Cd>NURG</Cd></SvcLvl>')
@@ -299,8 +320,9 @@ export function generateSupplierPain001(
     lines.push('      <Dbtr>')
     lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
     // XSD order in PostalAddress6: TwnNm before Ctry; PstlAdr before Id. MIG
-    // 2.0 marks Dbtr/PstlAdr and its Ctry required, so Swedbank always gets one.
-    if (swedbank || debtor.city?.trim()) {
+    // 2.0 marks Dbtr/PstlAdr and its Ctry required, and Nordea's guide the
+    // debtor's country, so Swedbank and Nordea always get one.
+    if (swedbank || nordea || debtor.city?.trim()) {
       lines.push('        <PstlAdr>')
       if (debtor.city?.trim()) {
         lines.push(`          <TwnNm>${escapeXml(text(debtor.city.trim()))}</TwnNm>`)
@@ -310,12 +332,14 @@ export function generateSupplierPain001(
     }
     lines.push('        <Id>')
     lines.push('          <OrgId>')
-    if (swedbank) {
-      // MIG 2.0 Dbtr/Id/OrgId/Othr: "Corporate Pay Agreement Identifier as
-      // assigned by Swedbank", SchmeNm/Cd BANK.
-      pushSchemedId(lines, swedbank.corporatePayId, 'BANK')
+    // The debtor as its bank knows it (initiating-party.ts): Swedbank's
+    // Corporate Pay agreement id and Nordea's CCM agreement id (both BANK),
+    // the org number elsewhere.
+    const debtorId = debtorPartyId(debtor) ?? { id: orgDigits, scheme: null }
+    if (debtorId.scheme) {
+      pushSchemedId(lines, debtorId.id, debtorId.scheme)
     } else {
-      lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
+      lines.push(`            <Othr><Id>${escapeXml(debtorId.id)}</Id></Othr>`)
     }
     lines.push('          </OrgId>')
     lines.push('        </Id>')

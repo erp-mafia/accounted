@@ -22,7 +22,8 @@
  *      cash account the salary verifikat credits (a booked run's posted
  *      entry, else the primary bank account), with an IBAN and a BIC saved
  *      or derivable, and for a Swedbank debtor Swedbank's SignerID and
- *      Corporate Pay id
+ *      Corporate Pay id, for a Nordea debtor Nordea's Signer ID and CCM
+ *      agreement id
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
  *   8. every one of those accounts names a payable account
@@ -85,7 +86,8 @@ import {
 } from './payable'
 import { isSalaryInBankPaymentError } from './in-bank-payment'
 import { resolveBankFileIds } from '@/lib/payments/initiating-party'
-import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { NORDEA_AGREEMENT_ID_MISSING_SV, NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { tolerateMissingNordeaAgreementId } from '@/lib/payments/nordea-agreement-read'
 import {
   checkEmployeeAccountChecksum,
   describePayeeAccountProblems,
@@ -108,6 +110,14 @@ import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './pay
 export { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat }
 
 const log = createLogger('salary/payment/build-payment-file')
+
+/**
+ * The company_settings columns a payment file reads, but nordea_agreement_id,
+ * which the builder reads beside them while its migration may still be on
+ * its way (tolerateMissingNordeaAgreementId).
+ */
+const PAYMENT_FILE_SETTINGS_COLUMNS =
+  'company_name, org_number, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id'
 
 /** Run statuses a payment file may be generated from. */
 export const SALARY_PAYMENT_FILE_ALLOWED_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -148,6 +158,7 @@ export type SalaryPaymentFileErrorCode =
   | 'BIC_MISSING'
   | 'SWEDBANK_IDS_MISSING'
   | 'NORDEA_SIGNER_ID_MISSING'
+  | 'NORDEA_AGREEMENT_ID_MISSING'
   | 'BANKGIRO_MISSING'
   | 'BANKGIRO_INVALID'
   | 'NO_EMPLOYEES'
@@ -285,6 +296,7 @@ interface SettingsRow {
   swedbank_signer_id: string | null
   swedbank_corporate_pay_id: string | null
   nordea_signer_id: string | null
+  nordea_agreement_id: string | null
 }
 
 interface RunEmployeeRow {
@@ -350,6 +362,7 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
     case 'BIC_MISSING':
     case 'SWEDBANK_IDS_MISSING':
     case 'NORDEA_SIGNER_ID_MISSING':
+    case 'NORDEA_AGREEMENT_ID_MISSING':
     case 'BANKGIRO_MISSING':
     case 'BANKGIRO_INVALID':
       return {
@@ -469,11 +482,15 @@ export async function buildSalaryPaymentFile(
 
   // 4. Settings: the sender's name, town, bankgiro and bank-assigned file
   // ids live here, not on companies. The paying account is step 5.
-  const { data: settingsData, error: settingsErr } = await supabase
-    .from('company_settings')
-    .select('company_name, org_number, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id')
-    .eq('company_id', companyId)
-    .maybeSingle()
+  const { data: settingsData, error: settingsErr } = await tolerateMissingNordeaAgreementId(
+    () =>
+      supabase
+        .from('company_settings')
+        .select(`${PAYMENT_FILE_SETTINGS_COLUMNS}, nordea_agreement_id`)
+        .eq('company_id', companyId)
+        .maybeSingle(),
+    () => supabase.from('company_settings').select(PAYMENT_FILE_SETTINGS_COLUMNS).eq('company_id', companyId).maybeSingle(),
+  )
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
 
   if (!company) return fail('COMPANY_NOT_FOUND', requestedFormat)
@@ -521,9 +538,13 @@ export async function buildSalaryPaymentFile(
     // (lib/payments/initiating-party.ts).
     const fileIds = resolveBankFileIds(debtor.bic, settings)
     if (!fileIds.ok) {
-      return fileIds.missing === 'swedbank_ids'
-        ? fail('SWEDBANK_IDS_MISSING', format, { fields: fileIds.fields, message: SWEDBANK_IDS_MISSING_SV })
-        : fail('NORDEA_SIGNER_ID_MISSING', format, { fields: fileIds.fields, message: NORDEA_SIGNER_ID_MISSING_SV })
+      const refusal = {
+        swedbank_ids: ['SWEDBANK_IDS_MISSING', SWEDBANK_IDS_MISSING_SV],
+        nordea_signer_id: ['NORDEA_SIGNER_ID_MISSING', NORDEA_SIGNER_ID_MISSING_SV],
+        nordea_agreement_id: ['NORDEA_AGREEMENT_ID_MISSING', NORDEA_AGREEMENT_ID_MISSING_SV],
+      } as const satisfies Record<typeof fileIds.missing, readonly [SalaryPaymentFileErrorCode, string]>
+      const [code, message] = refusal[fileIds.missing]
+      return fail(code, format, { fields: fileIds.fields, message })
     }
 
     pain001Company = {
@@ -536,6 +557,7 @@ export async function buildSalaryPaymentFile(
       city: settings.city,
       swedbank: fileIds.ids.swedbank,
       nordeaSignerId: fileIds.ids.nordeaSignerId,
+      nordeaAgreementId: fileIds.ids.nordeaAgreementId,
     }
     payingCashAccount = payingAccountSummary(debtor)
   } else {

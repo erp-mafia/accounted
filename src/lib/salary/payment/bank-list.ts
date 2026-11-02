@@ -80,6 +80,7 @@ export function salaryBankListErrorResponse(
       result.code === 'GENERATOR_FAILED' ||
       result.code === 'SWEDBANK_IDS_MISSING' ||
       result.code === 'NORDEA_SIGNER_ID_MISSING' ||
+      result.code === 'NORDEA_AGREEMENT_ID_MISSING' ||
       result.code === 'IBAN_MISSING' ||
       result.code === 'BIC_MISSING') &&
     typeof result.details.message === 'string' &&

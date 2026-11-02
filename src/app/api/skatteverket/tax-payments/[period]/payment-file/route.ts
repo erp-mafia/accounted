@@ -4,7 +4,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
 import { paysThroughSwedbankIso2, resolveBatchDebtor, supplierPain001Debtor } from '@/lib/payments/batch-service'
-import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { NORDEA_AGREEMENT_ID_MISSING_SV, NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 import { payingAccountMissingSv } from '@/lib/payments/paying-account'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { parseEntityType } from '@/lib/company/entity-type'
@@ -157,6 +157,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
               org_number: 'Organisationsnummer saknas för företaget.',
               swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturor.',
               nordea_signer_id: NORDEA_SIGNER_ID_MISSING_SV,
+              nordea_agreement_id: NORDEA_AGREEMENT_ID_MISSING_SV,
             }[missing]
       return NextResponse.json({ error: message }, { status: 400 })
     }

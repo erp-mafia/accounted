@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { initiatingPartyId, resolveBankFileIds } from '@/lib/payments/initiating-party'
-import { isNordeaBic, isNordeaCompany, NORDEA_SIGNER_ID_PATTERN, resolveNordeaSignerId } from '@/lib/payments/nordea'
+import { debtorPartyId, initiatingPartyId, resolveBankFileIds } from '@/lib/payments/initiating-party'
+import {
+  isNordeaBic,
+  isNordeaCompany,
+  NORDEA_AGREEMENT_ID_PATTERN,
+  NORDEA_SIGNER_ID_PATTERN,
+  resolveNordeaFileIds,
+} from '@/lib/payments/nordea'
 
 const SWEDBANK = { swedbank_signer_id: '123456789ORI0001', swedbank_corporate_pay_id: '123456789CPO0001' }
 
@@ -28,27 +34,45 @@ describe('Nordea by BIC and by company settings', () => {
   })
 })
 
-describe('resolveNordeaSignerId', () => {
+describe('resolveNordeaFileIds', () => {
+  const NORDEA = { nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' }
+
   it('asks nothing of another bank', () => {
-    expect(resolveNordeaSignerId('ESSESESS', null)).toEqual({ ok: true, signerId: null })
-    expect(resolveNordeaSignerId('SWEDSESS', { nordea_signer_id: 'NB10000123456' })).toEqual({ ok: true, signerId: null })
+    expect(resolveNordeaFileIds('ESSESESS', null)).toEqual({ ok: true, ids: null })
+    expect(resolveNordeaFileIds('SWEDSESS', NORDEA)).toEqual({ ok: true, ids: null })
   })
 
-  it('needs the stored id at Nordea', () => {
-    expect(resolveNordeaSignerId('NDEASESS', { nordea_signer_id: 'NB10000123456' })).toEqual({
+  it('needs both stored ids at Nordea, naming the Signer ID first', () => {
+    expect(resolveNordeaFileIds('NDEASESS', NORDEA)).toEqual({
       ok: true,
-      signerId: 'NB10000123456',
+      ids: { signerId: 'NB10000123456', agreementId: 'NB123456' },
     })
-    expect(resolveNordeaSignerId('NDEASESS', { nordea_signer_id: '  ' })).toEqual({ ok: false })
-    expect(resolveNordeaSignerId('NDEASESS', null)).toEqual({ ok: false })
+    // crm#1530: the Signer ID alone got the file past the upload, then Nordea
+    // rejected it for the missing CCM agreement id.
+    expect(resolveNordeaFileIds('NDEASESS', { nordea_signer_id: 'NB10000123456' })).toEqual({
+      ok: false,
+      missing: 'nordea_agreement_id',
+    })
+    expect(resolveNordeaFileIds('NDEASESS', { nordea_signer_id: '  ', nordea_agreement_id: 'NB123456' })).toEqual({
+      ok: false,
+      missing: 'nordea_signer_id',
+    })
+    expect(resolveNordeaFileIds('NDEASESS', null)).toEqual({ ok: false, missing: 'nordea_signer_id' })
+  })
+
+  it('takes letters and digits as an agreement id, normalised beforehand', () => {
+    expect(NORDEA_AGREEMENT_ID_PATTERN.test('NB123456')).toBe(true)
+    expect(NORDEA_AGREEMENT_ID_PATTERN.test('1234567890')).toBe(true)
+    expect(NORDEA_AGREEMENT_ID_PATTERN.test('NB 123456')).toBe(false)
+    expect(NORDEA_AGREEMENT_ID_PATTERN.test('A'.repeat(36))).toBe(false)
   })
 })
 
 describe('resolveBankFileIds: what each debtor bank requires', () => {
   it('requires nothing at a bank that keys the agreement on the org number', () => {
-    expect(resolveBankFileIds('HANDSESS', { ...SWEDBANK, nordea_signer_id: 'NB10000123456' })).toEqual({
+    expect(resolveBankFileIds('HANDSESS', { ...SWEDBANK, nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' })).toEqual({
       ok: true,
-      ids: { swedbank: null, nordeaSignerId: null },
+      ids: { swedbank: null, nordeaSignerId: null, nordeaAgreementId: null },
     })
   })
 
@@ -60,19 +84,28 @@ describe('resolveBankFileIds: what each debtor bank requires', () => {
     })
     expect(resolveBankFileIds('SWEDSESS', SWEDBANK)).toEqual({
       ok: true,
-      ids: { swedbank: { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' }, nordeaSignerId: null },
+      ids: {
+        swedbank: { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' },
+        nordeaSignerId: null,
+        nordeaAgreementId: null,
+      },
     })
   })
 
-  it("refuses a Nordea debtor without its Signer ID and carries the one it has", () => {
+  it('refuses a Nordea debtor without both its ids, naming the empty columns, and carries the ones it has', () => {
     expect(resolveBankFileIds('NDEASESS', SWEDBANK)).toEqual({
       ok: false,
       missing: 'nordea_signer_id',
-      fields: ['nordea_signer_id'],
+      fields: ['nordea_signer_id', 'nordea_agreement_id'],
     })
     expect(resolveBankFileIds('NDEASESS', { nordea_signer_id: 'NB10000123456' })).toEqual({
+      ok: false,
+      missing: 'nordea_agreement_id',
+      fields: ['nordea_agreement_id'],
+    })
+    expect(resolveBankFileIds('NDEASESS', { nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' })).toEqual({
       ok: true,
-      ids: { swedbank: null, nordeaSignerId: 'NB10000123456' },
+      ids: { swedbank: null, nordeaSignerId: 'NB10000123456', nordeaAgreementId: 'NB123456' },
     })
   })
 })
@@ -91,5 +124,24 @@ describe('initiatingPartyId', () => {
       scheme: null,
     })
     expect(initiatingPartyId({ orgNumber: '' })).toBeNull()
+  })
+})
+
+describe('debtorPartyId', () => {
+  const swedbank = { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' }
+
+  it("names the bank's agreement id with scheme BANK, else the org number digits without one", () => {
+    expect(debtorPartyId({ orgNumber: '556677-8899', swedbank })).toEqual({ id: '123456789CPO0001', scheme: 'BANK' })
+    // Nordea's MIG: "Customer agreement (Nordea's CCM agreement) identification
+    // with Nordea is mandatory (BANK)" (crm#1530).
+    expect(
+      debtorPartyId({ orgNumber: '556677-8899', nordeaSignerId: 'NB10000123456', nordeaAgreementId: 'NB123456' }),
+    ).toEqual({ id: 'NB123456', scheme: 'BANK' })
+    // A Nordea batch made before the agreement id was stored keeps the org number.
+    expect(debtorPartyId({ orgNumber: '556677-8899', nordeaSignerId: 'NB10000123456' })).toEqual({
+      id: '5566778899',
+      scheme: null,
+    })
+    expect(debtorPartyId({ orgNumber: '' })).toBeNull()
   })
 })

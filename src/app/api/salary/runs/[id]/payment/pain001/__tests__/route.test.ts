@@ -88,7 +88,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     enqueueMany([
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25', corrects_run_id: 'run-0' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
-      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } }, // company_settings
+      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } }, // company_settings
       ...payingAccountReads(),
       { data: [employee] }, // salary_run_employees
       { data: { id: 'run-0', corrects_run_id: null } }, // the corrected run
@@ -124,7 +124,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     enqueueMany([
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
-      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } }, // settings
+      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } }, // settings
       ...payingAccountReads(),
       {
         data: [
@@ -189,6 +189,27 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     expect(generatePain001).not.toHaveBeenCalled()
   })
 
+  it('returns 400 asking for the Nordea agreement id when a Nordea company has only the Signer ID (crm#1530)', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
+      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } }, // settings
+      ...payingAccountReads(),
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/pain001'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error).toContain('avtals-ID')
+    expect(body.error).toContain('Inställningar → Fakturor')
+    expect(generatePain001).not.toHaveBeenCalled()
+  })
+
   it('returns 400 naming the paying account and where its IBAN is filled when it has none (crm#1483)', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
@@ -226,7 +247,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     enqueueMany([
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } },
-      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } },
+      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } },
       ...payingAccountReads(),
       {
         data: [
@@ -249,7 +270,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     enqueueMany([
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 3, payment_date: '2026-03-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
-      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } }, // settings
+      { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' } }, // settings
       ...payingAccountReads(),
       {
         data: [
@@ -270,7 +291,11 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     expect(response.headers.get('Content-Type')).toBe('application/xml; charset=utf-8')
     expect(response.headers.get('Content-Disposition')).toContain('pain001_lon_2026-03.xml')
     // A Nordea company's file names the sender by its Signer ID (crm#1530).
-    expect(vi.mocked(generatePain001).mock.calls[0][0]).toMatchObject({ nordeaSignerId: 'NB10000123456', swedbank: null })
+    expect(vi.mocked(generatePain001).mock.calls[0][0]).toMatchObject({
+      nordeaSignerId: 'NB10000123456',
+      nordeaAgreementId: 'NB123456',
+      swedbank: null,
+    })
   })
 })
 

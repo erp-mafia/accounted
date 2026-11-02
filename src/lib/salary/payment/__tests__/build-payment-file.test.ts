@@ -21,7 +21,7 @@ import {
   salaryPaymentFileRefusal,
   salaryPaymentMessageId,
 } from '../build-payment-file'
-import { NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
+import { NORDEA_AGREEMENT_ID_MISSING_SV, NORDEA_SIGNER_ID_MISSING_SV } from '@/lib/payments/nordea'
 
 const COMPANY_ID = 'company-1'
 const RUN_ID = 'run-1'
@@ -516,10 +516,11 @@ describe('buildSalaryPaymentFile', () => {
   })
 })
 
-// Nordea refuses a pain.001 whose InitgPty is not its Signer ID (crm#1530):
-// the builder asks for it before anything is generated and passes it on.
+// Nordea refuses a pain.001 whose InitgPty is not its Signer ID, and rejects
+// one whose Dbtr is not its CCM agreement id (crm#1530): the builder asks
+// for both before anything is generated and passes them on.
 describe('buildSalaryPaymentFile for a Nordea debtor', () => {
-  const nordeaSettings = { ...settings, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' }
+  const nordeaSettings = { ...settings, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' }
 
   it('refuses NORDEA_SIGNER_ID_MISSING with a Swedish message, before loading employees', async () => {
     const { supabase, enqueueMany, calls } = client()
@@ -536,6 +537,37 @@ describe('buildSalaryPaymentFile for a Nordea debtor', () => {
     expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
   })
 
+  it('refuses NORDEA_AGREEMENT_ID_MISSING when only the CCM agreement id is missing', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: { ...nordeaSettings, nordea_agreement_id: null } }, ...ONLY_1930])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'NORDEA_AGREEMENT_ID_MISSING',
+      format: 'pain001',
+      details: { fields: ['nordea_agreement_id'], message: NORDEA_AGREEMENT_ID_MISSING_SV },
+    })
+    expect(calls.map((c) => c.table)).not.toContain('salary_run_employees')
+  })
+
+  it('reads the settings again without the agreement id while its column is not there yet', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: null, error: { code: '42703', message: 'column company_settings.nordea_agreement_id does not exist' } },
+      { data: { ...nordeaSettings, nordea_agreement_id: undefined } },
+      ...ONLY_1930,
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result).toMatchObject({ ok: false, code: 'NORDEA_AGREEMENT_ID_MISSING' })
+    const selects = calls.filter((c) => c.table === 'company_settings' && c.method === 'select').map((c) => String(c.args[0]))
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('nordea_agreement_id')
+  })
+
   it('maps the refusal to the missing-bank-details code for v1, MCP and the bank list', () => {
     const refusal = salaryPaymentFileRefusal({
       ok: false,
@@ -550,7 +582,7 @@ describe('buildSalaryPaymentFile for a Nordea debtor', () => {
     })
   })
 
-  it('names the sender by the Signer ID with SchmeNm CUST', async () => {
+  it('names the sender by the Signer ID (CUST) and the debtor by the CCM agreement id (BANK)', async () => {
     const { supabase, enqueueMany } = client()
     enqueueMany([
       { data: run },
@@ -566,6 +598,9 @@ describe('buildSalaryPaymentFile for a Nordea debtor', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.content).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
+    const debtor = result.content.match(/<Dbtr>[\s\S]*?<\/Dbtr>/)![0]
+    expect(debtor).toContain('<Othr><Id>NB123456</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
+    expect(debtor).toContain('<Ctry>SE</Ctry>')
   })
 })
 

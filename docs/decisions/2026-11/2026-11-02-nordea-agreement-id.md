@@ -1,0 +1,1 @@
+[2026-11-02] Nordea pain.001 files name the stored CCM agreement id (SchmeNm BANK) as Dbtr, with Dbtr/PstlAdr Ctry SE and SvcLvl NURG, and a Nordea company without it gets no file: Nordea rejected the org number there after upload (crm#1530).

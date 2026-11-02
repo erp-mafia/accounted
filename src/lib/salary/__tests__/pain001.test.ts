@@ -401,7 +401,7 @@ describe('generatePain001 for a Nordea debtor with its Signer ID', () => {
   const employees = [{ name: 'Anna Andersson', clearingNumber: '1344', bankAccountNumber: '2045678', netSalary: 28000 }]
   const options = { messageId: 'ACCOUNTED-5561234567-2026-10', paymentDate: '2026-10-23', periodLabel: '2026-10' }
 
-  it('identifies the sender by the Signer ID with SchmeNm CUST; the debtor keeps the org number', () => {
+  it('with the Signer ID alone (before the agreement id) identifies the sender by it; the debtor keeps the org number', () => {
     const xml = generatePain001({ ...company, nordeaSignerId: 'NB10000123456' }, employees, options)
     expect(block(xml, 'InitgPty')).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
     expect(block(xml, 'InitgPty')).not.toContain('5561234567')
@@ -410,5 +410,25 @@ describe('generatePain001 for a Nordea debtor with its Signer ID', () => {
 
   it('without a Signer ID keeps the org number, as before', () => {
     expect(block(generatePain001(company, employees, options), 'InitgPty')).toContain('<Othr><Id>5561234567</Id></Othr>')
+  })
+
+  // Nordea's MIG: "Customer agreement (Nordea's CCM agreement) identification
+  // with Nordea is mandatory (BANK)", and the debtor's country is required;
+  // Example 5.9 (Sweden, salary) writes SvcLvl NURG before CtgyPurp SALA.
+  it('with the CCM agreement id names it with SchmeNm BANK as the debtor, with country SE and SvcLvl NURG', () => {
+    const xml = generatePain001(
+      { ...company, city: 'Stockholm', nordeaSignerId: 'NB10000123456', nordeaAgreementId: 'NB123456' },
+      employees,
+      options,
+    )
+    const dbtr = block(xml, 'Dbtr')
+    expect(dbtr).toContain('<Othr><Id>NB123456</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
+    expect(dbtr).toContain('<TwnNm>Stockholm</TwnNm>')
+    expect(dbtr).toContain('<Ctry>SE</Ctry>')
+    expect(dbtr).not.toContain('5561234567')
+    expect(block(xml, 'InitgPty')).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
+    expect(block(xml, 'PmtTpInf')).toMatch(/<SvcLvl><Cd>NURG<\/Cd><\/SvcLvl>\s*<CtgyPurp><Cd>SALA<\/Cd><\/CtgyPurp>/)
+    // Payday stays the requested date: only Swedbank's guide moves it.
+    expect(xml).toContain('<ReqdExctnDt>2026-10-23</ReqdExctnDt>')
   })
 })

@@ -41,6 +41,7 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'SWEDBANK_IDS_MISSING':
     case 'NORDEA_SIGNER_ID_MISSING':
+    case 'NORDEA_AGREEMENT_ID_MISSING':
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'IN_BANK_PAYMENT':
       return NextResponse.json({ error: SALARY_IN_BANK_PAYMENT_FILE_SV }, { status: 409 })

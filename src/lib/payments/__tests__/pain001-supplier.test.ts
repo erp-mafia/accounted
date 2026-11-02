@@ -820,7 +820,7 @@ describe('Nordea: the Signer ID as the initiating party', () => {
     expect(shape(findAll(parseXml(xml), 'InitgPty')[0])).toBe('InitgPty(Nm,Id(OrgId(Othr(Id,SchmeNm(Cd)))))')
   })
 
-  it('changes nothing but InitgPty: the debtor keeps the org number and the Nordea form', () => {
+  it('with the Signer ID alone (a batch made before the agreement id) changes nothing but InitgPty', () => {
     const payments = mixedBatch()
     const withId = generateSupplierPain001({ ...nordea, nordeaSignerId: signerId }, payments, options)
     const without = generateSupplierPain001(nordea, payments, options)
@@ -840,8 +840,75 @@ describe('Nordea: the Signer ID as the initiating party', () => {
 
   it('leaves a Swedbank debtor on its own SignerID even with a stray Nordea id', () => {
     const swedbank = { ...nordea, bic: 'SWEDSESS', swedbank: { signerId: '260637712ORI0003', corporatePayId: '260637712CPO0001' } }
-    const initgPty = block(generateSupplierPain001({ ...swedbank, nordeaSignerId: signerId }, [bgPayment()], options), 'InitgPty')
-    expect(initgPty).toContain('<Id>260637712ORI0003</Id>')
-    expect(initgPty).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+    const xml = generateSupplierPain001(
+      { ...swedbank, nordeaSignerId: signerId, nordeaAgreementId: 'NB123456' },
+      [bgPayment()],
+      options,
+    )
+    expect(block(xml, 'InitgPty')).toContain('<Id>260637712ORI0003</Id>')
+    expect(block(xml, 'InitgPty')).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+    expect(block(xml, 'Dbtr')).toContain('<Id>260637712CPO0001</Id>')
+    expect(xml).not.toContain('NB123456')
+  })
+})
+
+/**
+ * Nordea "Corporate Access Payables, MIG pain.001.001.03" v2.4 (2026-06-24)
+ * and "pain.001.001.09" v1.4 (2026-09-16), Dbtr/Id/OrgId/Othr/Id: "Customer
+ * agreement (Nordea's CCM agreement) identification with Nordea is mandatory
+ * (BANK)"; "Debtor Name, Country and Identification are required". "Example
+ * per payment type" v2.6 (2026-06-22), 5.4 Sweden, PlusGiro to Bankgiro:
+ * PmtTpInf SvcLvl NURG + CtgyPurp SUPP, Dbtr PstlAdr Ctry SE and the
+ * agreement id with SchmeNm BANK. A file naming the org number there passed
+ * the upload and was rejected for the missing agreement id (crm#1530).
+ */
+describe('Nordea: the CCM agreement id as the debtor', () => {
+  const nordea = {
+    name: 'Testbolaget AB',
+    orgNumber: '556677-8899',
+    // A PlusGiro account at Nordea, as in the rejected file.
+    iban: 'SE2895000099602600000000',
+    bic: 'NDEASESS',
+    bankgiro: null,
+    city: 'Stockholm',
+    nordeaSignerId: 'NB10000123456',
+    nordeaAgreementId: 'NB123456',
+  }
+
+  function block(xml: string, name: string): string {
+    return xml.match(new RegExp(`<${name}>[\\s\\S]*?</${name}>`))![0]
+  }
+
+  it('states the agreement id with SchmeNm BANK in Dbtr, never the org number (the rejected file: three bankgiro payments)', () => {
+    const payments = [bgPayment({ amount: 934 }), bgPayment({ amount: 798 }), bgPayment({ amount: 2718 })]
+    const xml = generateSupplierPain001(nordea, payments, options)
+    const dbtr = block(xml, 'Dbtr')
+    expect(dbtr).toContain('<Id>NB123456</Id>')
+    expect(dbtr).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+    expect(dbtr).not.toContain('5566778899')
+    expect(block(xml, 'InitgPty')).toContain('<Id>NB10000123456</Id>')
+    const doc = parseXml(xml)
+    expect(shape(findAll(doc, 'Dbtr')[0])).toBe('Dbtr(Nm,PstlAdr(TwnNm,Ctry),Id(OrgId(Othr(Id,SchmeNm(Cd)))))')
+    expect(shape(findAll(doc, 'PmtTpInf')[0])).toBe('PmtTpInf(SvcLvl(Cd),CtgyPurp(Cd))')
+    expect(block(xml, 'PmtTpInf')).toContain('<SvcLvl><Cd>NURG</Cd></SvcLvl>')
+    expect(block(xml, 'PmtTpInf')).toContain('<CtgyPurp><Cd>SUPP</Cd></CtgyPurp>')
+  })
+
+  it("names the debtor's country even without a town", () => {
+    const dbtr = block(generateSupplierPain001({ ...nordea, city: null }, [bgPayment()], options), 'Dbtr')
+    expect(dbtr).toContain('<PstlAdr>')
+    expect(dbtr).toContain('<Ctry>SE</Ctry>')
+    expect(dbtr).not.toContain('<TwnNm>')
+  })
+
+  it('keeps every other part of the file: the payees, the IBAN debit and the BIC', () => {
+    const payments = mixedBatch()
+    const withAgreement = generateSupplierPain001(nordea, payments, options)
+    const signerOnly = generateSupplierPain001({ ...nordea, nordeaAgreementId: null }, payments, options)
+    const strip = (xml: string) =>
+      xml
+        .replace(/\s*<Dbtr>[\s\S]*?<\/Dbtr>/g, '')
+        .replace(/\s*<PmtTpInf>[\s\S]*?<\/PmtTpInf>/g, '')
+    expect(strip(withAgreement)).toBe(strip(signerOnly))
   })
 })

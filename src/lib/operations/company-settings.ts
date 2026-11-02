@@ -76,6 +76,7 @@ export const GENERAL_SETTINGS_FIELDS = [
   'swedbank_signer_id',
   'swedbank_corporate_pay_id',
   'nordea_signer_id',
+  'nordea_agreement_id',
   'invoice_payment_accounts',
   'invoice_prefix',
   'next_invoice_number',
@@ -230,7 +231,7 @@ const SettingsResource = z.object({
       'company_name', 'address_line1', 'address_line2', 'postal_code', 'city', 'registered_office', 'country', 'phone', 'email',
       'website', 'tax_contact_name', 'tax_contact_phone', 'tax_contact_email', 'bank_name', 'clearing_number',
       'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'swedbank_signer_id',
-      'swedbank_corporate_pay_id', 'nordea_signer_id', 'invoice_prefix', 'invoice_default_notes',
+      'swedbank_corporate_pay_id', 'nordea_signer_id', 'nordea_agreement_id', 'invoice_prefix', 'invoice_default_notes',
       'invoice_company_name_position', 'invoice_late_fee_text', 'invoice_credit_terms_text',
       'invoice_email_reply_to', 'invoice_primary_color', 'invoice_accent_color', 'invoice_font_family',
       'invoice_header_text', 'invoice_footer_text', 'default_voucher_series', 'sector_slug',
@@ -388,6 +389,9 @@ const GeneralSettingsInput = z
     ),
     nordea_signer_id: S.nordea_signer_id.describe(
       'Nordea Signer ID, letters and digits (for example NB10000123456), agreed with or assigned by Nordea; Nordea shows it when it refuses a file for the wrong Signer ID. Written as the initiating party (SchmeNm CUST) of the pain.001 payment files (supplier payments, tax payments, salaries) of a company whose bank is Nordea; Nordea refuses such a file without it. Spaces and hyphens are dropped and letters upper-cased. Null or empty string clears it.',
+    ),
+    nordea_agreement_id: S.nordea_agreement_id.describe(
+      'Nordea CCM (Corporate Cash Management) agreement id, letters and digits, assigned by Nordea: at Nordea Business it starts with NB (for example NB123456). Written as the debtor id (SchmeNm BANK) of the pain.001 payment files of a company whose bank is Nordea; required together with nordea_signer_id, and Nordea rejects a file without it. Spaces and hyphens are dropped and letters upper-cased. Null or empty string clears it.',
     ),
     invoice_email_texts: S.invoice_email_texts.describe(
       'Per-language (sv, en) overrides of subject, greeting, body, signoff. Placeholders: {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}. Null clears every override.',
