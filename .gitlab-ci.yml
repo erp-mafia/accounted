@@ -133,6 +133,12 @@ checks:
   # now waits ("waiting for resource") instead of dying, and a new commit still
   # cancels the wait.
   resource_group: typecheck
+  # The group keeps two typechecks apart; the tag keeps one apart from every
+  # other job. Only the autoscaler carries single-job, and it runs one job per
+  # 16 GB instance (capacity_per_instance = 1), so tsc no longer shares memory
+  # with a build or a test shard. A cold check of main measured 12.5 GB of heap
+  # on 2026-11-01. ci-runner-1 runs five jobs on 15 GB and never takes it.
+  tags: [single-job]
   variables:
     CHECKS_CACHE_DIR: .ci-cache
   script:
@@ -180,8 +186,9 @@ checks-cache:
   needs: []
   allow_failure: true
   interruptible: false
-  # checks' group: one typecheck at a time (see there).
+  # checks' group and tag: one typecheck at a time, alone on its host (see there).
   resource_group: typecheck
+  tags: [single-job]
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
