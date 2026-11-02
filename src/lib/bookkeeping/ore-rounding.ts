@@ -38,6 +38,24 @@ export function oreSettlementResidual(owedSek: number, bankSek: number): number 
 }
 
 /**
+ * The öresavrundning a SEK customer invoice's own verifikat already booked:
+ * what the reskontra says is still owed less what 1510 carries for it, when
+ * that gap is inside the öre band. It is there when the issue verifikat put
+ * 1510 at the rounded "Att betala" and the öre on 3740 (an issuance edited by
+ * hand, the way Fortnox books it). A settlement of that invoice clears what
+ * 1510 carries and books only the rest of the öre: otherwise the rounding
+ * lands on 3740 twice and 1510 keeps the öre.
+ *
+ *   > 0: 1510 carries LESS than owed (the issue verifikat debited 3740)
+ *   < 0: 1510 carries MORE than owed (the issue verifikat credited 3740)
+ *   0:   1510 carries the remainder, the ledger cannot say (null), or the
+ *        gap is a krona or more, which is never rounding
+ */
+export function bookedOreRounding(remainingSek: number, carriedSek: number | null | undefined): number {
+  return carriedSek == null ? 0 : oreSettlementResidual(remainingSek, carriedSek)
+}
+
+/**
  * Which ledger the settlement clears. It decides the 3740 side:
  *
  *   customer (1510 or revenue credited, bank debited):

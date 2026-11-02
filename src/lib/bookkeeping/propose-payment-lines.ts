@@ -4,12 +4,12 @@
  *
  * No DB or Supabase dependency: all inputs are plain data.
  */
-import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import { isKronorCurrency, resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
 import { roundOre, ORE_TOLERANCE } from '@/lib/money'
 import { InvoiceFxRateMissingError } from './invoice-accounts'
 import { buildInvoiceCashLines } from './invoice-lines'
 import { statedSettlement } from './ledger-carried-sek'
-import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { CreateJournalEntryLineInput, EntityType, InvoiceItem, VatTreatment } from '@/types'
@@ -67,8 +67,10 @@ export interface ProposePaymentLinesInput {
     paid_amount?: number | null
     remaining_amount?: number | null
     /**
-     * What 1510 carries for a foreign invoice (carriedSekOf): the proposal
-     * clears exactly that, so nothing is stranded on a paid invoice.
+     * What 1510 carries (carriedSekOf): for a foreign invoice, and for a SEK
+     * invoice whose issue verifikat booked the öresavrundning. The proposal
+     * clears exactly that, so nothing is stranded on a paid invoice and the öre
+     * are not booked twice.
      */
     carried_sek?: number | null
   }
@@ -198,6 +200,20 @@ function proposeRemainingAwareLines(
   const hasPartial = remaining > ORE_TOLERANCE && total - remaining > ORE_TOLERANCE
   if (!hasPartial) return null
 
+  // The issue verifikat booked the öresavrundning (carriedSekOf): 1510 gives
+  // up what it carries, the bank the remaining, and 3740 the difference, so
+  // the öre on the issue verifikat are not booked twice.
+  if (bookedOreRounding(remaining, invoice.carried_sek) !== 0) {
+    const carried = roundOre(invoice.carried_sek!)
+    const lines: FormLine[] = [
+      { account_number: paymentAccount, debit_amount: toFormAmount(remaining), credit_amount: '', line_description: desc },
+      { account_number: '1510', debit_amount: '', credit_amount: toFormAmount(carried), line_description: desc },
+    ]
+    const issueOre = oreSettlementResidual(carried, remaining)
+    if (issueOre !== 0) lines.push(toFormLine(oreRoundingLine(issueOre, 'customer')))
+    return lines
+  }
+
   // Nothing arrives at the bank, so the whole remaining is the residual; it
   // is öresavrundning only inside the shared band.
   const residual = oreSettlementResidual(remaining, 0)
@@ -305,9 +321,15 @@ function proposeAccrualLines(
     if (gainSek !== 0) lines.push(toFormLine(fxDifferenceLine(gainSek)))
   } else {
     const amount = Math.round(bookedSekAmount * 100) / 100
+    // The customer pays "Att betala": the total plus the öresavrundning. On a
+    // SEK invoice whose issue verifikat booked that rounding, 1510 carries it
+    // already (carried_sek), so the residual below is 0 and 3740 is not
+    // booked twice. A foreign invoice has no rounding: the bank takes what
+    // 1510 carries.
+    const bank = isKronorCurrency(invoice.currency) ? roundOre(sekAtRate + roundingDelta) : roundOre(amount + roundingDelta)
     lines.push({
       account_number: paymentAccount,
-      debit_amount: toFormAmount(amount + roundingDelta),
+      debit_amount: toFormAmount(bank),
       credit_amount: '',
       line_description: desc,
     })
@@ -317,8 +339,7 @@ function proposeAccrualLines(
       credit_amount: toFormAmount(amount),
       line_description: desc,
     })
-    // roundingDelta is "Att betala" minus the total: the residual's negative.
-    const residual = oreSettlementResidual(amount, amount + roundingDelta)
+    const residual = oreSettlementResidual(amount, bank)
     if (residual !== 0) {
       lines.push(toFormLine(oreRoundingLine(residual, 'customer')))
     }

@@ -1055,6 +1055,21 @@ describe('header fallback and payment path: strict FX conversion', () => {
     ])
   })
 
+  it('a SEK invoice whose issue verifikat booked the öresavrundning: the settlement clears what 1510 carries (crm#1553)', () => {
+    const invoice = makeInvoice({ currency: 'SEK', total: 17176.25, remaining_amount: 17176.25, paid_amount: 0 })
+    const { lines } = buildInvoicePaymentLines({ ...invoice, carried_sek: 17176 }, undefined, '1930')
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 17176, 0],
+      ['1510', 0, 17176],
+    ])
+    // A kronor part payment clears its own kronor, never a share of the ledger figure.
+    const part = buildInvoicePaymentLines({ ...invoice, carried_sek: 17176 }, undefined, '1930', undefined, 5000)
+    expect(part.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 5000, 0],
+      ['1510', 0, 5000],
+    ])
+  })
+
   describe('a stated difference, measured from the rate, on a ledger that says otherwise', () => {
     const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
       lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])

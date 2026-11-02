@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from '../ore-rounding'
+import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from '../ore-rounding'
 
 describe('oreSettlementResidual', () => {
   it('is owed minus bank inside the one-krona band', () => {
@@ -81,5 +81,19 @@ describe('fxDifferenceLine: parity with the inline legs it replaced', () => {
     const texts = { gain: 'Orealiserade valutakursvinster', loss: 'Orealiserade valutakursförluster' }
     expect(fxDifferenceLine(12.345, texts)).toMatchObject({ account_number: FX_GAIN_ACCOUNT, credit_amount: 12.35, line_description: texts.gain })
     expect(fxDifferenceLine(-0.5, texts)).toMatchObject({ account_number: FX_LOSS_ACCOUNT, debit_amount: 0.5, line_description: texts.loss })
+  })
+})
+
+describe('bookedOreRounding', () => {
+  it('the öre the issue verifikat booked: remaining less what 1510 carries', () => {
+    expect(bookedOreRounding(17176.25, 17176)).toBe(0.25)
+    expect(bookedOreRounding(3063.75, 3064)).toBe(-0.25)
+  })
+
+  it('none when 1510 carries the remainder, the ledger cannot say, or the gap is a krona or more', () => {
+    expect(bookedOreRounding(17176.25, 17176.25)).toBe(0)
+    expect(bookedOreRounding(17176.25, null)).toBe(0)
+    expect(bookedOreRounding(17176.25, undefined)).toBe(0)
+    expect(bookedOreRounding(17176.25, 17175)).toBe(0)
   })
 })

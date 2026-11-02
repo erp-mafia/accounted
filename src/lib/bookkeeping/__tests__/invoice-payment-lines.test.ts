@@ -679,3 +679,63 @@ describe('buildInvoicePaymentClearingLines: feeAccount (crm#1364)', () => {
     expect(foreign.feeSek).toBe(0)
   })
 })
+
+describe('buildInvoicePaymentClearingLines: öresavrundning the issue verifikat already booked (crm#1553)', () => {
+  const sek = (amount: number) => ({ amount, amount_sek: null, currency: 'SEK', exchange_rate: null })
+  // Total 17 176,25; the issue verifikat put 1510 at 17 176 and Dr 3740 0,25.
+  const roundedDown = { currency: 'SEK', exchange_rate: null, remaining_amount: 17176.25, total: 17176.25, paid_amount: 0, carried_sek: 17176 }
+  const net = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>, account: string) =>
+    Math.round(lines.filter((l) => l.account_number === account).reduce((s, l) => s + l.debit_amount - l.credit_amount, 0) * 100) / 100
+
+  it('the rounded payment clears what 1510 carries and books no second 3740', () => {
+    const r = buildInvoicePaymentClearingLines(sek(17176), roundedDown, 'Inbetalning', undefined, '1930')
+    expect(r.arSek).toBe(17176)
+    expect(r.oreRoundingSek).toBe(0)
+    expect(r.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 17176, 0],
+      ['1510', 0, 17176],
+    ])
+  })
+
+  it('the exact total: 3740 gives back the öre the issue verifikat took', () => {
+    const r = buildInvoicePaymentClearingLines(sek(17176.25), roundedDown, 'Inbetalning', undefined, '1930')
+    expect(r.arSek).toBe(17176)
+    expect(net(r.lines, '3740')).toBe(-0.25)
+  })
+
+  it('rounded up at issue (3 063,75 on 3 064): the rounded payment books no 3740', () => {
+    const roundedUp = { currency: 'SEK', exchange_rate: null, remaining_amount: 3063.75, total: 3063.75, paid_amount: 0, carried_sek: 3064 }
+    const r = buildInvoicePaymentClearingLines(sek(3064), roundedUp, 'Inbetalning', undefined, '1930')
+    expect(r.arSek).toBe(3064)
+    expect(r.lines).toHaveLength(2)
+  })
+
+  it('a part payment clears its own kronor; the gap waits for the settlement', () => {
+    const part = buildInvoicePaymentClearingLines(sek(5000), roundedDown, 'Inbetalning', undefined, '1930')
+    expect(part.arSek).toBe(5000)
+    expect(part.lines).toHaveLength(2)
+    const rest = buildInvoicePaymentClearingLines(
+      sek(12176),
+      { ...roundedDown, remaining_amount: 12176.25, paid_amount: 5000, carried_sek: 12176 },
+      'Inbetalning', undefined, '1930',
+    )
+    expect(rest.arSek).toBe(12176)
+    expect(rest.lines).toHaveLength(2)
+  })
+
+  it('an overpayment to 2420: 1510 clears what it carries and 3740 returns the issue öre', () => {
+    const r = buildInvoicePaymentClearingLines(sek(17200), roundedDown, 'Inbetalning', undefined, '1930', '2420')
+    expect(r.arSek).toBe(17176)
+    expect(r.overpaymentSek).toBe(23.75)
+    expect(net(r.lines, '3740')).toBe(-0.25)
+    expect(net(r.lines, '1930') + net(r.lines, '1510') + net(r.lines, '2420') + net(r.lines, '3740')).toBe(0)
+  })
+
+  it('without a ledger figure, or a gap of a krona or more, nothing changes', () => {
+    const plain = buildInvoicePaymentClearingLines(sek(17176), { ...roundedDown, carried_sek: null }, 'Inbetalning', undefined, '1930')
+    expect(plain.arSek).toBe(17176.25)
+    expect(net(plain.lines, '3740')).toBe(0.25)
+    const far = buildInvoicePaymentClearingLines(sek(17176), { ...roundedDown, carried_sek: 17000 }, 'Inbetalning', undefined, '1930')
+    expect(far.arSek).toBe(17176.25)
+  })
+})

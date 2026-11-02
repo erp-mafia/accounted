@@ -658,6 +658,54 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     )
   })
 
+  it('the issue verifikat booked the öresavrundning: the whole-krona payment clears what 1510 carries, no second 3740 (crm#1553)', async () => {
+    // Total 999.60, the issue verifikat put 1510 at the rounded 1 000 and Cr
+    // 3740 0.40. The customer pays 1 000: 1510 goes to zero and the invoice is
+    // paid, with nothing more on 3740.
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 999.6,
+      remaining_amount: 999.6,
+      paid_amount: 0,
+      subtotal: 799.68,
+      vat_amount: 199.92,
+      journal_entry_id: 'je-issue',
+      invoice_number: 'F-2024003',
+      customer: makeCustomer(),
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: invoice, error: null }) // fetch invoice
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // 1510 carries the rounded 1 000
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update transaction
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ invoice_status: string; remaining_amount: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.invoice_status).toBe('paid')
+    expect(body.remaining_amount).toBe(0)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 1000, 0],
+      ['1510', 0, 1000],
+    ])
+  })
+
   it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
     // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
     // absorbs the 0.40 and paid_amount advances by the remaining only. The AR
@@ -682,6 +730,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 999.6 }, error: null }) // 1510 carries the remainder
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
@@ -1923,6 +1972,7 @@ describe('POST /api/transactions/[id]/match-invoice: a customer overpayment (crm
     enqueueUpToRefusal()
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: { ok: true, sek: 812.4 }, error: null }) // 1510 carries the remainder
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert

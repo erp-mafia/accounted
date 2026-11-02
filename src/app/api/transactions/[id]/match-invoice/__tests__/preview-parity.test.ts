@@ -258,6 +258,7 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: invoice, error: null }) // preview: invoice
     enqueue({ data: settings, error: null }) // preview: settings
     enqueue({ data: [], error: null }) // preview: cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 12500.4 }, error: null }) // preview: 1510 carries the remainder
     const shown = await preview()
 
     enqueue({ data: tx, error: null }) // POST: transaction
@@ -265,6 +266,7 @@ describe('bank-match preview and booking are identical', () => {
     enqueue({ data: [], error: null }) // POST: hard-duplicate check
     enqueue({ data: settings, error: null }) // POST: settings
     enqueue({ data: [], error: null }) // POST: cash accounts -> 1930
+    enqueue({ data: { ok: true, sek: 12500.4 }, error: null }) // POST: 1510 carries the remainder
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // POST: row claim
     enqueue({ data: [{ id: INVOICE_ID }], error: null }) // POST: invoice update
     const booked = await book()

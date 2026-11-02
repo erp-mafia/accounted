@@ -1,10 +1,11 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek, statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
-import { equalOre, roundOre, sumOre } from '@/lib/money'
+import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import { assertAccruedIncomeLinesBookable } from './accruals/accrued-cost-guard'
 import {
@@ -259,8 +260,13 @@ export function buildInvoicePaymentLines(
     : settlesFullTotal
       ? headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
       : headerToSekOrThrow(outstanding, null, invoice.currency, invoice.exchange_rate)
+  // A SEK invoice carries a ledger figure only when its issue verifikat booked
+  // the öresavrundning (carriedSekOf): the settlement of the whole remainder
+  // clears that figure, so the öre are not booked twice, while a kronor part
+  // payment clears its own kronor and never a share of it.
+  const kronorPart = isPartial && isKronorCurrency(invoice.currency) && paymentAmount < outstanding - ORE_TOLERANCE
   const bookedSekAmount =
-    invoice.carried_sek != null
+    invoice.carried_sek != null && !kronorPart
       ? clearedSek({
           amount: paymentAmount ?? outstanding,
           remaining: outstanding,

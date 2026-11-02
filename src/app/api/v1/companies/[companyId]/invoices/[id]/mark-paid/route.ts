@@ -30,7 +30,7 @@
  * settlement-amount derivation, the duplicate guard and the dry run.
  */
 
-import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { carriedSekOf, paidOfClearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -409,11 +409,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // (sub-krona partials stay partial, overshoot rejects), mirroring the
     // dashboard mark-paid flow. The default path pays the exact remaining, so
     // absorption is a no-op there.
+    // Lines for a SEK invoice whose issue verifikat booked the öresavrundning
+    // carry only the rest of it on 3740 (carriedSekOf).
+    const linesCarriedSek =
+      customLines && invoiceAlreadyBooked && isKronorCurrency(typed.currency)
+        ? await carriedSekOf(ctx.supabase, ctx.companyId!, 'customer', typed)
+        : null
     const payment = planInvoicePaymentForLines(
       typed,
       paymentAmountInInvoiceCurrency,
       customLines,
       typed.currency ?? 'SEK',
+      linesCarriedSek,
     )
     if (!payment.ok) {
       return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', ctx.log, {

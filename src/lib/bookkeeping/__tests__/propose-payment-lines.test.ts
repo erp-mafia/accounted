@@ -843,3 +843,64 @@ describe('proposePaymentLines: ROT/RUT invoice reopened by a reclaim (rot_rut_re
     expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '17500' })
   })
 })
+
+describe('proposePaymentLines: öresavrundning the issue verifikat already booked (crm#1553)', () => {
+  const rows = (lines: Array<{ account_number: string; debit_amount: string; credit_amount: string }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('proposes the rounded payment against what 1510 carries, with no 3740', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), ore_rounding: true, carried_sek: 17176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '17176', ''],
+      ['1510', '', '17176'],
+    ])
+  })
+
+  it('rounded up at issue: the same, 3 064 both legs', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 3063.75 }), ore_rounding: true, carried_sek: 3064 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '3064', ''],
+      ['1510', '', '3064'],
+    ])
+  })
+
+  it('rounding off for the invoice: the exact total arrives and 3740 gives the issue öre back', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), ore_rounding: false, carried_sek: 17176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '17176.25', ''],
+      ['1510', '', '17176'],
+      ['3740', '', '0.25'],
+    ])
+  })
+
+  it('the rest of a part-paid invoice: 1510 what it carries, the bank the remaining, 3740 the difference', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 17176.25 }), paid_amount: 5000, remaining_amount: 12176.25, carried_sek: 12176 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+    })
+    expect(rows(lines)).toEqual([
+      ['1930', '12176.25', ''],
+      ['1510', '', '12176'],
+      ['3740', '', '0.25'],
+    ])
+  })
+})

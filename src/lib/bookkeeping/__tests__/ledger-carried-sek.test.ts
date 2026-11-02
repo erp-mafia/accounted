@@ -106,7 +106,7 @@ describe('carriedSek', () => {
 })
 
 describe('carriedSekOf', () => {
-  it('a kronor document costs no read', async () => {
+  it('a kronor document without the öre to round costs no read', async () => {
     const supabase = client({ data: null, error: null })
     expect(await carriedSekOf(supabase, 'c-1', 'customer', { id: 'inv-1', currency: 'SEK' })).toBeNull()
     expect(await carriedSekOf(supabase, 'c-1', 'customer', { id: 'inv-1', currency: null })).toBeNull()
@@ -116,5 +116,34 @@ describe('carriedSekOf', () => {
   it('answers the figure, or null for a door that falls back to the rate', async () => {
     expect(await carriedSekOf(client({ data: { ok: true, sek: 10 }, error: null }), 'c-1', 'supplier', { id: 's', currency: 'EUR' })).toBe(10)
     expect(await carriedSekOf(client({ data: { ok: false, reason: 'no_registration_voucher' }, error: null }), 'c-1', 'supplier', { id: 's', currency: 'EUR' })).toBeNull()
+  })
+
+  describe('a SEK customer invoice whose issue verifikat booked the öresavrundning (crm#1553)', () => {
+    const invoice = { id: 'inv-1', currency: 'SEK', total: 17176.25, remaining_amount: 17176.25, paid_amount: 0, journal_entry_id: 'je-1' }
+
+    it('answers what 1510 carries when it is the remainder rounded', async () => {
+      const supabase = client({ data: { ok: true, sek: 17176 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', invoice)).toBe(17176)
+      expect(supabase.rpc).toHaveBeenCalledWith('document_carried_sek', { p_company_id: 'c-1', p_side: 'customer', p_document_id: 'inv-1' })
+    })
+
+    it('null when 1510 carries the remainder, a krona or more off it, or the ledger cannot say', async () => {
+      expect(await carriedSekOf(client({ data: { ok: true, sek: 17176.25 }, error: null }), 'c-1', 'customer', invoice)).toBeNull()
+      expect(await carriedSekOf(client({ data: { ok: true, sek: 17000 }, error: null }), 'c-1', 'customer', invoice)).toBeNull()
+      expect(await carriedSekOf(client({ data: { ok: false, reason: 'registration_voucher_shared' }, error: null }), 'c-1', 'customer', invoice)).toBeNull()
+    })
+
+    it('reads nothing for a whole-krona remainder, no issue verifikat, or a supplier invoice', async () => {
+      const supabase = client({ data: { ok: true, sek: 1 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, total: 17176, remaining_amount: 17176 })).toBeNull()
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, journal_entry_id: null })).toBeNull()
+      expect(await carriedSekOf(supabase, 'c-1', 'supplier', invoice)).toBeNull()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('reads the remainder after a part payment, and a numeric string', async () => {
+      const supabase = client({ data: { ok: true, sek: 12176 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, remaining_amount: '12176.25' as never, paid_amount: 5000 })).toBe(12176)
+    })
   })
 })
