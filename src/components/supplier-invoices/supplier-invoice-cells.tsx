@@ -106,11 +106,13 @@ export function AmountCell({
   onChange,
   inputRef,
   className,
+  id,
 }: {
   value: number
   onChange: (v: number) => void
   inputRef?: (el: HTMLInputElement | null) => void
   className?: string
+  id?: string
 }) {
   const innerRef = useRef<HTMLInputElement | null>(null)
   // Display Swedish comma decimals; parsing accepts both comma and dot.
@@ -129,6 +131,7 @@ export function AmountCell({
         innerRef.current = el
         inputRef?.(el)
       }}
+      id={id}
       type="text"
       inputMode="decimal"
       placeholder="0,00"

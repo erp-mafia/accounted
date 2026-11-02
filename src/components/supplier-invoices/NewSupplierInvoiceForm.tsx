@@ -57,6 +57,12 @@ import {
   type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
 import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
+import {
+  bookLimitedDeduction,
+  deductibleRowVat,
+  invoicedRowVat,
+  limitedDeductionApplies,
+} from '@/lib/supplier-invoices/limited-deduction'
 import { rememberedReverseChargeKind } from '@/lib/supplier-invoices/remembered-kind'
 import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
@@ -73,6 +79,7 @@ import { isPersonPayer } from '@/lib/expenses/payer'
 import {
   ArrowLeftIcon,
   CalendarDaysIcon,
+  PercentBadgeIcon,
   ChatBubbleOvalLeftIcon,
   DocumentTextIcon,
   ExclamationCircleIcon,
@@ -1117,6 +1124,74 @@ export default function NewSupplierInvoiceForm({
     )
   }
 
+  // --- Begränsat momsavdrag (personbil, representation; crm#1617) ---
+  // The row keeps the invoice's net and moms sats; the panel says how much of
+  // that moms is deducted. The rest is booked on the row's cost account
+  // (bookLimitedDeduction), so the payable stays the invoice total.
+  function limitedDeductionAvailable(index: number): boolean {
+    const item = watchedItems?.[index]
+    if (!item || !vatRegistered) return false
+    if (!limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled })) return false
+    return invoicedRowVat(item) > 0
+  }
+
+  function isLimitedDeductionOpen(index: number): boolean {
+    return limitedDeductionAvailable(index) && watchedItems?.[index]?.vat_deduction_share != null
+  }
+
+  function toggleLimitedDeduction(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return
+    // Opens at half the row's moms, the personbil rule; the person adjusts it.
+    const next = item.vat_deduction_share != null ? undefined : 0.5
+    setValue(`items.${index}.vat_deduction_share`, next, { shouldDirty: true })
+  }
+
+  function renderLimitedDeductionPanel(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return null
+    const invoiced = invoicedRowVat(item)
+    return (
+      <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Label htmlFor={`deductible-vat-${index}`} className="text-sm font-normal">
+            {t('deductible_vat_label')}
+          </Label>
+          {/* Shown and typed in kronor, kept as a share of the row's moms
+              so a corrected amount or moms sats keeps it in proportion. */}
+          <Controller
+            name={`items.${index}.vat_deduction_share`}
+            control={control}
+            render={({ field }) => (
+              <AmountCell
+                value={deductibleRowVat(item, field.value ?? 1)}
+                onChange={(kronor) => field.onChange(invoiced > 0 ? kronor / invoiced : 0)}
+                id={`deductible-vat-${index}`}
+                className="h-8 w-28 text-right tabular-nums"
+              />
+            )}
+          />
+          <span className="text-muted-foreground tabular-nums">
+            {t('deductible_vat_of', {
+              vat: formatAmount(invoiced),
+              cost: formatAmount(nonDeductibleVat[index] ?? 0),
+            })}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={() => toggleLimitedDeduction(index)}
+          >
+            {t('deductible_vat_remove')}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('deductible_vat_hint')}</p>
+      </div>
+    )
+  }
+
   // --- Dimension tagging (kostnadsställe/projekt, dimensions PR7) ---
   // Mirrors the accrual pattern: a defined (possibly empty) bag on the item
   // means the row's panel is open; closing clears the bag entirely so the
@@ -1229,15 +1304,25 @@ export default function NewSupplierInvoiceForm({
   // turns it on, so the 3740 line books the difference with its sign.
   // The Moms field is the invoice's own VAT: on a single-rate invoice it is
   // what the registration books when the lines take it (crm#1367).
-  const statedVat = statedVatFromInvoiceField(watchedItems || [], enteredFakturaVat, watchedReverseCharge)
+  // Begränsat momsavdrag: the amounts are those the registration books (the
+  // non-deductible moms on the cost row); the figures shown add it back so
+  // they read as the invoice does.
+  const { items: bookedItems, nonDeductibleVat } = bookLimitedDeduction(
+    watchedItems || [],
+    limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled }),
+  )
+  const statedVat = statedVatFromInvoiceField(bookedItems, enteredFakturaVat, watchedReverseCharge)
   const exactAmounts = supplierInvoiceEditorAmounts(
-    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, false, statedVat,
+    bookedItems, watchedCurrency || 'SEK', watchedReverseCharge, false, statedVat,
   )
   const oreRounding =
     oreRoundingChoice ?? isWholeKronaRoundingOf(exactAmounts.total, enteredFakturaTotal, watchedCurrency || 'SEK')
-  const { itemTotals, subtotal, totalVat, figures } = oreRounding
-    ? supplierInvoiceEditorAmounts(watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, true, statedVat)
+  const { itemTotals, subtotal: bookedSubtotal, totalVat: deductibleVat, figures } = oreRounding
+    ? supplierInvoiceEditorAmounts(bookedItems, watchedCurrency || 'SEK', watchedReverseCharge, true, statedVat)
     : exactAmounts
+  const totalNonDeductibleVat = roundOre(nonDeductibleVat.reduce((sum, vat) => sum + vat, 0))
+  const subtotal = roundOre(bookedSubtotal - totalNonDeductibleVat)
+  const totalVat = roundOre(deductibleVat + totalNonDeductibleVat)
 
   // Total-first fill: a single row whose amount is still empty, or still the
   // one this fill put there, takes its net from Fakturabelopp and Moms (and
@@ -2236,6 +2321,12 @@ export default function NewSupplierInvoiceForm({
                     {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
                   </p>
                 )}
+                {/* Less moms than the rows carry is often a limited deduction
+                    typed into the invoice's Moms field (crm#1617): point at
+                    the row control that books it. */}
+                {vatCrosscheckDiff != null && vatCrosscheckDiff < -0.005 && totalNonDeductibleVat === 0 && (
+                  <p className="text-muted-foreground">{t('crosscheck_vat_limited_hint')}</p>
+                )}
               </div>
             )}
 
@@ -2340,7 +2431,8 @@ export default function NewSupplierInvoiceForm({
                           'group align-middle',
                           (canUseAccrual && isAccrualOpen(index)) ||
                             (dimensionsEnabled && isDimOpen(index)) ||
-                            slpRowVisible(index)
+                            slpRowVisible(index) ||
+                            isLimitedDeductionOpen(index)
                             ? 'border-0'
                             : 'border-b border-border',
                           settledFields.has('items') && 'prefill-settle',
@@ -2417,7 +2509,7 @@ export default function NewSupplierInvoiceForm({
                               )}
                             </td>
                             <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
-                              {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                              {formatAmount(roundOre((itemTotals[index]?.vatAmount ?? 0) + (nonDeductibleVat[index] ?? 0)))}
                             </td>
                           </>
                         )}
@@ -2436,6 +2528,23 @@ export default function NewSupplierInvoiceForm({
                                   className={cn(
                                     'h-3.5 w-3.5',
                                     isDimOpen(index) ? 'text-foreground' : undefined,
+                                  )}
+                                />
+                              </button>
+                            )}
+                            {limitedDeductionAvailable(index) && (
+                              <button
+                                type="button"
+                                onClick={() => toggleLimitedDeduction(index)}
+                                aria-label={t('row_deductible_vat_aria', { index: index + 1 })}
+                                aria-pressed={isLimitedDeductionOpen(index)}
+                                title={t('row_deductible_vat_title')}
+                                className={ROW_ICON_BTN_CLASS}
+                              >
+                                <PercentBadgeIcon
+                                  className={cn(
+                                    'h-3.5 w-3.5',
+                                    isLimitedDeductionOpen(index) ? 'text-foreground' : undefined,
                                   )}
                                 />
                               </button>
@@ -2473,23 +2582,30 @@ export default function NewSupplierInvoiceForm({
                         </td>
                       </tr>
                       {canUseAccrual && isAccrualOpen(index) && (
-                        <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderAccrualPanel(index, `accrual-${index}`)}
                           </td>
                         </tr>
                       )}
                       {dimensionsEnabled && isDimOpen(index) && (
-                        <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn(slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderDimensionsPanel(index)}
                           </td>
                         </tr>
                       )}
                       {slpRowVisible(index) && (
-                        <tr className="border-b border-border">
+                        <tr className={cn(isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderSlpPanel(index)}
+                          </td>
+                        </tr>
+                      )}
+                      {isLimitedDeductionOpen(index) && (
+                        <tr className="border-b border-border">
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                            {renderLimitedDeductionPanel(index)}
                           </td>
                         </tr>
                       )}
@@ -2693,6 +2809,12 @@ export default function NewSupplierInvoiceForm({
                   </span>
                   <span className="tabular-nums">{formatCurrency(totalVat, watchedCurrency)}</span>
                 </div>
+                {totalNonDeductibleVat !== 0 && (
+                  <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                    <span className="text-muted-foreground">{t('non_deductible_vat_label')}</span>
+                    <span className="tabular-nums">{formatCurrency(totalNonDeductibleVat, watchedCurrency)}</span>
+                  </div>
+                )}
               </>
             )}
             {figures.rounding.applies && (
@@ -2806,12 +2928,16 @@ export default function NewSupplierInvoiceForm({
               reverseCharge={pendingData.reverse_charge}
               reverseChargeKind={pendingData.reverse_charge && euSupplier ? pendingData.reverse_charge_kind || undefined : undefined}
               paymentReference={pendingData.payment_reference || undefined}
-              items={pendingData.items}
+              items={bookLimitedDeduction(pendingData.items, limitedDeductionApplies(pendingData)).items}
               oreRounding={oreRounding}
               bookingMoment={effectiveBookingMoment}
               chartVatTreatments={chartVatTreatmentsOf(accounts)}
               defaultDimensions={defaultDims}
-              statedVat={statedVatFromInvoiceField(pendingData.items, enteredFakturaVat, pendingData.reverse_charge)}
+              statedVat={statedVatFromInvoiceField(
+                bookLimitedDeduction(pendingData.items, limitedDeductionApplies(pendingData)).items,
+                enteredFakturaVat,
+                pendingData.reverse_charge,
+              )}
             />
           </ConfirmationDialog>
         )
