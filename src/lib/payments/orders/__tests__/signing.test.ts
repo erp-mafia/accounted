@@ -46,13 +46,13 @@ beforeEach(() => {
   ctx = { supabase: db.supabase as never, companyId: COMPANY, userId: USER, log: log as never }
   mock.storedBatchPsu.mockReset().mockResolvedValue(null)
   mock.rememberBatchPsu.mockReset().mockResolvedValue(undefined)
-  mock.readMonth.mockReset().mockResolvedValue({ period: '2026-10', sent: [], included_payments: 10 })
+  mock.readMonth.mockReset().mockResolvedValue({ period: '2026-10', sent: [], included_payments: 10, cap_payments: 10, extra_offered: false, billed_above_included: false })
 })
 
 /** The month as usage.ts reads it: `others` payments sent outside the signing, plus the signing's own ids already at the bank. */
 function month(others: number, atBank: string[] = [], included = 10) {
   const sent = [...Array.from({ length: others }, (_, i) => ({ id: `sent-${i}`, cash_account_id: 'acct-1' })), ...atBank.map((id) => ({ id, cash_account_id: 'acct-1' }))]
-  return { period: '2026-10', sent, included_payments: included }
+  return { period: '2026-10', sent, included_payments: included, cap_payments: included, extra_offered: false, billed_above_included: false }
 }
 
 /** The PSU-ID a signing's payments were created with, as the earlier signing kept it. */
@@ -882,7 +882,7 @@ describe('the monthly cap on bank payments', () => {
     expect(result).toEqual({
       ok: false,
       code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
-      details: { period: '2026-10', used: 9, included: 10, remaining: 1, requested: 2 },
+      details: { period: '2026-10', used: 9, included: 10, cap: 10, extra_offered: false, billed: false, unit_price_ore: 200, remaining: 1, requested: 2 },
       messageSv: 'Ni har använt 9 av 10 betalningar som ingår i oktober. Välj högst 1 betalning, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
     })
     expect(db.supabase.rpc).not.toHaveBeenCalled()

@@ -179,6 +179,10 @@
       "schedule": "3-59/10 * * * *"
     },
     {
+      "path": "/api/billing/usage/cron",
+      "schedule": "0 6 1 * *"
+    },
+    {
       "path": "/api/agent/categorize/cron",
       "schedule": "*/10 * * * *"
     },

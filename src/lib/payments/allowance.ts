@@ -2,6 +2,10 @@
  * The hard monthly cap on bank payments (founder decision 2026-10-14): a
  * signing that would take the month past the company's allowance is refused
  * before anything is sent to the provider, and a person can ask for more.
+ * Once payments above the allowance are offered at the unit price (usage.ts,
+ * bankPaymentsBilled), the refusal at the allowance says so and points to the
+ * acceptance an admin gives under Abonnemang; after that the cap is the
+ * safety ceiling and the allowance is what the month includes.
  *
  * The cap is read where the counter is (usage.ts): the orders that reached
  * the provider this Stockholm month against the company's allowance
@@ -15,6 +19,7 @@ import type { Logger } from '@/lib/logger'
 import { getEmailService } from '@/lib/email/service'
 import { getSupportRecipientEmail } from '@/lib/support'
 import { getBranding } from '@/lib/branding/service'
+import { formatOre, USAGE_PRICES } from '@/lib/usage/kinds'
 import { currentUsagePeriod, getBankPaymentsUsage, readBankPaymentsMonth } from './usage'
 
 type Refusal = Extract<OperationOutcome<never>, { ok: false }>
@@ -25,8 +30,19 @@ export interface BankPaymentsAllowanceDetails {
   period: string
   /** Payments that reached the provider this month, outside this signing. */
   used: number
+  /** What the month includes. */
   included: number
-  /** What this month still takes. */
+  /** The hard stop: included, or the safety ceiling once extra payments are accepted. */
+  cap: number
+  /** Whether payments above `included` can be accepted at unit_price_ore. */
+  extra_offered: boolean
+  /** Whether they were accepted: payments above `included` are then billed instead of refused. */
+  billed: boolean
+  /** Whether more would be offered with a subscription of its own: the company has none (lib/usage/paying.ts). */
+  subscription_required: boolean
+  /** Öre exkl. moms per payment above `included`. */
+  unit_price_ore: number
+  /** What this month still takes, up to the cap. */
   remaining: number
   /** The payments of this signing. */
   requested: number
@@ -42,9 +58,23 @@ export function swedishMonthName(period: string): string {
 
 /** The Swedish refusal, composed with the numbers (thrown_message_sv on the code). */
 export function allowanceExceededMessage(details: BankPaymentsAllowanceDetails): string {
-  const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${swedishMonthName(details.period)}.`
-  if (details.remaining <= 0) return `${head} Begär fler under Inställningar, Kopplingar, Betalningar via banken.`
+  const month = swedishMonthName(details.period)
   const noun = details.remaining === 1 ? 'betalning' : 'betalningar'
+  if (details.subscription_required) {
+    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och kräver ett abonnemang.`
+    return details.remaining <= 0
+      ? `${head} Starta det under Inställningar, Abonnemang.`
+      : `${head} Välj högst ${details.remaining} ${noun}, eller starta ett abonnemang under Inställningar, Abonnemang.`
+  }
+  if (details.extra_offered && !details.billed) {
+    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och faktureras i efterskott.`
+    const accept = 'En admin godkänner det under Inställningar, Abonnemang, Användning.'
+    return details.remaining <= 0 ? `${head} ${accept}` : `${head} Välj högst ${details.remaining} ${noun}, eller: ${accept.charAt(0).toLowerCase()}${accept.slice(1)}`
+  }
+  const head = details.billed
+    ? `Ni har skickat ${details.used} betalningar i ${month}, och taket är ${details.cap} i månaden.`
+    : `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}.`
+  if (details.remaining <= 0) return `${head} Begär fler under Inställningar, Kopplingar, Betalningar via banken.`
   return `${head} Välj högst ${details.remaining} ${noun}, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.`
 }
 
@@ -69,9 +99,20 @@ export async function bankPaymentsAllowanceRefusal(
   const mine = new Set(orderIds)
   const used = month.sent.filter((row) => !mine.has(row.id)).length
   const requested = mine.size
-  const included = month.included_payments
-  if (used + requested <= included) return null
-  const details: BankPaymentsAllowanceDetails = { period: month.period, used, included, remaining: Math.max(0, included - used), requested }
+  const cap = month.cap_payments
+  if (used + requested <= cap) return null
+  const details: BankPaymentsAllowanceDetails = {
+    period: month.period,
+    used,
+    included: month.included_payments,
+    cap,
+    extra_offered: month.extra_offered,
+    billed: month.billed_above_included,
+    subscription_required: month.subscription_required,
+    unit_price_ore: USAGE_PRICES.bank_payment.unitPriceOre ?? 0,
+    remaining: Math.max(0, cap - used),
+    requested,
+  }
   return { ok: false, code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED', details: { ...details }, messageSv: allowanceExceededMessage(details) }
 }
 

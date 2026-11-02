@@ -3315,7 +3315,33 @@
     "packs_row_change": "Ändra",
     "packs_row_buy": "Köp",
     "packs_row_price": "{price} per paket och månad exkl. moms, {size} betalningar per paket.",
-    "packs_row_scheduled": "Minskar till {packs} paket den {date}."
+    "packs_row_scheduled": "Minskar till {packs} paket den {date}.",
+    "tab_usage": "Användning",
+    "usage_caption": "Användning i {month}",
+    "usage_col_service": "Tjänst",
+    "usage_col_used": "Använt",
+    "usage_col_included": "Ingår",
+    "usage_col_price": "Därefter",
+    "usage_col_amount": "Att betala",
+    "usage_kind_bank_payment": "Betalningar via banken",
+    "usage_kind_peppol_send": "Skickade e-fakturor via Peppol",
+    "usage_kind_kivra_send": "Utskick till Kivra",
+    "usage_kind_billo_send": "Utskick till Billo",
+    "usage_kind_signing": "Signerade dokument med BankID",
+    "usage_unit_price": "{price} st",
+    "usage_included": "Ingår",
+    "usage_all_included": "Alla",
+    "usage_billed_note": "Det som går över det som ingår läggs på abonnemangets faktura i efterskott.",
+    "usage_empty": "Inget använt i {month} ännu.",
+    "usage_load_failed": "Användningen kunde inte läsas just nu.",
+    "usage_charges_label": "Över det som ingår",
+    "usage_charges_help": "När månadens antal som ingår är använt stannar tjänsten tills en admin godkänner avgiften. Godkännandet gäller tills någon stänger av det här.",
+    "usage_charge_off": "{included, plural, =0 {Kostar {price} st. Stannar tills ni godkänner.} other {Stannar vid # i månaden. Därefter {price} st om ni godkänner.}}",
+    "usage_charge_on": "{included, plural, =0 {Godkänt {date}: {price} st.} other {Godkänt {date}: {price} st över # i månaden.}}",
+    "usage_charge_needs_subscription": "{included, plural, =0 {Kostar {price} st och kräver ett abonnemang.} other {Stannar vid # i månaden. Fler kostar {price} st och kräver ett abonnemang.}}",
+    "usage_charge_accept": "Godkänn avgift",
+    "usage_charge_turn_off": "Stäng av",
+    "usage_charge_off_failed": "Avgiften kunde inte stängas av"
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Standard för Vår referens",
@@ -16359,7 +16385,15 @@
     "buy_done_now": "Klart. Ni kan nu skicka {included} bankbetalningar i månaden.",
     "buy_done_later": "Klart. Från {date} har ni {packs} paket.",
     "buy_unavailable": "Fler betalningar går inte att köpa här just nu. Begär fler i stället.",
-    "buy_failed": "Köpet gick inte igenom. Försök igen."
+    "buy_failed": "Köpet gick inte igenom. Försök igen.",
+    "refused_cap": "Ni har skickat {used} bankbetalningar i {month}, och taket är {cap} i månaden. Välj högst {remaining, plural, one {# betalning} other {# betalningar}}.",
+    "refused_cap_none_left": "Ni har skickat {used} bankbetalningar i {month}, och taket är {cap} i månaden.",
+    "billed_within": "{left} av {included} bankbetalningar som ingår kvar i {month}, därefter {price} st.",
+    "billed_extra": "{extra, plural, one {# betalning} other {# betalningar}} går över det som ingår i {month} och kostar {price} st, faktureras i efterskott.",
+    "accept_charge": "Godkänn avgift",
+    "offered_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och läggs på abonnemangets faktura.",
+    "subscription_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och kräver ett abonnemang.",
+    "start_subscription": "Starta abonnemang"
   },
   "payments_page": {
     "title": "Betalningar",
@@ -16456,7 +16490,9 @@
     "account_reason_bank_not_supported": "Banken tar inte emot betalningar via Accounted än",
     "buy_more": "Köp fler betalningar",
     "usage_of_with_packs": "{used} av {included} ({base} ingår + {bought} köpta)",
-    "packs_scheduled": "De köpta betalningarna minskar till {packs} paket den {date}."
+    "packs_scheduled": "De köpta betalningarna minskar till {packs} paket den {date}.",
+    "usage_of_billed": "{used} skickade, {included} ingår, därefter {price} st",
+    "accept_charge": "Godkänn avgift"
   },
   "bank_ledger_suggestion": {
     "move_transactions": "Bankkontot {account} bokförs på {from}, men {hits, plural, one {# av dess banktransaktioner är redan bokförd} other {# av dess banktransaktioner är redan bokförda}} på {to}. Byt till {toNumber} så kopplas transaktionerna till verifikaten.",
@@ -19765,5 +19801,15 @@
       "label": "Företagsinställningar",
       "description": "Ändra företagsuppgifter, paket och inställningar som gäller hela företaget."
     }
+  },
+  "usage_consent": {
+    "title": "{included, plural, =0 {{service} kostar {price} st} other {{service}: månadens # som ingår är använda}}",
+    "body": "{included, plural, =0 {Godkänner du kostar de {price} st exkl. moms.} other {Godkänner du kostar varje ytterligare {price} exkl. moms.}} Det läggs på abonnemangets faktura i efterskott och gäller tills någon stänger av det under Inställningar, Abonnemang, Användning.",
+    "admin_only": "Bara en admin i företaget kan godkänna avgiften. Be en admin göra det.",
+    "accept": "Godkänn avgiften",
+    "cancel": "Avbryt",
+    "close": "Stäng",
+    "accepted": "Avgiften för {service} är godkänd",
+    "failed": "Avgiften kunde inte godkännas"
   }
 }

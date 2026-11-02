@@ -2,7 +2,7 @@ import type Stripe from 'stripe'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyRole } from '@/types'
 import { createLogger, type Logger } from '@/lib/logger'
-import { BANK_PAYMENTS_PER_PACK, readBankPaymentsAllowance } from '@/lib/payments/usage'
+import { BANK_PAYMENTS_PER_PACK, bankPaymentsBilled, readBankPaymentsAllowance } from '@/lib/payments/usage'
 import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
 import { getStripe, paymentPackPriceId, paymentPacksConfigured } from './client'
 import { idOf, isCancelling, paymentPackItemOf, periodEndOf, planItemOf, sekAmountOf } from './subscription-items'
@@ -310,9 +310,13 @@ export async function readCompanySubscription(service: SupabaseClient, companyId
   return row?.stripe_subscription_id ? { id: row.stripe_subscription_id, status: row.status } : null
 }
 
-/** Whether packs are sold here and bank payments are open to the company at all. */
+/**
+ * Whether packs are sold here and bank payments are open to the company at
+ * all. Not once payments above the included amount are billed per unit
+ * (bankPaymentsBilled): a pack would then buy nothing the unit price does not.
+ */
 export async function paymentPacksOffered(supabase: SupabaseClient, companyId: string): Promise<boolean> {
-  if (!paymentPacksConfigured()) return false
+  if (!paymentPacksConfigured() || bankPaymentsBilled()) return false
   return (await paymentsAdmitted(supabase, companyId)).ok
 }
 

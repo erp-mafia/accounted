@@ -10,6 +10,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import { formatCurrency } from '@/lib/utils'
+import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
 import {
   fetchPaymentPacks,
   PaymentsClientError,
@@ -301,6 +302,8 @@ interface BankPaymentsAllowanceLineProps {
   canRequest: boolean
   /** The cap an owner just raised by buying packs, for the dialog's own counter. */
   onIncluded?: (included: number) => void
+  /** An admin just accepted that payments above what is included cost the unit price: reread the counter. */
+  onAccepted?: () => void
 }
 
 /**
@@ -309,24 +312,45 @@ interface BankPaymentsAllowanceLineProps {
  * than that or the server refused a signing at the cap, with Köp fler
  * betalningar for an owner who can buy packs and Begär fler for everyone else.
  */
-export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canRequest, onIncluded }: BankPaymentsAllowanceLineProps) {
+export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canRequest, onIncluded, onAccepted }: BankPaymentsAllowanceLineProps) {
   const t = useTranslations('bank_payments_allowance')
   const locale = useLocale()
   const [requesting, setRequesting] = useState(false)
   const [buying, setBuying] = useState(false)
+  const [accepting, setAccepting] = useState(false)
 
   const over = refusal !== null || (usage !== null && count > remainingBankPayments(usage))
-  const { view: packs } = usePaymentPacks(canRequest && over)
+  // More than what is included is on offer and nobody has accepted it yet: the way on is to accept the charge.
+  const acceptable = (refusal ? refusal.extra_offered && !refusal.billed : usage?.extra_offered === true && !usage.billed_above_included)
+  // More would be on offer with a subscription of its own: the way on is to start one.
+  const needsSubscription = refusal ? refusal.subscription_required : usage?.subscription_required === true
+  const unitPriceOre = refusal?.unit_price_ore ?? usage?.unit_price_ore ?? 0
+  const { view: packs } = usePaymentPacks(canRequest && over && !acceptable && !needsSubscription)
   const buyable = packs !== null && packs !== 'failed' && packs.can_buy ? packs : null
   // No action until the offer is known, so the link does not change under the cursor.
   const action =
-    !canRequest || packs === null
+    !canRequest
       ? undefined
-      : buyable
-        ? { label: t('buy_more'), onClick: () => setBuying(true) }
-        : { label: t('request_more'), onClick: () => setRequesting(true) }
+      : acceptable
+        ? { label: t('accept_charge'), onClick: () => setAccepting(true) }
+        : needsSubscription
+          ? { label: t('start_subscription'), href: '/settings/billing' }
+          : packs === null
+          ? undefined
+          : buyable
+            ? { label: t('buy_more'), onClick: () => setBuying(true) }
+            : { label: t('request_more'), onClick: () => setRequesting(true) }
   const dialog =
-    buying && buyable ? (
+    accepting ? (
+      <UsageConsentDialog
+        kind="bank_payment"
+        included={refusal?.included ?? usage?.included_payments ?? 0}
+        unitPriceOre={unitPriceOre}
+        open={accepting}
+        onOpenChange={setAccepting}
+        onAccepted={() => onAccepted?.()}
+      />
+    ) : buying && buyable ? (
       <BuyPaymentPacksDialog
         view={buyable}
         onOpenChange={setBuying}
@@ -340,12 +364,22 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
 
   if (refusal) {
     const month = usageMonthName(refusal.period, locale)
-    const numbers = { used: refusal.used, included: refusal.included, remaining: refusal.remaining, month }
-    const text = !canRequest
-      ? t('refused_link', numbers)
-      : refusal.remaining > 0
-        ? t('refused', numbers)
-        : t('refused_none_left', numbers)
+    const price = formatCurrency(unitPriceOre / 100)
+    const numbers = { used: refusal.used, included: refusal.included, cap: refusal.cap, remaining: refusal.remaining, month, price }
+    // Billed above what is included: the stop is the safety ceiling, said as such.
+    const text = acceptable
+      ? t('offered_none_left', numbers)
+      : needsSubscription
+      ? t('subscription_none_left', numbers)
+      : refusal.billed
+      ? refusal.remaining > 0
+        ? t('refused_cap', numbers)
+        : t('refused_cap_none_left', numbers)
+      : !canRequest
+        ? t('refused_link', numbers)
+        : refusal.remaining > 0
+          ? t('refused', numbers)
+          : t('refused_none_left', numbers)
     return (
       <>
         <AttnLine action={action}>{text}</AttnLine>
@@ -356,14 +390,34 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
   if (!usage) return null
   const remaining = remainingBankPayments(usage)
   const month = usageMonthName(usage.period, locale)
+  const cap = usage.cap_payments ?? usage.included_payments
   if (count > remaining) {
+    const price = formatCurrency(unitPriceOre / 100)
     return (
       <>
         <AttnLine action={action}>
-          {remaining > 0 ? t('too_many', { remaining, included: usage.included_payments, month }) : t('none_left', { included: usage.included_payments, month })}
+          {acceptable
+            ? t('offered_none_left', { used: usage.payments_sent, included: usage.included_payments, month, price })
+            : needsSubscription
+            ? t('subscription_none_left', { used: usage.payments_sent, included: usage.included_payments, month, price })
+            : remaining > 0
+              ? t('too_many', { remaining, included: cap, month })
+              : t('none_left', { included: cap, month })}
         </AttnLine>
         {dialog}
       </>
+    )
+  }
+  if (usage.billed_above_included) {
+    // Said before signing: how many of these go above what the month includes, and what each costs.
+    const price = formatCurrency((usage.unit_price_ore ?? 0) / 100)
+    const alreadyAbove = Math.max(0, usage.payments_sent - usage.included_payments)
+    const extra = Math.max(0, usage.payments_sent + count - usage.included_payments) - alreadyAbove
+    const left = Math.max(0, usage.included_payments - usage.payments_sent)
+    return (
+      <p className="text-[12.5px] text-muted-foreground">
+        {extra > 0 ? t('billed_extra', { extra, price, month }) : t('billed_within', { left, included: usage.included_payments, price, month })}
+      </p>
     )
   }
   return <p className="text-[12.5px] text-muted-foreground">{t('remaining', { remaining, included: usage.included_payments, month })}</p>

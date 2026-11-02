@@ -147,6 +147,14 @@ describe('POST /api/billing/payment-packs', () => {
     expect(subscriptionsRetrieve).not.toHaveBeenCalled()
   })
 
+  it('refuses with 409 PAYMENT_PACKS_NOT_OFFERED once extra payments are billed per unit: a pack would buy nothing', async () => {
+    vi.stubEnv('USAGE_BILLING_KINDS', 'bank_payment')
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post({ packs: 1 }))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('PAYMENT_PACKS_NOT_OFFERED')
+    expect(subscriptionsRetrieve).not.toHaveBeenCalled()
+  })
+
   it('refuses with 409 when the company has no subscription, or Stripe says it is not active (a trial)', async () => {
     service.setTable('company_subscriptions', { data: null })
     const none = await parseJsonResponse<{ error: { code: string } }>(await post({ packs: 1 }))

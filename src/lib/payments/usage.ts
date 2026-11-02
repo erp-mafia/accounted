@@ -13,16 +13,43 @@
  * pack its owner bought on the subscription (issue #132), and a signing that
  * would pass it is refused (lib/payments/allowance.ts). Accounts are counted
  * for display only.
+ *
+ * Once bank payments are billed per unit (USAGE_BILLING_KINDS lists
+ * bank_payment, lib/usage/kinds.ts), more than what is included is offered:
+ * the signing still stops at the included amount until an admin accepts the
+ * charge (lib/usage/consent.ts). After that, payments above it cost the unit
+ * price, billed in arrears, and the hard stop moves up to
+ * BANK_PAYMENTS_SAFETY_CEILING.
  * Payment files (betalfil) never reach the provider and are not counted.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { consentCovers, readOpenConsents } from '@/lib/usage/consent'
+import { billedUsageKinds, USAGE_PRICES } from '@/lib/usage/kinds'
+import { readCompanyPays } from '@/lib/usage/paying'
 
 /** Payments per company and Stockholm calendar month, unless company_bank_payment_allowances says otherwise. A hard cap. */
 export const BANK_PAYMENTS_INCLUDED_PER_MONTH = 10
 /** Accounts per company and month the plan includes: display only, never enforced. */
 export const BANK_ACCOUNTS_INCLUDED_PER_MONTH = 2
+
+/**
+ * The hard monthly stop while payments above the included amount are billed:
+ * a guard against a runaway loop, not a price limit. Below USAGE_ROW_CAP, so
+ * the counter always sees the whole month it guards.
+ */
+export const BANK_PAYMENTS_SAFETY_CEILING = 500
+
+/** Whether payments above the included amount are offered at the unit price (USAGE_BILLING_KINDS). */
+export function bankPaymentsBilled(env: Record<string, string | undefined> = process.env): boolean {
+  return billedUsageKinds(env).has('bank_payment')
+}
+
+/** The hard monthly stop for a company that includes `included` payments: what is included, or the ceiling once extra payments are accepted. */
+export function bankPaymentsCap(included: number, accepted: boolean): number {
+  return accepted ? Math.max(included, BANK_PAYMENTS_SAFETY_CEILING) : included
+}
 
 /** Rows read per month; a company sending more bank payments than this in a month is not a case the counter (or the cap) is built for. */
 const USAGE_ROW_CAP = 1000
@@ -32,12 +59,22 @@ export interface BankPaymentsUsage {
   period: string
   payments_sent: number
   accounts_used: number
-  /** The cap: the company's allowance, or the default. */
+  /** What the month includes: the company's allowance, or the default. Also the cap, unless extra payments are accepted. */
   included_payments: number
   included_accounts: number
+  /** The hard stop: included_payments, or BANK_PAYMENTS_SAFETY_CEILING once extra payments are accepted. */
+  cap_payments: number
+  /** Whether payments above included_payments can be accepted at unit_price_ore (an admin accepts under Abonnemang). */
+  extra_offered: boolean
+  /** Whether an admin accepted them: payments above included_payments are then billed instead of refused. */
+  billed_above_included: boolean
+  /** Whether more would be offered with a subscription of its own: billed, but the company has none (lib/usage/paying.ts). */
+  subscription_required: boolean
+  /** Öre exkl. moms per payment above included_payments (lib/usage/kinds.ts). */
+  unit_price_ore: number
   /** Payments the company may still send this month (0 when the cap is reached). */
   remaining_payments: number
-  /** Beyond the cap: two signings racing each other, or an allowance lowered mid-month. */
+  /** Beyond what is included: billed when billed_above_included, else two signings racing each other, or an allowance lowered mid-month. */
   extra_payments: number
   extra_accounts: number
 }
@@ -47,6 +84,11 @@ export interface BankPaymentsMonth {
   period: string
   sent: Array<{ id: string; cash_account_id: string | null }>
   included_payments: number
+  /** The hard stop (bankPaymentsCap). */
+  cap_payments: number
+  extra_offered: boolean
+  billed_above_included: boolean
+  subscription_required: boolean
 }
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -158,7 +200,18 @@ export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId:
     .limit(USAGE_ROW_CAP)
   if (error) throw error
   const included = await includedBankPayments(supabase, companyId)
-  return { period: month, sent: (data ?? []) as BankPaymentsMonth['sent'], included_payments: included }
+  const billed = bankPaymentsBilled()
+  const offered = billed && (await readCompanyPays(supabase, companyId))
+  const accepted = offered && consentCovers((await readOpenConsents(supabase, companyId)).get('bank_payment'), 'bank_payment')
+  return {
+    period: month,
+    sent: (data ?? []) as BankPaymentsMonth['sent'],
+    included_payments: included,
+    cap_payments: bankPaymentsCap(included, accepted),
+    extra_offered: offered,
+    billed_above_included: accepted,
+    subscription_required: billed && !offered,
+  }
 }
 
 export async function getBankPaymentsUsage(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsUsage> {
@@ -172,7 +225,12 @@ export async function getBankPaymentsUsage(supabase: SupabaseClient, companyId: 
     accounts_used: accountsUsed,
     included_payments: included,
     included_accounts: BANK_ACCOUNTS_INCLUDED_PER_MONTH,
-    remaining_payments: Math.max(0, included - paymentsSent),
+    cap_payments: month.cap_payments,
+    extra_offered: month.extra_offered,
+    billed_above_included: month.billed_above_included,
+    subscription_required: month.subscription_required,
+    unit_price_ore: USAGE_PRICES.bank_payment.unitPriceOre ?? 0,
+    remaining_payments: Math.max(0, month.cap_payments - paymentsSent),
     extra_payments: Math.max(0, paymentsSent - included),
     extra_accounts: Math.max(0, accountsUsed - BANK_ACCOUNTS_INCLUDED_PER_MONTH),
   }

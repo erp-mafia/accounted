@@ -29,6 +29,7 @@ import { arsredovisningSigningEnabledFor, signingEnabledFor } from '@/lib/env/si
 import { COMPANY_ADMIN_ROLES } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { createServiceClient } from '@/lib/supabase/server'
+import { usageGateRefusal } from '@/lib/usage/gate'
 import { resolveBankIdSigning } from './bankid-provider'
 import { loadSignableDocument, pdfPageCount } from './document'
 import { generateSigningToken, signingUrl } from './tokens'
@@ -250,6 +251,12 @@ export async function createSigningRequest(ctx: OperationContext, input: CreateS
   if (!title) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'title' } }
   const service = createServiceClient()
   const now = input.now ?? Date.now()
+  // A signed document past what the month includes waits for a subscription
+  // and an admin's acceptance; an annual report's signing is always included.
+  if (!input.annualReportVersionId) {
+    const usageGate = await usageGateRefusal(service, ctx.companyId, 'signing')
+    if (usageGate) return usageGate
+  }
 
   const document = await loadSignableDocument(service, ctx.companyId, input.documentId)
   if (!document.ok) return { ok: false, code: document.code }

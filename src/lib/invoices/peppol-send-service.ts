@@ -95,6 +95,7 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { listInvoiceAttachments, loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { peppolAttachmentIssues, type PeppolAttachmentFile } from '@/lib/invoices/peppol-bis-billing'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { usageGateRefusal } from '@/lib/usage/gate'
 import type { CompanySettings, Invoice } from '@/types'
 
 /** Invoice states that may still be handed to the network. */
@@ -291,6 +292,19 @@ export interface PeppolSendResult {
   issuance: { ok: true; partial_failures: unknown[] } | { ok: false; error_code: string } | null
 }
 
+/** Whether a delivery of the invoice already reached the access point. */
+async function invoiceHandedToPeppol(service: SupabaseClient, companyId: string, invoiceId: string): Promise<boolean> {
+  const { data, error } = await service
+    .from('peppol_deliveries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('invoice_id', invoiceId)
+    .not('submitted_at', 'is', null)
+    .limit(1)
+  if (error) throw new Error(`peppol_deliveries read failed: ${error.message}`)
+  return (data ?? []).length > 0
+}
+
 export async function sendInvoiceViaPeppol(
   ctx: OperationContext,
   invoiceId: string,
@@ -332,6 +346,15 @@ export async function sendInvoiceViaPeppol(
         sent_count: permission.summary.sent_count,
       },
     })
+  }
+
+  // At the month's included e-invoices, a new send waits until an admin
+  // accepts the charge (lib/usage/gate.ts). Sending an invoice the network
+  // already has again is no new e-invoice.
+  const usageGate = await usageGateRefusal(service, companyId, 'peppol_send')
+  if (usageGate && !(await invoiceHandedToPeppol(service, companyId, invoiceId))) {
+    logRefusal(usageGate.code)
+    return usageGate
   }
 
   const records = await fetchPeppolRecordRows(supabase, companyId, invoiceId)

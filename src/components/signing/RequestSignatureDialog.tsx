@@ -14,7 +14,8 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import type { CreatedSigningRequest } from '@/lib/signing/requests'
 import { SIGNING_DEFAULT_TTL_DAYS, SIGNING_MAX_SIGNERS, SIGNING_MAX_TTL_DAYS, SIGNING_MESSAGE_MAX, SIGNING_NAME_MAX, SIGNING_TITLE_MAX } from '@/lib/signing/types'
 import { CopyLink } from './CopyLink'
-import { createSigningRequest, fetchCompanyMemberOptions, signingErrorBody, type CompanyMemberOption } from './signing-client'
+import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
+import { createSigningRequest, fetchCompanyMemberOptions, signingErrorBody, signingErrorCode, type CompanyMemberOption } from './signing-client'
 import { personalNumberValid, SIGNER_EMAIL_RE as EMAIL_RE } from './signer-fields'
 
 interface SignerRow {
@@ -66,6 +67,8 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
   const [error, setError] = useState<unknown>(null)
   const [showErrors, setShowErrors] = useState(false)
   const [created, setCreated] = useState<CreatedSigningRequest | null>(null)
+  // Stopped at the signings the month includes: the charge to accept before sending again.
+  const [charge, setCharge] = useState<{ included: number; unitPriceOre: number } | null>(null)
 
   // The company's members for the picker; without them the dialog takes typed people only.
   useEffect(() => {
@@ -135,7 +138,12 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
       setCreated(result)
       onCreated?.(result)
     } catch (err) {
-      setError(signingErrorBody(err) ?? err)
+      if (signingErrorCode(err) === 'USAGE_CONSENT_REQUIRED') {
+        const details = (signingErrorBody(err) as { error?: { details?: { included?: number; unit_price_ore?: number } } } | null)?.error?.details
+        setCharge({ included: details?.included ?? 0, unitPriceOre: details?.unit_price_ore ?? 0 })
+      } else {
+        setError(signingErrorBody(err) ?? err)
+      }
     } finally {
       setBusy(false)
     }
@@ -317,6 +325,21 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
               </Button>
             </DialogFooter>
           </form>
+        )}
+        {charge && (
+          <UsageConsentDialog
+            kind="signing"
+            included={charge.included}
+            unitPriceOre={charge.unitPriceOre}
+            open
+            onOpenChange={(next) => {
+              if (!next) setCharge(null)
+            }}
+            onAccepted={() => {
+              setCharge(null)
+              void submit()
+            }}
+          />
         )}
       </DialogContent>
     </Dialog>

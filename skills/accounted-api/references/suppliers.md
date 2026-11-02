@@ -1105,14 +1105,14 @@ Example response `200`:
 **Bank payments sent and accounts used in a month, against the monthly cap.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. Payments are capped: included_payments is the cap (10 a month unless raised for the company), remaining_payments what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
+Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a person starts one under Settings, Billing. remaining_payments is what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
 
 **Use when:** Before a batch of bank payments, to see how many the month still takes.
 **Do not use for:** Payment files (pain.001): they are not bank payments and are neither counted nor capped.
 
 **Pitfalls:**
 - A person asks for a higher cap under Settings, Connections, Bank payments; no API raises it.
-- extra_payments is non-zero only when two signings raced past the cap or the cap was lowered mid-month; the counter is read from the orders, never edited.
+- extra_payments counts payments above what is included: billed when billed_above_included, otherwise non-zero only when two signings raced past the cap or the cap was lowered mid-month. The counter is read from the orders, never edited.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1128,6 +1128,11 @@ Response `200`:
     accounts_used: number,
     included_payments: number,
     included_accounts: number,
+    cap_payments: number,
+    extra_offered: boolean,
+    billed_above_included: boolean,
+    subscription_required: boolean,
+    unit_price_ore: number,
     remaining_payments: number,
     extra_payments: number,
     extra_accounts: number
@@ -1153,6 +1158,11 @@ Example response `200`:
     "accounts_used": 1,
     "included_payments": 10,
     "included_accounts": 2,
+    "cap_payments": 10,
+    "extra_offered": false,
+    "billed_above_included": false,
+    "subscription_required": false,
+    "unit_price_ore": 200,
     "remaining_payments": 6,
     "extra_payments": 0,
     "extra_accounts": 0

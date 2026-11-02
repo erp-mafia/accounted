@@ -420,7 +420,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
             </p>
           )}
           <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
-          <BankPaymentsAllowanceLine usage={usage} count={1} canRequest onIncluded={bank.raiseIncluded} />
+          <BankPaymentsAllowanceLine usage={usage} count={1} canRequest onIncluded={bank.raiseIncluded} onAccepted={bank.refreshUsage} />
         </>
       )}
     </BankPaymentDialogFrame>
