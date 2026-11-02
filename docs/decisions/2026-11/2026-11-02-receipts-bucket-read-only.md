@@ -1,0 +1,1 @@
+[2026-11-02] The legacy receipts storage bucket is private and read-only for its owner: INSERT and DELETE policies dropped, SELECT kept, its 2 objects kept. No code uses the bucket, and a client delete was the last way the retained files could be removed (CASA 5.2.1).
