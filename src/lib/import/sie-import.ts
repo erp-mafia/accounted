@@ -805,9 +805,17 @@ export function prepareSIEVouchers(
   accountMap: Map<string, string>,
   defaultSeries: string,
   sieImportId: string,
-  options: { startOrdinal: number; hasCurrentYearIb?: boolean; accountIds: Map<string, string> },
+  options: {
+    startOrdinal: number
+    hasCurrentYearIb?: boolean
+    accountIds: Map<string, string>
+    /** Skipped vouchers still waiting for a booked successor, carried from the previous voucher group. */
+    pendingNumberGaps?: SIEPendingNumberGaps
+  },
 ): {
   preparedEntries: SIEPreparedEntry[]
+  /** Skipped vouchers no booked voucher of their series has followed yet: the next group's input. */
+  pendingNumberGaps: SIEPendingNumberGaps
   skippedDetails: {
     voucherId: string
     date: string
@@ -822,13 +830,21 @@ export function prepareSIEVouchers(
     originalLineCount?: number
   }[]
 } {
-  const results: ReturnType<typeof prepareSIEVouchers> = { preparedEntries: [], skippedDetails: [] }
+  const results: ReturnType<typeof prepareSIEVouchers> = { preparedEntries: [], skippedDetails: [], pendingNumberGaps: {} }
+  // A voucher the file numbers but the import does not book (crm#1599: one
+  // the source system cancelled, only #BTRANS rows left) keeps its number:
+  // the next booked voucher of its series carries the count as numberGap, the
+  // writer reserves that many numbers before it and records the documented
+  // gap (BFNAR 2013:2, voucher_gap_explanations). Without this every later
+  // voucher of the series lands one number below its source number.
+  const pendingGaps: SIEPendingNumberGaps = structuredClone(options.pendingNumberGaps ?? {})
 
   // Pre-filter and prepare all valid vouchers
   interface PreparedVoucher {
     sourceId: string
     sourceOrdinal: number
     series: string
+    numberGap?: SIEPreparedEntry['numberGap']
     date: string
     description: string
     // Original series/number as written in the source SIE file. NULL for SIE4I
@@ -955,6 +971,22 @@ export function prepareSIEVouchers(
     const voucherId = formatVoucherRef(voucher, sourceOrdinal + 1)
     const voucherDate = formatDate(voucher.date)
 
+    // Resolve per-voucher series from the parsed SIE record. Fall back to the
+    // caller-supplied default only when the source voucher has no series
+    // (e.g., SIE4I subsystem import files where series/verno are optional).
+    const resolvedSeries = voucher.series && voucher.series.trim()
+      ? voucher.series.trim()
+      : defaultSeries
+    // A skipped voucher the source numbered holds its number for the next
+    // booked voucher of the series. Without a source number (SIE4I) there is
+    // no numbering to follow.
+    const holdNumber = (why: string) => {
+      if (voucher.numberOmitted || !Number.isFinite(voucher.number)) return
+      const pending = (pendingGaps[resolvedSeries] ??= { count: 0, refs: [] })
+      pending.count++
+      if (pending.refs.length < GAP_REFS_NAMED) pending.refs.push(`${voucherId} (${why})`)
+    }
+
     // Skip vouchers with unmapped accounts
     if (hasUnmappedAccount) {
       results.skippedDetails.push({
@@ -967,6 +999,7 @@ export function prepareSIEVouchers(
         originalLineCount: voucher.lines.length,
         sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
       })
+      holdNumber('konto utan mappning')
       continue
     }
 
@@ -981,6 +1014,7 @@ export function prepareSIEVouchers(
         originalLineCount: voucher.lines.length,
         sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
       })
+      holdNumber(voucher.corrections?.struck.length ? 'makulerat i källsystemet' : 'saknar rader med belopp')
       continue
     }
 
@@ -994,6 +1028,7 @@ export function prepareSIEVouchers(
         originalLineCount: voucher.lines.length,
         sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
       })
+      holdNumber('bara en rad')
       continue
     }
 
@@ -1014,6 +1049,7 @@ export function prepareSIEVouchers(
         originalLineCount: voucher.lines.length,
         sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
       })
+      holdNumber('balanserar inte')
       continue
     } else if (difference !== 0) {
       // Rounding difference <= 1 SEK: add explicit öresutjämning line (never modify existing lines)
@@ -1024,13 +1060,6 @@ export function prepareSIEVouchers(
         line_description: 'Öresutjämning',
       })
     }
-
-    // Resolve per-voucher series from the parsed SIE record. Fall back to the
-    // caller-supplied default only when the source voucher has no series
-    // (e.g., SIE4I subsystem import files where series/verno are optional).
-    const resolvedSeries = voucher.series && voucher.series.trim()
-      ? voucher.series.trim()
-      : defaultSeries
 
     const rawSourceSeries = voucher.series && voucher.series.trim() ? voucher.series.trim() : null
     const rawSourceNumber = !voucher.numberOmitted && Number.isFinite(voucher.number) ? voucher.number : null
@@ -1060,10 +1089,14 @@ export function prepareSIEVouchers(
       }
     }
 
+    const held = pendingGaps[resolvedSeries]
+    delete pendingGaps[resolvedSeries]
+
     preparedVouchers.push({
       sourceId: voucherId,
       sourceOrdinal,
       series: resolvedSeries,
+      ...(held ? { numberGap: { count: held.count, explanation: numberGapExplanation(held) } } : {}),
       date: voucherDateStr,
       description: voucher.description || `Import: ${voucherId}`,
       sourceSeries: rawSourceSeries,
@@ -1084,6 +1117,7 @@ export function prepareSIEVouchers(
     sourceSeries: voucher.sourceSeries,
     sourceNumber: voucher.sourceNumber,
     sourceType: voucher.sourceType,
+    ...(voucher.numberGap ? { numberGap: voucher.numberGap } : {}),
     ...(voucher.corrections ? { corrections: voucher.corrections } : {}),
     lines: voucher.lines.map((line, lineIndex) => ({
       account_number: line.account_number,
@@ -1099,8 +1133,28 @@ export function prepareSIEVouchers(
       dimensions: normalizeLineDimensions({ dimensions: line.dimensions ?? null }),
     })),
   })) as SIEPreparedEntry[]
+  results.pendingNumberGaps = pendingGaps
 
   return results
+}
+
+/** How many held vouchers a gap explanation names before it summarises the rest. */
+const GAP_REFS_NAMED = 5
+
+/**
+ * Skipped vouchers of one series not yet followed by a booked one: the count
+ * of numbers to hold and the first few refs with why each was not booked.
+ */
+export type SIEPendingNumberGaps = Record<string, { count: number; refs: string[] }>
+
+/** The gap's documented explanation (voucher_gap_explanations, at most 500 characters). */
+function numberGapExplanation(held: { count: number; refs: string[] }): string {
+  const rest = held.count - held.refs.length
+  const named = rest > 0 ? `${held.refs.join(', ')} och ${rest} till` : held.refs.join(', ')
+  const one = held.count === 1
+  const text = `SIE-import: källsystemets ${one ? 'verifikation' : 'verifikationer'} ${named} bokfördes inte. ` +
+    `${one ? 'Numret hålls tomt' : 'Numren hålls tomma'} så att serien följer källsystemets numrering.`
+  return text.length > 500 ? `${text.slice(0, 499)}…` : text
 }
 
 /**

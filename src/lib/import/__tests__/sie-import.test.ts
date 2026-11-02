@@ -1687,3 +1687,70 @@ describe('precheckFiscalPeriod', () => {
     ).rejects.toThrow(precheck.verdict === 'conflict' ? precheck.message : 'unreachable')
   })
 })
+
+describe('prepareSIEVouchers: a skipped source voucher keeps its number (crm#1599)', () => {
+  const map = new Map([['1930', '1930'], ['5611', '5611']])
+  const booked = (series: string, number: number) => ({
+    series, number, date: new Date(2024, 1, 29), description: `Voucher ${series}${number}`,
+    lines: [{ account: '5611', amount: 500 }, { account: '1930', amount: -500 }],
+  })
+  // Fortnox exports a cancelled verifikat with every row struck: #BTRANS only, no #TRANS.
+  const cancelled = (series: string, number: number) => ({
+    ...booked(series, number), lines: [],
+    corrections: { struck: [{ account: '5611', amount: 500 }, { account: '1930', amount: -500 }], added: [] },
+  })
+  const prepare = (vouchers: ParsedSIEFile['vouchers'], pendingNumberGaps?: Record<string, { count: number; refs: string[] }>) =>
+    prepareSIEVouchers(makeParsedFile({ vouchers }), map, 'A', 'import-1', { startOrdinal: 0, accountIds: new Map(), pendingNumberGaps })
+
+  it('the next booked voucher of the series holds the cancelled one\'s number, with the explanation', () => {
+    const result = prepare([booked('A', 9), cancelled('A', 10), booked('A', 11), booked('A', 12)])
+
+    expect(result.skippedDetails.map((s) => [s.voucherId, s.reason])).toEqual([['A10', 'zero_lines']])
+    expect(result.preparedEntries.map((e) => [e.sourceId, e.numberGap?.count ?? 0])).toEqual([['A9', 0], ['A11', 1], ['A12', 0]])
+    expect(result.preparedEntries[1].numberGap?.explanation).toBe(
+      'SIE-import: källsystemets verifikation A10 (makulerat i källsystemet) bokfördes inte. ' +
+      'Numret hålls tomt så att serien följer källsystemets numrering.',
+    )
+    expect(result.pendingNumberGaps).toEqual({})
+  })
+
+  it('holds every skipped voucher of a run, per series, whatever the reason', () => {
+    const unbalanced = { ...booked('A', 3), lines: [{ account: '5611', amount: 500 }, { account: '1930', amount: -400 }] }
+    const result = prepare([booked('A', 1), cancelled('A', 2), unbalanced, booked('B', 1), booked('A', 4)])
+
+    expect(result.preparedEntries.map((e) => [e.sourceId, e.numberGap?.count ?? 0])).toEqual([['A1', 0], ['B1', 0], ['A4', 2]])
+    expect(result.preparedEntries[2].numberGap?.explanation).toContain('A2 (makulerat i källsystemet), A3 (balanserar inte)')
+  })
+
+  it('carries a hold across voucher groups and returns the one still open', () => {
+    const first = prepare([booked('A', 1), cancelled('A', 2)])
+    expect(first.pendingNumberGaps).toEqual({ A: { count: 1, refs: ['A2 (makulerat i källsystemet)'] } })
+
+    const second = prepare([booked('A', 3)], first.pendingNumberGaps)
+    expect(second.preparedEntries[0].numberGap?.count).toBe(1)
+    expect(second.pendingNumberGaps).toEqual({})
+    // The caller's carried state is not mutated (it is checkpointed as is).
+    expect(first.pendingNumberGaps).toEqual({ A: { count: 1, refs: ['A2 (makulerat i källsystemet)'] } })
+  })
+
+  it('names five held vouchers and counts the rest, under the 500-character limit', () => {
+    const run = Array.from({ length: 40 }, (_, i) => cancelled('A', i + 2))
+    const [entry] = prepare([...run, booked('A', 42)]).preparedEntries
+
+    expect(entry.numberGap?.count).toBe(40)
+    expect(entry.numberGap?.explanation).toContain('A6 (makulerat i källsystemet) och 35 till')
+    expect(entry.numberGap!.explanation.length).toBeLessThanOrEqual(500)
+  })
+
+  it('holds nothing for a voucher without a source number (SIE4I)', () => {
+    const omitted = { ...cancelled('', 0), numberOmitted: true }
+    const result = prepare([omitted, { ...booked('', 0), numberOmitted: true }])
+
+    expect(result.preparedEntries[0]).not.toHaveProperty('numberGap')
+  })
+
+  it('a voucher with nothing skipped before it carries no numberGap, so its payload is as before', () => {
+    const [entry] = prepare([booked('A', 1)]).preparedEntries
+    expect(entry).not.toHaveProperty('numberGap')
+  })
+})

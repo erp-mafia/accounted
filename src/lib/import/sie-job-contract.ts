@@ -36,6 +36,13 @@ export interface SIEPreparedEntry {
   sourceNumber: number | null
   sourceType: 'import' | 'opening_balance'
   sieImportId: string
+  /**
+   * Source vouchers of this series the import skipped right before this one
+   * (crm#1599): write_sie_job_entries holds that many numbers before it and
+   * records them as one explained gap. Left out of source_content_hash: it
+   * places the voucher, it is not its content.
+   */
+  numberGap?: { count: number; explanation: string }
   lines: SIEPreparedLine[]
   corrections?: {
     struck: unknown[]
