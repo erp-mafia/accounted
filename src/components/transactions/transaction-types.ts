@@ -51,7 +51,7 @@ export interface TransactionWithInvoice extends Transaction {
 // suggestion awaits confirmation ("Granska migrerad historik"); the tab only
 // renders while such rows exist.
 export type ViewMode = 'inbox' | 'history' | 'review'
-export type HistoryFilter = 'all' | 'business' | 'private'
+export type { HistoryFilter } from '@/lib/transactions/history-filter'
 // Source filter (concept scene 10 account chooser), shared by both view modes:
 // everything, one cash account ('acct:<id>'), bank rows not yet tied to a
 // registered cash account ('bank:other'), all bank rows ('bank': the fallback

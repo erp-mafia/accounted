@@ -39,11 +39,17 @@ vi.mock('@/components/bookkeeping/CorrectionAffordance', () => ({
 
 const { default: TransactionHistoryList } = await import('../TransactionHistoryList')
 
-function render(transaction: ReturnType<typeof makeTransaction>) {
+function render(
+  transaction: ReturnType<typeof makeTransaction>,
+  filter: 'all' | 'business' | 'private' | 'ignored' = 'all',
+) {
   return renderToStaticMarkup(
     createElement(TransactionHistoryList, {
       transactions: [{ ...transaction }],
       sourceFilter: 'all',
+      filter,
+      onFilterChange: () => undefined,
+      onUnignore: () => undefined,
       onOpenMatchDialog: () => undefined,
       onOpenCategoryDialog: () => undefined,
     }),
@@ -72,5 +78,55 @@ describe('TransactionHistoryList correction affordance', () => {
     canWrite.value = false
     render(makeTransaction({ id: 'tx-3', journal_entry_id: 'je-3', is_business: true, category: 'expense_other' }))
     expect(mounted).toEqual([])
+  })
+})
+
+// crm#1612: a migrated row the user ignored showed under Alla as unbooked with
+// Bokför, so nothing told them it was the ignored one or how to restore it.
+describe('TransactionHistoryList ignored row', () => {
+  const ignored = () =>
+    makeTransaction({ id: 'tx-ign', journal_entry_id: null, is_business: null, is_ignored: true })
+
+  beforeEach(() => {
+    canWrite.value = true
+  })
+
+  it('says Ignorerad and offers Återställ instead of Bokför', () => {
+    const html = render(ignored())
+    expect(html).toContain('ignored_badge')
+    expect(html).toContain('>unignore<')
+    expect(html).not.toContain('>book<')
+  })
+
+  it('shows under the Ignorerade chip, and an ordinary unbooked row does not', () => {
+    expect(render(ignored(), 'ignored')).toContain('data-tx-id="tx-ign"')
+    const pending = makeTransaction({ id: 'tx-pend', journal_entry_id: null, is_business: null, is_ignored: false })
+    expect(render(pending, 'ignored')).not.toContain('data-tx-id="tx-pend"')
+    expect(render(pending)).toContain('>book<')
+  })
+
+  it('drops Ladda fler under Ignorerade, where every ignored row is already loaded', () => {
+    const withMore = (filter: 'all' | 'ignored') =>
+      renderToStaticMarkup(
+        createElement(TransactionHistoryList, {
+          transactions: [ignored()],
+          sourceFilter: 'all',
+          filter,
+          onFilterChange: () => undefined,
+          onOpenMatchDialog: () => undefined,
+          onOpenCategoryDialog: () => undefined,
+          hasMore: true,
+          onLoadMore: () => undefined,
+        }),
+      )
+    expect(withMore('all')).toContain('load_more')
+    expect(withMore('ignored')).not.toContain('load_more')
+  })
+
+  it('offers a viewer no Återställ', () => {
+    canWrite.value = false
+    const html = render(ignored())
+    expect(html).toContain('ignored_badge')
+    expect(html).not.toContain('>unignore<')
   })
 })

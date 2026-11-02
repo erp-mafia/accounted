@@ -1,0 +1,1 @@
+[2026-11-02] crm#1612: an ignored bank row shows under Transaktioner Alla as Ignorerad with Återställ and has its own Ignorerade chip, and ignore texts point there instead of Bankavstämning: the menu has no Bankavstämning since Konton (2026-10-18) and Alla showed the row as unbooked with Bokför.
