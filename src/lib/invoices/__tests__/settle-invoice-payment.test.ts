@@ -654,6 +654,7 @@ describe('settleInvoicePayment', () => {
     vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
     vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-ore' } as never)
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ok: true, sek: 1234.75 } }) // 1510 carries the remainder
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
 
@@ -693,6 +694,7 @@ describe('settleInvoicePayment', () => {
     vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
     vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-partial' } as never)
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ok: true, sek: 1234.75 } }) // 1510 carries the remainder
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
 
@@ -723,6 +725,45 @@ describe('settleInvoicePayment', () => {
       newStatus: 'partially_paid',
       newPaidAmount: 1234,
       newRemaining: 0.75,
+    })
+  })
+
+  it('settles in full when the issue verifikat booked the öresavrundning and the lines clear what 1510 carries', async () => {
+    vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-issue-ore' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The issue verifikat put 1510 at the rounded 1235 and Cr 3740 0.25.
+    enqueue({ data: { ok: true, sek: 1235 } })
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const invoice = payableInvoice({
+      total: 1234.75,
+      remaining_amount: 1234.75,
+      journal_entry_id: 'je-orig',
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 1235,
+        customLines: [
+          { account_number: '1930', debit_amount: 1235, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1235 },
+        ],
+      },
+    )
+
+    expect(supabase.rpc).toHaveBeenCalledWith('document_carried_sek', expect.objectContaining({ p_side: 'customer', p_document_id: invoice.id }))
+    expect(result).toMatchObject({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 1234.75,
+      newRemaining: 0,
+      journalEntryId: 'je-issue-ore',
     })
   })
 

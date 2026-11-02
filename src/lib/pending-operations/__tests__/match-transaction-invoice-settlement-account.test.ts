@@ -819,6 +819,7 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
     tx: Record<string, unknown>,
     invoice: Record<string, unknown>,
     accountingMethod: 'accrual' | 'cash',
+    carriedSek?: number,
   ) {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
@@ -832,6 +833,7 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    if (carriedSek !== undefined) enqueue({ data: { ok: true, sek: carriedSek }, error: null }) // what 1510 carries
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
@@ -891,7 +893,7 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
 
   it('faktureringsmetod: 1510 is credited the remaining and 2420 the excess', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueueCommit(enqueue, { amount: 1312.4 }, { total: 812.4, remaining_amount: 812.4, journal_entry_id: 'je-sent' }, 'accrual')
+    enqueueCommit(enqueue, { amount: 1312.4 }, { total: 812.4, remaining_amount: 812.4, journal_entry_id: 'je-sent' }, 'accrual', 812.4)
 
     const op = makePendingOp({
       params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '2420', overpayment_amount: 500 },

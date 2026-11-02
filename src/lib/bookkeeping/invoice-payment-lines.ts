@@ -62,10 +62,10 @@ import type { CreateJournalEntryLineInput } from '@/types'
 import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek } from './ledger-carried-sek'
-import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 
 /**
  * Structured code for "the foreign-currency invoice carries no usable booking
@@ -147,7 +147,9 @@ export interface PaymentClearingInvoice {
   /**
    * What 1510 carries for this invoice (carriedSekOf): a full settlement clears
    * exactly that, a part payment its share. Null or absent: the invoice's
-   * booking rate.
+   * booking rate. On a SEK invoice it is set only when the issue verifikat
+   * booked the öresavrundning (bookedOreRounding): a full settlement then
+   * clears that figure and 3740 takes only the rest of the öre.
    */
   carried_sek?: number | null
 }
@@ -180,7 +182,9 @@ export interface PaymentClearingLines {
    * remainingSek − bankSek: >0 → customer paid a sub-krona short (3740 debit,
    * förlust); <0 → paid a sub-krona over (3740 credit, vinst); 0 → no 3740 line.
    * When non-zero the AR leg (1510) is credited the FULL remaining so the
-   * invoice settles, and the residual balances the verifikat via 3740.
+   * invoice settles, and the residual balances the verifikat via 3740. When
+   * the issue verifikat already booked öre (bookedOreRounding), the AR leg is
+   * what 1510 carries and this is the residual less those öre.
    */
   oreRoundingSek: number
   /**
@@ -334,6 +338,16 @@ export function buildInvoicePaymentClearingLines(
     } else {
       arSek = bankSek
     }
+    // The issue verifikat may have booked the öresavrundning already (1510 at
+    // the rounded "Att betala", the öre on 3740). A settlement in full then
+    // clears what 1510 carries and 3740 takes only the rest, so the öre are
+    // not booked twice and 1510 ends at zero. A part payment clears its own
+    // kronor; the gap waits for the settlement.
+    const issueOre = bookedOreRounding(remainingSek, invoice.carried_sek)
+    if (issueOre !== 0 && equalOre(arSek, remainingSek)) {
+      arSek = roundOre(remainingSek - issueOre)
+      oreRoundingSek = roundOre(oreRoundingSek - issueOre)
+    }
     fxDiffSek = 0
   } else if (!invoiceIsForeign) {
     // SEK invoice settled from a non-SEK bank account: the receivable is a
@@ -398,9 +412,10 @@ export function buildInvoicePaymentClearingLines(
   }
 
   // Öresavrundning (3740): pure-SEK only, mutually exclusive with an FX diff.
-  // The AR leg above is already the full remaining, so 3740 balances the
-  // verifikat: customer paid a sub-krona short → 3740 debit (förlust); over →
-  // credit (vinst). Opposite polarity to the supplier side (AP cleared by a Dr).
+  // The AR leg above is already the full remaining (or what 1510 carries), so
+  // 3740 balances the verifikat: customer paid short → 3740 debit (förlust);
+  // over → credit (vinst). Opposite polarity to the supplier side (AP cleared
+  // by a Dr).
   if (oreRoundingSek !== 0) {
     lines.push(oreRoundingLine(oreRoundingSek, 'customer'))
   }

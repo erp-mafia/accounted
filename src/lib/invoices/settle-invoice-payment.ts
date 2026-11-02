@@ -11,6 +11,7 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { ORE_TOLERANCE, equalOre, isZeroOre, roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
@@ -233,12 +234,27 @@ export async function settleInvoicePayment(
   // 3740, mirroring the bank-transaction match flow; lines that don't (e.g.
   // a deliberate sub-krona partial) get the strict plan instead. The
   // generated-entry paths (Stripe sync, no-body mark-paid) always pay the
-  // exact remaining, so absorption is a no-op there.
+  // exact remaining, so absorption is a no-op there. Lines for a SEK invoice
+  // whose issue verifikat booked the öresavrundning carry only the rest of it
+  // on 3740 (carriedSekOf, planInvoicePaymentForLines).
+  let linesCarriedSek: number | null = null
+  if (customLines && invoiceAlreadyBooked && isKronorCurrency(invoice.currency)) {
+    try {
+      linesCarriedSek = await carriedSekOf(supabase, companyId, 'customer', invoice)
+    } catch (err) {
+      return {
+        ok: false,
+        code: 'INVOICE_PAID_BOOK_FAILED',
+        details: { reason: err instanceof Error ? err.message : 'unknown' },
+      }
+    }
+  }
   const payment = planInvoicePaymentForLines(
     invoice,
     paymentAmountInInvoiceCurrency,
     customLines,
     invoice.currency,
+    linesCarriedSek,
   )
   if (!payment.ok) {
     return {

@@ -23,6 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { ORE_TOLERANCE, equalOre, roundOre } from '@/lib/money'
 
@@ -77,18 +78,58 @@ export async function carriedSek(
 
 /**
  * The ledger's figure for a foreign document, for a door that clears at the
- * rate when the ledger cannot say. A kronor document costs no read: its
- * remainder is the figure.
+ * rate when the ledger cannot say.
+ *
+ * A kronor document's remainder is its figure, with one exception: a customer
+ * invoice whose issue verifikat booked its öresavrundning (1510 at the rounded
+ * "Att betala", the öre on 3740) carries the rounded figure, and a payment
+ * that clears the remainder would book the öre a second time. For that
+ * invoice the ledger's figure is answered (bookedOreRounding non-zero); for
+ * every other kronor document null, as before, so its doors keep clearing the
+ * remainder. Only a customer invoice with an issue verifikat and öre left to
+ * pay costs a read. A supplier document costs none: its rounding is an item
+ * of the invoice, inside its total (supplier-invoice-rounding-item.ts).
  */
 export async function carriedSekOf(
   supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   side: LedgerSide,
-  document: { id: string; currency?: string | null },
+  document: {
+    id: string
+    currency?: string | null
+    remaining_amount?: number | null
+    total?: number | null
+    paid_amount?: number | null
+    /** The issue verifikat; null (not absent) means none, so nothing to read. */
+    journal_entry_id?: string | null
+  },
 ): Promise<number | null> {
-  if (isKronorCurrency(document.currency)) return null
+  if (isKronorCurrency(document.currency)) {
+    if (side !== 'customer' || document.journal_entry_id === null) return null
+    // Rounding to whole kronor leaves a gap only when the remainder has öre:
+    // a whole-krona remainder costs no read.
+    const remaining = kronorRemaining(document)
+    if (remaining === null || Number.isInteger(remaining)) return null
+    const carried = await carriedSek(supabase, companyId, side, document.id)
+    return carried.ok && bookedOreRounding(remaining, carried.sek) !== 0 ? carried.sek : null
+  }
   const carried = await carriedSek(supabase, companyId, side, document.id)
   return carried.ok ? carried.sek : null
+}
+
+/** What a kronor document still owes, or null when the row cannot say. */
+function kronorRemaining(document: {
+  remaining_amount?: number | null
+  total?: number | null
+  paid_amount?: number | null
+}): number | null {
+  // A numeric column can arrive as a string from some readers.
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : null
+  const stored = num(document.remaining_amount)
+  const total = num(document.total)
+  const remaining = stored !== null ? stored : total !== null ? total - (num(document.paid_amount) ?? 0) : null
+  return remaining !== null && Number.isFinite(remaining) && remaining > ORE_TOLERANCE ? roundOre(remaining) : null
 }
 
 /**
