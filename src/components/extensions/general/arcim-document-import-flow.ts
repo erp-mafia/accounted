@@ -1,6 +1,9 @@
 import { sleep } from '@/lib/utils'
 import { supportsUnderlagImport, type UnderlagImportProvider } from '@/lib/providers/underlag-import'
-import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
+import {
+  documentImportRunStartedAfter,
+  type DocumentImportRunStatus,
+} from '@/extensions/general/arcim-migration/lib/document-import-run'
 
 export const ARCIM_DOCUMENT_IMPORT_ENDPOINT =
   '/api/extensions/ext/arcim-migration/import-documents'
@@ -14,6 +17,13 @@ export const PROVIDER_DOCUMENT_SCOPES_REQUIRED =
  */
 export const PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE =
   'PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE'
+
+/**
+ * The server is carrying the run on by itself (crm#1581): this tab has
+ * nothing to drive, and the page says the run goes on without it.
+ */
+export const PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER =
+  'PROVIDER_IMPORT_DOCUMENTS_RUNNING_ON_SERVER'
 
 /**
  * The provider refused the connection itself and the run stopped once: a
@@ -422,8 +432,8 @@ export function resumableDocumentImportRun(
 ): ArcimDocumentImportResult | null {
   if (!run || run.complete || run.provider !== provider) return null
   if (typeof run.nextCursor !== 'string' || run.nextCursor.length === 0) return null
-  const startedAt = Date.parse(run.startedAt)
-  if (notBefore.some((at) => typeof at === 'string' && Date.parse(at) > startedAt)) return null
+  // The server's continuation judges a run by the same rule (crm#1581).
+  if (!documentImportRunStartedAfter(run, notBefore)) return null
   return {
     provider: run.provider,
     scanned: run.scanned,
@@ -752,7 +762,12 @@ export type DocumentImportRunNote =
       /** Fortnox held back the files on supplier invoices. */
       unreachable: boolean
     }
-  | { kind: 'running' | 'stopped'; date: string; scanned: number; total: number }
+  /**
+   * running: a slice answered moments ago. resuming: silent, and the server
+   * picks it up again on its own (crm#1581). stopped: silent, and only
+   * "Hämta underlag" moves it.
+   */
+  | { kind: 'running' | 'resuming' | 'stopped'; date: string; scanned: number; total: number }
   /** The provider refused the connection: nothing moves until it is reconnected (B11). */
   | { kind: 'reconnect'; date: string; provider: string }
 
@@ -764,7 +779,10 @@ export function documentImportRunNote(
     return { kind: 'reconnect', date: run.updatedAt, provider: run.provider }
   }
   if (!run.complete) {
-    return { kind: run.stalled ? 'stopped' : 'running', date: run.updatedAt, scanned: run.scanned, total: run.total }
+    // An older server sends no continuesOnServer: such a run only moves again
+    // when someone starts it.
+    const kind = !run.stalled ? 'running' : run.continuesOnServer === true ? 'resuming' : 'stopped'
+    return { kind, date: run.updatedAt, scanned: run.scanned, total: run.total }
   }
   return {
     kind: 'complete',

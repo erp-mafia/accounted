@@ -175,6 +175,13 @@ export interface ImportDocumentsOptions {
    * 300 s function limit.
    */
   timeBudgetMs?: number
+  /**
+   * Also stop the sweep at this moment (on `now`'s clock), whichever comes
+   * first. The server's continuation (document-import-continuation.ts) sweeps
+   * until its function's deadline instead of 30 s: a large Fortnox listing
+   * alone takes about two minutes, paid again by every slice (crm#1581).
+   */
+  sweepDeadline?: number
   /** Clock, injectable for tests. */
   now?: () => number
 }
@@ -523,6 +530,7 @@ export async function importProviderDocuments(
     cursor = null,
     savedRun = null,
     timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
+    sweepDeadline,
     now = Date.now,
   } = opts
   const startedAt = now()
@@ -760,7 +768,10 @@ export async function importProviderDocuments(
     // Always make progress: at least one attachment per call, then stop at
     // the budget so the caller can report progress and resume after the
     // last handled id.
-    if (index > startIndex && now() - sweepStartedAt >= timeBudgetMs) {
+    if (
+      index > startIndex &&
+      (now() - sweepStartedAt >= timeBudgetMs || (sweepDeadline !== undefined && now() >= sweepDeadline))
+    ) {
       result.partial = true
       result.nextCursor = attachments[index - 1].id
       break

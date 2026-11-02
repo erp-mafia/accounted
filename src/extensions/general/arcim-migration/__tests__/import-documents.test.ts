@@ -1299,6 +1299,34 @@ describe('importProviderDocuments', () => {
       expect(result).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: true, nextCursor: 'file-b' })
     })
 
+    it('stops at an absolute sweep deadline the listing already counts against (crm#1581)', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      // The listing "costs" 1000 ms and each download 100 ms. The server's
+      // slice sweeps to its function's deadline: 1150 ms from the start fits
+      // two downloads after the listing, however large the budget.
+      let clock = 0
+      mockFetchFortnoxFileConnections.mockImplementation(async () => {
+        clock += 1_000
+        return THREE_CONNECTIONS
+      })
+      mockDownloadFortnoxArchiveFile.mockImplementation(async () => {
+        clock += 100
+        return { bytes: bytesOf('FORTNOX-PDF-' + clock), contentType: 'application/pdf' }
+      })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 1_000_000,
+        sweepDeadline: 1_150,
+        now: () => clock,
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: true, nextCursor: 'file-b' })
+    })
+
     it('always processes at least one attachment per call even when the budget is already spent', async () => {
       const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
 
