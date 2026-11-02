@@ -1612,6 +1612,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_invitations: 'membership state, meaningless outside the platform',
   company_members: 'membership state, meaningless outside the platform',
   company_subscriptions: 'billing state',
+  usage_statements: "billing state: Accounted's monthly usage statements and invoice ids, not räkenskapsinformation (the usage itself is in the exported payment orders, deliveries and signings)",
+  usage_consents: 'billing state: who accepted the charge for use above what the plan includes, and at what price; not räkenskapsinformation',
   deadlines: 'regenerable operational calendar state',
   dimension_retag_log: 'operation log',
   // Page text Arkiv reads out of each archived document (text layer or model

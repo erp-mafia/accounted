@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage, isUsagePeriod, readBankPaymentsMonth, usagePeriodBounds } from '../usage'
+import { BANK_PAYMENTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_SAFETY_CEILING, getBankPaymentsUsage, isUsagePeriod, readBankPaymentsMonth, usagePeriodBounds } from '../usage'
 import { createPayrollFakeDb } from '@/lib/salary/__tests__/payroll-fake-db'
 import { paymentOrderRow } from './payment-order-row'
 
@@ -22,7 +22,59 @@ describe('usagePeriodBounds', () => {
   })
 })
 
+// A subscription of its own: what lets more than what is included be offered.
+const PAYING = {
+  company_subscriptions: { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } },
+  company_settings: { data: { is_sandbox: false } },
+}
+
 describe('getBankPaymentsUsage', () => {
+  it('offers more at the unit price, and keeps the stop at what is included until an admin accepts', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    try {
+      const db = createTableMockSupabase({ payment_orders: { data: Array.from({ length: 10 }, (_, i) => ({ id: `o${i}`, cash_account_id: 'a1' })) }, ...PAYING })
+      const usage = await getBankPaymentsUsage(db.supabase as unknown as SupabaseClient, COMPANY, '2026-10')
+      expect(usage).toMatchObject({ included_payments: 10, cap_payments: 10, extra_offered: true, billed_above_included: false, subscription_required: false, remaining_payments: 0 })
+    } finally {
+      delete process.env.USAGE_BILLING_KINDS
+    }
+  })
+
+  it('offers nothing more to a company without a subscription of its own, and says one is needed', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    try {
+      const db = createTableMockSupabase({ payment_orders: { data: Array.from({ length: 10 }, (_, i) => ({ id: `o${i}`, cash_account_id: 'a1' })) } })
+      const usage = await getBankPaymentsUsage(db.supabase as unknown as SupabaseClient, COMPANY, '2026-10')
+      expect(usage).toMatchObject({ cap_payments: 10, extra_offered: false, billed_above_included: false, subscription_required: true, remaining_payments: 0 })
+    } finally {
+      delete process.env.USAGE_BILLING_KINDS
+    }
+  })
+
+  it('moves the stop to the safety ceiling and names the unit price once an admin accepted', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    try {
+      const db = createTableMockSupabase({
+        payment_orders: { data: Array.from({ length: 14 }, (_, i) => ({ id: `o${i}`, cash_account_id: 'a1' })) },
+        usage_consents: { data: [{ company_id: COMPANY, kind: 'bank_payment', unit_price_ore: 200, included: 10, accepted_by: 'u1', accepted_at: '2026-10-02T08:00:00Z' }] },
+        ...PAYING,
+      })
+      const usage = await getBankPaymentsUsage(db.supabase as unknown as SupabaseClient, COMPANY, '2026-10')
+      expect(usage).toMatchObject({
+        payments_sent: 14,
+        included_payments: 10,
+        cap_payments: BANK_PAYMENTS_SAFETY_CEILING,
+        extra_offered: true,
+        billed_above_included: true,
+        unit_price_ore: 200,
+        remaining_payments: BANK_PAYMENTS_SAFETY_CEILING - 14,
+        extra_payments: 4,
+      })
+    } finally {
+      delete process.env.USAGE_BILLING_KINDS
+    }
+  })
+
   it('counts the payments that reached the provider and the accounts they left from, against the default cap', async () => {
     const db = createTableMockSupabase({
       payment_orders: { data: [{ id: 'o1', cash_account_id: 'a1' }, { id: 'o2', cash_account_id: 'a1' }, { id: 'o3', cash_account_id: 'a2' }] },
@@ -34,6 +86,11 @@ describe('getBankPaymentsUsage', () => {
       accounts_used: 2,
       included_payments: 10,
       included_accounts: 2,
+      cap_payments: 10,
+      extra_offered: false,
+      billed_above_included: false,
+      subscription_required: false,
+      unit_price_ore: 200,
       remaining_payments: 7,
       extra_payments: 0,
       extra_accounts: 0,

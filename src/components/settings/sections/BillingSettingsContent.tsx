@@ -27,6 +27,7 @@ import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
 import { BuyPaymentPacksDialog, usePaymentPacks } from '@/components/payments/BankPaymentsAllowance'
+import { UsagePanel } from '@/components/settings/UsagePanel'
 
 // What the paid tier unlocks: the external connections. One item per PAID
 // capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
@@ -53,7 +54,7 @@ const FREE_KEYS = ['free_bookkeeping', 'free_invoices', 'free_reports'] as const
 // but the first charge lands when the trial ends.
 const DEFER_THRESHOLD_MS = 49 * 3600 * 1000
 
-type BillingTab = 'plan' | 'receipts'
+type BillingTab = 'plan' | 'usage' | 'receipts'
 
 interface BillingView {
   isPaying: boolean
@@ -207,6 +208,7 @@ function BillingCoreContent() {
   // The receipts panel mounts on first open and then stays mounted, so
   // switching back and forth does not refetch.
   const [receiptsOpened, setReceiptsOpened] = useState(false)
+  const [usageOpened, setUsageOpened] = useState(false)
   // A paying company sees its plan as one row; the two sales cards open
   // behind "Jämför planer".
   const [comparing, setComparing] = useState(false)
@@ -563,6 +565,7 @@ function BillingCoreContent() {
   function selectTab(next: BillingTab) {
     setTab(next)
     if (next === 'receipts') setReceiptsOpened(true)
+    if (next === 'usage') setUsageOpened(true)
   }
 
   return (
@@ -586,6 +589,7 @@ function BillingCoreContent() {
         aria-label={t('tabs_label')}
         options={[
           { value: 'plan', label: t('tab_plan') },
+          { value: 'usage', label: t('tab_usage') },
           { value: 'receipts', label: t('tab_receipts') },
         ]}
       />
@@ -593,6 +597,11 @@ function BillingCoreContent() {
       <div role="tabpanel" className="mt-6" hidden={tab !== 'plan'}>
         {planTab}
       </div>
+      {usageOpened && (
+        <div role="tabpanel" className="mt-6" hidden={tab !== 'usage'}>
+          <UsagePanel />
+        </div>
+      )}
       {receiptsOpened && (
         <div role="tabpanel" className="mt-6" hidden={tab !== 'receipts'}>
           <ReceiptsPanel isPaying={view.isPaying} configured={view.configured} />

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 
@@ -7,6 +7,7 @@ vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn().mockResolvedVal
 
 import { allowanceExceededMessage, bankPaymentsAllowanceRefusal, requestMoreBankPayments, swedishMonthName } from '../allowance'
 import { createPayrollFakeDb } from '@/lib/salary/__tests__/payroll-fake-db'
+import { BANK_PAYMENTS_SAFETY_CEILING } from '../usage'
 import { paymentOrderRow } from './payment-order-row'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
@@ -34,7 +35,7 @@ describe('bankPaymentsAllowanceRefusal', () => {
     expect(refusal).toEqual({
       ok: false,
       code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
-      details: { period: '2026-10', used: 9, included: 10, remaining: 1, requested: 2 },
+      details: { period: '2026-10', used: 9, included: 10, cap: 10, extra_offered: false, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 1, requested: 2 },
       messageSv: 'Ni har använt 9 av 10 betalningar som ingår i oktober. Välj högst 1 betalning, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
     })
   })
@@ -70,7 +71,63 @@ describe('bankPaymentsAllowanceRefusal', () => {
     expect(await bankPaymentsAllowanceRefusal(raised.supabase as unknown as SupabaseClient, COMPANY, ['n1'], '2026-10')).toBeNull()
     const stopped = createTableMockSupabase({ payment_orders: { data: [] }, company_bank_payment_allowances: { data: { monthly_payments: 0 } } })
     const refusal = await bankPaymentsAllowanceRefusal(stopped.supabase as unknown as SupabaseClient, COMPANY, ['n1'], '2026-10')
-    expect(refusal?.details).toEqual({ period: '2026-10', used: 0, included: 0, remaining: 0, requested: 1 })
+    expect(refusal?.details).toEqual({ period: '2026-10', used: 0, included: 0, cap: 0, extra_offered: false, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 0, requested: 1 })
+  })
+})
+
+describe('bankPaymentsAllowanceRefusal while extra payments are billed', () => {
+  afterEach(() => {
+    delete process.env.USAGE_BILLING_KINDS
+  })
+
+  const accepted = { data: [{ company_id: COMPANY, kind: 'bank_payment', unit_price_ore: 200, included: 10, accepted_by: 'u1', accepted_at: '2026-10-02T08:00:00Z' }] }
+  // A subscription of its own: what lets more than what is included be accepted.
+  const paying = {
+    company_subscriptions: { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } },
+    company_settings: { data: { is_sandbox: false } },
+  }
+
+  it('stops at what is included until an admin accepts, and says what more would cost', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    const db = createTableMockSupabase({ payment_orders: { data: sent(10) }, ...paying })
+    const refusal = await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1'], '2026-10')
+    expect(refusal).toEqual({
+      ok: false,
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { period: '2026-10', used: 10, included: 10, cap: 10, extra_offered: true, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 0, requested: 1 },
+      messageSv:
+        'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och faktureras i efterskott. En admin godkänner det under Inställningar, Abonnemang, Användning.',
+    })
+  })
+
+  it('lets payments above what is included through once accepted, up to the safety ceiling', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    const db = createTableMockSupabase({ payment_orders: { data: sent(30) }, usage_consents: accepted, ...paying })
+    expect(await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1', 'n2'], '2026-10')).toBeNull()
+  })
+
+  it('refuses at the ceiling and says it is the ceiling, not what is included', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    const db = createTableMockSupabase({ payment_orders: { data: sent(BANK_PAYMENTS_SAFETY_CEILING - 1) }, usage_consents: accepted, ...paying })
+    const refusal = await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1', 'n2'], '2026-10')
+    expect(refusal).toMatchObject({
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { used: 499, included: 10, cap: 500, extra_offered: true, billed: true, remaining: 1, requested: 2 },
+      messageSv: 'Ni har skickat 499 betalningar i oktober, och taket är 500 i månaden. Välj högst 1 betalning, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
+    })
+  })
+
+  it('stops a company without a subscription of its own at what is included, accepted or not, and says a subscription is needed', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    const trial = { company_subscriptions: { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } } }
+    const db = createTableMockSupabase({ payment_orders: { data: sent(10) }, usage_consents: accepted, ...trial })
+    const refusal = await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1'], '2026-10')
+    expect(refusal).toEqual({
+      ok: false,
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { period: '2026-10', used: 10, included: 10, cap: 10, extra_offered: false, billed: false, subscription_required: true, unit_price_ore: 200, remaining: 0, requested: 1 },
+      messageSv: 'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
+    })
   })
 })
 
@@ -78,10 +135,10 @@ describe('allowanceExceededMessage', () => {
   it('names the month in Swedish and drops the choice when nothing remains', () => {
     expect(swedishMonthName('2026-01')).toBe('januari')
     expect(swedishMonthName('2026-12')).toBe('december')
-    expect(allowanceExceededMessage({ period: '2026-11', used: 10, included: 10, remaining: 0, requested: 3 })).toBe(
+    expect(allowanceExceededMessage({ period: '2026-11', used: 10, included: 10, cap: 10, extra_offered: false, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 0, requested: 3 })).toBe(
       'Ni har använt 10 av 10 betalningar som ingår i november. Begär fler under Inställningar, Kopplingar, Betalningar via banken.',
     )
-    expect(allowanceExceededMessage({ period: '2026-10', used: 6, included: 10, remaining: 4, requested: 5 })).toBe(
+    expect(allowanceExceededMessage({ period: '2026-10', used: 6, included: 10, cap: 10, extra_offered: false, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 4, requested: 5 })).toBe(
       'Ni har använt 6 av 10 betalningar som ingår i oktober. Välj högst 4 betalningar, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
     )
   })

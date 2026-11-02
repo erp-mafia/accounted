@@ -47,6 +47,8 @@ const bankIdEnabled = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/bankid-flags', () => ({ isBankIdEnabled: bankIdEnabled }))
 const capability = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: capability }))
+const usageGate = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal: usageGate }))
 
 import { cancelSigningRequest, createSigningRequest, describeRequester, remindSigner, signingAvailability, type CreateSigningRequestInput } from '../requests'
 
@@ -102,6 +104,7 @@ const createdSigners: TableMockResolver = (calls) => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  usageGate.mockResolvedValue(null)
   vi.stubEnv('SIGNING_ENABLED', '1')
   vi.stubEnv('SIGNING_ARSREDOVISNING_ENABLED', '1')
   vi.stubEnv('BANKID_ENCRYPTION_KEY', BANKID_TEST_KEY)
@@ -422,11 +425,23 @@ describe('createSigningRequest', () => {
     ])
   })
 
+  it('stops at the signings the month includes before anything is stored or mailed', async () => {
+    const refusal = { ok: false, code: 'USAGE_CONSENT_REQUIRED', details: { kind: 'signing', included: 3, unit_price_ore: 1000 }, messageSv: 'x' }
+    usageGate.mockResolvedValue(refusal)
+    expect(await createSigningRequest(ctx, input())).toBe(refusal)
+    expect(usageGate).toHaveBeenCalledWith(mock.supabase, COMPANY, 'signing')
+    expect(insertedRequests()).toEqual([])
+    expect(mail.sendSigningRequestMail).not.toHaveBeenCalled()
+  })
+
   it('carries the slots of an annual-report request', async () => {
+    usageGate.mockResolvedValue({ ok: false, code: 'USAGE_CONSENT_REQUIRED' })
     const result = await createSigningRequest(
       ctx,
       input({ annualReportVersionId: VERSION, signers: [{ name: 'Anna', annualReportSignatureId: 'slot-1' }, { name: 'Erik', annualReportSignatureId: 'slot-2' }] }),
     )
+    // An annual report's signing is always included: never asked about.
+    expect(usageGate).not.toHaveBeenCalled()
     expect(result.ok).toBe(true)
     expect(insertedRequests()[0]).toMatchObject({ annual_report_version_id: VERSION })
     expect(insertedSigners().map((r) => r.annual_report_signature_id)).toEqual(['slot-1', 'slot-2'])

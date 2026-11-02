@@ -8,12 +8,14 @@ const providers = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 const issueAndBookInvoice = vi.hoisted(() => vi.fn())
 const renderInvoicePdfBuffer = vi.hoisted(() => vi.fn())
 const isSandboxCompany = vi.hoisted(() => vi.fn())
+const usageGateRefusal = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/digital-mailboxes/connections', () => ({ getConnection }))
 vi.mock('@/lib/digital-mailboxes/providers', () => ({ getDigitalMailboxProviders: () => providers.value }))
 vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({ issueAndBookInvoice }))
 vi.mock('@/lib/invoices/render-invoice-pdf', () => ({ renderInvoicePdfBuffer }))
 vi.mock('@/lib/sandbox/guard', () => ({ isSandboxCompany }))
+vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal }))
 
 import {
   invoiceMailboxBlock,
@@ -132,6 +134,7 @@ describe('sendInvoiceToDigitalMailbox', () => {
     dispatches.length = 0
     providers.value = { kivra: { sender } }
     isSandboxCompany.mockResolvedValue(false)
+    usageGateRefusal.mockResolvedValue(null)
     getConnection.mockResolvedValue({ send_state: 'active', tenant_ref: 'tk1' })
     invoiceRow = { ...makeInvoice({ id: 'inv-1', status: 'draft', invoice_number: null }), customer, items: [] }
     renderInvoicePdfBuffer.mockResolvedValue({ buffer: Buffer.from('%PDF') })
@@ -149,6 +152,17 @@ describe('sendInvoiceToDigitalMailbox', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE' })
     expect(issueAndBookInvoice).not.toHaveBeenCalled()
     expect(sender.sendInvoice).not.toHaveBeenCalled()
+  })
+
+  it('stops at what the month includes before anything is matched, issued or sent, and asks the gate for this provider', async () => {
+    const refusal = { ok: false, code: 'USAGE_CONSENT_REQUIRED', details: { kind: 'kivra_send', included: 0, unit_price_ore: 300 }, messageSv: 'x' }
+    usageGateRefusal.mockResolvedValue(refusal)
+    expect(await sendInvoiceToDigitalMailbox(ctx(), 'inv-1', 'kivra')).toBe(refusal)
+    expect(usageGateRefusal).toHaveBeenCalledWith(service, 'company-1', 'kivra_send')
+    expect(sender.isReachable).not.toHaveBeenCalled()
+    expect(issueAndBookInvoice).not.toHaveBeenCalled()
+    expect(sender.sendInvoice).not.toHaveBeenCalled()
+    expect(dispatches).toEqual([])
   })
 
   it('refuses without an active sender, and in the demo company', async () => {

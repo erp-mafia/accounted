@@ -37,6 +37,9 @@ import { getCompanyDisplayName } from '@/lib/company/context'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { createServiceClient } from '@/lib/supabase/server'
+import { usageGateRefusal } from '@/lib/usage/gate'
+import { billedUsageKinds } from '@/lib/usage/kinds'
 import {
   PAYSLIP_ISSUABLE_STATUSES,
   issuePayslipSections,
@@ -161,6 +164,14 @@ export async function sendPayslips(
   const runEmployees = (runEmployeesData ?? []) as unknown as RunEmployeeRow[]
   if (runEmployees.length === 0) {
     return { ok: false, code: 'SALARY_PAYSLIPS_NO_EMPLOYEES' }
+  }
+
+  // Each payslip the mailbox takes is a unit it prices: past what the month
+  // includes the run waits, dry run too, for a subscription and an admin's
+  // acceptance. Counted as if the mailbox reaches everyone on the run.
+  if (mailbox && billedUsageKinds().has(`${mailbox}_send`)) {
+    const usageGate = await usageGateRefusal(createServiceClient(), companyId, `${mailbox}_send`, { requested: runEmployees.length })
+    if (usageGate) return usageGate
   }
 
   if (options.dryRun) {

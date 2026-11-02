@@ -242,6 +242,7 @@ afterEach(() => {
   unregister?.()
   unregister = null
   delete process.env.PEPPOL_TRANSPORT_PROVIDER
+  vi.unstubAllEnvs()
 })
 
 // ---------------------------------------------------------------------------
@@ -333,6 +334,62 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     const body = await res.json()
     expect(body.error.code).toBe('PEPPOL_SEND_LIMIT_REACHED')
     expect(body.error.details).toMatchObject({ max_sends: 50, sent_count: 50 })
+  })
+
+  describe('while e-invoices above what the month includes are billed', () => {
+    /** The cap's two reads, then the month's e-invoices for the usage stop, then whether this invoice was already handed over. */
+    const atIncluded = (handed: unknown[] = []) => [SENT_COUNT, UNSTAMPED_COUNT, { data: null, error: null, count: 10 }, { data: handed, error: null }]
+    const accepted = {
+      data: [{ company_id: COMPANY_ID, kind: 'peppol_send', unit_price_ore: 100, included: 10, accepted_by: 'user-0', accepted_at: '2026-10-02T08:00:00Z' }],
+      error: null,
+    }
+    /** A subscription of its own: what lets more than what is included be accepted. */
+    const paying = { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
+
+    it('409 USAGE_CONSENT_REQUIRED at the included amount until an admin accepts, before the invoice is read', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const client = sendClient({ peppol_deliveries: atIncluded(), company_subscriptions: paying })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('USAGE_CONSENT_REQUIRED')
+      expect(body.error.details).toMatchObject({ kind: 'peppol_send', used: 10, included: 10, unit_price_ore: 100 })
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
+      expect(wrote(client)).toBe(false)
+      expect(transport.submit).not.toHaveBeenCalled()
+    })
+
+    it('sends once an admin accepted the charge', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      mockServiceClient.mockReturnValue(
+        sendClient({ peppol_deliveries: [SENT_COUNT, UNSTAMPED_COUNT, { data: null, error: null, count: 10 }], usage_consents: accepted, company_subscriptions: paying }),
+      )
+      const res = await send()
+      expect(res.status).toBe(201)
+      expect(transport.submit).toHaveBeenCalled()
+    })
+
+    it('409 USAGE_SUBSCRIPTION_REQUIRED for a trial at the included amount, accepted or not, before the invoice is read', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const trial = { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
+      const client = sendClient({ peppol_deliveries: atIncluded(), usage_consents: accepted, company_subscriptions: trial })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('USAGE_SUBSCRIPTION_REQUIRED')
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
+      expect(transport.submit).not.toHaveBeenCalled()
+    })
+
+    it('does not stop an invoice the network already has: sending it again is no new e-invoice', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
+      const client = sendClient({ peppol_deliveries: atIncluded([{ id: DELIVERY_ID }]) })
+      mockServiceClient.mockReturnValue(client)
+      const res = await send()
+      expect((await res.json()).error?.code).not.toBe('USAGE_CONSENT_REQUIRED')
+      expect(client.calls.some((c) => c.table === 'invoices')).toBe(true)
+    })
   })
 
   it.each([

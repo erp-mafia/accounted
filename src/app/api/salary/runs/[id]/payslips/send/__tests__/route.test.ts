@@ -58,6 +58,12 @@ const mailboxMock = vi.hoisted(() => ({
   deliverPayslipsToMailbox: vi.fn(),
 }))
 vi.mock('@/lib/salary/payslips/send-digital-mailbox', () => mailboxMock)
+const usageGate = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal: usageGate }))
+vi.mock('@/lib/supabase/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
+  createServiceClient: () => ({ service: true }),
+}))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
@@ -440,6 +446,65 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     beforeEach(() => {
       mailboxMock.payslipMailboxBlock.mockResolvedValue(null)
       mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([])
+      usageGate.mockResolvedValue(null)
+    })
+
+    it('stops a Kivra run at what the month includes, before any payslip goes, counting everyone on the run', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', 'kivra_send')
+      try {
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        authed(supabase)
+        const sendEmail = mockEmail({ success: true })
+        usageGate.mockResolvedValue({
+          ok: false,
+          code: 'USAGE_CONSENT_REQUIRED',
+          details: { kind: 'kivra_send', period: '2026-11', used: 0, included: 0, requested: 2, unit_price_ore: 300 },
+          messageSv: 'Utskick till Kivra kostar 3,00 kr st och faktureras i efterskott. En admin godkänner det under Inställningar, Abonnemang, Användning.',
+        })
+        enqueueMany([
+          { data: RUN },
+          { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+          {
+            data: [
+              { employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } },
+              { employee_id: 'emp-2', employee: { first_name: 'Bo', last_name: 'B', email: 'bo@example.test', personnummer: 'enc' } },
+            ],
+          },
+        ])
+        const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'kivra' } })
+        const { status, body } = await parseJsonResponse<{ error: { code: string; details: { included: number; unit_price_ore: number } } }>(
+          await POST(request, createMockRouteParams({ id: 'run-1' })),
+        )
+        expect(status).toBe(409)
+        expect(body.error).toMatchObject({ code: 'USAGE_CONSENT_REQUIRED', details: { included: 0, unit_price_ore: 300 } })
+        expect(usageGate).toHaveBeenCalledWith({ service: true }, 'company-1', 'kivra_send', { requested: 2 })
+        expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+        expect(sendEmail).not.toHaveBeenCalled()
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('never asks the gate about a channel that is not billed (Billo)', async () => {
+      vi.stubEnv('USAGE_BILLING_KINDS', '*')
+      try {
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        authed(supabase)
+        mockEmail({ success: true })
+        mailboxMock.deliverPayslipsToMailbox.mockResolvedValue([{ employee_id: 'emp-1', status: 'sent', error: null }])
+        enqueueMany([
+          { data: RUN },
+          { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+          { data: [{ employee_id: 'emp-1', employee: { first_name: 'Anna', last_name: 'A', email: 'anna@example.test', personnummer: 'enc' } }] },
+          ...ISSUE_SECTIONS,
+        ])
+        const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
+        expect((await POST(request, createMockRouteParams({ id: 'run-1' }))).status).toBe(200)
+        expect(usageGate).not.toHaveBeenCalled()
+        expect(mailboxMock.deliverPayslipsToMailbox).toHaveBeenCalled()
+      } finally {
+        vi.unstubAllEnvs()
+      }
     })
 
     it('returns 400 for an unknown channel', async () => {

@@ -751,6 +751,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   // extension alike.
   'tic-budget',
   'ui-state',
+  // Priced usage (bank payments, Peppol, Kivra, Billo, signing): counted
+  // from each block's own log, stated and billed monthly. Billing
+  // infrastructure beside stripe, read by payments and the billing page.
+  'usage',
   'vendor-marks',
   // The liquidity forecast: reads across the ledger and the blocks (AR, AP,
   // payment orders, salary, skattekonto, VAT, recurring invoices), like the

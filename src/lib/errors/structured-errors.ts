@@ -11409,16 +11409,47 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   },
   // The monthly cap on bank payments (lib/payments/allowance.ts). The thrower
   // composes the Swedish text with the numbers and the month; details carry
-  // { period, used, included, remaining, requested } for the screen.
+  // { period, used, included, cap, extra_offered, billed, unit_price_ore,
+  // remaining, requested } for the screen.
   BANK_PAYMENTS_ALLOWANCE_EXCEEDED: {
     httpStatus: 409,
     message_sv: 'Månadens bankbetalningar som ingår är använda. Välj färre betalningar, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
     message_en: 'The bank payments included this month are used up. Choose fewer payments, or ask for more under Settings, Connections, Bank payments.',
     remediation: {
       description:
-        'Sign at most details.remaining payments this month (details.used of details.included are used in details.period), or ask for more under Settings, Connections, Bank payments. Payment files are not capped.',
+        'Sign at most details.remaining payments this month (details.used of details.included are used in details.period). When details.extra_offered is true and details.billed false, a person with the admin role can accept that more cost details.unit_price_ore öre each under Settings, Billing, Usage; an agent cannot accept it. Otherwise ask for more under Settings, Connections, Bank payments. Payment files are not capped.',
     },
     thrown_message_sv: true,
+  },
+  // A paid action at its month's included amount, before anyone accepted the
+  // charge (lib/usage/gate.ts). The thrower composes the Swedish text; details
+  // carry { kind, period, used, included, requested, unit_price_ore }.
+  USAGE_CONSENT_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Det som ingår i månaden är använt. Fler kostar en avgift per styck, och en admin godkänner det under Inställningar, Abonnemang, Användning.',
+    message_en: "This month's included amount is used up. More cost a fee each, which an admin accepts under Settings, Billing, Usage.",
+    remediation: {
+      description:
+        'A person with the admin role accepts the charge for details.kind (details.unit_price_ore öre each above details.included a month) under Settings, Billing, Usage; it then holds until turned off. An agent cannot accept it: ask the person, then retry.',
+    },
+    thrown_message_sv: true,
+  },
+  // Use above the included amount for a company without a subscription of its own (trial, free period).
+  USAGE_SUBSCRIPTION_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Det som ingår i månaden är använt. Fler kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
+    message_en: "This month's included amount is used up. More need a subscription. Start one under Settings, Billing.",
+    remediation: {
+      description:
+        'The company has no active subscription of its own (a trial or a free period), so nothing above details.included a month for details.kind can be accepted or billed. A person starts a subscription under Settings, Billing; an agent cannot.',
+    },
+    thrown_message_sv: true,
+  },
+  // Accepting a charge that is not on offer: the kind has no price or is not billed here.
+  USAGE_CHARGES_NOT_OFFERED: {
+    httpStatus: 409,
+    message_sv: 'Den här tjänsten har ingen avgift att godkänna just nu.',
+    message_en: 'This service has no charge to accept right now.',
   },
   BANK_PAYMENTS_ALLOWANCE_REQUEST_OPEN: {
     httpStatus: 409,

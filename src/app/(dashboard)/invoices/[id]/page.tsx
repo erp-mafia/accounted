@@ -148,6 +148,8 @@ import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import type { StatusChip } from '@/lib/status-display'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
+import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
+import type { UsageKind } from '@/lib/usage/kinds'
 import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import {
   EMPTY_INVOICE_MAILBOX_VIEW,
@@ -400,6 +402,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showResendDialog, setShowResendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [isSendingPeppol, setIsSendingPeppol] = useState(false)
+  // A send refused at the month's included e-invoices: the charge to accept before sending again.
+  // A send stopped at what the month includes: the charge to accept, and the send to retry once it is.
+  const [usageCharge, setUsageCharge] = useState<{ kind: UsageKind; included: number; unitPriceOre: number; retry: () => void } | null>(null)
   const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
   // A file uploading into the Peppol dialog's Bilagor: the send waits (crm#1545).
   const [peppolAttachmentsBusy, setPeppolAttachmentsBusy] = useState(false)
@@ -1454,8 +1459,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       })
       const body = (await response.json().catch(() => null)) as {
         data?: { issued?: boolean; journal_entry_id?: string | null }
+        error?: { code?: string; details?: { included?: number; unit_price_ore?: number } }
       } | null
-      if (!response.ok) {
+      if (body?.error?.code === 'USAGE_CONSENT_REQUIRED') {
+        setUsageCharge({
+          kind: `${provider}_send`,
+          included: body.error.details?.included ?? 0,
+          unitPriceOre: body.error.details?.unit_price_ore ?? 0,
+          retry: () => void sendToMailbox(provider),
+        })
+      } else if (!response.ok) {
         toast({
           title: t('mailbox_send_failed_title', { provider: providerName }),
           description: getUserErrorMessage(body ?? new Error(`HTTP ${response.status}`), {
@@ -1497,8 +1510,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/peppol/send`, { method: 'POST' })
       const body = await response.json().catch(() => null) as {
         data?: { already_submitted?: boolean; issuance?: { ok: boolean } | null }
-        error?: { code?: string; message?: string; message_en?: string }
+        error?: { code?: string; message?: string; message_en?: string; details?: { included?: number; unit_price_ore?: number } }
       } | null
+      if (body?.error?.code === 'USAGE_CONSENT_REQUIRED') {
+        setShowPeppolSendDialog(false)
+        setUsageCharge({
+          kind: 'peppol_send',
+          included: body.error.details?.included ?? 0,
+          unitPriceOre: body.error.details?.unit_price_ore ?? 0,
+          retry: () => void sendViaPeppol(),
+        })
+        return
+      }
       if (!response.ok) {
         throw body?.error ?? new Error(t('peppol_send_failed_description'))
       }
@@ -3530,6 +3553,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       )}
 
       {/* Peppol send confirmation (convention 10: confirm up front). */}
+      {usageCharge && (
+        <UsageConsentDialog
+          kind={usageCharge.kind}
+          included={usageCharge.included}
+          unitPriceOre={usageCharge.unitPriceOre}
+          open
+          onOpenChange={(open) => {
+            if (!open) setUsageCharge(null)
+          }}
+          onAccepted={() => {
+            const retry = usageCharge.retry
+            setUsageCharge(null)
+            retry()
+          }}
+        />
+      )}
       <Dialog open={showPeppolSendDialog} onOpenChange={setShowPeppolSendDialog}>
         <DialogContent>
           <DialogHeader>

@@ -277,6 +277,14 @@ export function BankIdSigningFlow({
     setUsage((current) => withIncludedPayments(current, included))
     setAllowance((current) => withIncludedRefusal(current, included))
   }, [])
+  // An admin accepted the charge above what is included: the refusal no longer
+  // holds, and the counter is read again with the new cap.
+  const acceptedCharge = useCallback(() => {
+    setAllowance(null)
+    client.usage?.().then(setUsage, () => {
+      // Without the counter the flow stands; the server decides at the next start.
+    })
+  }, [client])
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const currency = orders[0]?.currency ?? 'SEK'
   // The other signatory is named by their own number, whoever holds the screen.
@@ -665,7 +673,7 @@ export function BankIdSigningFlow({
           </AttnLine>
         )}
         {refusal === 'redirect' && <AttnLine>{t('signing_redirect_unsupported')}</AttnLine>}
-        <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
+        <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} onAccepted={acceptedCharge} />
         <DialogFooter>
           {closeButton}
           <Button variant="secondary" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
@@ -756,7 +764,7 @@ export function BankIdSigningFlow({
         {!waiting && (failure || signing.status === 'created') && (
           <div className="space-y-3">
             {allowance ? (
-              <BankPaymentsAllowanceLine usage={usage} count={signing.orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
+              <BankPaymentsAllowanceLine usage={usage} count={signing.orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} onAccepted={acceptedCharge} />
             ) : (
               <AttnLine>
                 {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}

@@ -16,7 +16,9 @@
  * is issued, so an unreachable customer leaves the draft as it was.
  *
  * Every attempt, sent or failed, is a digital_mailbox_dispatches row: how
- * the invoice reached its customer.
+ * the invoice reached its customer. A sent row is also the unit the usage
+ * statements count (lib/usage/counters.ts), and past what the month
+ * includes a send waits for the usage gate (lib/usage/gate.ts).
  */
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
@@ -41,6 +43,7 @@ import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import type { Logger } from '@/lib/logger'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { usageGateRefusal } from '@/lib/usage/gate'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 export type DigitalMailboxSendCode =
@@ -232,6 +235,10 @@ export async function sendInvoiceToDigitalMailbox(
     return { ok: false, code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' }
   }
   const tenantRef = connection.tenant_ref
+  // Every send is a unit the provider prices, a resend too: past what the
+  // month includes it waits for a subscription and an admin's acceptance.
+  const usageGate = await usageGateRefusal(ctx.service, ctx.companyId, `${providerId}_send`)
+  if (usageGate) return usageGate
 
   let invoice = await loadInvoice(ctx.supabase, ctx.companyId, invoiceId)
   if (!invoice) return { ok: false, code: 'INVOICE_NOT_FOUND' }

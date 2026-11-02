@@ -7,6 +7,7 @@
  * person signing and is rendered, never printed.
  */
 
+import type { BankPaymentsAllowanceDetails } from '@/lib/payments/allowance'
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
 import { paymentsReadiness, type PaymentAccountContext, type PaymentsReadiness } from '@/lib/payments/orders/readiness'
@@ -263,9 +264,19 @@ export interface BankPaymentsUsage {
   period: string
   payments_sent: number
   accounts_used: number
-  /** The cap: payments a month the company may send. */
+  /** What the month includes; also the cap unless extra payments are billed. */
   included_payments: number
   included_accounts: number
+  /** The hard stop. Absent from servers before usage billing (then included_payments). */
+  cap_payments?: number
+  /** Whether payments above included_payments can be accepted at unit_price_ore. */
+  extra_offered?: boolean
+  /** Whether an admin accepted them: payments above included_payments are billed instead of refused. */
+  billed_above_included?: boolean
+  /** Whether more would be offered with a subscription of its own: the company has none. */
+  subscription_required?: boolean
+  /** Öre exkl. moms per payment above included_payments. */
+  unit_price_ore?: number
   /** Payments the month still takes. Absent from servers before the cap. */
   remaining_payments?: number
   extra_payments: number
@@ -298,13 +309,7 @@ export function withIncludedRefusal(refusal: BankPaymentsAllowanceRefusal | null
 }
 
 /** A signing refused at the monthly cap (BANK_PAYMENTS_ALLOWANCE_EXCEEDED): the numbers the refusal carries. */
-export interface BankPaymentsAllowanceRefusal {
-  period: string
-  used: number
-  included: number
-  remaining: number
-  requested: number
-}
+export type BankPaymentsAllowanceRefusal = BankPaymentsAllowanceDetails
 
 /** The cap's numbers when `error` is that refusal; null for anything else. */
 export function allowanceRefusalOf(error: unknown): BankPaymentsAllowanceRefusal | null {
@@ -315,6 +320,11 @@ export function allowanceRefusalOf(error: unknown): BankPaymentsAllowanceRefusal
     period: details.period,
     used: details.used,
     included: details.included,
+    cap: typeof details.cap === 'number' ? details.cap : details.included,
+    extra_offered: details.extra_offered === true,
+    billed: details.billed === true,
+    subscription_required: details.subscription_required === true,
+    unit_price_ore: typeof details.unit_price_ore === 'number' ? details.unit_price_ore : 0,
     remaining: typeof details.remaining === 'number' ? details.remaining : Math.max(0, details.included - details.used),
     requested: typeof details.requested === 'number' ? details.requested : 0,
   }
