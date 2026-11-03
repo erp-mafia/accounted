@@ -12532,6 +12532,13 @@
     "apply_error": "Uppdelningen misslyckades"
   },
   "time_tracking_workspace": {
+    "invoiced_externally": "Fakturerad (externt)",
+    "external_title": "Fakturerat i tidigare system",
+    "external_help": "Timmar som redan fakturerats utanför Accounted, till exempel i systemet tidrapporten kommer från. De räknas som fakturerade och låses, utan att någon faktura skapas här.",
+    "external_before": "Fakturerat före",
+    "external_action": "Markera som fakturerat",
+    "external_confirm": "Alla debiterbara tidrader före {date} som inte ligger på en faktura i Accounted markeras som fakturerade utanför Accounted. De försvinner från ofakturerad tid och kan inte längre ändras.",
+    "external_marked": "{count} tidrader markerade som fakturerade",
     "col_invoice": "Fakturera",
     "draft_action": "Skapa fakturautkast",
     "draft_confirm_title": "Skapa fakturautkast",

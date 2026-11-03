@@ -17,6 +17,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAllTimeEntries, loadTimeTrackingSettings, withCustomerName } from './service'
 import type { TimeEntryRow } from './service'
 import { resolveHourlyRate } from './summary'
+import { isInvoiced } from './types'
 import type { TimeEntry, TimeTrackingSettings } from './types'
 import type { TimeWriteContext } from './writes'
 
@@ -113,7 +114,7 @@ async function loadPinnedEntries(ctx: TimeWriteContext, ids: string[]): Promise<
   const rows = await fetchAllRows<TimeEntryRow>(({ from, to }) =>
     ctx.supabase
       .from('time_entries')
-      .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
+      .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)')
       .eq('company_id', ctx.companyId)
       .in('id', ids)
       .order('id', { ascending: true })
@@ -185,7 +186,7 @@ export async function invoiceTimeEntries(
     if (pinned) {
       // The approver saw these rows: every one must still be here, billable,
       // uninvoiced and on this customer, or the draft would bill something else.
-      const usable = entries.filter((e) => e.customer_id === input.customer_id && e.is_billable && !e.invoice_id)
+      const usable = entries.filter((e) => e.customer_id === input.customer_id && e.is_billable && !isInvoiced(e))
       if (usable.length !== pinned.length) {
         return { ok: false, code: 'TIME_INVOICE_ENTRIES_CHANGED', details: { expected: pinned.length, usable: usable.length } }
       }
@@ -279,6 +280,7 @@ export async function invoiceTimeEntries(
       .eq('company_id', ctx.companyId)
       .in('id', ids)
       .is('invoice_id', null)
+      .eq('invoiced_externally', false)
       .select('id')
     if (linkError || (linked ?? []).length !== ids.length) {
       ctx.log.error('time_entries invoice link incomplete', linkError ?? { linked: linked?.length, expected: ids.length })

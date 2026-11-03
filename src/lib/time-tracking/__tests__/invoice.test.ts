@@ -45,6 +45,7 @@ const entry = (overrides: Partial<TimeEntry> = {}): TimeEntry & { customers: nul
   comment: null,
   is_billable: true,
   invoice_id: null,
+  invoiced_externally: false,
   source: 'manual',
   import_key: null,
   created_at: '2026-10-14T15:00:00Z',

@@ -177,6 +177,40 @@ describe('POST /entries/mark-invoiced', () => {
   })
 })
 
+describe('POST /entries/mark-invoiced-externally', () => {
+  it('marks billable entries before the date that are on no Accounted invoice', async () => {
+    mock.enqueue({ data: [{ id: ENTRY_ID }, { id: INVOICE_ID }] })
+    const res = await route('POST', '/entries/mark-invoiced-externally')(
+      createMockRequest('/x', { method: 'POST', body: { before: '2026-08-01' } }),
+      ctx,
+    )
+    const { status, body } = await parseJsonResponse<{ data: { updated: number } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.updated).toBe(2)
+    expect(mock.findCall('time_entries', 'update')).toEqual([{ invoiced_externally: true }])
+    expect(mock.findCall('time_entries', 'lt')).toEqual(['entry_date', '2026-08-01'])
+    expect(mock.findCalls('time_entries', 'is')).toContainEqual(['invoice_id', null])
+    expect(mock.findCalls('time_entries', 'eq')).toEqual(
+      expect.arrayContaining([['company_id', 'company-1'], ['is_billable', true], ['invoiced_externally', false]]),
+    )
+  })
+
+  it('undoes the marking for the same range', async () => {
+    mock.enqueue({ data: [] })
+    await route('POST', '/entries/mark-invoiced-externally')(
+      createMockRequest('/x', { method: 'POST', body: { before: '2026-08-01', invoiced_externally: false } }),
+      ctx,
+    )
+    expect(mock.findCall('time_entries', 'update')).toEqual([{ invoiced_externally: false }])
+    expect(mock.findCalls('time_entries', 'eq')).toContainEqual(['invoiced_externally', true])
+  })
+
+  it('rejects a missing date', async () => {
+    const res = await route('POST', '/entries/mark-invoiced-externally')(createMockRequest('/x', { method: 'POST', body: {} }), ctx)
+    expect(res.status).toBe(400)
+  })
+})
+
 describe('import', () => {
   function workbookRequest(options?: unknown): Request {
     const wb = XLSX.utils.book_new()

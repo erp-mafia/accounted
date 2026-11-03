@@ -259,8 +259,10 @@ function EntriesTab({ from, to, onError }: { from: string; to: string; onError: 
                 {row.comment}
               </TableCell>
               <TableCell>
-                {row.invoice_id ? (
-                  <span className="text-xs text-muted-foreground">{t('invoiced')}</span>
+                {row.invoice_id || row.invoiced_externally ? (
+                  <span className="text-xs text-muted-foreground">
+                    {row.invoice_id ? t('invoiced') : t('invoiced_externally')}
+                  </span>
                 ) : (
                   <Button size="icon-sm" variant="ghost" aria-label={t('delete')} onClick={() => void remove(row.id)}>
                     <Trash2 className="h-4 w-4" />
@@ -433,10 +435,66 @@ function SummaryTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ExternalInvoicedSection onMarked={() => void load()} onError={onError} />
       {settings && settings.consultants.length > 0 && (
         <MyConsultantSection settings={settings} value={myConsultant} onSaved={onMyConsultantSaved} onError={onError} />
       )}
       {settings && <RatesSection settings={settings} onSaved={onSettingsSaved} onError={onError} />}
+    </div>
+  )
+}
+
+/** History billed in the old system: mark it invoiced so only what is really unbilled remains. */
+function ExternalInvoicedSection({ onMarked, onError }: { onMarked: () => void; onError: (m: string) => void }) {
+  const t = useTranslations('time_tracking_workspace')
+  const { toast } = useToast()
+  const [before, setBefore] = useState('')
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function mark() {
+    setBusy(true)
+    const res = await fetch(`${API}/entries/mark-invoiced-externally`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ before }),
+    })
+    setBusy(false)
+    setConfirmOpen(false)
+    if (!res.ok) return onError(await readError(res, t('save_error')))
+    const { data } = await res.json()
+    toast({ title: t('external_marked', { count: data.updated }) })
+    onMarked()
+  }
+
+  return (
+    <div className="space-y-2">
+      <h2 className="font-display text-lg">{t('external_title')}</h2>
+      <p className="max-w-xl text-sm text-muted-foreground">{t('external_help')}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="date"
+          value={before}
+          onChange={(e) => setBefore(e.target.value)}
+          className={cn(TOOLBAR_FIELD_CLASS, 'w-44')}
+          aria-label={t('external_before')}
+        />
+        <Button size="sm" variant="secondary" disabled={!before} onClick={() => setConfirmOpen(true)}>
+          {t('external_action')}
+        </Button>
+      </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('external_title')}</DialogTitle>
+            <DialogDescription>{t('external_confirm', { date: before })}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)}>{t('cancel')}</Button>
+            <Button onClick={() => void mark()} loading={busy}>{t('external_action')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

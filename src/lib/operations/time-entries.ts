@@ -36,6 +36,7 @@ const TimeEntry = z.object({
   comment: z.string().nullable(),
   is_billable: z.boolean(),
   invoice_id: z.string().uuid().nullable(),
+  invoiced_externally: z.boolean(),
   source: z.enum(['manual', 'import']),
   created_at: z.string(),
   updated_at: z.string(),
@@ -81,7 +82,7 @@ export const timeEntriesList = defineOperation({
   docs: {
     summary: 'List registered hours (tidrader), newest first.',
     description:
-      'Returns time entries newest first: date, consultant, customer, project, activity code, hours, billable flag and the invoice they were billed on. Filter by date range, customer, consultant, project or uninvoiced. Offset pagination: pass next_offset back as offset; it is null on the last page.',
+      'Returns time entries newest first: date, consultant, customer, project, activity code, hours, billable flag and the invoice they were billed on (or invoiced_externally for hours billed outside Accounted). Filter by date range, customer, consultant, project or uninvoiced. Offset pagination: pass next_offset back as offset; it is null on the last page.',
     useWhen: 'Checking what was logged on a day, a customer or a project, or finding hours that are not invoiced yet.',
     doNotUseFor: 'Totals per customer, project or consultant (GET /time-entries/summary).',
     pitfalls: [
@@ -107,6 +108,7 @@ export const timeEntriesList = defineOperation({
               comment: 'Månadsavstämning',
               is_billable: true,
               invoice_id: null,
+              invoiced_externally: false,
               source: 'manual',
               created_at: '2026-10-14T15:02:11Z',
               updated_at: '2026-10-14T15:02:11Z',
@@ -334,6 +336,7 @@ export const timeEntriesCreate = defineOperation({
               comment: null,
               is_billable: true,
               invoice_id: null,
+              invoiced_externally: false,
               source: 'manual',
               created_at: '2026-11-03T08:12:40Z',
               updated_at: '2026-11-03T08:12:40Z',

@@ -1448,7 +1448,7 @@ Example response `200`:
 **List registered hours (tidrader), newest first.**
 `scope:time:read · risk:low · idempotent`
 
-Returns time entries newest first: date, consultant, customer, project, activity code, hours, billable flag and the invoice they were billed on. Filter by date range, customer, consultant, project or uninvoiced. Offset pagination: pass next_offset back as offset; it is null on the last page.
+Returns time entries newest first: date, consultant, customer, project, activity code, hours, billable flag and the invoice they were billed on (or invoiced_externally for hours billed outside Accounted). Filter by date range, customer, consultant, project or uninvoiced. Offset pagination: pass next_offset back as offset; it is null on the last page.
 
 **Use when:** Checking what was logged on a day, a customer or a project, or finding hours that are not invoiced yet.
 **Do not use for:** Totals per customer, project or consultant (GET /time-entries/summary).
@@ -1475,7 +1475,7 @@ Response `200`:
 ```ts
 {
   data: {
-    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }[],
+    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, invoiced_externally: boolean, source: "manual" | "import", created_at: string, updated_at: string }[],
     total: number,
     has_more: boolean,
     next_offset: number | null
@@ -1510,6 +1510,7 @@ Example response `200`:
         "comment": "Månadsavstämning",
         "is_billable": true,
         "invoice_id": null,
+        "invoiced_externally": false,
         "source": "manual",
         "created_at": "2026-10-14T15:02:11Z",
         "updated_at": "2026-10-14T15:02:11Z"
@@ -1573,7 +1574,7 @@ Response `200`:
 ```ts
 {
   data: {
-    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }[]
+    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, invoiced_externally: boolean, source: "manual" | "import", created_at: string, updated_at: string }[]
   },
   meta: {
     request_id: string,
@@ -1605,6 +1606,7 @@ Example response `200`:
         "comment": null,
         "is_billable": true,
         "invoice_id": null,
+        "invoiced_externally": false,
         "source": "manual",
         "created_at": "2026-11-03T08:12:40Z",
         "updated_at": "2026-11-03T08:12:40Z"
@@ -1666,7 +1668,7 @@ Response `200`:
 ```ts
 {
   data: {
-    entry: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }
+    entry: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, invoiced_externally: boolean, source: "manual" | "import", created_at: string, updated_at: string }
   },
   meta: {
     request_id: string,

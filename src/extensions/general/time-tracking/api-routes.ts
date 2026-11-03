@@ -68,6 +68,13 @@ const periodQuery = z.object({
   uninvoiced: z.enum(['true', 'false']).optional(),
 })
 
+const markExternalSchema = z.object({
+  /** Entries dated before this day (exclusive). */
+  before: isoDate,
+  /** false undoes an earlier marking for the same range. */
+  invoiced_externally: z.boolean().default(true),
+})
+
 const invoiceDraftSchema = z.object({
   customer_id: z.uuid(),
   from: isoDate,
@@ -309,12 +316,39 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       }
       const { data, error } = await ctx.supabase
         .from('time_entries')
-        .update({ invoice_id: body.data.invoice_id })
+        // A link to an Accounted invoice supersedes "invoiced outside Accounted".
+        .update({ invoice_id: body.data.invoice_id, invoiced_externally: false })
         .in('id', body.data.entry_ids)
         .eq('company_id', ctx.companyId)
         .select('id')
       if (error) {
         ctx.log.error('time_entries mark-invoiced failed', error)
+        return NextResponse.json({ error: 'Tidraderna kunde inte uppdateras.' }, { status: 500 })
+      }
+      return NextResponse.json({ data: { updated: data?.length ?? 0 } })
+    },
+  },
+  {
+    method: 'POST',
+    path: '/entries/mark-invoiced-externally',
+    handler: async (request, rawCtx) => {
+      const ctx = requireCtx(rawCtx)
+      if (ctx instanceof NextResponse) return ctx
+      const body = await validateBody(request, markExternalSchema)
+      if (!body.success) return body.response
+      // Only billable rows not on an Accounted invoice: those are the ones the
+      // old system billed. Rows linked to a draft or sent invoice stay as they are.
+      const { data, error } = await ctx.supabase
+        .from('time_entries')
+        .update({ invoiced_externally: body.data.invoiced_externally })
+        .eq('company_id', ctx.companyId)
+        .lt('entry_date', body.data.before)
+        .is('invoice_id', null)
+        .eq('is_billable', true)
+        .eq('invoiced_externally', !body.data.invoiced_externally)
+        .select('id')
+      if (error) {
+        ctx.log.error('time_entries mark-invoiced-externally failed', error)
         return NextResponse.json({ error: 'Tidraderna kunde inte uppdateras.' }, { status: 500 })
       }
       return NextResponse.json({ data: { updated: data?.length ?? 0 } })

@@ -69,7 +69,7 @@ function applyFilters<Q extends FilterableQuery<Q>>(query: Q, f: TimeEntryFilter
   if (f.customer_code) q = q.eq('customer_code', f.customer_code.toUpperCase())
   if (f.consultant) q = q.eq('consultant', f.consultant.toUpperCase())
   if (f.project_code) q = q.eq('project_code', f.project_code)
-  if (f.uninvoiced) q = q.is('invoice_id', null).eq('is_billable', true)
+  if (f.uninvoiced) q = q.is('invoice_id', null).eq('invoiced_externally', false).eq('is_billable', true)
   return q
 }
 
@@ -89,7 +89,7 @@ export async function listTimeEntries(
   const offset = filters.offset ?? 0
   const query = ctx.supabase
     .from('time_entries')
-    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)', { count: 'exact' })
+    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)', { count: 'exact' })
     .eq('company_id', ctx.companyId)
   const { data, error, count } = await applyFilters(query, filters)
     .order('entry_date', { ascending: false })
@@ -117,7 +117,7 @@ export async function fetchAllTimeEntries(ctx: TimeTrackingContext, filters: Tim
   const rows = await fetchAllRows<TimeEntryRow>(({ from, to }) => {
     const query = ctx.supabase
       .from('time_entries')
-      .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
+      .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)')
       .eq('company_id', ctx.companyId)
     return applyFilters(query, filters)
       .order('entry_date', { ascending: true })

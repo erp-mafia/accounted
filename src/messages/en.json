@@ -12532,6 +12532,13 @@
     "apply_error": "The split failed"
   },
   "time_tracking_workspace": {
+    "invoiced_externally": "Invoiced (external)",
+    "external_title": "Invoiced in a previous system",
+    "external_help": "Hours already invoiced outside Accounted, for example in the system the time report comes from. They count as invoiced and are locked, without any invoice being created here.",
+    "external_before": "Invoiced before",
+    "external_action": "Mark as invoiced",
+    "external_confirm": "Every billable time entry before {date} that is not on an Accounted invoice is marked as invoiced outside Accounted. They leave uninvoiced time and can no longer be changed.",
+    "external_marked": "{count} time entries marked as invoiced",
     "col_invoice": "Invoice",
     "draft_action": "Create draft invoice",
     "draft_confirm_title": "Create draft invoice",

@@ -28,6 +28,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   comment: null,
   is_billable: true,
   invoice_id: null,
+  invoiced_externally: false,
   source: 'manual',
   import_key: null,
   created_at: '2026-10-14T15:02:11Z',
@@ -393,5 +394,36 @@ describe('time-entries.delete', () => {
     const outcome = await timeEntriesDelete.run(ctx, { time_entry_id: ENTRY_ID }, { dryRun: false })
     expect(outcome).toEqual({ ok: true, data: { deleted: true, time_entry_id: ENTRY_ID } })
     expect(mock.findCalls('time_entries', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+})
+
+describe('invoiced outside Accounted', () => {
+  it('keeps externally invoiced hours out of the uninvoiced filter', async () => {
+    mock.enqueue({ data: [], count: 0 })
+    await timeEntriesList.run(ctx, timeEntriesList.input.parse({ uninvoiced: 'true' }), { dryRun: false })
+    expect(mock.findCalls('time_entries', 'eq')).toContainEqual(['invoiced_externally', false])
+  })
+
+  it('freezes an externally invoiced entry for update and delete', async () => {
+    mock.enqueue({ data: row({ invoiced_externally: true }) })
+    expect(await timeEntriesUpdate.run(ctx, { time_entry_id: ENTRY_ID, hours: 1 }, { dryRun: true })).toMatchObject({
+      ok: false,
+      code: 'TIME_ENTRY_INVOICED',
+      details: { invoiced_externally: true },
+    })
+    mock.enqueue({ data: row({ invoiced_externally: true }) })
+    expect(await timeEntriesDelete.run(ctx, { time_entry_id: ENTRY_ID }, { dryRun: false })).toMatchObject({
+      ok: false,
+      code: 'TIME_ENTRY_INVOICED',
+    })
+    expect(mock.findCall('time_entries', 'delete')).toBeUndefined()
+  })
+
+  it('leaves externally invoiced hours out of the uninvoiced totals', async () => {
+    mock.enqueue({ data: [row({ hours: '2' }), row({ id: 'x', hours: '5', invoiced_externally: true })] })
+    mock.enqueue({ data: { value: settings } })
+    const outcome = await timeEntriesSummary.run(ctx, timeEntriesSummary.input.parse({}), { dryRun: false })
+    if (!outcome.ok || outcome.dryRun) throw new Error('expected data')
+    expect(outcome.data.totals).toMatchObject({ hours: 7, billable_hours: 7, uninvoiced_billable_hours: 2, uninvoiced_amount: 1900 })
   })
 })

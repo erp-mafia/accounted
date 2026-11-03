@@ -49,6 +49,8 @@ export interface TimeEntry {
   comment: string | null
   is_billable: boolean
   invoice_id: string | null
+  /** Billed outside Accounted (history from the old system): counts as invoiced, no invoice row. */
+  invoiced_externally: boolean
   source: 'manual' | 'import'
   import_key: string | null
   created_at: string
@@ -56,6 +58,11 @@ export interface TimeEntry {
 }
 
 /** Max hours on one row; mirrors the time_entries CHECK. */
+/** Invoiced here (invoice_id) or outside Accounted: either way frozen and out of uninvoiced totals. */
+export function isInvoiced(entry: { invoice_id: string | null; invoiced_externally?: boolean }): boolean {
+  return Boolean(entry.invoice_id) || Boolean(entry.invoiced_externally)
+}
+
 export const MAX_HOURS_PER_ENTRY = 24
 
 /** extension_data.extension_id the time-tracking settings are stored under. */

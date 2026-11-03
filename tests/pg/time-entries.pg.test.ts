@@ -74,6 +74,16 @@ describe('time_entries', () => {
     await expect(insertEntry(a.companyId, a.userId, { hours: 24.5 })).rejects.toThrow(/check constraint/)
   })
 
+  it('is invoiced here or outside Accounted, never both', async () => {
+    const a = await seedCompany()
+    const id = await insertEntry(a.companyId, a.userId)
+    await getPool().query('UPDATE public.time_entries SET invoiced_externally = true WHERE id = $1', [id])
+    // The CHECK fires before the invoice FK would, so no invoice row is needed.
+    await expect(
+      getPool().query('UPDATE public.time_entries SET invoice_id = $2 WHERE id = $1', [id, randomUUID()]),
+    ).rejects.toThrow(/time_entries_invoiced_once/)
+  })
+
   it('keeps import_key unique per company, not globally', async () => {
     const a = await seedCompany()
     const b = await seedCompany()

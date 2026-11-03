@@ -11,6 +11,7 @@ import type { RefCandidate } from './resolve'
 import { loadTimeTrackingSettings, withCustomerName } from './service'
 import type { TimeEntryRow, TimeTrackingContext } from './service'
 import { resolveHourlyRate } from './summary'
+import { isInvoiced } from './types'
 import type { TimeEntry, TimeTrackingSettings } from './types'
 
 export interface TimeWriteContext extends TimeTrackingContext {
@@ -355,7 +356,7 @@ export async function createTimeEntries(
         source: 'manual' as const,
       })),
     )
-    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
+    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)')
   if (error || !data) {
     ctx.log.error('time_entries insert failed', error)
     return { ok: false, code: 'UNKNOWN_ERROR', error }
@@ -367,7 +368,7 @@ export async function createTimeEntries(
 async function loadEditable(ctx: TimeWriteContext, id: string): Promise<{ ok: true; entry: TimeEntry } | Failure> {
   const { data, error } = await ctx.supabase
     .from('time_entries')
-    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
+    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -377,8 +378,12 @@ async function loadEditable(ctx: TimeWriteContext, id: string): Promise<{ ok: tr
   }
   if (!data) return { ok: false, code: 'TIME_ENTRY_NOT_FOUND', details: { time_entry_id: id } }
   const entry = withCustomerName(data as unknown as TimeEntryRow)
-  if (entry.invoice_id) {
-    return { ok: false, code: 'TIME_ENTRY_INVOICED', details: { time_entry_id: id, invoice_id: entry.invoice_id } }
+  if (isInvoiced(entry)) {
+    return {
+      ok: false,
+      code: 'TIME_ENTRY_INVOICED',
+      details: { time_entry_id: id, invoice_id: entry.invoice_id, invoiced_externally: entry.invoiced_externally },
+    }
   }
   return { ok: true, entry }
 }
@@ -509,7 +514,7 @@ export async function updateTimeEntry(
     return { ok: true, dryRun: true, preview }
   }
 
-  // The invoice_id guard is in the write itself, so a row invoiced since the read stays frozen.
+  // The invoiced guards are in the write itself, so a row invoiced since the read stays frozen.
   const { data, error } = await ctx.supabase
     .from('time_entries')
     .update({
@@ -525,7 +530,8 @@ export async function updateTimeEntry(
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .is('invoice_id', null)
-    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
+    .eq('invoiced_externally', false)
+    .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, invoiced_externally, source, import_key, created_at, updated_at, customers(name)')
     .maybeSingle()
   if (error) {
     ctx.log.error('time_entries update failed', error)
@@ -556,6 +562,7 @@ export async function deleteTimeEntry(
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .is('invoice_id', null)
+    .eq('invoiced_externally', false)
     .select('id')
   if (error) {
     ctx.log.error('time_entries delete failed', error)

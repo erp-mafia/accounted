@@ -1,9 +1,10 @@
+import { isInvoiced } from './types'
 import type { TimeEntry, TimeTrackingSettings } from './types'
 
 type SummaryEntry = Pick<
   TimeEntry,
   'entry_date' | 'customer_id' | 'customer_code' | 'customer_name' | 'activity_code' | 'hours' | 'is_billable' | 'invoice_id'
->
+> & { invoiced_externally?: boolean }
 
 export interface CustomerMonthSummary {
   /** customer_id when linked, otherwise `code:<customer_code>`. */
@@ -66,7 +67,7 @@ function totalsByGroupMonth<E extends SummaryEntry>(
     group.hours += hours
     if (!entry.is_billable) continue
     group.billable += hours
-    if (entry.invoice_id) continue
+    if (isInvoiced(entry)) continue
     group.uninvoiced += hours
     const rate = resolveHourlyRate(entry.activity_code, settings)
     if (rate === null) group.rateMissing = true
