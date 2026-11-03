@@ -71,12 +71,12 @@
     "ics": "^3.12.0",
     "js-yaml": "4.3.2",
     "jszip": "^3.10.1",
-    "mailparser": "3.9.32",
+    "mailparser": "3.14.1",
     "motion": "^12.43.0",
     "next": "16.4.2",
     "next-intl": "^4.13.2",
     "next-themes": "^0.4.6",
-    "nodemailer": "10.0.13",
+    "nodemailer": "10.3.1",
     "pdf-lib": "^1.17.1",
     "posthog-js": "^1.407.3",
     "posthog-node": "^5.46.1",
@@ -95,7 +95,7 @@
     "tailwind-merge": "^3.6.0",
     "unpdf": "1.8.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@react-pdf/layout": "^4.6.1",
