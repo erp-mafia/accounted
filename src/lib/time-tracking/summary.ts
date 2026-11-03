@@ -1,4 +1,4 @@
-import type { TimeEntry, TimeTrackingSettings } from '../types'
+import type { TimeEntry, TimeTrackingSettings } from './types'
 
 type SummaryEntry = Pick<
   TimeEntry,
@@ -34,57 +34,103 @@ export function resolveHourlyRate(
   return code?.hourly_rate ?? settings.default_hourly_rate ?? null
 }
 
-/** Hours per customer and calendar month, newest month first, then by customer name. */
-export function summarizeByCustomerMonth(
-  entries: SummaryEntry[],
+interface Totals {
+  hours: number
+  billable_hours: number
+  uninvoiced_billable_hours: number
+  uninvoiced_amount: number | null
+}
+
+/**
+ * Totals per (group, calendar month). Only uninvoiced billable hours are
+ * priced; the amount is null when some of those hours have no known rate.
+ * Each group keeps the first entry seen, for its labels.
+ */
+function totalsByGroupMonth<E extends SummaryEntry>(
+  entries: E[],
   settings: Pick<TimeTrackingSettings, 'activity_codes' | 'default_hourly_rate'>,
-): CustomerMonthSummary[] {
-  const groups = new Map<string, CustomerMonthSummary & { amount_cents: number; rate_missing: boolean }>()
+  keyOf: (entry: E) => string,
+): Array<Totals & { key: string; month: string; first: E }> {
+  const groups = new Map<string, { key: string; month: string; first: E; hours: number; billable: number; uninvoiced: number; cents: number; rateMissing: boolean }>()
 
   for (const entry of entries) {
-    const key = customerKey(entry)
+    const key = keyOf(entry)
     const month = entry.entry_date.slice(0, 7)
     const groupKey = `${key}|${month}`
     let group = groups.get(groupKey)
     if (!group) {
-      group = {
-        customer_key: key,
-        customer_id: entry.customer_id,
-        customer_code: entry.customer_code,
-        customer_name: entry.customer_name,
-        month,
-        hours: 0,
-        billable_hours: 0,
-        uninvoiced_billable_hours: 0,
-        uninvoiced_amount: null,
-        amount_cents: 0,
-        rate_missing: false,
-      }
+      group = { key, month, first: entry, hours: 0, billable: 0, uninvoiced: 0, cents: 0, rateMissing: false }
       groups.set(groupKey, group)
     }
     const hours = Number(entry.hours)
     group.hours += hours
     if (!entry.is_billable) continue
-    group.billable_hours += hours
+    group.billable += hours
     if (entry.invoice_id) continue
-    group.uninvoiced_billable_hours += hours
+    group.uninvoiced += hours
     const rate = resolveHourlyRate(entry.activity_code, settings)
-    if (rate === null) group.rate_missing = true
-    else group.amount_cents += Math.round(hours * rate * 100)
+    if (rate === null) group.rateMissing = true
+    else group.cents += Math.round(hours * rate * 100)
   }
 
-  return [...groups.values()]
-    .map(({ amount_cents, rate_missing, ...g }) => ({
-      ...g,
-      hours: round2(g.hours),
-      billable_hours: round2(g.billable_hours),
-      uninvoiced_billable_hours: round2(g.uninvoiced_billable_hours),
-      uninvoiced_amount: rate_missing ? null : amount_cents / 100,
+  return [...groups.values()].map((g) => ({
+    key: g.key,
+    month: g.month,
+    first: g.first,
+    hours: round2(g.hours),
+    billable_hours: round2(g.billable),
+    uninvoiced_billable_hours: round2(g.uninvoiced),
+    uninvoiced_amount: g.rateMissing ? null : g.cents / 100,
+  }))
+}
+
+/** Hours per customer and calendar month, newest month first, then by customer name. */
+export function summarizeByCustomerMonth(
+  entries: SummaryEntry[],
+  settings: Pick<TimeTrackingSettings, 'activity_codes' | 'default_hourly_rate'>,
+): CustomerMonthSummary[] {
+  return totalsByGroupMonth(entries, settings, customerKey)
+    .map(({ key, first, ...totals }) => ({
+      customer_key: key,
+      customer_id: first.customer_id,
+      customer_code: first.customer_code,
+      customer_name: first.customer_name,
+      ...totals,
     }))
     .sort((a, b) =>
       b.month.localeCompare(a.month) ||
       (a.customer_name ?? a.customer_code ?? '').localeCompare(b.customer_name ?? b.customer_code ?? '', 'sv'),
     )
+}
+
+export type TimeSummaryGroupBy = 'customer' | 'project' | 'consultant'
+
+export interface TimeSummaryRow extends Totals {
+  /** customer: customer_id or `code:<customer_code>`; project: the project code or ''; consultant: the initials. */
+  key: string
+  /** Customer name, project code or consultant initials; null for hours without a project. */
+  label: string | null
+  month: string
+}
+
+type GroupableEntry = SummaryEntry & Pick<TimeEntry, 'project_code' | 'consultant'>
+
+const GROUPINGS: Record<TimeSummaryGroupBy, { keyOf: (e: GroupableEntry) => string; labelOf: (e: GroupableEntry) => string | null }> = {
+  customer: { keyOf: customerKey, labelOf: (e) => e.customer_name ?? e.customer_code },
+  project: { keyOf: (e) => e.project_code ?? '', labelOf: (e) => e.project_code },
+  consultant: { keyOf: (e) => e.consultant, labelOf: (e) => e.consultant },
+}
+
+/** Hours per customer, project or consultant and calendar month, newest month first, then by label. */
+export function summarizeTimeByMonth(
+  entries: GroupableEntry[],
+  settings: Pick<TimeTrackingSettings, 'activity_codes' | 'default_hourly_rate'>,
+  groupBy: TimeSummaryGroupBy,
+): TimeSummaryRow[] {
+  const { keyOf, labelOf } = GROUPINGS[groupBy]
+  return totalsByGroupMonth(entries, settings, keyOf)
+    .map(({ first, ...totals }) => ({ ...totals, label: labelOf(first) }))
+    .sort((a, b) => b.month.localeCompare(a.month) || (a.label ?? '').localeCompare(b.label ?? '', 'sv'))
 }
 
 function csvCell(value: string | number | null): string {

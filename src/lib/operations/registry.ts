@@ -19,6 +19,7 @@ import {
   dimensionRulesUpdate,
 } from './dimension-rules'
 import { dimensionsRetagLines, dimensionsRetagLog } from './dimension-retag'
+import { timeEntriesCodes, timeEntriesList, timeEntriesSummary } from './time-entries'
 import {
   accountsActivate,
   accountsCreate,
@@ -367,6 +368,10 @@ export const OPERATIONS: readonly AnyOperation[] = [
   skatteverketAgiValidateHuvuduppgift,
   skatteverketAgiValidateIndividuppgift,
   skattekontoSync,
+  // time-entries
+  timeEntriesList,
+  timeEntriesSummary,
+  timeEntriesCodes,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

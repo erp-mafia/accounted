@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvoiceBasisCsv, resolveHourlyRate, summarizeByCustomerMonth } from '../lib/summary'
+import { buildInvoiceBasisCsv, resolveHourlyRate, summarizeByCustomerMonth, summarizeTimeByMonth } from '../summary'
 
 const settings = {
   activity_codes: [
@@ -80,5 +80,46 @@ describe('buildInvoiceBasisCsv', () => {
     const [header, line] = csv.replace('﻿', '').trim().split('\r\n')
     expect(header).toBe('Datum;Kund;Kundnamn;Projekt;Medarbetare;A-kod;Timmar;Timpris;Belopp;Kommentar')
     expect(line).toBe('2026-06-15;GF;Galärbryggan;;GK;1;1,5;950;1425;"\'=HYPERLINK(""x""); moms"')
+  })
+})
+
+describe('summarizeTimeByMonth', () => {
+  const entry = { ...base, consultant: 'AB', project_code: 'P1' as string | null }
+
+  it('groups by project, with hours without a project in one unlabelled group', () => {
+    const rows = summarizeTimeByMonth(
+      [
+        { ...entry, entry_date: '2026-06-01', hours: 2 },
+        { ...entry, entry_date: '2026-06-02', hours: 1, project_code: null },
+        { ...entry, entry_date: '2026-06-03', hours: 0.5, project_code: null },
+      ],
+      settings,
+      'project',
+    )
+    expect(rows).toEqual([
+      expect.objectContaining({ key: '', label: null, month: '2026-06', hours: 1.5 }),
+      expect.objectContaining({ key: 'P1', label: 'P1', month: '2026-06', hours: 2, uninvoiced_amount: 1900 }),
+    ])
+  })
+
+  it('groups by consultant and month, newest month first', () => {
+    const rows = summarizeTimeByMonth(
+      [
+        { ...entry, entry_date: '2026-06-01', hours: 2 },
+        { ...entry, entry_date: '2026-07-01', hours: 1, consultant: 'CD' },
+      ],
+      settings,
+      'consultant',
+    )
+    expect(rows.map((r) => [r.month, r.key])).toEqual([['2026-07', 'CD'], ['2026-06', 'AB']])
+  })
+
+  it('labels a customer group by its name, else its code', () => {
+    const rows = summarizeTimeByMonth(
+      [{ ...entry, entry_date: '2026-06-01', hours: 1, customer_name: null }],
+      settings,
+      'customer',
+    )
+    expect(rows[0]).toMatchObject({ key: 'code:GF', label: 'GF' })
   })
 })

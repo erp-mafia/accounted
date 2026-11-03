@@ -302,6 +302,10 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Time tracking (tidrapportering): lib/operations/time-entries.ts.
+  'GET /api/v1/companies/:companyId/time-entries': 'time:read',
+  'GET /api/v1/companies/:companyId/time-entries/summary': 'time:read',
+  'GET /api/v1/companies/:companyId/time-entries/codes': 'time:read',
   // Operation registry, wave 4: Peppol, årsredovisning, opening balances,
   // supplier-invoice actions, inbox matches, Skatteverket helpers.
   'GET /api/v1/companies/:companyId/invoices/:id/peppol': 'invoices:read',

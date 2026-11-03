@@ -26,8 +26,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { TimeEntry, TimeTrackingSettings } from '@/extensions/general/time-tracking/types'
-import type { CustomerMonthSummary } from '@/extensions/general/time-tracking/lib/summary'
+import type { TimeEntry, TimeTrackingSettings } from '@/lib/time-tracking/types'
+import type { CustomerMonthSummary } from '@/lib/time-tracking/summary'
 
 const API = '/api/extensions/ext/time-tracking'
 const NONE = '__none__'

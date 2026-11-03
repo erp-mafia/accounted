@@ -4,18 +4,18 @@ import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/type
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { readWorkbookFromBuffer } from '@/lib/import/shared/workbook-reader'
 import { parseTimeWorkbook, TimeWorkbookError } from './lib/workbook-import'
 import type { ParsedTimeWorkbook } from './lib/workbook-import'
-import { buildInvoiceBasisCsv, summarizeByCustomerMonth } from './lib/summary'
+import { buildInvoiceBasisCsv, summarizeByCustomerMonth } from '@/lib/time-tracking/summary'
 import { DEFAULT_SETTINGS, MAX_HOURS_PER_ENTRY, MAX_IMPORT_FILE_BYTES } from './types'
-import type { TimeEntry, TimeTrackingSettings } from './types'
+import type { TimeTrackingSettings } from './types'
+import { fetchAllTimeEntries, listTimeEntries, TIME_ENTRY_LIST_LIMIT_MAX, withCustomerName } from '@/lib/time-tracking/service'
+import type { TimeEntryRow } from '@/lib/time-tracking/service'
 
 const SETTINGS_KEY = 'settings'
 const RATE_LIMIT_IMPORT = { maxRequests: 10, windowMs: 60_000 }
 const IMPORT_CHUNK = 500
-const LIST_LIMIT_MAX = 500
 
 const isoDate = isoDateSchema
 const code = (max: number) => z.string().trim().min(1).max(max)
@@ -51,7 +51,7 @@ const listQuery = z.object({
   customer_code: code(40).optional(),
   consultant: code(20).optional(),
   uninvoiced: z.enum(['true', 'false']).optional(),
-  limit: z.coerce.number().int().min(1).max(LIST_LIMIT_MAX).optional(),
+  limit: z.coerce.number().int().min(1).max(TIME_ENTRY_LIST_LIMIT_MAX).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 })
 
@@ -75,8 +75,6 @@ const importOptionsSchema = z.object({
   links: z.array(z.object({ code: code(40), customer_id: z.uuid() })).max(2000).optional(),
 })
 
-type EntryRow = TimeEntry & { customers: { name: string } | null }
-
 function requireCtx(ctx: ExtensionContext | undefined): ExtensionContext | NextResponse {
   if (!ctx?.companyId || !ctx.userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -87,11 +85,6 @@ function requireCtx(ctx: ExtensionContext | undefined): ExtensionContext | NextR
 async function loadSettings(ctx: ExtensionContext): Promise<TimeTrackingSettings> {
   const stored = await ctx.settings.get<Partial<TimeTrackingSettings>>(SETTINGS_KEY)
   return { ...DEFAULT_SETTINGS, ...(stored ?? {}) }
-}
-
-/** The display name: the linked Accounted customer wins over the imported snapshot. */
-function withCustomerName({ customers, ...entry }: EntryRow): TimeEntry {
-  return { ...entry, hours: Number(entry.hours), customer_name: customers?.name ?? entry.customer_name }
 }
 
 async function customerBelongsToCompany(ctx: ExtensionContext, customerId: string): Promise<boolean> {
@@ -156,24 +149,8 @@ async function loadEditableEntry(
   return null
 }
 
-/** All entries in a period, for summaries and exports that must not stop at 1000 rows. */
-async function fetchPeriodEntries(
-  ctx: ExtensionContext,
-  q: z.infer<typeof periodQuery>,
-): Promise<TimeEntry[]> {
-  const rows = await fetchAllRows<EntryRow>(({ from, to }) => {
-    let query = ctx.supabase.from('time_entries').select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)').eq('company_id', ctx.companyId)
-    if (q.from) query = query.gte('entry_date', q.from)
-    if (q.to) query = query.lte('entry_date', q.to)
-    if (q.customer_id) query = query.eq('customer_id', q.customer_id)
-    if (q.customer_code) query = query.eq('customer_code', q.customer_code)
-    if (q.uninvoiced === 'true') query = query.is('invoice_id', null).eq('is_billable', true)
-    return query
-      .order('entry_date', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to) as unknown as PromiseLike<{ data: EntryRow[] | null; error: { message: string } | null }>
-  })
-  return rows.map(withCustomerName)
+function periodFilters({ uninvoiced, ...rest }: z.infer<typeof periodQuery>) {
+  return { ...rest, uninvoiced: uninvoiced === 'true' }
 }
 
 async function readUploadedWorkbook(
@@ -250,37 +227,13 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       if (ctx instanceof NextResponse) return ctx
       const q = validateQuery(request, listQuery)
       if (!q.success) return q.response
-      const { from, to, customer_id, customer_code, consultant, uninvoiced } = q.data
-      const limit = q.data.limit ?? 100
-      const offset = q.data.offset ?? 0
-
-      let query = ctx.supabase
-        .from('time_entries')
-        .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)', { count: 'exact' })
-        .eq('company_id', ctx.companyId)
-      if (from) query = query.gte('entry_date', from)
-      if (to) query = query.lte('entry_date', to)
-      if (customer_id) query = query.eq('customer_id', customer_id)
-      if (customer_code) query = query.eq('customer_code', customer_code)
-      if (consultant) query = query.eq('consultant', consultant.toUpperCase())
-      if (uninvoiced === 'true') query = query.is('invoice_id', null)
-
-      const { data, error, count } = await query
-        .order('entry_date', { ascending: false })
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1)
-      if (error) {
-        ctx.log.error('time_entries list failed', error)
+      const { uninvoiced, ...filters } = q.data
+      const outcome = await listTimeEntries(ctx, { ...filters, uninvoiced: uninvoiced === 'true' })
+      if (!outcome.ok || outcome.dryRun) {
         return NextResponse.json({ error: 'Tidraderna kunde inte hämtas.' }, { status: 500 })
       }
-      const total = count ?? 0
-      const hasMore = offset + limit < total
-      return NextResponse.json({
-        data: ((data ?? []) as unknown as EntryRow[]).map(withCustomerName),
-        total,
-        has_more: hasMore,
-        next_offset: hasMore ? offset + limit : null,
-      })
+      const { entries, ...page } = outcome.data
+      return NextResponse.json({ data: entries, ...page })
     },
   },
   {
@@ -315,7 +268,7 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
         ctx.log.error('time_entries insert failed', error)
         return NextResponse.json({ error: 'Tidraden kunde inte sparas.' }, { status: 500 })
       }
-      return NextResponse.json({ data: withCustomerName(data as unknown as EntryRow) }, { status: 201 })
+      return NextResponse.json({ data: withCustomerName(data as unknown as TimeEntryRow) }, { status: 201 })
     },
   },
   {
@@ -354,7 +307,7 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
         ctx.log.error('time_entries update failed', error)
         return NextResponse.json({ error: 'Tidraden kunde inte sparas.' }, { status: 500 })
       }
-      return NextResponse.json({ data: withCustomerName(data as unknown as EntryRow) })
+      return NextResponse.json({ data: withCustomerName(data as unknown as TimeEntryRow) })
     },
   },
   {
@@ -414,7 +367,7 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       const q = validateQuery(request, periodQuery)
       if (!q.success) return q.response
       try {
-        const [entries, settings] = await Promise.all([fetchPeriodEntries(ctx, q.data), loadSettings(ctx)])
+        const [entries, settings] = await Promise.all([fetchAllTimeEntries(ctx, periodFilters(q.data)), loadSettings(ctx)])
         return NextResponse.json({ data: summarizeByCustomerMonth(entries, settings) })
       } catch (error) {
         ctx.log.error('time_entries summary failed', error)
@@ -431,7 +384,7 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       const q = validateQuery(request, periodQuery)
       if (!q.success) return q.response
       try {
-        const [entries, settings] = await Promise.all([fetchPeriodEntries(ctx, q.data), loadSettings(ctx)])
+        const [entries, settings] = await Promise.all([fetchAllTimeEntries(ctx, periodFilters(q.data)), loadSettings(ctx)])
         const csv = buildInvoiceBasisCsv(entries, settings)
         const name = `fakturaunderlag_${q.data.from ?? 'start'}_${q.data.to ?? 'idag'}.csv`
         return new Response(csv, {
