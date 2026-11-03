@@ -968,8 +968,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
-          {/* The in-app legal pages (host-relative for branded domains). The
-              acceptance itself is recorded by the prompt after signup. */}
+          {/* The in-app legal pages (host-relative for branded domains).
+              Creating the account accepts the terms and the DPA: both signup
+              routes record it in legal_acceptances (method 'signup'). */}
           <a
             href="/terms"
             target="_blank"

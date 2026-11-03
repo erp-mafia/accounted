@@ -22,6 +22,12 @@ vi.mock('../lib/bankid-confirmation-mail', () => ({
   sendBankIdSignupConfirmation: vi.fn(),
 }))
 
+// The signup acceptance rows have their own tests (src/lib/legal); here it is
+// a seam so the route tests can assert WHEN it is recorded and for WHOM.
+vi.mock('@/lib/legal/acceptance', () => ({
+  recordSignupAcceptances: vi.fn(),
+}))
+
 // The invite-only brand gate reads the brands table for any non-empty host;
 // it has its own tests. Open here so a forwarded host can be asserted on the
 // mail without a database.
@@ -48,6 +54,7 @@ import {
   startBankIdAuth,
 } from '../lib/bankid-client'
 import { sendBankIdSignupConfirmation } from '../lib/bankid-confirmation-mail'
+import { recordSignupAcceptances } from '@/lib/legal/acceptance'
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { ticExtension } from '../index'
@@ -196,6 +203,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
   vi.mocked(sendBankIdSignupConfirmation).mockResolvedValue({ ok: true })
+  vi.mocked(recordSignupAcceptances).mockResolvedValue(true)
 })
 
 afterEach(() => {
@@ -444,6 +452,8 @@ describe('POST /bankid/complete', () => {
       expect(body.error).toBe('internal_error')
       expect(body.message).toBe('Kunde inte skicka bekräftelsemailet. Försök igen.')
       expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+      // The rolled-back account accepted nothing.
+      expect(recordSignupAcceptances).not.toHaveBeenCalled()
     })
 
     it('deletes the created user when the app_metadata update fails', async () => {
@@ -486,6 +496,50 @@ describe('POST /bankid/complete', () => {
       const { status } = await parseJsonResponse(await findCompleteHandler()(req))
 
       expect(status).toBe(200)
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+    })
+
+    it('records the acceptance of the terms for the new account once it can no longer roll back', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { client } = mockServiceClient([
+        { data: null },
+        { error: null },
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(recordSignupAcceptances).toHaveBeenCalledTimes(1)
+      expect(recordSignupAcceptances).toHaveBeenCalledWith(client, 'new-user-uuid')
+      expect(vi.mocked(recordSignupAcceptances).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(sendBankIdSignupConfirmation).mock.invocationCallOrder[0],
+      )
+    })
+
+    it('still completes the signup when the acceptance cannot be stored', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null },
+        { error: null },
+      ])
+      vi.mocked(recordSignupAcceptances).mockResolvedValueOnce(false)
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ data?: { status?: string } }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.status).toBe('confirmation_sent')
       expect(admin.deleteUser).not.toHaveBeenCalled()
     })
   })

@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { ACCEPTED_DOCUMENTS, LEGAL_DOCUMENTS } from '../documents'
-import { currentAcceptanceVersions, readAcceptanceState, recordAcceptances, storeAnalyticsConsent } from '../acceptance'
+import {
+  currentAcceptanceVersions,
+  readAcceptanceState,
+  recordAcceptances,
+  recordSignupAcceptances,
+  storeAnalyticsConsent,
+} from '../acceptance'
 
 const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
@@ -63,5 +69,34 @@ describe('writes', () => {
     const [row] = findCall('user_preferences', 'upsert') as [Record<string, unknown>]
     expect(row).toMatchObject({ user_id: 'user-1', analytics_consent: false })
     expect(typeof row.analytics_consent_at).toBe('string')
+  })
+})
+
+describe('recordSignupAcceptances', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('records every document at its current version with method signup and no company', async () => {
+    expect(await recordSignupAcceptances(supabase as never, 'new-user')).toBe(true)
+    const calls = findCalls('legal_acceptances', 'upsert') as Array<[Record<string, unknown>]>
+    expect(calls.map(([row]) => row)).toEqual(
+      ACCEPTED_DOCUMENTS.map((key) => ({
+        user_id: 'new-user',
+        company_id: null,
+        document_key: key,
+        version: LEGAL_DOCUMENTS[key].acceptanceVersion,
+        method: 'signup',
+      })),
+    )
+  })
+
+  it('never throws: a failed write answers false and the signup goes on', async () => {
+    enqueue({ error: { message: 'denied' } })
+    await expect(recordSignupAcceptances(supabase as never, 'new-user')).resolves.toBe(false)
+  })
+
+  it('writes nothing on a self-hosted deployment', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    expect(await recordSignupAcceptances(supabase as never, 'new-user')).toBe(false)
+    expect(findCalls('legal_acceptances', 'upsert')).toEqual([])
   })
 })
