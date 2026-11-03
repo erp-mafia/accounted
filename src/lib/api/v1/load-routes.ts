@@ -312,6 +312,11 @@ import '@/app/api/v1/companies/[companyId]/settings/route'
 // #1663: filed momsdeklaration read (SKV inlamnat/beslutat).
 import '@/app/api/v1/companies/[companyId]/skatteverket/vat-declarations/route'
 
+// Time tracking: lib/operations/time-entries.ts.
+import '@/app/api/v1/companies/[companyId]/time-entries/route'
+import '@/app/api/v1/companies/[companyId]/time-entries/summary/route'
+import '@/app/api/v1/companies/[companyId]/time-entries/codes/route'
+
 // Portfolio: cross-company overview for multi-company keys.
 import '@/app/api/v1/portfolio/overview/route'
 

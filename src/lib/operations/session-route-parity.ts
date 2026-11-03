@@ -678,10 +678,20 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/zettle/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/zettle/backfill': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC),
+
+  // time-tracking
+  'POST /api/extensions/ext/time-tracking/entries': gap('P2', 'register billable hours per customer and project'),
+  'PATCH /api/extensions/ext/time-tracking/entries/:id': gap('P2'),
+  'DELETE /api/extensions/ext/time-tracking/entries/:id': gap('P2'),
+  'POST /api/extensions/ext/time-tracking/entries/mark-invoiced': gap('P2', 'link hours to the invoice that billed them'),
+  'PUT /api/extensions/ext/time-tracking/customer-links': gap('P3', 'map imported customer codes to customers'),
+  'PUT /api/extensions/ext/time-tracking/settings': gap('P3', 'consultants, activity codes and hourly rates'),
+  'POST /api/extensions/ext/time-tracking/import/preview': uiOnly(PREVIEW),
+  'POST /api/extensions/ext/time-tracking/import/commit': gap('P3', 'workbook import; the API would take structured rows'),
 }
 
 /**
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 134
+export const GAP_CEILING = 141
