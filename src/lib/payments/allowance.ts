@@ -3,9 +3,10 @@
  * signing that would take the month past the company's allowance is refused
  * before anything is sent to the provider, and a person can ask for more.
  * Once payments above the allowance are offered at the unit price (usage.ts,
- * bankPaymentsBilled), the refusal at the allowance says so and points to the
- * acceptance an admin gives under Abonnemang; after that the cap is the
- * safety ceiling and the allowance is what the month includes.
+ * bankPaymentsBilled), the refusal at the allowance says so and points to
+ * Begär fler; once a founder opens the charge for the company
+ * (lib/usage/consent.ts) the cap is the safety ceiling and the allowance is
+ * what the month includes.
  *
  * The cap is read where the counter is (usage.ts): the orders that reached
  * the provider this Stockholm month against the company's allowance
@@ -34,9 +35,9 @@ export interface BankPaymentsAllowanceDetails {
   included: number
   /** The hard stop: included, or the safety ceiling once extra payments are accepted. */
   cap: number
-  /** Whether payments above `included` can be accepted at unit_price_ore. */
+  /** Whether payments above `included` can be asked for at unit_price_ore. */
   extra_offered: boolean
-  /** Whether they were accepted: payments above `included` are then billed instead of refused. */
+  /** Whether the charge is open for the company: payments above `included` are then billed instead of refused. */
   billed: boolean
   /** Whether more would be offered with a subscription of its own: the company has none (lib/usage/paying.ts). */
   subscription_required: boolean
@@ -67,9 +68,9 @@ export function allowanceExceededMessage(details: BankPaymentsAllowanceDetails):
       : `${head} Välj högst ${details.remaining} ${noun}, eller starta ett abonnemang under Inställningar, Abonnemang.`
   }
   if (details.extra_offered && !details.billed) {
-    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och faktureras i efterskott.`
-    const accept = 'En admin godkänner det under Inställningar, Abonnemang, Användning.'
-    return details.remaining <= 0 ? `${head} ${accept}` : `${head} Välj högst ${details.remaining} ${noun}, eller: ${accept.charAt(0).toLowerCase()}${accept.slice(1)}`
+    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st.`
+    const where = 'under Inställningar, Kopplingar, Betalningar via banken, så öppnar vi.'
+    return details.remaining <= 0 ? `${head} Begär fler ${where}` : `${head} Välj högst ${details.remaining} ${noun}, eller begär fler ${where}`
   }
   const head = details.billed
     ? `Ni har skickat ${details.used} betalningar i ${month}, och taket är ${details.cap} i månaden.`
@@ -195,10 +196,15 @@ export async function requestMoreBankPayments(
     ['Förfrågan', row.id],
   ]
   const message = input.message ?? ''
-  const text = `${lines.map(([label, value]) => `${label}: ${value}`).join('\n')}${message ? `\n\nMeddelande:\n${message}` : ''}\n\nHöj taket i company_bank_payment_allowances och sätt handled_at på förfrågan.`
+  // While bank payments are billed per unit, the answer is to open the charge, not to raise the cap.
+  const footer = usage.extra_offered
+    ? 'Öppna styckavgiften för företaget och sätt handled_at på förfrågan: ' +
+      `insert into usage_consents (company_id, kind, unit_price_ore, included, accepted_by) values ('${actor.companyId}', 'bank_payment', ${usage.unit_price_ore}, ${usage.included_payments}, '<din user id>');`
+    : 'Höj taket i company_bank_payment_allowances och sätt handled_at på förfrågan.'
+  const text = `${lines.map(([label, value]) => `${label}: ${value}`).join('\n')}${message ? `\n\nMeddelande:\n${message}` : ''}\n\n${footer}`
   const html = `${lines.map(([label, value]) => `<p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`).join('')}${
     message ? `<hr /><p><strong>Meddelande:</strong></p><p>${escapeHtml(message).replace(/\n/g, '<br />')}</p>` : ''
-  }<hr /><p>Höj taket i company_bank_payment_allowances och sätt handled_at på förfrågan.</p>`
+  }<hr /><p>${escapeHtml(footer)}</p>`
 
   const result = await emailService.sendEmail({
     to: getSupportRecipientEmail(),

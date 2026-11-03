@@ -10,7 +10,6 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import { formatCurrency } from '@/lib/utils'
-import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
 import {
   fetchPaymentPacks,
   PaymentsClientError,
@@ -302,8 +301,6 @@ interface BankPaymentsAllowanceLineProps {
   canRequest: boolean
   /** The cap an owner just raised by buying packs, for the dialog's own counter. */
   onIncluded?: (included: number) => void
-  /** An admin just accepted that payments above what is included cost the unit price: reread the counter. */
-  onAccepted?: () => void
 }
 
 /**
@@ -312,15 +309,14 @@ interface BankPaymentsAllowanceLineProps {
  * than that or the server refused a signing at the cap, with Köp fler
  * betalningar for an owner who can buy packs and Begär fler for everyone else.
  */
-export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canRequest, onIncluded, onAccepted }: BankPaymentsAllowanceLineProps) {
+export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canRequest, onIncluded }: BankPaymentsAllowanceLineProps) {
   const t = useTranslations('bank_payments_allowance')
   const locale = useLocale()
   const [requesting, setRequesting] = useState(false)
   const [buying, setBuying] = useState(false)
-  const [accepting, setAccepting] = useState(false)
 
   const over = refusal !== null || (usage !== null && count > remainingBankPayments(usage))
-  // More than what is included is on offer and nobody has accepted it yet: the way on is to accept the charge.
+  // More than what is included is on offer and not open yet: the way on is to ask for it (Begär fler).
   const acceptable = (refusal ? refusal.extra_offered && !refusal.billed : usage?.extra_offered === true && !usage.billed_above_included)
   // More would be on offer with a subscription of its own: the way on is to start one.
   const needsSubscription = refusal ? refusal.subscription_required : usage?.subscription_required === true
@@ -332,7 +328,7 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
     !canRequest
       ? undefined
       : acceptable
-        ? { label: t('accept_charge'), onClick: () => setAccepting(true) }
+        ? { label: t('request_more'), onClick: () => setRequesting(true) }
         : needsSubscription
           ? { label: t('start_subscription'), href: '/settings/billing' }
           : packs === null
@@ -341,16 +337,7 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
             ? { label: t('buy_more'), onClick: () => setBuying(true) }
             : { label: t('request_more'), onClick: () => setRequesting(true) }
   const dialog =
-    accepting ? (
-      <UsageConsentDialog
-        kind="bank_payment"
-        included={refusal?.included ?? usage?.included_payments ?? 0}
-        unitPriceOre={unitPriceOre}
-        open={accepting}
-        onOpenChange={setAccepting}
-        onAccepted={() => onAccepted?.()}
-      />
-    ) : buying && buyable ? (
+    buying && buyable ? (
       <BuyPaymentPacksDialog
         view={buyable}
         onOpenChange={setBuying}

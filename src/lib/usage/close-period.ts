@@ -6,12 +6,15 @@
  *
  *   preview    not billed, with the reason: no_price, nothing_billable
  *              (within what the month includes), billing_off (the kind is not
- *              in USAGE_BILLING_KINDS), no_consent (no admin accepted the
- *              charge, consent.ts), not_paying (no active subscription of its
- *              own: a trial, a past-due card, a byrå's client, a demo)
+ *              in USAGE_BILLING_KINDS), no_consent (the charge is not open
+ *              for the company, consent.ts), not_paying (nobody pays: a
+ *              trial, a past-due card, a demo; paying.ts)
  *   billing    the Stripe lines are being made
  *   billed     a line on the company's own subscription at Stripe
  *   failed     Stripe refused something; the error is on the row
+ *   manual     a byrå client covered by its byrå's agreement: billed to the
+ *              byrå by hand, listed in the result (and mailed to support by
+ *              the cron), never a Stripe line
  *
  * What is billed rides the subscription, never a separate bill: one line per
  * kind ("Betalningar via banken, oktober 2026: 4 st à 2,00 kr", Stripe Tax,
@@ -19,7 +22,7 @@
  * invoice; a yearly plan renews once a year, so its lines get an invoice for
  * the subscription each month instead of waiting.
  *
- * A rerun is safe: a statement that is billed is never touched again, the
+ * A rerun is safe: a statement that is billed or manual is never touched again, the
  * Stripe calls carry idempotency keys, and a company left billing or failed
  * is never billed again by the cron: it is reported for a person.
  */
@@ -33,9 +36,9 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { consentCovers, readOpenConsentsByCompany, type UsageConsent } from './consent'
 import { countUsageByCompany } from './counters'
 import { formatOre, USAGE_INVOICE_LABELS, USAGE_KINDS, usageLine, type UsageKind, type UsageLine } from './kinds'
-import { subscriptionPays } from './paying'
+import { readByraAgreements, subscriptionPays } from './paying'
 
-export type StatementStatus = 'preview' | 'billing' | 'billed' | 'failed'
+export type StatementStatus = 'preview' | 'billing' | 'billed' | 'failed' | 'manual'
 export type PreviewReason = 'no_price' | 'nothing_billable' | 'billing_off' | 'no_consent' | 'not_paying'
 
 export interface CloseUsageDeps {
@@ -52,6 +55,8 @@ export interface CloseUsageResult {
   statements: number
   billed: Array<{ companyId: string; amountOre: number; invoiceId: string | null }>
   failed: Array<{ companyId: string; error: string }>
+  /** Byrå clients' lines to bill to their byrå by hand (status manual). */
+  manual: Array<{ companyId: string; teamId: string; teamName: string; lines: UsageLine[] }>
   /** Companies with a statement already billing or failed: left for a person. */
   needsAttention: string[]
 }
@@ -70,6 +75,8 @@ interface CompanyContext {
   plan: string | null
   bankPaymentsIncluded: number
   consents: Map<UsageKind, UsageConsent>
+  /** The byrå whose agreement covers the company, when one does. */
+  byra: { teamId: string; teamName: string } | null
 }
 
 /** Ids per .in() read: a few hundred uuids would pass the URL length PostgREST takes. */
@@ -101,7 +108,7 @@ async function readStatements(service: SupabaseClient, period: string): Promise<
 type SubscriptionRow = { company_id: string; status: string | null; stripe_customer_id: string | null; stripe_subscription_id: string | null; plan: string | null }
 
 async function loadCompanyContexts(service: SupabaseClient, companyIds: string[]): Promise<Map<string, CompanyContext>> {
-  const [settings, subscriptions, allowances, consents] = await Promise.all([
+  const [settings, subscriptions, allowances, consents, byras] = await Promise.all([
     readByCompanies<{ company_id: string; is_sandbox: boolean | null }>(service, 'company_settings', 'company_id, is_sandbox', companyIds),
     readByCompanies<SubscriptionRow>(
       service,
@@ -117,6 +124,7 @@ async function loadCompanyContexts(service: SupabaseClient, companyIds: string[]
       companyIds,
     ),
     readOpenConsentsByCompany(service, companyIds),
+    readByraAgreements(service, companyIds),
   ])
   const sandbox = new Map(settings.map((r) => [r.company_id, r.is_sandbox === true]))
   const subscription = new Map(subscriptions.map((r) => [r.company_id, r]))
@@ -134,6 +142,7 @@ async function loadCompanyContexts(service: SupabaseClient, companyIds: string[]
           plan: sub?.plan ?? null,
           bankPaymentsIncluded: allowanceOf(allowance.get(id) ?? null).included,
           consents: consents.get(id) ?? new Map(),
+          byra: byras.get(id) ?? null,
         },
       ]
     }),
@@ -276,8 +285,9 @@ async function billCompany(input: {
 
 /**
  * Close a month that has ended: write every company's statements and bill
- * what is above the included amount where the kind is billed, an admin
- * accepted the charge and the company has an active subscription of its own.
+ * what is above the included amount where the kind is billed, the charge is
+ * open for the company and someone pays: its own active subscription (Stripe
+ * lines), or its byrå's agreement (manual, billed to the byrå by hand).
  * Refuses the current or a future month: a month still open would be billed
  * short.
  */
@@ -285,7 +295,7 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
   if (!isUsagePeriod(period) || period >= currentUsagePeriod()) {
     throw new Error(`usage period ${period} is not a closed month`)
   }
-  const result: CloseUsageResult = { period, companies: 0, statements: 0, billed: [], failed: [], needsAttention: [] }
+  const result: CloseUsageResult = { period, companies: 0, statements: 0, billed: [], failed: [], manual: [], needsAttention: [] }
 
   const counts = new Map<UsageKind, Map<string, number>>()
   for (const kind of USAGE_KINDS) counts.set(kind, await countUsageByCompany(service, kind, period))
@@ -313,8 +323,11 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
       continue
     }
 
-    const open = lines.filter((line) => existing.get(`${companyId}:${line.kind}`) !== 'billed')
-    const paying =
+    const open = lines.filter((line) => {
+      const status = existing.get(`${companyId}:${line.kind}`)
+      return status !== 'billed' && status !== 'manual'
+    })
+    const ownSubscription =
       !!deps.stripe &&
       subscriptionPays({
         isSandbox: context.isSandbox,
@@ -322,6 +335,8 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
         customerId: context.customerId,
         subscriptionId: context.subscriptionId,
       })
+    const byra = ownSubscription || context.isSandbox ? null : context.byra
+    const paying = ownSubscription || byra !== null
     const toBill: UsageLine[] = []
     const previews: Array<ReturnType<typeof statementRow>> = []
     for (const line of open) {
@@ -333,6 +348,12 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
     result.statements += previews.length
 
     if (toBill.length === 0) continue
+    if (byra) {
+      await upsertStatements(service, toBill.map((line) => statementRow(companyId, period, line, 'manual', { reason: 'byra_agreement' })))
+      result.statements += toBill.length
+      result.manual.push({ companyId, teamId: byra.teamId, teamName: byra.teamName, lines: toBill })
+      continue
+    }
     try {
       const billed = await billCompany({ service, stripe: deps.stripe!, companyId, context, period, lines: toBill })
       result.billed.push({ companyId, ...billed })

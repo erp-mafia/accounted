@@ -3,6 +3,7 @@ import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { currentUsagePeriod, isUsagePeriod } from '@/lib/payments/usage'
 import { getStripe, isStripeConfigured } from '@/lib/stripe/client'
+import { mailByraStatements } from '@/lib/usage/byra-billing'
 import { closeUsagePeriod, previousUsagePeriod } from '@/lib/usage/close-period'
 import { billedUsageKinds } from '@/lib/usage/kinds'
 
@@ -10,7 +11,8 @@ import { billedUsageKinds } from '@/lib/usage/kinds'
  * GET /api/billing/usage/cron: the 1st of every month, 06:00 UTC. Closes
  * the month that just ended (or ?period=YYYY-MM, a closed month, for a rerun):
  * every company's usage statements, and lines on the company's subscription
- * for the kinds in USAGE_BILLING_KINDS that an admin accepted. With none
+ * for the kinds in USAGE_BILLING_KINDS whose charge is open for it. A byrå
+ * client's lines are mailed to support to bill the byrå by hand. With no kind
  * listed, or without Stripe, every statement is a preview and nobody is
  * charged (lib/usage/close-period.ts).
  */
@@ -36,7 +38,9 @@ export const GET = withServiceCronContext('cron.usage_statements', async (reques
     statements: result.statements,
     billed: result.billed.length,
     failed: result.failed.length,
+    manual: result.manual.length,
     needsAttention: result.needsAttention.length,
   })
+  await mailByraStatements(result, ctx.log)
   return NextResponse.json({ data: { ...result, kinds: [...billed] } })
 })

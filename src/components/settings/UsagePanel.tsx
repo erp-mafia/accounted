@@ -2,15 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import { RequestMorePaymentsDialog } from '@/components/payments/BankPaymentsAllowance'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsRowNote } from '@/components/settings/SettingsRows'
-import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
+import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { CompanyUsage, CompanyUsageLine } from '@/lib/usage/summary'
@@ -20,11 +19,12 @@ import type { CompanyUsage, CompanyUsageLine } from '@/lib/usage/summary'
  * service (GET /api/billing/usage), against what the month includes and the
  * price above it. A service the company has not used and that carries no
  * price is left out. The "Att betala" column and the arrears note show only
- * for a service that is billed: on offer (USAGE_BILLING_KINDS) and accepted.
+ * for a service that is billed: on offer (USAGE_BILLING_KINDS) and open for
+ * the company.
  *
- * Below the table, each service on offer has its row: it stops at what the
- * month includes until an admin accepts the charge, and the acceptance holds
- * until someone turns it off here.
+ * Below the table, each service on offer has its row: it stops at what is
+ * included until the company asks for more (Begär fler) and a founder opens
+ * the charge, which then holds month after month.
  */
 export function UsagePanel() {
   const t = useTranslations('settings_billing')
@@ -74,7 +74,6 @@ export function UsagePanel() {
   const lines = usage.lines.filter((line) => line.used > 0 || (line.unit_price_ore ?? 0) > 0)
   const anyBilled = lines.some((line) => line.billed)
   const offered = usage.lines.filter((line) => line.offered)
-  const reload = () => setReloadKey((k) => k + 1)
 
   if (lines.length === 0) return <p className="text-[13px] text-muted-foreground">{t('usage_empty', { month })}</p>
 
@@ -113,7 +112,7 @@ export function UsagePanel() {
       {offered.length > 0 && (
         <SettingsGroup className="mt-6" label={t('usage_charges_label')} help={t('usage_charges_help')}>
           {offered.map((line) => (
-            <UsageChargeRow key={line.kind} line={line} paying={usage.paying} onChanged={reload} />
+            <UsageChargeRow key={line.kind} line={line} paying={usage.paying} />
           ))}
         </SettingsGroup>
       )}
@@ -122,39 +121,18 @@ export function UsagePanel() {
 }
 
 /**
- * One service on offer: stopping at what is included, or accepted at its
- * price, with the admin's switch. Without a subscription of its own the
- * company stops at what is included, and the row says so instead.
+ * One service on offer: stopping at what is included, with Begär fler, or
+ * open at its price since a date. Nobody paying for the company (a trial)
+ * stops it at what is included, and the row says so instead. Bank payments
+ * ask through their own request, which also asks how many a month.
  */
-function UsageChargeRow({ line, paying, onChanged }: { line: CompanyUsageLine; paying: boolean; onChanged: () => void }) {
+function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: boolean }) {
   const t = useTranslations('settings_billing')
-  const locale = useLocale()
-  const { toast } = useToast()
   const { role } = useCompany()
   const { formatDateLong } = useFormat()
-  const [accepting, setAccepting] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const isAdmin = role === 'owner' || role === 'admin'
+  const [requesting, setRequesting] = useState(false)
   const price = formatCurrency((line.unit_price_ore ?? 0) / 100)
-
-  async function turnOff() {
-    setSaving(true)
-    try {
-      const res = await fetch('/api/billing/usage/consent', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: line.kind, accepted: false }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => null)
-        toast({ title: t('usage_charge_off_failed'), description: getErrorMessage(body, { locale: locale as ErrorLocale }), variant: 'destructive' })
-        return
-      }
-      onChanged()
-    } finally {
-      setSaving(false)
-    }
-  }
+  const canRequest = paying && !line.accepted && role !== null
 
   return (
     <SettingsRow label={t(`usage_kind_${line.kind}`)}>
@@ -165,29 +143,25 @@ function UsageChargeRow({ line, paying, onChanged }: { line: CompanyUsageLine; p
             ? t('usage_charge_on', { price, included: line.included ?? 0, date: formatDateLong(line.accepted_at) })
             : t('usage_charge_off', { included: line.included ?? 0, price })}
       </SettingsRowNote>
-      {isAdmin && (paying || line.accepted) && (
+      {canRequest && (
         <SettingsRowEnd>
-          {line.accepted ? (
-            <Button variant="outline" size="sm" onClick={() => void turnOff()} disabled={saving}>
-              {t('usage_charge_turn_off')}
-            </Button>
-          ) : (
-            <Button size="sm" onClick={() => setAccepting(true)}>
-              {t('usage_charge_accept')}
-            </Button>
-          )}
+          <Button size="sm" variant="outline" onClick={() => setRequesting(true)}>
+            {t('usage_charge_request')}
+          </Button>
         </SettingsRowEnd>
       )}
-      {accepting && (
-        <UsageConsentDialog
-          kind={line.kind}
-          included={line.included ?? 0}
-          unitPriceOre={line.unit_price_ore ?? 0}
-          open={accepting}
-          onOpenChange={setAccepting}
-          onAccepted={onChanged}
-        />
-      )}
+      {requesting &&
+        (line.kind === 'bank_payment' ? (
+          <RequestMorePaymentsDialog included={line.included} onOpenChange={setRequesting} />
+        ) : (
+          <UsageLimitDialog
+            kind={line.kind}
+            included={line.included ?? 0}
+            unitPriceOre={line.unit_price_ore ?? 0}
+            open={requesting}
+            onOpenChange={setRequesting}
+          />
+        ))}
     </SettingsRow>
   )
 }

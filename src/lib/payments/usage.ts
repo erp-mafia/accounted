@@ -16,10 +16,10 @@
  *
  * Once bank payments are billed per unit (USAGE_BILLING_KINDS lists
  * bank_payment, lib/usage/kinds.ts), more than what is included is offered:
- * the signing still stops at the included amount until an admin accepts the
- * charge (lib/usage/consent.ts). After that, payments above it cost the unit
- * price, billed in arrears, and the hard stop moves up to
- * BANK_PAYMENTS_SAFETY_CEILING.
+ * the signing still stops at the included amount until the company asks for
+ * more and a founder opens the charge (lib/usage/consent.ts). After that,
+ * payments above it cost the unit price, billed in arrears, and the hard stop
+ * moves up to BANK_PAYMENTS_SAFETY_CEILING; packs are not sold.
  * Payment files (betalfil) never reach the provider and are not counted.
  */
 
@@ -64,11 +64,11 @@ export interface BankPaymentsUsage {
   included_accounts: number
   /** The hard stop: included_payments, or BANK_PAYMENTS_SAFETY_CEILING once extra payments are accepted. */
   cap_payments: number
-  /** Whether payments above included_payments can be accepted at unit_price_ore (an admin accepts under Abonnemang). */
+  /** Whether payments above included_payments can be asked for at unit_price_ore (Begär fler; a founder opens the charge). */
   extra_offered: boolean
-  /** Whether an admin accepted them: payments above included_payments are then billed instead of refused. */
+  /** Whether the charge is open: payments above included_payments are then billed instead of refused. */
   billed_above_included: boolean
-  /** Whether more would be offered with a subscription of its own: billed, but the company has none (lib/usage/paying.ts). */
+  /** Whether more would be offered with a subscription: billed, but nobody pays for the company (lib/usage/paying.ts). */
   subscription_required: boolean
   /** Öre exkl. moms per payment above included_payments (lib/usage/kinds.ts). */
   unit_price_ore: number

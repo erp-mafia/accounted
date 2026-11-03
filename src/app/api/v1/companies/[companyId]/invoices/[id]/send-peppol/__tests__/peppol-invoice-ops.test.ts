@@ -346,21 +346,21 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     /** A subscription of its own: what lets more than what is included be accepted. */
     const paying = { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
 
-    it('409 USAGE_CONSENT_REQUIRED at the included amount until an admin accepts, before the invoice is read', async () => {
+    it('409 USAGE_LIMIT_REACHED at the included amount until the charge is open, before the invoice is read', async () => {
       vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
       const client = sendClient({ peppol_deliveries: atIncluded(), company_subscriptions: paying })
       mockServiceClient.mockReturnValue(client)
       const res = await send()
       expect(res.status).toBe(409)
       const body = await res.json()
-      expect(body.error.code).toBe('USAGE_CONSENT_REQUIRED')
+      expect(body.error.code).toBe('USAGE_LIMIT_REACHED')
       expect(body.error.details).toMatchObject({ kind: 'peppol_send', used: 10, included: 10, unit_price_ore: 100 })
       expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
       expect(wrote(client)).toBe(false)
       expect(transport.submit).not.toHaveBeenCalled()
     })
 
-    it('sends once an admin accepted the charge', async () => {
+    it('sends once the charge is open', async () => {
       vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
       mockServiceClient.mockReturnValue(
         sendClient({ peppol_deliveries: [SENT_COUNT, UNSTAMPED_COUNT, { data: null, error: null, count: 10 }], usage_consents: accepted, company_subscriptions: paying }),
@@ -387,7 +387,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
       const client = sendClient({ peppol_deliveries: atIncluded([{ id: DELIVERY_ID }]) })
       mockServiceClient.mockReturnValue(client)
       const res = await send()
-      expect((await res.json()).error?.code).not.toBe('USAGE_CONSENT_REQUIRED')
+      expect((await res.json()).error?.code).not.toBe('USAGE_LIMIT_REACHED')
       expect(client.calls.some((c) => c.table === 'invoices')).toBe(true)
     })
   })

@@ -3,7 +3,7 @@ import { getPool, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 /**
- * Priced usage (migration 20261101190000_usage_statements.sql): members read
+ * Priced usage (migration 20261102164704_usage_statements.sql): members read
  * their own company's acceptances and statements and write neither, one open
  * acceptance per company and kind, one statement per company, month and
  * kind, and a statement's amount is always the unit price times what is

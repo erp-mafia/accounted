@@ -86,7 +86,7 @@ describe('GET /api/billing/usage', () => {
 const CRON_PATH = '/api/billing/usage/cron'
 const CRON_AUTH = 'Bearer cron-secret'
 
-const emptyResult = { companies: 0, statements: 0, billed: [], failed: [], needsAttention: [] }
+const emptyResult = { companies: 0, statements: 0, billed: [], failed: [], manual: [], needsAttention: [] }
 
 describe('GET /api/billing/usage/cron', () => {
   it('refuses a request without the cron secret', async () => {

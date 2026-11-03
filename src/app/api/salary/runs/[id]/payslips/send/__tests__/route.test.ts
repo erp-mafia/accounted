@@ -457,7 +457,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
         const sendEmail = mockEmail({ success: true })
         usageGate.mockResolvedValue({
           ok: false,
-          code: 'USAGE_CONSENT_REQUIRED',
+          code: 'USAGE_LIMIT_REACHED',
           details: { kind: 'kivra_send', period: '2026-11', used: 0, included: 0, requested: 2, unit_price_ore: 300 },
           messageSv: 'Utskick till Kivra kostar 3,00 kr st och faktureras i efterskott. En admin godkänner det under Inställningar, Abonnemang, Användning.',
         })
@@ -476,7 +476,7 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
           await POST(request, createMockRouteParams({ id: 'run-1' })),
         )
         expect(status).toBe(409)
-        expect(body.error).toMatchObject({ code: 'USAGE_CONSENT_REQUIRED', details: { included: 0, unit_price_ore: 300 } })
+        expect(body.error).toMatchObject({ code: 'USAGE_LIMIT_REACHED', details: { included: 0, unit_price_ore: 300 } })
         expect(usageGate).toHaveBeenCalledWith({ service: true }, 'company-1', 'kivra_send', { requested: 2 })
         expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
         expect(sendEmail).not.toHaveBeenCalled()

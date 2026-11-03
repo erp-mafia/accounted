@@ -48,6 +48,33 @@ describe('countCompanyUsage', () => {
     expect(findCalls('signing_requests', 'gte')[0]?.[0]).toBe('completed_at')
   })
 
+  it('counts inbox documents our AI read, never those a customer\'s own agent read', async () => {
+    enqueue({ count: 31 })
+
+    expect(await countCompanyUsage(db, 'c1', 'ai_document', '2026-10')).toBe(31)
+    expect(findCalls('invoice_inbox_items', 'eq')).toEqual([
+      ['company_id', 'c1'],
+      ['extraction_skipped', 'false'],
+    ])
+    expect(findCalls('invoice_inbox_items', 'gte')[0]?.[0]).toBe('created_at')
+  })
+
+  it('counts live bank accounts as they are now, whatever the month', async () => {
+    enqueue({
+      data: [
+        { id: 'k1', accounts_data: [{ uid: 'a', iban: 'SE11', enabled: true }, { uid: 'b', iban: 'SE22', enabled: false }] },
+        { id: 'k2', accounts_data: [{ uid: 'a2', iban: 'SE11', enabled: true }, { uid: 'c', iban: 'SE33', enabled: true }] },
+      ],
+    })
+
+    expect(await countCompanyUsage(db, 'c1', 'bank_account', '2026-01')).toBe(2)
+    expect(findCalls('bank_connections', 'eq')).toEqual([
+      ['company_id', 'c1'],
+      ['status', 'active'],
+    ])
+    expect(findCalls('bank_connections', 'is')).toEqual([['superseded_at', null]])
+  })
+
   it('throws on a failed read instead of counting zero', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countCompanyUsage(db, 'c1', 'peppol_send', '2026-10')).rejects.toThrow(/peppol_deliveries.*boom/)

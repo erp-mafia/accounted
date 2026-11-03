@@ -50,7 +50,7 @@ import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDet
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
 import { RunFoldSection } from '@/components/salary/run/RunFoldSection'
 import { ForaReportDialog } from '@/components/salary/run/ForaReportDialog'
-import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
+import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
 import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
 import { isPaymentDateAhead, needsFuturePayoutConfirm } from '@/lib/salary/payout-date'
 import { formatDate } from '@/lib/utils'
@@ -132,7 +132,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // (Billo, Kivra) the company sends through, read once. A failed read
   // leaves the email link alone, as before the mailboxes.
   const [payslipChannels, setPayslipChannels] = useState<PayslipSendChannel[]>(['email'])
-  // A mailbox send stopped at what the month includes: the charge to accept before sending again.
+  // A mailbox send stopped at what the month includes: the service to ask for more of.
   const [payslipCharge, setPayslipCharge] = useState<{ channel: Exclude<PayslipSendChannel, 'email'>; included: number; unitPriceOre: number } | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -760,7 +760,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       } else {
         const result = await res.json().catch(() => ({}))
         const refused = (result as { error?: { code?: string; details?: { included?: number; unit_price_ore?: number } } }).error
-        if (refused?.code === 'USAGE_CONSENT_REQUIRED' && channel !== 'email') {
+        if (refused?.code === 'USAGE_LIMIT_REACHED' && channel !== 'email') {
           setPayslipCharge({ channel, included: refused.details?.included ?? 0, unitPriceOre: refused.details?.unit_price_ore ?? 0 })
           return
         }
@@ -1314,18 +1314,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       <DestructiveConfirmDialog {...dialogProps} />
 
       {payslipCharge && (
-        <UsageConsentDialog
+        <UsageLimitDialog
           kind={`${payslipCharge.channel}_send`}
           included={payslipCharge.included}
           unitPriceOre={payslipCharge.unitPriceOre}
           open
           onOpenChange={(open) => {
             if (!open) setPayslipCharge(null)
-          }}
-          onAccepted={() => {
-            const channel = payslipCharge.channel
-            setPayslipCharge(null)
-            void handleSendPayslips(channel)
           }}
         />
       )}

@@ -3328,6 +3328,8 @@
     "usage_kind_kivra_send": "Utskick till Kivra",
     "usage_kind_billo_send": "Utskick till Billo",
     "usage_kind_signing": "Signerade dokument med BankID",
+    "usage_kind_bank_account": "Kopplade bankkonton",
+    "usage_kind_ai_document": "Underlag lästa med AI",
     "usage_unit_price": "{price} st",
     "usage_included": "Ingår",
     "usage_all_included": "Alla",
@@ -3335,13 +3337,11 @@
     "usage_empty": "Inget använt i {month} ännu.",
     "usage_load_failed": "Användningen kunde inte läsas just nu.",
     "usage_charges_label": "Över det som ingår",
-    "usage_charges_help": "När månadens antal som ingår är använt stannar tjänsten tills en admin godkänner avgiften. Godkännandet gäller tills någon stänger av det här.",
-    "usage_charge_off": "{included, plural, =0 {Kostar {price} st. Stannar tills ni godkänner.} other {Stannar vid # i månaden. Därefter {price} st om ni godkänner.}}",
-    "usage_charge_on": "{included, plural, =0 {Godkänt {date}: {price} st.} other {Godkänt {date}: {price} st över # i månaden.}}",
-    "usage_charge_needs_subscription": "{included, plural, =0 {Kostar {price} st och kräver ett abonnemang.} other {Stannar vid # i månaden. Fler kostar {price} st och kräver ett abonnemang.}}",
-    "usage_charge_accept": "Godkänn avgift",
-    "usage_charge_turn_off": "Stäng av",
-    "usage_charge_off_failed": "Avgiften kunde inte stängas av"
+    "usage_charges_help": "När det som ingår är använt stannar tjänsten. Begär fler så öppnar vi, och det som går över läggs sedan på fakturan i efterskott.",
+    "usage_charge_off": "{included, plural, =0 {Kostar {price} st. Begär det så öppnar vi.} other {Stannar vid #. Fler kostar {price} st: begär fler så öppnar vi.}}",
+    "usage_charge_on": "{included, plural, =0 {Öppet sedan {date}: {price} st.} other {Öppet sedan {date}: {price} st över #.}}",
+    "usage_charge_needs_subscription": "{included, plural, =0 {Kostar {price} st och kräver ett abonnemang.} other {Stannar vid #. Fler kostar {price} st och kräver ett abonnemang.}}",
+    "usage_charge_request": "Begär fler"
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Standard för Vår referens",
@@ -16398,8 +16398,7 @@
     "refused_cap_none_left": "Ni har skickat {used} bankbetalningar i {month}, och taket är {cap} i månaden.",
     "billed_within": "{left} av {included} bankbetalningar som ingår kvar i {month}, därefter {price} st.",
     "billed_extra": "{extra, plural, one {# betalning} other {# betalningar}} går över det som ingår i {month} och kostar {price} st, faktureras i efterskott.",
-    "accept_charge": "Godkänn avgift",
-    "offered_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och läggs på abonnemangets faktura.",
+    "offered_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st: begär fler så öppnar vi.",
     "subscription_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och kräver ett abonnemang.",
     "start_subscription": "Starta abonnemang"
   },
@@ -16499,8 +16498,7 @@
     "buy_more": "Köp fler betalningar",
     "usage_of_with_packs": "{used} av {included} ({base} ingår + {bought} köpta)",
     "packs_scheduled": "De köpta betalningarna minskar till {packs} paket den {date}.",
-    "usage_of_billed": "{used} skickade, {included} ingår, därefter {price} st",
-    "accept_charge": "Godkänn avgift"
+    "usage_of_billed": "{used} skickade, {included} ingår, därefter {price} st"
   },
   "bank_ledger_suggestion": {
     "move_transactions": "Bankkontot {account} bokförs på {from}, men {hits, plural, one {# av dess banktransaktioner är redan bokförd} other {# av dess banktransaktioner är redan bokförda}} på {to}. Byt till {toNumber} så kopplas transaktionerna till verifikaten.",
@@ -19810,14 +19808,14 @@
       "description": "Ändra företagsuppgifter, paket och inställningar som gäller hela företaget."
     }
   },
-  "usage_consent": {
-    "title": "{included, plural, =0 {{service} kostar {price} st} other {{service}: månadens # som ingår är använda}}",
-    "body": "{included, plural, =0 {Godkänner du kostar de {price} st exkl. moms.} other {Godkänner du kostar varje ytterligare {price} exkl. moms.}} Det läggs på abonnemangets faktura i efterskott och gäller tills någon stänger av det under Inställningar, Abonnemang, Användning.",
-    "admin_only": "Bara en admin i företaget kan godkänna avgiften. Be en admin göra det.",
-    "accept": "Godkänn avgiften",
+  "usage_limit": {
+    "title": "{included, plural, =0 {{service} kostar {price} st} other {{service}: de # som ingår är använda}}",
+    "body": "{included, plural, =0 {Varje kostar {price} exkl. moms.} other {Varje ytterligare kostar {price} exkl. moms.}} Skicka en förfrågan så öppnar vi för fler. Det läggs sedan på abonnemangets faktura i efterskott.",
+    "message_label": "Meddelande (valfritt)",
+    "message_placeholder": "Hur många behöver ni ungefär?",
+    "send": "Begär fler",
     "cancel": "Avbryt",
-    "close": "Stäng",
-    "accepted": "Avgiften för {service} är godkänd",
-    "failed": "Avgiften kunde inte godkännas"
+    "sent": "Förfrågan om {service} är skickad. Vi hör av oss.",
+    "failed": "Förfrågan kunde inte skickas"
   }
 }
