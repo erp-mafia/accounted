@@ -49,6 +49,7 @@ export const SWEDISH_BY_DESIGN = new Map([
   ['app/(public)/privacy/page.tsx', 'privacy policy, a Swedish legal document'],
   ['app/(public)/dpa/page.tsx', 'data processing agreement, a Swedish legal document'],
   ['app/(public)/terms/page.tsx', 'terms of use, a Swedish legal document'],
+  ['app/(public)/terms/2026-10-22/page.tsx', 'earlier terms of use still binding earlier customers, a Swedish legal document'],
   ['app/(public)/subprocessors/page.tsx', 'subprocessor list, a Swedish legal document'],
   // The chrome of those four documents, used by nothing else.
   ['components/legal/LegalShell.tsx', 'legal document layout (privacy, dpa, terms, subprocessors)'],

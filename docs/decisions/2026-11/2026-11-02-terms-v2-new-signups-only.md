@@ -1,0 +1,1 @@
+[2026-11-02] Terms v2 binds new signups only (14.4), no notice e-mail: earlier customers stay on /terms/2026-10-22 until a 14.1 notice. DPA 13 aligned to 9.3: 18 months export, then sealed, released on written request (founder choice).

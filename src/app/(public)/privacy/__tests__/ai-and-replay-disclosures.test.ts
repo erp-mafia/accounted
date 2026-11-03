@@ -244,11 +244,14 @@ describe('payroll and retention disclosures match the code', () => {
   it('serves every legal page without a session', () => {
     const middleware = code(read('lib/supabase/middleware.ts'))
     expect(middleware).toContain('LEGAL_PATHS.includes(pathname)')
-    expect(LEGAL_PATHS.sort()).toEqual(
+    expect([...LEGAL_PATHS].sort()).toEqual(
       Object.values(LEGAL_DOCUMENTS)
-        .map((d) => d.path)
+        .flatMap((d) => [d.path, ...(d.previousVersionPaths ?? [])])
         .sort(),
     )
+    // Customers who signed up before terms v2 are bound by the earlier
+    // wording, so it stays reachable without a login.
+    expect(LEGAL_PATHS).toContain('/terms/2026-10-22')
   })
 })
 
@@ -291,7 +294,10 @@ describe('consent and data choices match the code', () => {
   it('pooling opt-outs are left out of the shared directory, and contribution is off by default', () => {
     expect(DIRECTORY).toContain('companiesWithPoolingOff')
     expect(MIGRATION).toContain("v_default := p_key <> 'data:contribution'")
-    expect(flat(PRIVACY)).toContain('då räknas företagets tolkningar inte in')
+    expect(flat(PRIVACY)).toContain('företagets tolkningar räknas inte in i katalogen')
+    // The same switch stops the anonymous calibration statistics.
+    expect(code(read('app/api/agent/categorize/outcome/route.ts'))).toContain('if (!(await isPoolingOn(supabase, companyId))) return noContent()')
+    expect(flat(PRIVACY)).toContain('då sparas ingen statistik från företagets bokningar')
     expect(flat(DPA)).toContain('om inte Kunden har slagit på Bidra med innehåll i Tjänsten')
   })
 

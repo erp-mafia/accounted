@@ -121,6 +121,36 @@ export const RECIPIENTS: Recipient[] = [
     scope: 'customer',
     activation: 'När ditt företag skickar eller tar emot e-faktura via Peppol.',
   },
+  // Kivra and Billo: lib/digital-mailboxes (read the company's mailbox into
+  // Inkorgen, send as the company). Gated per company by
+  // DIGITAL_MAILBOX_COMPANY_IDS; opening them to customers who signed up
+  // before these rows were listed needs the 30-day notice (DPA point 6).
+  // Kivra's entity, location and safeguard are from its published privacy
+  // notice (kivra.se, read 2026-11-02).
+  {
+    name: 'Kivra Sverige AB, org.nr 556917-3544',
+    purpose:
+      'Digital brevlåda: hämtar post från ditt företags Kivra-brevlåda till Inkorgen och skickar dokument som du väljer att skicka, till exempel fakturor och lönebesked, till mottagarens brevlåda.',
+    data: 'Mottagarens namn och personnummer eller organisationsnummer, samt innehållet i dokumenten.',
+    location: 'Sverige eller EU/EES; vissa av Kivras underleverantörer finns i USA',
+    safeguard:
+      'För Kivras underleverantörer i USA: EU-U.S. Data Privacy Framework eller standardavtalsklausuler.',
+    scope: 'customer',
+    activation: 'När du kopplar ditt företags Kivra-brevlåda eller skickar via Kivra.',
+  },
+  // Billo's org.nr is from its own payment terms and Bolagsverket's register;
+  // its hosting (Binero Cloud, data managed only in Sweden) is from Binero's
+  // published Billo case study (read 2026-11-03).
+  {
+    name: 'Billo AB, org.nr 559138-6718',
+    purpose:
+      'Digital brevlåda: hämtar post från ditt företags Billo-brevlåda till Inkorgen och skickar dokument som du väljer att skicka, till exempel fakturor och lönebesked, till mottagarens brevlåda.',
+    data: 'Mottagarens namn och personnummer eller organisationsnummer, samt innehållet i dokumenten.',
+    location: 'Sverige',
+    safeguard: 'Ingen tredjelandsöverföring.',
+    scope: 'customer',
+    activation: 'När du kopplar ditt företags Billo-brevlåda eller skickar via Billo.',
+  },
   {
     name: 'Meta Platforms Ireland Ltd (WhatsApp Business Platform)',
     purpose: 'Kvitton som du skickar till Accounteds WhatsApp-nummer, och den korta dialogen om dem.',

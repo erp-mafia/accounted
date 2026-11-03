@@ -284,9 +284,12 @@ export default function DPAPage() {
         </p>
         <ul>
           <li>
-            <strong>bevarar</strong> räkenskapsinformationen skrivskyddad och exporterbar under
-            bokföringslagens lagringstid och därefter raderar den, vilket gäller om Kunden inte
-            väljer annat; eller
+            <strong>bevarar</strong> uppgifterna skrivskyddade i arton (18) månader, då Kunden
+            själv kan ladda ner hela arkivet. Därefter raderas eller anonymiseras övriga
+            uppgifter, medan räkenskapsinformationen spärras tills bokföringslagens lagringstid
+            har löpt ut och raderas då. Under spärrtiden lämnar Biträdet ut
+            räkenskapsinformationen på Kundens skriftliga begäran till {LEGAL_PROVIDER.email}.
+            Detta gäller om Kunden inte väljer annat; eller
           </li>
           <li>
             <strong>raderar</strong> övriga uppgifter senast 30 dagar efter Kundens skriftliga
