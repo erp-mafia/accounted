@@ -109,6 +109,25 @@ export function summarizePeppolAccess(row: PeppolAccessRow | null, sentCount: nu
   }
 }
 
+/** Receiving is on once the identifier is published at the access point, or while it is being published. */
+export function peppolReceivingOn(registrationStatus: string | null | undefined): boolean {
+  return registrationStatus === 'registered' || registrationStatus === 'pending'
+}
+
+/**
+ * The company's Peppol connection in one word, read by the Peppol page and the
+ * Kopplingar row alike: receiving (identifier published), sending (access
+ * granted, nothing published) or off. The row once read only the
+ * registration, so send-only access showed Inte kopplad.
+ */
+export function peppolConnectionState(
+  access: Pick<PeppolAccessSummary, 'send_enabled'> | null | undefined,
+  registrationStatus: string | null | undefined,
+): 'receiving' | 'sending' | 'off' {
+  if (peppolReceivingOn(registrationStatus)) return 'receiving'
+  return access?.send_enabled ? 'sending' : 'off'
+}
+
 export async function getPeppolAccessSummary(args: {
   supabase: SupabaseClient
   service: SupabaseClient

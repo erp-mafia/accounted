@@ -51,6 +51,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { skvConnectionState, type SkvStatusLike } from '@/lib/notices/predicates'
+import { peppolConnectionState } from '@/lib/invoices/peppol-access'
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
@@ -84,7 +85,8 @@ interface Status {
   bankCount: number
   /** The caller's Skatteverket connection, as the settings panel and the agent's tool judge it. */
   skv: 'connected' | 'reconnect' | 'off'
-  peppolOn: boolean
+  /** Receiving published, sending access only, or neither: the Peppol page's own reading. */
+  peppol: 'receiving' | 'sending' | 'off'
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
   /** Bank payments are switched on for this company (the pilot list); the row shows only then. */
@@ -211,15 +213,17 @@ export function ConnectionsSettingsContent() {
     ]).then(([bank, skv, peppol, mail, pos]) => {
       if (cancelled) return
       const banks = bank.status === 'fulfilled' ? ((bank.value.data ?? []) as Array<{ bank_name: string | null }>) : []
-      const registration =
+      const peppolData =
         peppol.status === 'fulfilled'
-          ? (peppol.value as { data?: { registration?: { status?: string } | null } } | null)?.data?.registration
+          ? (peppol.value as {
+              data?: { access?: { send_enabled: boolean } | null; registration?: { status?: string } | null }
+            } | null)?.data
           : null
       setStatus({
         bankName: banks[0]?.bank_name ?? null,
         bankCount: banks.length,
         skv: skv.status === 'fulfilled' ? skv.value : 'off',
-        peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
+        peppol: peppolConnectionState(peppolData?.access, peppolData?.registration?.status),
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
         pos: (() => {
           const venues = pos.status === 'fulfilled' ? ((pos.value.data ?? []) as Array<{ venue_name: string; provider_name: string; health: string }>) : []
@@ -613,9 +617,9 @@ export function ConnectionsSettingsContent() {
           logo: <span className="text-[11px] font-semibold text-foreground">P</span>,
           name: t('peppol'),
           help: t('peppol_help'),
-          state: status ? (status.peppolOn ? t('peppol_on') : off) : null,
+          state: status ? { receiving: t('peppol_on'), sending: t('peppol_sending'), off }[status.peppol] : null,
           href: '/settings/peppol',
-          connected: status?.peppolOn ?? false,
+          connected: status ? status.peppol !== 'off' : false,
         })}
         {hasWhatsApp &&
           row({

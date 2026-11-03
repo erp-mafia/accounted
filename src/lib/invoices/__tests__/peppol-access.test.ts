@@ -4,6 +4,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   checkPeppolSendPermission,
   countPeppolSends,
+  peppolConnectionState,
+  peppolReceivingOn,
   peppolSendPeriodStart,
   requestPeppolAccess,
   setPeppolAccess,
@@ -160,5 +162,38 @@ describe('requestPeppolAccess / setPeppolAccess', () => {
     expect(disabled.status).toBe('disabled')
     expect(disabled.max_sends).toBeUndefined()
     expect(typeof disabled.disabled_at).toBe('string')
+  })
+})
+
+describe('peppolConnectionState', () => {
+  it('reads send-only access without a registration as sending, not off (the Kopplingar row)', () => {
+    const access = summarizePeppolAccess(row({ status: 'enabled', receive_enabled: false, max_sends: 10 }), 0)
+    expect(peppolConnectionState(access, null)).toBe('sending')
+  })
+
+  it('reads a published or publishing registration as receiving', () => {
+    const access = summarizePeppolAccess(row({ receive_enabled: true }), 0)
+    expect(peppolConnectionState(access, 'registered')).toBe('receiving')
+    expect(peppolConnectionState(access, 'pending')).toBe('receiving')
+  })
+
+  it('reads send and receive access before the registration as sending', () => {
+    const access = summarizePeppolAccess(row({ receive_enabled: true }), 0)
+    expect(peppolConnectionState(access, null)).toBe('sending')
+    expect(peppolConnectionState(access, 'deregistered')).toBe('sending')
+  })
+
+  it('reads no, requested or disabled access as off', () => {
+    expect(peppolConnectionState(null, null)).toBe('off')
+    expect(peppolConnectionState(summarizePeppolAccess(null, 0), null)).toBe('off')
+    expect(peppolConnectionState(summarizePeppolAccess(row({ status: 'requested' }), 0), null)).toBe('off')
+    expect(peppolConnectionState(summarizePeppolAccess(row({ status: 'disabled' }), 0), 'failed')).toBe('off')
+  })
+
+  it('peppolReceivingOn is true only for registered and pending', () => {
+    expect(peppolReceivingOn('registered')).toBe(true)
+    expect(peppolReceivingOn('pending')).toBe(true)
+    expect(peppolReceivingOn('failed')).toBe(false)
+    expect(peppolReceivingOn(null)).toBe(false)
   })
 })
