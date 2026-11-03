@@ -1,0 +1,26 @@
+{
+  "id": "time-tracking",
+  "sector": "general",
+  "exportName": "timeTrackingExtension",
+  "entryPoint": "@/extensions/general/time-tracking",
+  "workspace": "@/components/extensions/general/TimeTrackingWorkspace",
+  "requiredEnvVars": [],
+  "optionalEnvVars": [],
+  "npmDependencies": [],
+  "definition": {
+    "name": "Tidredovisning",
+    "category": "operations",
+    "icon": "Clock",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Registrera timmar per kund och projekt och ta fram fakturaunderlag",
+    "longDescription": "Registrera arbetad tid per medarbetare, kund, projekt och arbetskod. Importera en befintlig tidrapport från Excel eller Numbers, se timmar per kund och månad och exportera fakturaunderlag med timpris och belopp. Inget bokförs automatiskt: fakturan skapar du som vanligt och markerar sedan timmarna som fakturerade.",
+    "quickAction": {
+      "label": "Tidredovisning",
+      "description": "Timmar per kund och projekt",
+      "icon": "Clock",
+      "href": "/e/general/time-tracking",
+      "order": 40
+    }
+  }
+}

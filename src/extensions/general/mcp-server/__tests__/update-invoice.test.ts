@@ -647,7 +647,7 @@ describe('gnubok_update_invoice: free-text rows (round-trip, issue #1642)', () =
     )) as StagedResult
 
     expect(result.staged).toBe(true)
-    // Totals exclude the text row (commitCreateInvoice billableItems parity).
+    // Totals exclude the text row (createInvoiceFromStagedParams billableItems parity).
     expect(result.preview).toMatchObject({ subtotal: 2000, vat_amount: 500, total: 2500, item_count: 2 })
     expect(result.preview.items?.[0]).toMatchObject({
       line_type: 'text',

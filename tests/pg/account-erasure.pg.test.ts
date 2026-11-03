@@ -127,6 +127,7 @@ const RETAINED = new Set([
   'supplier_payment_batches.cancelled_by',
   'supplier_payment_batches.user_id',
   'suppliers.user_id',
+  'time_entries.user_id', // Billing basis for the company's customers.
   'webshop_orders.manually_booked_by',
   'webshop_orders.user_id',
   // Payroll, expenses and filings

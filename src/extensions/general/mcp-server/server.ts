@@ -9258,7 +9258,7 @@ export const tools: McpTool[] = [
         ...(qrMode ? { qr_mode: qrMode } : {}),
       }
 
-      // A dry run of the approval: commitCreateInvoice runs this same build
+      // A dry run of the approval: createInvoiceFromStagedParams runs this same build
       // on these same params, so the preview cannot show other totals, VAT or
       // treatment than the invoice gets. Every rule of the shared builder
       // refuses HERE, where the agent can fix it: the permitted VAT rates,
@@ -22040,7 +22040,7 @@ export const tools: McpTool[] = [
         const allowedRates = new Set(permittedRates.map((r) => r.rate))
         for (const item of items) {
           // Text rows carry no amounts and never book: exclude them from the
-          // VAT gate and the totals, like commitCreateInvoice's billableItems.
+          // VAT gate and the totals, like createInvoiceFromStagedParams's billableItems.
           if (item.line_type === 'text') continue
           const itemRate = item.vat_rate ?? vatRules.rate
           if (!allowedRates.has(itemRate)) {

@@ -24,7 +24,10 @@ const WRITE_GATES = [
   'lib/invoices/build-invoice-write.ts',
   'lib/invoices/self-billed-sale.ts',
   'lib/invoices/recurring-schedule-service.ts',
-  'lib/pending-operations/commit.ts',
+  // The staged create_invoice write (commit.ts calls it), shared by the
+  // draft invoice from time entries.
+  'lib/pending-operations/create-invoice-commit.ts',
+  'lib/time-tracking/invoice.ts',
   'app/api/v1/companies/[companyId]/invoices/bulk-create/route.ts',
   'extensions/general/mcp-server/server.ts',
 ]

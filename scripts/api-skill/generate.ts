@@ -76,11 +76,12 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'invoices.md',
     title: 'Invoices (AR)',
-    members: ['invoices'],
+    members: ['invoices', 'time-entries'],
     blurb:
       'Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is ' +
       'assigned at send, not create. Supplier bills you receive are a different resource: see ' +
-      'suppliers.md. Customer and article registers: customers.md.',
+      'suppliers.md. Customer and article registers: customers.md. Registered hours ' +
+      '(time-entries) and their uninvoiced totals are the invoice basis for time-billed work.',
   },
   {
     file: 'customers.md',
