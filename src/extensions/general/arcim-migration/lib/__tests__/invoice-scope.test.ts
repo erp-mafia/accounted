@@ -29,8 +29,18 @@ describe('invoiceWithinScope', () => {
     expect(invoiceWithinScope(dto('2027-01-02', true), SCOPE)).toBe(false)
   })
 
-  it('keeps an unpaid invoice from any year', () => {
+  it('keeps an unpaid invoice from any year up to the scope', () => {
     expect(invoiceWithinScope(dto('2024-06-01', false), SCOPE)).toBe(true)
+    expect(invoiceWithinScope(dto('2026-12-31', false), SCOPE)).toBe(true)
+  })
+
+  it('declines an unpaid invoice issued after the scope: its year was not imported (crm#1660)', () => {
+    expect(invoiceWithinScope(dto('2027-01-01', false), SCOPE)).toBe(false)
+    expect(invoiceWithinScope(dto('2027-06-03', false), SCOPE)).toBe(false)
+  })
+
+  it('declines a paid invoice issued after the scope even when its payment date is known', () => {
+    expect(invoiceWithinScope(dto('2027-01-02', true, '2027-01-20'), SCOPE)).toBe(false)
   })
 
   it('reads a job scope by its years alone, and filters nothing when it carries none (crm#1114)', () => {
