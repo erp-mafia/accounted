@@ -680,9 +680,13 @@ export default function PendingOperationsPage() {
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
+      // The row leaving the list is the confirmation: no "Godkänd" toast. One
+      // opened top-right, over the next row's Godkänn and Avvisa, and a
+      // pointer resting there paused its timer, so approving rows in a row
+      // meant closing a toast before each click (crm#1618). A filing that
+      // still needs a BankID signature opens its signing step instead.
       const signingUrl = signingUrlOf(json.data)
       if (signingUrl) setSigningPrompt({ title: op.title, url: signingUrl })
-      else toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
       selection.deselect([op.id])

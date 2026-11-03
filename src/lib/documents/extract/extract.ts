@@ -14,7 +14,7 @@ import { jsonSchemaFor, readingsFromAnswer, type ExtractionSchemaDef } from './s
  */
 
 /** Recorded as the software agent of every model extraction; bump when prompts or merge rules change. */
-export const EXTRACTOR = { name: 'arkiv.extract', version: '1' } as const
+export const EXTRACTOR = { name: 'arkiv.extract', version: '2' } as const
 
 /** Characters of page text sent per reading. A longer document sends its opening, its last page and its most relevant pages. */
 const PAGE_BUDGET = 60_000

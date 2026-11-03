@@ -11,6 +11,8 @@ import type { CategorizationTemplate } from '@/types'
  * match, and a rule the system only proposed all open Granska bokföring.
  * So does any proposal the assistant's read puts in another reverse-charge
  * box (ruta 21 against ruta 22): the invoice decides that, not the history.
+ * So does a learned counterpart matched on money moving against its learned
+ * direction (a likely refund, crm#1598): the habit was learned the other way.
  * Every direct booking carries Ångra on its toast.
  *
  * Before the evidence, the company and the rule have their say
@@ -39,7 +41,7 @@ export const ASSISTANT_LIKELY = 0.5
  * revision). The thresholds are spelled into the version, so changing one
  * changes the version on its own.
  */
-export const DIRECT_BOOKING_POLICY_REVISION = 3
+export const DIRECT_BOOKING_POLICY_REVISION = 4
 
 /**
  * The approval policy a decision's confidence band is evaluated under,
@@ -110,7 +112,7 @@ export function askedForReview(rule: RuleReviewFlags, settings: DirectBookingSet
 
 type PolicyEvidence = Pick<
   SuggestedTemplate,
-  'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind'
+  'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'direction_mismatch'
 > &
   RuleReviewFlags
 
@@ -127,12 +129,15 @@ export function reviewRequired(s: PolicyEvidence, settings: DirectBookingSetting
 export function booksWithoutReview(
   s: Pick<
     SuggestedTemplate,
-    'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind'
+    'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'direction_mismatch'
   >,
 ): boolean {
   // A match the assistant's read took down from the row is the opposite of a
   // settled decision, however often its counterpart was booked.
   if (s.contested) return false
+  // Money against the counterpart's learned direction (a likely refund): the
+  // habit was learned the other way, so it settles nothing about this row.
+  if (s.direction_mismatch) return false
   // A read that reports the purchase in another reverse-charge box: which
   // company invoices decides the box, and that is on the invoice
   // (accounted#37). A counterpart learned as one pair never learned a box.

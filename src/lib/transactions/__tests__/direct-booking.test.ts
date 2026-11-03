@@ -19,7 +19,7 @@ const OFF = { enabled: false }
 
 describe('DIRECT_BOOKING_POLICY_VERSION', () => {
   it('spells the thresholds into the recorded policy version', () => {
-    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.3;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
+    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.4;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
   })
 
   /**
@@ -34,7 +34,7 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 3, sha256: '1085600c23d5936375694ebcf2a4d48d6b5a3f9501d03e9322adfabb208e8894' })
+    }).toEqual({ revision: 4, sha256: 'f6ca83f8320966e258c83720e93b274823a6589fc4b7e177863ca68417b666de' })
   })
 
   it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
@@ -56,6 +56,12 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
 
 describe('reviewReason: the one decision (accounted#130)', () => {
   const habit = { source: 'counterparty' as const, seen_count: 9, confidence: 0.95, rule_mode: 'propose' as const }
+
+  it('asks for a settled habit matched on money against its learned direction, a likely refund (crm#1598)', () => {
+    expect(reviewReason(habit, DIRECT_BOOKING_ON)).toBeNull()
+    expect(reviewReason({ ...habit, direction_mismatch: true }, DIRECT_BOOKING_ON)).toBe('evidence')
+    expect(reviewReason({ ...habit, rule_mode: 'auto', direction_mismatch: true }, DIRECT_BOOKING_ON)).toBe('evidence')
+  })
 
   it('books a settled habit with one click while nothing else asks', () => {
     expect(reviewReason(habit, DIRECT_BOOKING_ON)).toBeNull()

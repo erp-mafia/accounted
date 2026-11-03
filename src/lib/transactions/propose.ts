@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSuggestedTemplates, buildCounterpartySuggestion, rowProposal } from './category-suggestions'
 import {
   bindTemplateToSettlementAccount,
+  contradictsLearnedDirection,
   findCounterpartyTemplatesBatch,
   type CounterpartyTemplateMatch,
 } from '@/lib/bookkeeping/counterparty-templates'
@@ -54,7 +55,7 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.5'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.6'
 
 const log = createLogger('transactions/propose')
 
@@ -196,7 +197,13 @@ export async function proposeForTransactions(
     if (!cpMatch) continue
     const template = await guardLearnedTemplate(cpMatch.template, tx)
     if (!template) continue
-    proposals[tx.id] = [buildCounterpartySuggestion(template, cpMatch.confidence), ...(proposals[tx.id] || [])]
+    // Read off the stored template, as the booking reads it: money in from a
+    // counterpart learned as a cost is shown as the refund it books as.
+    const directionMismatch = contradictsLearnedDirection(cpMatch.template, tx.amount)
+    proposals[tx.id] = [
+      buildCounterpartySuggestion(template, cpMatch.confidence, { directionMismatch }),
+      ...(proposals[tx.id] || []),
+    ]
   }
 
   // The assistant's stored reads (the ten-minute cron, or an earlier

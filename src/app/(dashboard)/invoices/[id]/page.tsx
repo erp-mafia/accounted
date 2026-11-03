@@ -2176,6 +2176,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     showManualSendAlternative ||
     canResend ||
     canCreateCreditNote ||
+    (canBookAfterwards && canWrite) ||
     showPeppolActions ||
     mailboxActions.length > 0 ||
     showDestructive
@@ -2433,6 +2434,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[240px]">
+                    {/* PH 244: the page's actions live in this menu, so booking a
+                        sent invoice is here too, not only on the Bokföring row. */}
+                    {canBookAfterwards && canWrite && (
+                      <>
+                        <DropdownMenuItem onSelect={openBookConfirm} disabled={isUpdating}>
+                          <DocumentCheckIcon className="h-4 w-4" />
+                          {t('book_action')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
                     {/* An unsent quote's decisions (crm#1202): reachable for a yes
                         given another way, confirmed before anything is recorded. */}
                     {quoteDecisionInMenu && canDecideQuote && quoteStatus !== 'accepted' && (
@@ -2986,7 +2998,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {canBookAfterwards && (
             <DefRow label={t('bookkeeping_label')}>
               <span className="flex flex-wrap items-center gap-3">
-                <span className="text-muted-foreground">{t('not_booked_yet')}</span>
+                <span className="text-muted-foreground">
+                  {t(deferInvoiceBooking ? 'not_booked_yet_deferred' : 'not_booked_yet')}
+                </span>
                 {canWrite && (
                   <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} loading={isUpdating}>
                     {t('book_action')}

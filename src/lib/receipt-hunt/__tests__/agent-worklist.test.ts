@@ -11,7 +11,9 @@ vi.mock('../hunt', () => ({
   fetchCandidateTransactions: (...args: unknown[]) => mockFetchCandidateTransactions(...args),
 }))
 
-import { resolveAgentWorklist } from '../agent-worklist'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { nextStepKind, resolveAgentWorklist, UNDERLAG_ARCHIVED_ELSEWHERE_REASON } from '../agent-worklist'
 
 type Row = Record<string, unknown>
 
@@ -413,6 +415,33 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
     }
   })
 
+  // crm#1582: ~180 SIE-imported purchases whose underlag the former byrå kept
+  // on paper were sent to a mail search that could never find them.
+  it('sends no mail search for an imported verifikat: it points at the waiver for underlag kept with the earlier books', async () => {
+    const imported = (n: number, description: string, gross: number) => ({ ...verifikat(n, description, gross), source_type: 'import' })
+    const item = await worklist(
+      [
+        imported(41, 'Kortköp Clas Ohlson', 900),
+        imported(42, 'Hetzner Online GmbH', 600),
+        imported(43, 'Lön augusti', 30000),
+        verifikat(44, 'Hetzner Online GmbH', 600),
+      ],
+      [
+        line(41, '1930', 0, 900), line(41, '5410', 720), line(41, '2641', 180),
+        line(42, '1930', 0, 600), line(42, '6540', 600),
+        line(43, '1930', 0, 30000), line(43, '7210', 30000),
+        line(44, '1930', 0, 600), line(44, '6540', 600),
+      ],
+    )
+
+    for (const n of [41, 42, 43]) {
+      expect(item(n)).toMatchObject({ mail_searchable: false, portal: null, underlag_on: null })
+      expect(item(n).next_step).toContain(`"${UNDERLAG_ARCHIVED_ELSEWHERE_REASON}"`)
+    }
+    // The same purchase booked in Accounted is still worth a mail search.
+    expect(item(44)).toMatchObject({ mail_searchable: true })
+  })
+
   it('counts a refund and a verifikat that debits only input VAT as purchases', async () => {
     const item = await worklist(
       [
@@ -485,5 +514,19 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
       next_step: 'Fakturan finns redan på V299 (2025-12-28): koppla en kopia av den till det här verifikatet.',
       underlag_on: { voucher: 'V299', journal_entry_id: 'je-inv', entry_date: '2025-12-28', document_id: 'doc-v299' },
     })
+  })
+})
+
+describe('nextStepKind: imported verifikat (crm#1582)', () => {
+  it('reads source_type import before any word or line', () => {
+    expect(nextStepKind('ICA Kvantum Solna', [], undefined, 'import')).toBe('imported')
+    expect(nextStepKind('Skatteverket skattekonto', [], [{ account_number: '1630', debit_amount: 100 }], 'import')).toBe('imported')
+    expect(nextStepKind('ICA Kvantum Solna', [], undefined, 'bank_transaction')).toBe('kivra')
+    expect(nextStepKind('ICA Kvantum Solna')).toBe('kivra')
+  })
+
+  it('names the same reason the waiver dialogs suggest, so the two cannot drift apart', () => {
+    const sv = JSON.parse(readFileSync(join(process.cwd(), 'src/messages/sv.json'), 'utf8'))
+    expect(sv.journal_list.no_doc_required_suggestion_archived_elsewhere).toBe(UNDERLAG_ARCHIVED_ELSEWHERE_REASON)
   })
 })

@@ -9,6 +9,9 @@ import { NextResponse, after } from 'next/server'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { isMembershipActive } from '@/lib/entitlements/multi-user'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { isUuid } from '@/lib/invariants/uuid'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
@@ -294,6 +297,44 @@ async function requireSkvCapability(ctx: ExtensionContext): Promise<NextResponse
   return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.skatteverket)
 }
 
+const CONNECT_COMPANY_REFUSED_MESSAGE =
+  'Länken gäller ett företag som du inte kan ansluta med det konto du är inloggad med. Logga in med rätt konto och öppna länken igen.'
+
+/**
+ * The company a BankID connect is for. A link that names one (company_id;
+ * gnubok_connect_skatteverket adds the company the agent was asked about)
+ * gets it; without one, the browser's active company as before. Binding
+ * every connect to the active company stored a multi-company user's fresh
+ * session on whichever company the browser had open, while the one the agent
+ * asked about stayed expired (crm#1622). A named company passes the same
+ * gates the dispatcher puts on the active one: a membership of the signed-in
+ * user that the seat gate lets through, never the invoicing-only role.
+ */
+async function resolveConnectCompany(
+  ctx: ExtensionContext,
+  requested: string | null,
+): Promise<{ ok: true; companyId: string } | { ok: false; status: number; message: string }> {
+  if (requested === null || requested === ctx.companyId) return { ok: true, companyId: ctx.companyId }
+  if (!isUuid(requested)) return { ok: false, status: 400, message: CONNECT_COMPANY_REFUSED_MESSAGE }
+  const { data, error } = await ctx.supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', requested)
+    .eq('user_id', ctx.userId)
+    .maybeSingle()
+  if (error) return { ok: false, status: 500, message: 'Behörighetskontroll misslyckades.' }
+  const role = (data as { role?: string | null } | null)?.role ?? null
+  if (!role || isInvoicerRole(role) || !(await isMembershipActive(ctx.supabase, requested, role))) {
+    return { ok: false, status: 403, message: CONNECT_COMPANY_REFUSED_MESSAGE }
+  }
+  return { ok: true, companyId: requested }
+}
+
+/** `path` with one more query parameter. */
+function withQueryParam(path: string, key: string, value: string): string {
+  return `${path}${path.includes('?') ? '&' : '?'}${key}=${encodeURIComponent(value)}`
+}
+
 /**
  * The ombud path binds Skatteverket system-credential access to an org
  * number, and org numbers are public and tenant-editable. While more than
@@ -416,17 +457,11 @@ export const skatteverketExtension: Extension = {
       method: 'GET',
       path: '/authorize',
       handler: async (request: Request, ctx: ExtensionContext) => {
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-
-        const state = newOAuthFlowId()
-        let redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
-
         // Optional: where to send the user after the BankID round-trip.
         // Allowlisted to internal in-app paths to avoid open-redirect abuse.
         const url = new URL(request.url)
         const requestedReturn = url.searchParams.get('return_to')
-        const returnTo =
+        let returnTo =
           requestedReturn && requestedReturn.startsWith('/') && !requestedReturn.startsWith('//')
             ? requestedReturn
             : null
@@ -435,6 +470,30 @@ export const skatteverketExtension: Extension = {
         // domain). The callback finishes the flow there: that is where the
         // opener tab lives and where the session cookies are.
         const origin = await resolveOAuthOrigin(request)
+
+        const requestedCompany = url.searchParams.get('company_id')
+        const target = await resolveConnectCompany(ctx, requestedCompany)
+        if (!target.ok) {
+          // A link opened in a browser: back to the page it would have
+          // landed on, which shows the reason, when there is one.
+          return returnTo
+            ? NextResponse.redirect(`${origin}${withQueryParam(returnTo, 'skv_error', target.message)}`)
+            : NextResponse.json({ error: target.message }, { status: target.status })
+        }
+        const companyId = target.companyId
+        // The landing page names the company the session was stored for, so
+        // a browser working in another company is told rather than left to
+        // show that company's (unchanged) state. The active company is never
+        // switched here.
+        if (requestedCompany !== null) {
+          returnTo = withQueryParam(returnTo ?? '/settings/skatteverket', 'skv_company', companyId)
+        }
+
+        const blocked = await requireSkvCapability({ ...ctx, companyId })
+        if (blocked) return blocked
+
+        const state = newOAuthFlowId()
+        let redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Generate PKCE pair: verifier persisted server-side, challenge sent
         // to SKV. Some SKV per-flow client configurations issue revoked-on-use
@@ -454,7 +513,7 @@ export const skatteverketExtension: Extension = {
         if (connector) {
           try {
             const started = await startConnectorAuthorization(connector, {
-              companyRef: ctx.companyId,
+              companyRef: companyId,
               returnUrl: redirectUri,
               state,
               codeChallenge: pkce.challenge,
@@ -463,7 +522,7 @@ export const skatteverketExtension: Extension = {
             connectorState = started.connectorState
             authorizeUrl = started.authorizeUrl
           } catch (err) {
-            log.error('connector authorize-url failed', err as Error, { companyId: ctx.companyId })
+            log.error('connector authorize-url failed', err as Error, { companyId })
             return NextResponse.json(
               {
                 error:
@@ -491,7 +550,7 @@ export const skatteverketExtension: Extension = {
         await createOAuthFlow(db, {
           id: state,
           kind: 'skatteverket',
-          companyId: ctx.companyId,
+          companyId,
           userId: ctx.userId,
           origin,
           redirectUri,

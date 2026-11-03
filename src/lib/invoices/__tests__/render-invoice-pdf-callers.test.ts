@@ -17,7 +17,8 @@ const RENDER_SITES = [
   'src/app/api/invoices/[id]/send/route.ts',
   'src/app/api/v1/companies/[companyId]/invoices/[id]/send/route.ts',
   'src/app/api/invoices/[id]/pdf/route.ts',
-  'src/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route.ts',
+  // The v1 download and gnubok_get_invoice_pdf share this loader (crm#1593).
+  'src/lib/invoices/stored-invoice-pdf.ts',
   'src/app/api/invoices/[id]/send-payment-confirmation/route.ts',
   'src/app/api/invoices/preview-pdf/route.ts',
   'src/lib/pending-operations/commit.ts',

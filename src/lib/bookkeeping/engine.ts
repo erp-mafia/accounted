@@ -5,6 +5,7 @@ import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { lineBalance, storedLineValues } from './line-balance'
+import { withBankLegCurrency } from './bank-booking-context'
 import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   AccountsNotInChartError,
@@ -428,7 +429,12 @@ export async function createDraftEntry(
   if (rules === null) {
     log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
   }
-  const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
+  // A foreign bank row's own figure on the line that books it (crm#1590):
+  // one place for every door that declares the row in bank_booking_context.
+  const lines = withBankLegCurrency(
+    rules ? applyDimensionRules(input.lines, rules) : input.lines,
+    input.bank_booking_context,
+  )
 
   // Soft dimension validation (dimensions plan PR3): free for untagged
   // entries; free-text passthrough unless company_settings.dimensions_enabled;

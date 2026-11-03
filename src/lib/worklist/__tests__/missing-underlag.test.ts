@@ -21,6 +21,18 @@ describe('summariseMissingUnderlag', () => {
     expect(summary.sampled).toBe(3)
   })
 
+  // crm#1582: SIE-imported verifikat have their underlag where the earlier
+  // books were kept; the row says so instead of reading them as mail or Kivra.
+  it('reads imported verifikat as imported, whatever their words, as the agent does', () => {
+    const summary = summariseMissingUnderlag(180, [
+      { description: 'ICA Kvantum Solna', source_type: 'import' },
+      { description: 'Hetzner Online GmbH', source_type: 'import' },
+      { description: 'Lön augusti', source_type: 'import' },
+      { description: 'Coop Stadshagen', source_type: 'bank_transaction' },
+    ])
+    expect(summary.top).toEqual({ kind: 'imported', count: 3 })
+  })
+
   it('separates paper purchases from mailbox ones', () => {
     const summary = summariseMissingUnderlag(3, [
       { description: 'EasyPark' },

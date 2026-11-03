@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { booksBankLineInBankDirection, booksForeignAmountAsKronor } from '../bank-booking-context'
+import { booksBankLineInBankDirection, booksForeignAmountAsKronor, withBankLegCurrency } from '../bank-booking-context'
+import { buildInvoiceMatchClearingLines } from '../invoice-payment-lines'
+import { ledgerLineAmountIn } from '../ledger-line-amount'
+import type { BankBookingContext, CreateJournalEntryLineInput } from '@/types'
 
 const line = (account_number: string, debit_amount: number, credit_amount: number) =>
   ({ account_number, debit_amount, credit_amount })
@@ -46,5 +49,78 @@ describe('booksForeignAmountAsKronor (accounted#58)', () => {
 
   it('looks only at the bank ledger line', () => {
     expect(booksForeignAmountAsKronor([line('6200', 100, 0), line('1930', 0, 1150), line('3740', 0, -1050)], '1930', noRate)).toBe(false)
+  })
+})
+
+describe('withBankLegCurrency (crm#1590)', () => {
+  const ctx = (over: Partial<BankBookingContext> = {}): BankBookingContext => ({
+    transaction_id: 'tx-1',
+    cash_account_id: 'cash-1',
+    settlement_account: '1940',
+    date: '2026-10-20',
+    amount: 2200,
+    currency: 'EUR',
+    ...over,
+  })
+  const sekLine = (account_number: string, debit_amount: number, credit_amount: number): CreateJournalEntryLineInput =>
+    ({ account_number, debit_amount, credit_amount })
+
+  it('stamps a EUR deposit on its bank debit line, kronor untouched', () => {
+    const lines = [sekLine('1940', 24470.6, 0), sekLine('1510', 0, 24470.6)]
+    const out = withBankLegCurrency(lines, [ctx()])
+    expect(out[0]).toEqual({ ...lines[0], currency: 'EUR', amount_in_currency: 2200 })
+    expect(out[1]).toBe(lines[1])
+    // The caller's lines are not mutated.
+    expect(lines[0]).not.toHaveProperty('currency')
+  })
+
+  it('stamps a withdrawal on its bank credit line as a magnitude', () => {
+    const lines = [sekLine('2440', 618.75, 0), sekLine('1932', 0, 622.18), sekLine('7960', 3.43, 0)]
+    const out = withBankLegCurrency(lines, [ctx({ settlement_account: '1932', amount: -56.75 })])
+    expect(out[1]).toMatchObject({ credit_amount: 622.18, currency: 'EUR', amount_in_currency: 56.75 })
+    expect(ledgerLineAmountIn(out[1], 'EUR')).toBe(-56.75)
+  })
+
+  it('returns the same lines for a SEK row, no context, or a zero amount', () => {
+    const lines = [sekLine('1930', 100, 0), sekLine('3001', 0, 100)]
+    expect(withBankLegCurrency(lines, [ctx({ currency: 'SEK', settlement_account: '1930', amount: 100 })])).toBe(lines)
+    expect(withBankLegCurrency(lines, undefined)).toBe(lines)
+    expect(withBankLegCurrency(lines, [])).toBe(lines)
+    expect(withBankLegCurrency(lines, [ctx({ settlement_account: '1930', amount: 0 })])).toBe(lines)
+  })
+
+  it('keeps a figure the builder stamped itself (the categorize path)', () => {
+    const lines: CreateJournalEntryLineInput[] = [
+      { account_number: '1940', debit_amount: 6800, credit_amount: 0, currency: 'EUR', amount_in_currency: 611.67, exchange_rate: 11.117 },
+      sekLine('3001', 0, 6800),
+    ]
+    expect(withBankLegCurrency(lines, [ctx({ amount: 611.67 })])).toBe(lines)
+  })
+
+  it('stamps nothing when the bank side is split over two lines', () => {
+    const lines = [sekLine('1940', 12000, 0), sekLine('1940', 12470.6, 0), sekLine('1510', 0, 24470.6)]
+    expect(withBankLegCurrency(lines, [ctx()])).toBe(lines)
+  })
+
+  it('stamps nothing when two foreign rows share the account and side', () => {
+    const lines = [sekLine('1940', 24470.6, 0), sekLine('1510', 0, 24470.6)]
+    expect(withBankLegCurrency(lines, [ctx(), ctx({ transaction_id: 'tx-2', amount: 100 })])).toBe(lines)
+  })
+
+  it('the matched EUR payment reads 2200 EUR on the EUR account after the stamp (the reported symptom)', () => {
+    const { lines } = buildInvoiceMatchClearingLines(
+      { amount: 2200, amount_sek: 24470.6, currency: 'EUR', exchange_rate: 11.123 },
+      {
+        currency: 'EUR', exchange_rate: 11.1765, remaining_amount: 2200, total: 2200, paid_amount: 0,
+        invoice_number: '1001', customer: null,
+      },
+      undefined,
+      '1940',
+    )
+    const bankBefore = lines.find((l) => l.account_number === '1940')!
+    expect(ledgerLineAmountIn(bankBefore, 'EUR')).toBeNull()
+    const bankAfter = withBankLegCurrency(lines, [ctx()]).find((l) => l.account_number === '1940')!
+    expect(ledgerLineAmountIn(bankAfter, 'EUR')).toBe(2200)
+    expect(bankAfter.debit_amount).toBe(24470.6)
   })
 })

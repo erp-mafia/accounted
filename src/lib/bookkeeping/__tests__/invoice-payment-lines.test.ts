@@ -739,3 +739,66 @@ describe('buildInvoicePaymentClearingLines: öresavrundning the issue verifikat 
     expect(far.arSek).toBe(17176.25)
   })
 })
+
+describe('foreign figures on the 1510 leg (crm#1590)', () => {
+  it('EUR invoice settled by a EUR row: 1510 carries the EUR it clears; the bank line is left to the engine', () => {
+    const result = buildInvoicePaymentClearingLines(
+      { amount: 2200, amount_sek: 24470.6, currency: 'EUR', exchange_rate: 11.123 },
+      { currency: 'EUR', exchange_rate: 11.1765, remaining_amount: 2200, total: 2200, paid_amount: 0 },
+      'Inbetalning kundfaktura 1001', undefined, '1940',
+    )
+    expect(result.lines).toEqual([
+      { account_number: '1940', debit_amount: 24470.6, credit_amount: 0, line_description: 'Inbetalning kundfaktura 1001' },
+      {
+        account_number: '1510', debit_amount: 0, credit_amount: 24588.3, line_description: 'Inbetalning kundfaktura 1001',
+        currency: 'EUR', amount_in_currency: 2200, exchange_rate: 11.1765,
+      },
+      expect.objectContaining({ account_number: '7960', debit_amount: 117.7, credit_amount: 0 }),
+    ])
+    expect(result.lines[2]).not.toHaveProperty('currency')
+  })
+
+  it('cross-currency with paidInInvoiceCurrency: 1510 carries those units', () => {
+    const result = buildInvoicePaymentClearingLines(
+      { amount: 5000, amount_sek: null, currency: 'SEK', exchange_rate: null },
+      { currency: 'USD', exchange_rate: 10, remaining_amount: 1000, total: 1000, paid_amount: 0 },
+      'x', 480, '1930',
+    )
+    expect(result.lines[1]).toMatchObject({ account_number: '1510', currency: 'USD', amount_in_currency: 480 })
+    expect(result.lines[0]).not.toHaveProperty('currency')
+  })
+
+  it('fallback full clear carries the remaining; a deferred partial carries nothing', () => {
+    const full = buildInvoicePaymentClearingLines(
+      { amount: 11000, amount_sek: null, currency: 'SEK', exchange_rate: null },
+      { currency: 'USD', exchange_rate: 10, remaining_amount: 1000, total: 1000, paid_amount: 0 },
+      'x', undefined, '1930',
+    )
+    expect(full.lines[1]).toMatchObject({ currency: 'USD', amount_in_currency: 1000 })
+    const deferred = buildInvoicePaymentClearingLines(
+      { amount: 4000, amount_sek: null, currency: 'SEK', exchange_rate: null },
+      { currency: 'USD', exchange_rate: 10, remaining_amount: 1000, total: 1000, paid_amount: 0 },
+      'x', undefined, '1930',
+    )
+    expect(deferred.lines[1]).not.toHaveProperty('currency')
+    expect(deferred.lines[1]).not.toHaveProperty('amount_in_currency')
+  })
+
+  it('SEK invoices carry no currency keys, from a SEK or a EUR account', () => {
+    const sek = buildInvoicePaymentClearingLines(
+      { amount: 1250, amount_sek: null, currency: 'SEK', exchange_rate: null },
+      { currency: 'SEK', exchange_rate: null, remaining_amount: 1250, total: 1250, paid_amount: 0 },
+      'x', undefined, '1930',
+    )
+    expect(sek.lines).toEqual([
+      { account_number: '1930', debit_amount: 1250, credit_amount: 0, line_description: 'x' },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1250, line_description: 'x' },
+    ])
+    const fromEur = buildInvoicePaymentClearingLines(
+      { amount: 100, amount_sek: 1150, currency: 'EUR', exchange_rate: 11.5 },
+      { currency: 'SEK', exchange_rate: null, remaining_amount: 1150, total: 1150, paid_amount: 0 },
+      'x', undefined, '1940',
+    )
+    expect(fromEur.lines[1]).not.toHaveProperty('currency')
+  })
+})

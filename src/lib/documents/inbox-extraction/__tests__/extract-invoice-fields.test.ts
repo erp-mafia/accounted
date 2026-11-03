@@ -295,6 +295,29 @@ describe('extractInvoiceFields', () => {
     expect(system).toContain('Never put an amount including VAT in lineTotal.')
   })
 
+  it('tells the model which Swedish labels mean the due date and how a day-first date is written out (crm#1610)', async () => {
+    // An invoice that printed only "Oss tillhanda: 25-11-2026" came back with
+    // dueDate null, and the supplier's terms were booked in its place
+    // (due_date_source "defaulted"). Pinned so a prompt edit cannot drop it.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'faktura.pdf',
+    })
+    const call = mockCreate.mock.calls[0][0]
+    const system: string =
+      typeof call.system === 'string'
+        ? call.system
+        : call.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain('"dueDate": string | null,          // ISO date YYYY-MM-DD: when payment is due, see the dueDate rule')
+    expect(system).toContain('- dueDate: the date the payment must reach the seller')
+    for (const label of ['Förfallodatum', 'Oss tillhanda', 'Oss tillhanda senast', 'Betalas senast', 'Att betala senast']) {
+      expect(system).toContain(`"${label}"`)
+    }
+    expect(system).toContain('25-11-2026, 25.11.2026 and 25/11/2026 are all 2026-11-25')
+  })
+
   it('tells the model to keep a hyphen at a line break inside an identifier', async () => {
     // Agent feedback seq 936092: an invoice number wrapped after a hyphen
     // ("...-202604-" / "0001") came back with the hyphen dropped, read as

@@ -184,7 +184,10 @@
               "account_number": "2440",
               "debit_amount": 2300,
               "credit_amount": 0,
-              "line_description": "Utbetalning leverantörsfaktura F-4003 (ankomstnr 83)"
+              "line_description": "Utbetalning leverantörsfaktura F-4003 (ankomstnr 83)",
+              "currency": "EUR",
+              "amount_in_currency": 200,
+              "exchange_rate": 11.5
             },
             {
               "account_number": "1930",

@@ -464,13 +464,13 @@ export const transactionsMatchBatch = defineOperation({
       'Allocates the transaction across N invoices of one kind: one samlingsverifikation (bank against 1510 or 2440, kursdifferens on 3960/7960 for foreign invoices, öresavrundning on 3740, a payment service\'s fees on their own cost lines) and one payment row per invoice, atomically. The allocations, less the fees for customer invoices or plus the fees for supplier invoices, must sum to the transaction amount. The dry run answers the exact lines (expected_lines) the verifikat would carry. Idempotent. Dry-runnable.',
     useWhen: 'One incoming payment covers several customer invoices, or one outgoing transfer pays several supplier invoices.',
     doNotUseFor:
-      'One invoice (POST /transactions/{id}/match-invoice or match-supplier-invoice), mixing customer and supplier invoices, or supplier invoices never booked under kontantmetoden.',
+      'One invoice (POST /transactions/{id}/match-invoice or match-supplier-invoice), mixing customer and supplier invoices, or several supplier invoices never booked under kontantmetoden.',
     pitfalls: [
       'A bank row in a foreign currency returns 400 BATCH_FOREIGN_CURRENCY: the verifikat is in kronor and this door does not read the row\'s SEK. Match it to one invoice at a time (match-invoice, match-supplier-invoice). A SEK row against foreign invoices works: state each allocation in kronor, within 10 % of what the invoice is booked at (BATCH_FX_DEVIATION_TOO_LARGE).',
       'The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.',
       'fees books a payment service\'s fee on the row: a payout net of Stripe\'s or a card acquirer\'s fee (customer invoices: allocations - fees = |amount|) or a bank\'s charge added to a payment (supplier invoices: allocations + fees = |amount|). Each invoice is allocated what it owed. At most 5 rows, each a debit on an active BAS class 6 account (6570 Bankkostnader, 6040 Kontokortsavgifter) with no VAT, since a payment service is exempt (ML 10 kap. 33 §): BATCH_FEE_ACCOUNT_INVALID otherwise. The fees must be smaller than the invoices (BATCH_FEE_TOO_LARGE). A platform\'s commission is a taxable service, not a fee row: book it from the platform\'s invoice.',
       'A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.',
-      'Kontantmetoden: unbooked SEK customer invoices paid in full book their revenue and moms here (all or none, BATCH_CASH_LINES_MIXED); others return 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.',
+      'Kontantmetoden: unbooked SEK customer invoices paid in full book their revenue and moms here (all or none, BATCH_CASH_LINES_MIXED). One unbooked supplier invoice allocated the whole row (no fees) is booked as match-supplier-invoice books it: cost and moms at payment, its lines in the dry run. Others return 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.',
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.',
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each customer invoice sent without its verifikat gets its sale booked first by the invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 1510; sale_journal_entry_ids names them and the dry run shows them as sale_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.sale_first, before anything is booked.',
       'Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.',
@@ -617,16 +617,15 @@ export const transactionsMatchBatch = defineOperation({
           const unbooked = (failure.details?.invoices as Array<{ id: string; kind?: string; invoice_number?: string | null }> | undefined) ?? []
           const numbers = unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
           // crm#1510: gnubok_match_transaction_to_invoice takes incoming rows
-          // and customer invoices only, so an outgoing payment of a supplier
-          // invoice was routed to a tool that refuses it. No MCP tool books
-          // that payment yet: the person matches it in Accounted.
+          // and customer invoices only. PH 243: one supplier invoice per call
+          // books here, as the dashboard's single match books it.
           const supplier = unbooked.some((u) => u.kind === 'supplier_invoice')
           return codedRefusal(
             failure.code,
             `${getErrorEntry(failure.code)?.message_sv ?? failure.code}` +
               ` Obokförda fakturor: ${numbers}.` +
               (supplier
-                ? ' Leverantörsfakturor: be användaren matcha betalningen mot fakturan i Accounted (Att göra visar Accounteds förslag, suggested_match i gnubok_list_uncategorized_transactions); inget MCP-verktyg bokför den betalningen än.'
+                ? ' Leverantörsfakturor: anropa gnubok_match_batch_allocate med en enda allocation per faktura, på hela transaktionens belopp och utan fees; då bokförs kostnad och moms vid betalningen.'
                 : ' En faktura som ensam motsvarar beloppet: gnubok_match_transaction_to_invoice.' +
                   ' Flera fakturor: markera varje faktura som betald (gnubok_mark_invoice_as_paid), sedan gnubok_reconcile_match för att koppla transaktionen till verifikaten.'),
           )

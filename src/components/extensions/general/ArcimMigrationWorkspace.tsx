@@ -4230,12 +4230,21 @@ export default function ArcimMigrationWorkspace({
     if (new URL(window.location.href).searchParams.get('migration')) return
     const provider = ARCIM_PROVIDERS.find((p) => p.id === initialProvider)
     if (!provider || COMING_SOON_PROVIDERS.has(provider.id)) return
-    if (!provider.sieViaApi) {
-      if (isLoadingStatus) return
-      if (!connectionStatus?.hasCompletedSieImport) {
-        preselectedRef.current = true
-        return
-      }
+    if (isLoadingStatus) return
+    // A migration from this provider already ran: stay on the provider list,
+    // whose row offers "Hämta underlag" next to the re-run. Preselecting
+    // started a fresh migration instead, and a customer who came for the
+    // underlag went through the mapping again and never saw the button (PH 245).
+    if (
+      connectionStatus?.hasCompletedSieImport &&
+      connectionStatus.consents.some((consent) => consent.provider === provider.id)
+    ) {
+      preselectedRef.current = true
+      return
+    }
+    if (!provider.sieViaApi && !connectionStatus?.hasCompletedSieImport) {
+      preselectedRef.current = true
+      return
     }
     preselectedRef.current = true
     void handleSelectProvider(provider.id)

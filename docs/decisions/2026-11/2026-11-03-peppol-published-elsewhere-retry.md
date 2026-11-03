@@ -1,0 +1,1 @@
+[2026-11-03] Peppol PUBLISHED_ELSEWHERE is retryable: the settings page offers the retry and the inbound cron retries daily, at most 8 attempts, since it clears when the old operator withdraws the id (crm#1556). Count from failed rows, so no migration.

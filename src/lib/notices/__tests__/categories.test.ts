@@ -37,6 +37,7 @@ import {
   skvAuthErrorNeedsReconnect,
   skvStatusNeedsReconnect,
 } from '../categories'
+import { skvConnectionState } from '../predicates'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -108,6 +109,25 @@ describe('skvStatusNeedsReconnect (pure)', () => {
   it('stays quiet while reads run on the ombud grant, whatever the session says', () => {
     expect(skvStatusNeedsReconnect({ connected: true, ombud: true, needsReconsent: true })).toBe(false)
     expect(skvStatusNeedsReconnect({ connected: true, ombud: true, expired: true, canRefresh: false })).toBe(false)
+  })
+})
+
+// The Kopplingar overview row (crm#1622): a stored session is not a working
+// one. The row used to count token rows and showed Ansluten for a session
+// that had expired a week earlier.
+describe('skvConnectionState (pure)', () => {
+  it('a dead stored session is reconnect, never connected', () => {
+    expect(skvConnectionState({ connected: true, needsReconsent: true, expired: true, canRefresh: false })).toBe('reconnect')
+    expect(skvConnectionState({ connected: true, expired: true, canRefresh: false })).toBe('reconnect')
+  })
+  it('a live or still refreshable session is connected', () => {
+    expect(skvConnectionState({ connected: true, expired: false, canRefresh: true })).toBe('connected')
+    expect(skvConnectionState({ connected: true, expired: true, canRefresh: true })).toBe('connected')
+  })
+  it('no session is off, unless the company reads on the ombud grant', () => {
+    expect(skvConnectionState({ connected: false })).toBe('off')
+    expect(skvConnectionState({ connected: false, ombud: true })).toBe('connected')
+    expect(skvConnectionState({ connected: true, ombud: true, needsReconsent: true })).toBe('connected')
   })
 })
 

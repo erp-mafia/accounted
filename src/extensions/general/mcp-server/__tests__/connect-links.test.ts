@@ -13,6 +13,9 @@ import { tools } from '../server'
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const bankTool = tools.find((t) => t.name === 'gnubok_connect_bank')!
 const skvTool = tools.find((t) => t.name === 'gnubok_connect_skatteverket')!
+// The link names the company the tool was called for: the BankID session is
+// stored for it, not for the company the user's browser has open (crm#1622).
+const SKV_CONNECT_URL = `https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Fskatteverket&company_id=${COMPANY_ID}`
 
 /** Open the Open Payments door for COMPANY_ID: a connector with these banks, and the company on the pilot list. */
 function openDoor(banks: Array<{ bic: string; name: string }> | Error = [{ bic: 'SWEDSESS', name: 'Swedbank' }, { bic: 'ESSESESS', name: 'SEB' }]) {
@@ -256,9 +259,7 @@ describe('onboarding connect-link tools', () => {
     const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
     expect(result.available).toBe(true)
     expect(result.connected).toBe(false)
-    expect(result.connect_url).toBe(
-      'https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2F'
-    )
+    expect(result.connect_url).toBe(SKV_CONNECT_URL)
   })
 
   it('skatteverket: reports connected with the token expiry', async () => {
@@ -285,9 +286,7 @@ describe('onboarding connect-link tools', () => {
     expect(result.status).toBe('connected')
     // ... but filing runs on the caller's own BankID login, which is dead.
     expect(result.can_file).toBe(false)
-    expect(result.connect_url).toBe(
-      'https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2F'
-    )
+    expect(result.connect_url).toBe(SKV_CONNECT_URL)
     expect(String(result.instructions)).toContain('Filing is not possible for this user yet')
     expect(String(result.instructions)).toContain('another member of the company')
     expect(String(result.instructions)).not.toContain('can be filed from here')
@@ -312,9 +311,7 @@ describe('onboarding connect-link tools', () => {
     const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
     expect(result.connected).toBe(false)
     expect(result.status).toBe('needs_reconsent')
-    expect(result.connect_url).toBe(
-      'https://app.example.test/api/extensions/ext/skatteverket/authorize?return_to=%2F'
-    )
+    expect(result.connect_url).toBe(SKV_CONNECT_URL)
     expect(String(result.instructions)).toMatch(/expired/)
   })
 

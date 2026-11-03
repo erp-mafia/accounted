@@ -130,6 +130,14 @@ export interface BookingProposal {
    */
   contested?: boolean
   /**
+   * A learned counterpart matched on money moving against its learned
+   * direction (contradictsLearnedDirection in counterparty-templates.ts):
+   * money in from a counterpart booked as a cost, likely a refund or credit.
+   * The legs are shown mirrored, as the booking mirrors them, and it never
+   * books without a review (crm#1598).
+   */
+  direction_mismatch?: boolean
+  /**
    * The box the assistant's fresh read reports this reverse-charge purchase
    * in, set only when it is not a box the proposal books (ruta 22 read,
    * ruta 21 learned: accounted#37). Which box is right depends on the
@@ -541,7 +549,7 @@ export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<st
     case 'rule':
       return { key: 'rec_why_rule' }
     case 'counterparty':
-      return { key: 'rec_why_counterparty', values: { count: p.seen_count ?? 1 } }
+      return { key: p.direction_mismatch ? 'rec_why_counterparty_refund' : 'rec_why_counterparty', values: { count: p.seen_count ?? 1 } }
     case 'catalog':
       return { key: 'rec_why_catalog' }
     case 'recent':
@@ -690,7 +698,11 @@ function sourceWhySv(p: BookingProposal): string {
     case 'rule':
       return 'Enligt företagets regel'
     case 'counterparty': {
-      const seen = `Bokförd så ${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'} tidigare`
+      const times = `${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'}`
+      if (p.direction_mismatch) {
+        return `Motparten är bokförd ${times} tidigare, men pengarna går åt andra hållet: troligen en återbetalning eller kreditering, som bokförs omvänt mot samma konto. Stäm av mot kreditnotan eller ursprungsköpet`
+      }
+      const seen = `Bokförd så ${times} tidigare`
       return p.contested ? `${seen}, men matchningen är svag och assistentens läsning av raden bokför annorlunda` : seen
     }
     case 'catalog':

@@ -52,10 +52,10 @@ export interface AgentWorklistItem {
   search_from: string
   search_to: string
   /**
-   * False for rows that never have a mailed receipt (salary, tax, bank fees)
-   * and for verifikat that bought nothing (money in, a transfer between the
-   * company's own accounts): the agent skips the mail search and reports them
-   * as needing a human.
+   * False for rows that never have a mailed receipt (salary, tax, bank fees),
+   * for verifikat that bought nothing (money in, a transfer between the
+   * company's own accounts) and for verifikat imported from earlier books:
+   * the agent skips the mail search and reports them as needing a human.
    */
   mail_searchable: boolean
   /** Where the invoice lives when the vendor does not mail it. */
@@ -168,13 +168,15 @@ function shiftDate(isoDate: string, days: number): string {
  * its invoice behind a login, a chain that sends to Kivra, a counter purchase
  * that only exists on paper, and otherwise the mailbox. Before all of them,
  * what has no receipt at all: salary and tax, and a verifikat that bought
- * nothing.
+ * nothing. First of all, a verifikat imported from earlier books: its
+ * underlag is where those books were kept (the previous system, the byrå or
+ * paper), so the errand is to confirm that, not to search (crm#1582).
  *
  * Exported because this is derived, never stored: the app can classify the
  * rows it already has without an agent having run, and the agent's sentence
  * and the app's summary then say the same thing by construction.
  */
-export type NextStepKind = 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'paper' | 'mail'
+export type NextStepKind = 'imported' | 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'paper' | 'mail'
 
 /**
  * `companyPortals` are the company's own (public.company_portals); without
@@ -187,12 +189,18 @@ export type NextStepKind = 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'pa
  * (2026-10-28) those, sorted largest first, filled the whole first page of a
  * mail search. The words go first: a tax payment says so, and the sentence
  * for it names the skattekonto.
+ *
+ * `sourceType` is a posted verifikat's journal_entries.source_type: 'import'
+ * (SIE) wins over every word, since even an imported salary verifikat has its
+ * lönespecifikation in the earlier books, not in a mailbox.
  */
 export function nextStepKind(
   descriptor: string | null,
   companyPortals: readonly CompanyPortal[] = [],
   lines?: readonly BookedLine[],
+  sourceType?: string | null,
 ): NextStepKind {
+  if (sourceType === 'import') return 'imported'
   if (!canHaveEmailReceipt(descriptor)) return 'not_mail'
   if (lines && !booksPurchase(lines)) return 'no_purchase'
   if (resolvePortal(companyPortals, descriptor)) return 'portal'
@@ -202,12 +210,24 @@ export function nextStepKind(
 }
 
 /**
+ * The "Inget underlag krävs" reason for an imported verifikat whose underlag
+ * stays where the earlier books were kept. BFL 7 kap asks that the underlag is
+ * kept, readable and producible for seven years, not that it moves into the
+ * system the books moved to.
+ */
+export const UNDERLAG_ARCHIVED_ELSEWHERE_REASON = 'Underlag arkiverat utanför Accounted (tidigare system eller papper)'
+
+/**
  * What to tell the person when the agent cannot fetch this one: one sentence,
  * one place, one action. Never mentions searching, agents or what failed. By
  * the time this is read, the reader only wants the errand.
  */
 function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): string {
   switch (kind) {
+    case 'imported':
+      // The reason is the one the waiver dialogs suggest
+      // (journal_list.no_doc_required_suggestion_archived_elsewhere).
+      return `Importerat verifikat: underlaget finns där bokföringen fördes tidigare. Ligger det kvar där, markera det Inget underlag krävs med orsaken "${UNDERLAG_ARCHIVED_ELSEWHERE_REASON}".`
     case 'not_mail':
       return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
     case 'no_purchase':
@@ -231,6 +251,7 @@ function withSearchHints(
   companyPortals: readonly CompanyPortal[],
   lines?: readonly BookedLine[],
   underlagOn: UnderlagElsewhere | null = null,
+  sourceType?: string | null,
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
   // A payment that settles an invoice opens the window earlier: the invoice was
@@ -254,8 +275,8 @@ function withSearchHints(
       underlag_on: underlagOn,
     }
   }
-  const kind = nextStepKind(descriptor, companyPortals, lines)
-  const mailSearchable = kind !== 'not_mail' && kind !== 'no_purchase'
+  const kind = nextStepKind(descriptor, companyPortals, lines, sourceType)
+  const mailSearchable = kind !== 'imported' && kind !== 'not_mail' && kind !== 'no_purchase'
   // The company's own portal for the supplier first, then the directory's.
   const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
   const portalHint = portal ? { vendor: portal.vendor, url: portal.url, note: portal.note } : null
@@ -464,7 +485,7 @@ export async function resolveAgentWorklist(
         counterparty: ctx?.counterparty ?? null,
         description: v.description,
         invoice_number: ctx?.invoice_number ?? null,
-      }, companyPortals, linesByEntry.get(v.journal_entry_id), underlagElsewhere.get(v.journal_entry_id) ?? null),
+      }, companyPortals, linesByEntry.get(v.journal_entry_id), underlagElsewhere.get(v.journal_entry_id) ?? null, v.source_type),
     })
   }
   for (const tx of transactions) {

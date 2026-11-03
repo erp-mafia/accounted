@@ -22,6 +22,7 @@ import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
+import { DUE_DATE_RULE } from '@/lib/documents/due-date-labels'
 import { classifyExtractionError, type ExtractionFailure } from './extraction-failure'
 
 // Re-exported for callers and tests that import it from here.
@@ -402,7 +403,7 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   "invoice": {
     "invoiceNumber": string | null,    // include any suffix, e.g. "06655767-0007"
     "invoiceDate": string | null,      // ISO date YYYY-MM-DD: the invoice date, or on a receipt the purchase date printed on it
-    "dueDate": string | null,          // ISO date YYYY-MM-DD
+    "dueDate": string | null,          // ISO date YYYY-MM-DD: when payment is due, see the dueDate rule
     "paymentReference": string | null, // OCR / payment reference
     "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
     "servicePeriodStart": string | null, // ISO date: start of the service/coverage window the invoice charges for
@@ -450,6 +451,7 @@ Rules:
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - prepaidAmount: when the document deducts an amount settled WITHOUT paying this document ("Applied balance", "Credit applied", "Account credit", "Paid in advance", "Avgår förskott", "Förskott", a gift card or voucher) before its amount due, "total" is the amount BEFORE that deduction and prepaidAmount is the deduction as a positive number (Total 7.75, Applied balance -7.75, Amount due 0.00: total 7.75, prepaidAmount 7.75). A card, Swish or bank payment of this document ("Amount paid", "Betalt", "Paid with Visa") is NOT a prepaidAmount. null when nothing is deducted.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
+- dueDate: ${DUE_DATE_RULE}
 - creditedInvoiceNumber: only on a credit note, the number of the original invoice it refers to ("Krediterar faktura 10234", "Avser faktura", "Original invoice"), exactly as printed. null on every other document and when no invoice number is referenced. invoiceNumber stays the credit note's own number.
 - Identifiers (invoiceNumber, paymentReference/OCR, creditedInvoiceNumber, order numbers): copy them exactly as printed, character for character. When one wraps onto the next line, join the parts and KEEP a hyphen printed at the end of the first line: inside an identifier a line-end hyphen is part of the number, never word hyphenation ("INV-123-202604-" then "0001" on the next line is "INV-123-202604-0001").
 - Credit note amounts: give totals and lineItems with the sign printed on the document (negative when printed negative).

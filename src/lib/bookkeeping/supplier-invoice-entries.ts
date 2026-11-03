@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { findFiscalPeriod } from './engine'
 import { fxDifferenceLine } from './ore-rounding'
+import { buildCurrencyMetadata, isLedgerCurrency } from './currency-utils'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
   generateReverseChargePurchaseLines,
@@ -277,6 +278,13 @@ export interface SupplierInvoicePaymentLinesOptions {
    * exchangeRateDifference must be omitted.
    */
   sekClearingDebt?: number
+  /**
+   * Foreign invoice settled from a bank row: the units of the invoice's
+   * currency this payment clears off 2440, stamped on that line beside its
+   * kronor as the registration stamps its credit (crm#1590). Omit when not
+   * known; a SEK invoice never takes it.
+   */
+  apInInvoiceCurrency?: number
 }
 
 export interface SupplierInvoicePaymentLines {
@@ -307,7 +315,8 @@ export interface SupplierInvoicePaymentLines {
  * debt and the bank amount is booked on 3740 and 2440 clears in full.
  */
 export function buildSupplierInvoicePaymentLines(
-  invoice: Pick<SupplierInvoice, 'supplier_invoice_number' | 'arrival_number' | 'default_dimensions'>,
+  invoice: Pick<SupplierInvoice, 'supplier_invoice_number' | 'arrival_number' | 'default_dimensions'> &
+    Partial<Pick<SupplierInvoice, 'currency' | 'exchange_rate'>>,
   options: SupplierInvoicePaymentLinesOptions,
 ): SupplierInvoicePaymentLines {
   const { paymentAmount, exchangeRateDifference, supplierName, bankFeeSek, sekClearingDebt } = options
@@ -376,6 +385,18 @@ export function buildSupplierInvoicePaymentLines(
   // The clearing builder above books the fee itself.
   if (sekClearingDebt === undefined) addSupplierBankFeeLine(lines, creditAccount, bankFeeSek)
 
+  // The units of a foreign invoice the 2440 leg clears (the bank line's own
+  // figure is the engine's, from bank_booking_context: withBankLegCurrency).
+  if (options.apInInvoiceCurrency != null && !isLedgerCurrency(invoice.currency)) {
+    const apLine = lines.find((l) => l.account_number === '2440' && l.debit_amount > 0)
+    if (apLine) {
+      Object.assign(
+        apLine,
+        buildCurrencyMetadata(invoice.currency, roundOre(options.apInInvoiceCurrency), invoice.exchange_rate),
+      )
+    }
+  }
+
   if (defaultDimensions) {
     // Copy per line: a shared bag object would let one line's mutation
     // leak into every other line (same contract as proposal stamping).
@@ -414,6 +435,8 @@ export async function createSupplierInvoicePaymentEntry(
   // Pure-SEK bank match: see SupplierInvoicePaymentLinesOptions.sekClearingDebt.
   sekClearingDebt?: number,
   posting?: () => SupplierPaymentPostingContext,
+  // Foreign bank match: see SupplierInvoicePaymentLinesOptions.apInInvoiceCurrency.
+  apInInvoiceCurrency?: number,
 ): Promise<JournalEntry | null> {
   const { description, creditAccount, lines } = buildSupplierInvoicePaymentLines(invoice, {
     paymentAmount,
@@ -422,6 +445,7 @@ export async function createSupplierInvoicePaymentEntry(
     paymentAccount,
     bankFeeSek,
     sekClearingDebt,
+    apInInvoiceCurrency,
   })
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {

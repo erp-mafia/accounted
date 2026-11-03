@@ -486,6 +486,90 @@ describe('createDraftEntry: amount_in_currency 0 on a foreign line is kept (#351
   })
 })
 
+describe('createDraftEntry: a foreign bank row stamps its figure on its bank line (crm#1590)', () => {
+  function captureLines() {
+    let inserted: Array<Record<string, unknown>> = []
+    const supabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'fiscal_periods') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.single = vi.fn().mockResolvedValue({
+            data: { name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' },
+            error: null,
+          })
+          return b
+        }
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: ['1930', '1940', '1510', '7960'].map((n) => ({ account_number: n, id: `acc-${n}` })),
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entries') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['insert', 'select', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.single = vi.fn().mockResolvedValue({ data: { id: 'entry-1', status: 'draft', lines: [] }, error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return {
+            insert: vi.fn().mockImplementation(async (rows: Array<Record<string, unknown>>) => {
+              inserted = rows
+              return { error: null }
+            }),
+          }
+        }
+        return createMockChain()
+      }),
+    }
+    return { supabase, lines: () => inserted }
+  }
+
+  async function draft(currency: string, settlementAccount: string, lines: CreateJournalEntryLineInput[]) {
+    const { supabase, lines: inserted } = captureLines()
+    await createDraftEntry(supabase as never, 'company-1', 'user-1', {
+      fiscal_period_id: 'period-1',
+      entry_date: '2026-10-20',
+      description: 'Inbetalning kundfaktura 1001',
+      source_type: 'invoice_paid',
+      source_id: 'inv-1',
+      bank_booking_context: [{
+        transaction_id: 'tx-1', cash_account_id: 'cash-1', settlement_account: settlementAccount,
+        date: '2026-10-20', amount: currency === 'SEK' ? 24470.6 : 2200, currency,
+      }],
+      lines,
+    })
+    return Object.fromEntries(inserted().map((l) => [l.account_number, l]))
+  }
+
+  const matchLines = (bank: string): CreateJournalEntryLineInput[] => [
+    { account_number: bank, debit_amount: 24470.6, credit_amount: 0 },
+    { account_number: '1510', debit_amount: 0, credit_amount: 24588.3, currency: 'EUR', amount_in_currency: 2200 },
+    { account_number: '7960', debit_amount: 117.7, credit_amount: 0 },
+  ]
+
+  it('stores the EUR row on the 1940 line, kronor unchanged', async () => {
+    const byAccount = await draft('EUR', '1940', matchLines('1940'))
+    expect(byAccount['1940']).toMatchObject({ debit_amount: 24470.6, currency: 'EUR', amount_in_currency: 2200 })
+    expect(byAccount['1510']).toMatchObject({ credit_amount: 24588.3, currency: 'EUR', amount_in_currency: 2200 })
+    expect(byAccount['7960']).toMatchObject({ debit_amount: 117.7, currency: 'SEK', amount_in_currency: null })
+  })
+
+  it('leaves a SEK row exactly as before', async () => {
+    const byAccount = await draft('SEK', '1930', [
+      { account_number: '1930', debit_amount: 24470.6, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 24470.6 },
+    ])
+    expect(byAccount['1930']).toMatchObject({ currency: 'SEK', amount_in_currency: null })
+    expect(byAccount['1510']).toMatchObject({ currency: 'SEK', amount_in_currency: null })
+  })
+})
+
 describe('reverseEntry: a kept 0 in amount_in_currency reverses to 0 (#3517)', () => {
   it('the storno of a USD 0 line carries USD 0, not null', async () => {
     const original = {

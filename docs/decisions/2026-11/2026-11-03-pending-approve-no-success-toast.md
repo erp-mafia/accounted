@@ -1,0 +1,1 @@
+[2026-11-03] /pending confirms a plain single approval by the row leaving the list, with no Godkänd toast; errors, 409s, bulk summaries and signing steps keep theirs: the toast covered the next row's buttons and a resting pointer paused it (crm#1618).

@@ -7,6 +7,7 @@ import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConn
 import { SkattekontoAccountSetting } from '@/components/settings/SkattekontoAccountSetting'
 import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 /**
  * Kopplingar → Skatteverket: the connection (ombud, BankID consent) on its own
@@ -23,6 +24,17 @@ export function SkatteverketSettingsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const { toast } = useToast()
+  const companyContext = useCompanyOptional()
+
+  // A link that named a company (an agent's connect link) stored the session
+  // for that company, which need not be the one this browser has open: the
+  // panel below shows the open one, so the toast says which got it.
+  const connectedId = searchParams.get('skv_company')
+  const activeName = companyContext?.company?.name ?? null
+  const otherCompanyName =
+    connectedId && companyContext?.company && connectedId !== companyContext.company.id
+      ? companyContext.companies.find((m) => m.company.id === connectedId)?.company.name ?? null
+      : null
 
   // Skatteverket OAuth callback: the full-page connect flow returns here with
   // a status query param (returnTo set in SkatteverketConnectPanel).
@@ -30,7 +42,14 @@ export function SkatteverketSettingsContent() {
     const connected = searchParams.get('skv_connected')
     const error = searchParams.get('skv_error')
     if (connected === 'true') {
-      toast({ title: t('connected_title'), description: t('connected_description') })
+      if (otherCompanyName && activeName) {
+        toast({
+          title: t('connected_other_company_title', { company: otherCompanyName }),
+          description: t('connected_other_company_description', { company: otherCompanyName, active: activeName }),
+        })
+      } else {
+        toast({ title: t('connected_title'), description: t('connected_description') })
+      }
       router.replace('/settings/skatteverket')
     } else if (error) {
       let msg: string
@@ -42,7 +61,7 @@ export function SkatteverketSettingsContent() {
       toast({ title: t('connect_failed_title'), description: msg, variant: 'destructive' })
       router.replace('/settings/skatteverket')
     }
-  }, [searchParams, router, toast, t])
+  }, [searchParams, router, toast, t, otherCompanyName, activeName])
 
   return (
     <div>

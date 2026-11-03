@@ -1,0 +1,1 @@
+[2026-11-03] Invoices print säte (crm#1604): the PDF footer and invoice e-mail footers show a legal person's stored registered_office next to the org.nr, never the postal town as a fallback (unlike the annual report) and never for an enskild firma; the Peppol UBL is unchanged.

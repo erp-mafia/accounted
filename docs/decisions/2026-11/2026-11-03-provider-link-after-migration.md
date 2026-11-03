@@ -1,0 +1,1 @@
+[2026-11-03] A deep link to a provider whose migration already ran opens the provider list, where Hämta underlag sits, instead of starting a fresh migration: the customer who came for the underlag ran the mapping again (PH 245).

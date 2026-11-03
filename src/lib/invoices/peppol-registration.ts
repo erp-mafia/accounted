@@ -143,8 +143,10 @@ export function isStalePeppolPending(
 
 /**
  * Hosted verdicts on the identifier itself (packages/connect-contract):
- * retrying the same registration cannot change them, whatever the envelope's
- * retryable flag says.
+ * retrying the same registration right away cannot change them, whatever the
+ * envelope's retryable flag says. PUBLISHED_ELSEWHERE is the one that clears
+ * later (the other access point withdraws the id): its registry entry is
+ * retryable and registerGrantedPeppolReceivers asks again daily.
  */
 const PERMANENT_TRANSPORT_CODES = new Set([
   'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
@@ -572,10 +574,52 @@ export async function withdrawRevokedPeppolRegistrations(args: {
  */
 export const PEPPOL_GRANTED_REGISTRATIONS_PER_RUN = 3
 
+const PUBLISHED_ELSEWHERE_CODE = 'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE'
+
+/** How long after a PUBLISHED_ELSEWHERE attempt the cron asks again. */
+export const PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * PUBLISHED_ELSEWHERE attempts after which the cron stops asking on its own:
+ * the first one plus a week of daily retries. A company whose old operator
+ * never withdraws is not retried forever; the settings page keeps the retry.
+ */
+export const PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS = 8
+
+type RegistrationAttempt = Pick<PeppolRegistrationRow, 'status' | 'updated_at' | 'last_error_code'>
+
+/**
+ * Whether the cron should ask again for a company whose identifier was
+ * published at another access point: a company moving from another operator
+ * waits for that operator to withdraw it, and nobody tells us when it has.
+ * Due when the latest attempt (a stale pending row is a crash, not an
+ * attempt) failed with PUBLISHED_ELSEWHERE at least a day ago, nothing is
+ * live, and fewer than PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS such attempts
+ * exist. Every retry writes a new failed row, so the rows are the counter.
+ */
+export function isPublishedElsewhereRetryDue(rows: RegistrationAttempt[], now: number = Date.now()): boolean {
+  const attempts = rows.filter((row) => !isStalePeppolPending(row, now))
+  if (attempts.length === 0) return false
+  if (attempts.some((row) => LIVE_STATUSES.includes(row.status))) return false
+  const latest = attempts.reduce((a, b) => (Date.parse(b.updated_at) > Date.parse(a.updated_at) ? b : a))
+  if (latest.status !== 'failed' || latest.last_error_code !== PUBLISHED_ELSEWHERE_CODE) return false
+  const elsewhere = attempts.filter(
+    (row) => row.status === 'failed' && row.last_error_code === PUBLISHED_ELSEWHERE_CODE,
+  ).length
+  if (elsewhere >= PEPPOL_PUBLISHED_ELSEWHERE_MAX_ATTEMPTS) return false
+  const updatedAt = Date.parse(latest.updated_at)
+  return Number.isFinite(updatedAt) && now - updatedAt >= PEPPOL_PUBLISHED_ELSEWHERE_RETRY_MS
+}
+
 export interface RegisterGrantedPeppolSummary {
   registered: string[]
   failed: Array<{ companyId: string; reason: string }>
-  /** Granted but not registrable as it stands (sandbox, personnummer, no settings); checked again next run. */
+  /**
+   * Granted but not registered this run, and not an incident: not registrable
+   * as it stands (sandbox, personnummer, no settings), or a daily retry still
+   * published at another access point (the first failure already paged).
+   * Checked again on a later run.
+   */
   skipped: Array<{ companyId: string; reason: string }>
 }
 
@@ -583,12 +627,16 @@ export interface RegisterGrantedPeppolSummary {
  * Publish the identifier of every company the operators allowed to receive
  * that has never been registered at this provider. The grant alone used to
  * be half the job: until someone in the company pressed register, suppliers
- * sending to its Peppol id got a delivery error. Only a company with no
+ * sending to its Peppol id got a delivery error. A company with no
  * registration history here is attempted (a stale pending row, a crashed
- * attempt, counts as none): a failure, a refusal or a withdrawal the company
- * made itself is never retried on its own; the settings page shows it and
- * offers the retry. Oldest request first, a few per run. Run by the inbound
- * cron, the mirror of withdrawRevokedPeppolRegistrations.
+ * attempt, counts as none). The one failure retried on its own is
+ * PUBLISHED_ELSEWHERE, daily and capped (isPublishedElsewhereRetryDue): it
+ * clears when the old operator withdraws the id. Any other failure, a refusal
+ * or a withdrawal the company made itself is never retried on its own; the
+ * settings page shows it and offers the retry. Never-attempted companies
+ * first (oldest request first), then due retries (oldest attempt first), a
+ * few per run. Run by the inbound cron, the mirror of
+ * withdrawRevokedPeppolRegistrations.
  */
 export async function registerGrantedPeppolReceivers(args: {
   service: SupabaseClient
@@ -613,21 +661,36 @@ export async function registerGrantedPeppolReceivers(args: {
       .range(from, to),
   )
 
-  const attempted = new Set<string>()
+  const rowsByCompany = new Map<string, RegistrationAttempt[]>()
   const ids = granted.map((row) => row.company_id)
   for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) {
     const { data, error } = await service
       .from('peppol_registrations')
-      .select('company_id, status, updated_at')
+      .select('company_id, status, updated_at, last_error_code')
       .eq('provider', transport.provider)
       .in('company_id', ids.slice(i, i + IN_CLAUSE_CHUNK))
     if (error) throw new Error(`Failed to read Peppol registrations: ${error.message}`)
-    for (const row of (data ?? []) as Array<Pick<PeppolRegistrationRow, 'company_id' | 'status' | 'updated_at'>>) {
-      if (!isStalePeppolPending(row, now)) attempted.add(row.company_id)
+    for (const row of (data ?? []) as Array<RegistrationAttempt & { company_id: string }>) {
+      const rows = rowsByCompany.get(row.company_id) ?? []
+      rows.push(row)
+      rowsByCompany.set(row.company_id, rows)
     }
   }
 
-  const candidates = granted.filter((row) => !attempted.has(row.company_id))
+  const fresh: typeof granted = []
+  const retries: Array<{ access: (typeof granted)[number]; lastAttemptAt: number }> = []
+  for (const access of granted) {
+    const rows = rowsByCompany.get(access.company_id) ?? []
+    if (rows.every((row) => isStalePeppolPending(row, now))) {
+      fresh.push(access)
+    } else if (isPublishedElsewhereRetryDue(rows, now)) {
+      const lastAttemptAt = Math.max(...rows.map((row) => Date.parse(row.updated_at)).filter(Number.isFinite))
+      retries.push({ access, lastAttemptAt })
+    }
+  }
+  retries.sort((a, b) => a.lastAttemptAt - b.lastAttemptAt)
+  const retrying = new Set(retries.map((retry) => retry.access.company_id))
+  const candidates = [...fresh, ...retries.map((retry) => retry.access)]
   const settingsByCompany = new Map<string, ParticipantSettings & { is_sandbox: boolean | null }>()
   for (let i = 0; i < candidates.length; i += IN_CLAUSE_CHUNK) {
     const { data, error } = await service
@@ -640,8 +703,9 @@ export async function registerGrantedPeppolReceivers(args: {
     }
   }
 
+  let attempts = 0
   for (const access of candidates) {
-    if (summary.registered.length + summary.failed.length >= limit) break
+    if (attempts >= limit) break
     const companyId = access.company_id
     const settings = settingsByCompany.get(companyId)
     if (!settings) {
@@ -657,6 +721,7 @@ export async function registerGrantedPeppolReceivers(args: {
       summary.skipped.push({ companyId, reason: prepared.code })
       continue
     }
+    attempts += 1
     try {
       const result = await registerCompanyForPeppolReceiving({
         service, companyId, userId: access.requested_by, transport, settings,
@@ -665,7 +730,12 @@ export async function registerGrantedPeppolReceivers(args: {
         summary.registered.push(companyId)
         continue
       }
-      summary.failed.push({ companyId, reason: 'reason' in result && result.reason ? result.reason : result.code })
+      const reason = 'reason' in result && result.reason ? result.reason : result.code
+      if (retrying.has(companyId) && reason === PUBLISHED_ELSEWHERE_CODE) {
+        summary.skipped.push({ companyId, reason })
+        continue
+      }
+      summary.failed.push({ companyId, reason })
       // The cap is the same answer for everyone after this one.
       if (result.code === 'PEPPOL_REGISTRATION_CAP_REACHED') break
     } catch (err) {

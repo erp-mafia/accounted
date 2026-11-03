@@ -514,7 +514,7 @@
           "notes": null,
           "lines": [
             {
-              "currency": "SEK",
+              "currency": "EUR",
               "tax_code": null,
               "dimensions": {},
               "debit_amount": "1150.25",
@@ -522,7 +522,7 @@
               "exchange_rate": null,
               "account_number": "1930",
               "line_description": null,
-              "amount_in_currency": null
+              "amount_in_currency": "100"
             },
             {
               "currency": "SEK",

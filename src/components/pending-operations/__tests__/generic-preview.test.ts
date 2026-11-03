@@ -219,6 +219,130 @@ describe('the approval card of an update (crm#1300)', () => {
   })
 })
 
+/**
+ * Reported (crm#1605): the card of a staged company-settings change listed the
+ * company's city, email, phone, country, bankgiro, org number, VAT number,
+ * postal code, name and address, none of which changed, and not the two
+ * invoice texts the change set. settings.update stages the resulting record
+ * (the agent's dry-run answer) beside changes and previous; a supplier update
+ * does the same with { from, to } pairs. The card states the changes only,
+ * long texts included.
+ */
+describe('the approval card of an update staged as its resulting record (crm#1605)', () => {
+  const struck = (before: string, after: string) =>
+    `<del class="text-muted-foreground">${before}</del> → <ins class="no-underline">${after}</ins>`
+  const FOOTER = 'Tack för att du handlar hos oss'
+  const LATE_FEE =
+    'Vid betalning efter förfallodagen debiteras dröjsmålsränta enligt räntelagen, för närvarande referensränta plus åtta procentenheter.'
+  /** The settings resource the dry run answers, two invoice texts changed. */
+  const SETTINGS_RECORD = {
+    company_id: '44444444-4444-4444-8444-444444444444',
+    company_name: 'Exempel AB',
+    org_number: '5560000000',
+    vat_number: 'SE556000000001',
+    address_line1: 'Gatan 1',
+    postal_code: '111 22',
+    city: 'Staden',
+    country: 'SE',
+    phone: '08-123 45 67',
+    email: 'info@example.se',
+    bankgiro: '991-2346',
+    invoice_footer_text: FOOTER,
+    invoice_late_fee_text: LATE_FEE,
+    send_invoice_reminders: true,
+    changes: { invoice_footer_text: FOOTER, invoice_late_fee_text: LATE_FEE },
+    previous: { invoice_footer_text: null, invoice_late_fee_text: null },
+    deadlines_will_regenerate: false,
+    dimension_codes_will_import: false,
+    warnings: [],
+  }
+
+  it('shows the changed invoice texts and none of the fields the change leaves alone', () => {
+    const html = render('update_company_settings', SETTINGS_RECORD, true)
+    expect(html).toContain('Ändringar')
+    expect(html).toContain('Sidfot på fakturan')
+    expect(html).toContain(FOOTER)
+    expect(html).toContain('Text om dröjsmålsränta')
+    expect(html).toContain(LATE_FEE)
+    for (const unchanged of ['Ort', 'Staden', 'E-post', 'info@example.se', 'Bankgiro', '991-2346', 'Organisationsnummer', '5560000000', 'Momsregistreringsnummer', 'Företagsnamn', 'Exempel AB', 'Gatan 1', '111 22', 'Telefon', 'Land']) {
+      expect(html, unchanged).not.toContain(unchanged)
+    }
+    expect(html).not.toContain('Förslaget har ingen detaljerad förhandsvisning')
+  })
+
+  it('shows a short text change on one line, old struck before new', () => {
+    const html = render('update_company_settings', {
+      ...SETTINGS_RECORD,
+      invoice_footer_text: 'Ny sidfot',
+      changes: { invoice_footer_text: 'Ny sidfot' },
+      previous: { invoice_footer_text: 'Gammal sidfot' },
+    })
+    expect(html).toContain(struck('Gammal sidfot', 'Ny sidfot'))
+  })
+
+  it('shows a long text whole in the review panel and cut elsewhere, the old text struck above it', () => {
+    const before = `Gammal text. ${'x'.repeat(200)}`
+    const after = `Ny text. ${'y'.repeat(200)}`
+    const data = {
+      ...SETTINGS_RECORD,
+      invoice_late_fee_text: after,
+      changes: { invoice_late_fee_text: after },
+      previous: { invoice_late_fee_text: before },
+    }
+    const full = render('update_company_settings', data, true)
+    expect(full).toContain(`<del class="block whitespace-pre-wrap text-muted-foreground">${before}</del>`)
+    expect(full).toContain(`<ins class="block whitespace-pre-wrap no-underline">${after}</ins>`)
+    const compact = render('update_company_settings', data)
+    expect(compact).not.toContain(after)
+    expect(compact).toContain(`${after.slice(0, 160)}…`)
+  })
+
+  it('shows a structured change (the per-currency payment accounts) as changed, not as nothing', () => {
+    const accounts = { SEK: { bankgiro: '5050-1055', iban: null } }
+    const html = render('update_company_settings', {
+      ...SETTINGS_RECORD,
+      invoice_payment_accounts: accounts,
+      changes: { invoice_payment_accounts: accounts },
+      previous: { invoice_payment_accounts: { SEK: { bankgiro: '991-2346' } } },
+    })
+    expect(html).toContain('Betalningsuppgifter per valuta')
+    expect(html).toContain('Ändras')
+    expect(html).not.toContain('5050-1055')
+    expect(html).not.toContain('Förslaget har ingen detaljerad förhandsvisning')
+  })
+
+  it('shows a supplier’s change without the supplier’s unchanged fields, and still says whether bank details move', () => {
+    const html = render('update_supplier', {
+      supplier_id: '44444444-4444-4444-8444-444444444444',
+      name: 'Leverantören AB',
+      email: 'info@leverantor.se',
+      city: 'Staden',
+      org_number: '5560000001',
+      bankgiro: '5050-1055',
+      bank_account: '1234567',
+      changes: { bankgiro: { from: '991-2346', to: '5050-1055' } },
+      payment_details_changed: true,
+    })
+    expect(html).toContain(struck('991-2346', '5050-1055'))
+    expect(html).toContain('Bankuppgifter ändras')
+    for (const unchanged of ['info@leverantor.se', 'Staden', '5560000001', '1234567']) {
+      expect(html, unchanged).not.toContain(unchanged)
+    }
+  })
+
+  it('has a label in both languages for every field a settings or supplier update can change', async () => {
+    const { GENERAL_SETTINGS_FIELDS, TAX_PROFILE_FIELDS, BOOKKEEPING_LOCK_FIELDS } = await import('@/lib/operations/company-settings')
+    const { WRITABLE_FIELDS } = await import('@/lib/suppliers/update-supplier')
+    const sv = (await import('@/messages/sv.json')).default.pending.preview_field as Record<string, string>
+    const en = (await import('@/messages/en.json')).default.pending.preview_field as Record<string, string>
+    const fields = [...GENERAL_SETTINGS_FIELDS, ...TAX_PROFILE_FIELDS, ...BOOKKEEPING_LOCK_FIELDS, 'contact_person', ...WRITABLE_FIELDS]
+    for (const field of fields) {
+      expect(sv[field], `sv preview_field.${field}`).toBeTruthy()
+      expect(en[field], `en preview_field.${field}`).toBeTruthy()
+    }
+  })
+})
+
 describe('preview field formatting', () => {
   it('reads money from the field name', () => {
     for (const key of ['amount', 'total', 'total_amount', 'vat_amount', 'invoice_remaining', 'remaining_after', 'price_excl_vat', 'monthly_salary', 'reminder_fee_amount']) {

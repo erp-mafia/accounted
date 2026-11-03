@@ -8,6 +8,9 @@ import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { ORE_ROUNDING_SETTLEMENT_MAX, equalOre, isZeroOre, roundOre } from '@/lib/money'
 import type { EntityType, Invoice } from '@/types'
 
+// One unbooked supplier invoice paid by the whole row: the single bank match (PH 243).
+export { settleSingleSupplierPayment, type SupplierAllocation } from '@/lib/invoices/batch-cash-single-supplier'
+
 /**
  * Kontantmetoden guard for the samlingsbetalning / batch allocation
  * (match_batch_allocate RPC).

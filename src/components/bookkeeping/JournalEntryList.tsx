@@ -1552,6 +1552,7 @@ export default function JournalEntryList({
             <option value={t('no_doc_required_suggestion_internal_transfer')} />
             <option value={t('no_doc_required_suggestion_tax_payment')} />
             <option value={t('no_doc_required_suggestion_salary')} />
+            <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
           </datalist>
           <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
             {t('batch_mark_no_doc')}
@@ -1997,6 +1998,7 @@ export default function JournalEntryList({
                     <option value={t('no_doc_required_suggestion_internal_transfer')} />
                     <option value={t('no_doc_required_suggestion_tax_payment')} />
                     <option value={t('no_doc_required_suggestion_salary')} />
+                    <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
                   </datalist>
                 </div>
               </>

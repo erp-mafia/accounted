@@ -10,6 +10,7 @@ import {
   registerBookedLedgerOf,
   type RegisterBookedLedger,
 } from '@/lib/invoices/register-booked-invoice-mode'
+import { PAYMENT_FIELDS } from '@/lib/cash-accounts/invoice-payment-accounts'
 
 // Short human label (i18n key in the "pending" namespace) for each staged
 // operation_type: pending.type_<operation_type>, derived from the risk-tier
@@ -86,6 +87,9 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   hold_corporate_meeting: 'warning_hold_corporate_meeting',
   save_tax_loss_carryforward: 'warning_save_tax_loss_carryforward',
   book_webshop_day: 'warning_book_webshop_day',
+  // The sentence for a change of the payment details; singleActionWarning
+  // drops their clause when the change has none (crm#1605).
+  update_company_settings: 'warning_update_company_settings_payment',
   // High-tier types that had no sentence, so their approval showed none (accounted#22).
   settle_rot_rut_payout: 'warning_settle_rot_rut_payout',
   post_kontantmetod_cutoff: 'warning_post_kontantmetod_cutoff',
@@ -117,7 +121,6 @@ export const singleActionWarnings: Record<string, string> = {
   close_fiscal_period_external: 'Genom att klicka godkänn så stängs och låses räkenskapsåret som avslutat i tidigare program, utan bokslutsverifikat i Accounted. Använd bara för importerade år vars bokslut gjordes i det gamla programmet.',
   reopen_fiscal_period_external: 'Genom att klicka godkänn så öppnas och låses räkenskapsåret upp igen, så att dess innehåll kan ändras. Klarmarkera eller lås det igen när rättelsen är klar.',
   delete_account: 'Genom att klicka godkänn så tas kontot bort ur kontoplanen. Det går bara för ett konto utan bokförda rader; ett standardkonto kan läggas till igen från BAS.',
-  update_company_settings: 'Genom att klicka godkänn så ändras företagsinställningarna. Betalningsuppgifterna styr vart kunderna betalar kommande fakturor.',
   update_company_tax_profile: 'Genom att klicka godkänn så ändras företagets skatte- och momsuppgifter och skattedeadlines skapas om. Ändra bara det som redan gäller hos Skatteverket.',
   update_bookkeeping_lock: 'Genom att klicka godkänn så ändras låsdatumet för bokföringen. Flyttas det bakåt kan redan låsta datum ändras igen.',
   enable_package: 'Genom att klicka godkänn så slås paketet på: det syns i menyn och agentens verktyg för det blir tillgängliga. Bara en ägare eller administratör kan godkänna, och det går att dölja igen.',
@@ -268,9 +271,28 @@ export function singleActionWarning(
   if (RECURRING_SCHEDULE_TYPES.has(operationType) && isHighRisk(operationType, params ?? undefined)) {
     return t ? t('warning_recurring_schedule_auto_send') : ''
   }
+  // Payment details steer where customers pay, so the sentence says so only
+  // when the settings change touches them (crm#1605).
+  if (operationType === 'update_company_settings' && params && !changesInvoicePayee(params)) {
+    return t ? t('warning_update_company_settings') : ''
+  }
   const key = SINGLE_ACTION_WARNING_KEYS[operationType]
   if (key && t) return t(key)
   return singleActionWarnings[operationType] ?? ''
+}
+
+/**
+ * Whether a staged settings change moves where customers pay: a field of the
+ * invoice payment account (the company's SEK payee columns) or the
+ * per-currency map, both written through to the payee cash account
+ * (propagateLegacyPayeeWrite). A row staged before settings.update keeps its
+ * fields under `changes` (upgradeLegacyCompanySettingsParams).
+ */
+function changesInvoicePayee(params: Record<string, unknown>): boolean {
+  const legacy = params.changes
+  const fields =
+    legacy != null && typeof legacy === 'object' && !Array.isArray(legacy) ? { ...params, ...legacy } : params
+  return 'invoice_payment_accounts' in fields || PAYMENT_FIELDS.some((field) => field in fields)
 }
 
 /** What approving a mark_invoice_sent staged with paid_at_issue_account does (crm#1281). */
