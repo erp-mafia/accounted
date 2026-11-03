@@ -6,10 +6,11 @@
  *          Dry-runnable. VIES re-validation on commit if vat_number changes.
  *          Setting archived_at: null un-archives the customer.
  * DELETE: soft-delete (sets archived_at). Idempotent. Dry-runnable. 204
- *          on success. REFUSES to archive when the customer has any open
- *          (sent / partially_paid / overdue) invoice: preserves the
- *          canonical buyer name/address that ML 17 kap 24§ requires the
- *          invoice to carry. Issue a kreditfaktura first if needed.
+ *          on success. REFUSES to archive while the customer still owes on
+ *          an invoice (filterOwedInvoices: a credit note or a fully
+ *          credited original owes nothing): preserves the canonical buyer
+ *          name/address that ML 17 kap 24§ requires the invoice to carry.
+ *          Issue a kreditfaktura first if needed.
  */
 
 import { z } from 'zod'
@@ -29,7 +30,6 @@ import {
   readCustomerRecord,
 } from '@/lib/customers/customer-record'
 import { updateCustomer } from '@/lib/customers/customer-commands'
-import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { filterOwedInvoices } from '@/lib/invoices/overdue'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
@@ -316,7 +316,7 @@ registerEndpoint({
     'Permanently deleting a customer with all history: the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'A customer with any open invoice (sent / partially_paid / overdue) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.',
+    'A customer who still owes on an invoice (sent / partially_paid / overdue with an amount remaining) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Credit notes and fully credited invoices do not count. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.',
     '204 No Content is returned on success: there is no response body to parse.',
   ],
   example: {
@@ -346,13 +346,17 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
 
     // Pre-flight: check for open invoices BEFORE archiving. Preserves the
     // canonical buyer record per ML 17 kap 24§: an open invoice points at
-    // this customer for its statutory name/address fields.
-    const { count: openInvoiceCount, error: openErr } = await ctx.supabase
-      .from('invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', ctx.companyId!)
-      .eq('customer_id', customerId)
-      .in('status', OWED_INVOICE_STATUSES)
+    // this customer for its statutory name/address fields. Open is what the
+    // customer still owes (filterOwedInvoices), the same rows ?expand=invoices
+    // lists: an issued credit note keeps status 'sent' but owes nothing, and
+    // the original it fully credits is 'credited' (PH 226).
+    const { count: openInvoiceCount, error: openErr } = await filterOwedInvoices(
+      ctx.supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', ctx.companyId!)
+        .eq('customer_id', customerId),
+    )
 
     if (openErr) {
       return v1ErrorResponse(openErr, ctx.log, { requestId: ctx.requestId })

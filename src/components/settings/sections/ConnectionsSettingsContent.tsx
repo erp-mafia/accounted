@@ -50,7 +50,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
-import { fetchSessionUser } from '@/lib/auth/session-client'
+import { skvConnectionState, type SkvStatusLike } from '@/lib/notices/predicates'
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
@@ -82,7 +82,8 @@ function ProviderMarkOr({ src, children }: { src: string | null; children: React
 interface Status {
   bankName: string | null
   bankCount: number
-  skvConnected: boolean
+  /** The caller's Skatteverket connection, as the settings panel and the agent's tool judge it. */
+  skv: 'connected' | 'reconnect' | 'off'
   peppolOn: boolean
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
@@ -185,25 +186,21 @@ export function ConnectionsSettingsContent() {
     const supabase = createClient()
     // Best-effort readouts: a failed read shows the row without a state
     // rather than blocking the page.
-    // Skatteverket tokens are per user (each user signs their own BankID
-    // consent), so the readout asks for the signed-in user's token.
-    const skvCount = (async () => {
-      const user = await fetchSessionUser()
-      if (!user) return 0
-      const { count } = await supabase
-        .from('skatteverket_tokens')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('user_id', user.id)
-      return count ?? 0
-    })()
+    // Skatteverket sessions are per user (each user signs their own BankID
+    // consent). The readout asks /status, the panel's own source, so a
+    // stored but expired session reads as such instead of as Ansluten.
+    const skvState: Promise<Status['skv']> = hasSkatteverket
+      ? fetch('/api/extensions/ext/skatteverket/status').then(async (res) =>
+          res.ok ? skvConnectionState((await res.json()) as SkvStatusLike) : 'off',
+        )
+      : Promise.resolve('off')
     Promise.allSettled([
       supabase
         .from('bank_connections')
         .select('bank_name')
         .eq('company_id', companyId)
         .eq('status', 'active'),
-      skvCount,
+      skvState,
       fetch('/api/settings/peppol').then((res) => (res.ok ? res.json() : null)),
       hasMail ? fetchMailConnections() : Promise.resolve(null),
       supabase
@@ -221,7 +218,7 @@ export function ConnectionsSettingsContent() {
       setStatus({
         bankName: banks[0]?.bank_name ?? null,
         bankCount: banks.length,
-        skvConnected: skv.status === 'fulfilled' && skv.value > 0,
+        skv: skv.status === 'fulfilled' ? skv.value : 'off',
         peppolOn: registration?.status === 'registered' || registration?.status === 'pending',
         mail: mail.status === 'fulfilled' && mail.value ? summarizeMailboxes(mail.value) : null,
         pos: (() => {
@@ -237,7 +234,7 @@ export function ConnectionsSettingsContent() {
     return () => {
       cancelled = true
     }
-  }, [companyId, hasMail, bankGeneration])
+  }, [companyId, hasMail, hasSkatteverket, bankGeneration])
 
   // The document inbox address (crm#1174): until now it was shown only behind
   // the sources chip on the inbox page, so a person setting up a forwarding
@@ -537,9 +534,16 @@ export function ConnectionsSettingsContent() {
               logo: <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('skatteverket'),
               help: t('skatteverket_help'),
-              state: status ? (status.skvConnected ? t('connected') : off) : null,
+              state: status
+                ? status.skv === 'connected'
+                  ? t('connected')
+                  : status.skv === 'reconnect'
+                    ? t('skatteverket_reconnect')
+                    : off
+                : null,
               href: '/settings/skatteverket',
-              connected: status?.skvConnected ?? false,
+              connected: status?.skv === 'connected',
+              attention: status?.skv === 'reconnect',
             })}
           {bankPayments &&
             row({

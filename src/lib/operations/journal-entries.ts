@@ -721,11 +721,11 @@ export const journalEntriesSetNoDocumentRequired = defineOperation({
     summary: 'Mark a verifikat as "Inget underlag krävs" (no supporting document required).',
     description: `${NO_DOC_BASIS} Setting it again replaces the reason. Idempotent. Dry-runnable.`,
     useWhen:
-      'The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts) and it should stop showing as missing underlag.',
+      'The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts), or that an imported verifikat\'s underlag is kept with the earlier books (previous system, byrå or paper), and it should stop showing as missing underlag.',
     doNotUseFor:
       'Hiding a purchase or sale whose receipt or invoice is simply missing: that underlag must be found and attached (POST /documents), not waived.',
     pitfalls: [
-      'Only mark what genuinely has no external underlag: a waived receipt is a compliance gap, not a fix.',
+      'Only mark what genuinely has no external underlag, or imported underlag the user confirms is kept with the earlier books: a waived receipt is a compliance gap, not a fix.',
       'Undo with DELETE /journal-entries/{id}/no-document-required.',
     ],
     example: {
@@ -789,7 +789,7 @@ export const journalEntriesBatchNoDocumentRequired = defineOperation({
     summary: 'Mark many posted verifikat as "Inget underlag krävs" in one call.',
     description: `${NO_DOC_BASIS} Only posted verifikat of this company whose type normally needs an underlag are marked; every other id is returned in skipped_ids, never an error. Already-marked entries keep their existing reason. At most ${NO_DOC_BATCH_MAX} ids. Idempotent. Dry-runnable: the dry run lists what would be marked and what is skipped.`,
     useWhen:
-      'Clearing many entries that by nature have no external underlag (e.g. historical SIE-imported bokslutsposter) out of the missing-underlag worklist after the user has reviewed them.',
+      'Clearing many entries out of the missing-underlag worklist after the user has reviewed them: entries with no external underlag by nature, or SIE-imported verifikat whose underlag the user confirms is kept with the earlier books (reason "Underlag arkiverat utanför Accounted (tidigare system eller papper)").',
     doNotUseFor: 'Waiving receipts that are missing: find and attach them instead.',
     pitfalls: [
       'Check data.skipped_ids: drafts, reversed entries, other companies\' ids and entry types that never need an underlag are skipped.',
@@ -822,7 +822,7 @@ export const journalEntriesBatchNoDocumentRequired = defineOperation({
     name: 'gnubok_mark_no_document_required',
     title: 'Mark Vouchers as No Underlag Required',
     description:
-      'Stage marking posted verifikat "Inget underlag krävs" (no external underlag by nature: avskrivning, periodisering, bokslutspost). Removes them from the missing-underlag list; verifikat unchanged. Never for a missing receipt.',
+      'Stage "Inget underlag krävs" on posted verifikat: none by nature (avskrivning, periodisering, bokslutspost), or imported ones whose underlag the user confirms is kept with the earlier books. Never for a missing receipt.',
     // English too, for guessed waiver names (waive_document_requirement).
     // Matching only: the description's rule, never for a missing receipt, stands.
     keywords: ['inget underlag krävs', 'saknat underlag', 'underlag saknas', 'egen handling', 'utan underlag', 'waive', 'waiver', 'not required', 'no document needed'],

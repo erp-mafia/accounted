@@ -79,6 +79,7 @@ export type ReconcileReviewReason =
   | 'low_confidence' // best candidate below AUTO_LINK_MIN_CONFIDENCE
   | 'amount_exceeds_remaining' // best candidate would overpay the invoice
   | 'voucher_contested' // one voucher is the top pick for >1 invoice, or RPC rejected
+  | 'paid_before_invoice' // every candidate is dated before the invoice (PH 241)
 
 export interface ReconcileLink {
   supplier_invoice_id: string
@@ -129,7 +130,22 @@ export interface ReconcileOptions {
 }
 
 const SELECT_COLUMNS =
-  'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
+  'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, invoice_date, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
+
+/**
+ * A voucher dated before the invoice cannot be its payment: the debt did not
+ * exist yet. With a recurring supplier (the same amount every month) last
+ * month's payment, already settling last month's invoice in the source
+ * system, scores as this invoice's exact amount and name (PH 241: 79 of 130
+ * auto-links in prod on 2026-11-03). An unattended link never takes one; a
+ * person still can, from the review list.
+ */
+export function paidBeforeInvoice(
+  candidate: Pick<SupplierVoucherCandidate, 'entry_date'>,
+  invoice: { invoice_date?: string | null },
+): boolean {
+  return !!invoice.invoice_date && candidate.entry_date < invoice.invoice_date
+}
 
 /**
  * The invoice's outstanding balance, in the INVOICE's currency (total /
@@ -259,8 +275,21 @@ export async function reconcileSupplierInvoiceVouchers(
       continue
     }
 
-    const top = fresh[0]
-    const runnerUp = fresh[1]
+    // Only a voucher dated on or after the invoice can be its payment.
+    const datable = fresh.filter((c) => !paidBeforeInvoice(c, invoice))
+    if (datable.length === 0) {
+      result.ambiguous++
+      result.review.push({
+        supplier_invoice_id: invoice.id,
+        supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+        reason: 'paid_before_invoice',
+        candidates: fresh,
+      })
+      continue
+    }
+
+    const top = datable[0]
+    const runnerUp = datable[1]
     const remaining = remainingOf(invoice)
 
     const confidentEnough = top.confidence >= AUTO_LINK_MIN_CONFIDENCE

@@ -28,8 +28,10 @@
  *   3. kontantmetoden: an invoice with no booking yet has no 1510/2440 to
  *      clear. Customer invoices of SEK paid in full book their sale in the
  *      samlingsverifikat instead, each with the single cash match's lines
- *      (lib/invoices/batch-cash-method-guard.ts, the RPC's p_cash_lines); anything
- *      else (supplier invoices, a mix with booked invoices, a foreign
+ *      (lib/invoices/batch-cash-method-guard.ts, the RPC's p_cash_lines); one
+ *      supplier invoice paid by the whole row is the single bank match
+ *      (lib/invoices/batch-cash-single-supplier.ts, PH 243); anything
+ *      else (several supplier invoices, a mix with booked invoices, a foreign
  *      currency, an installment) is refused, before anything is written;
  *   3b. faktureringsmetoden with defer_invoice_booking: a supplier invoice
  *      registered without its verifikat is booked first by the Bokför step,
@@ -74,7 +76,9 @@ import {
 import {
   findCashMethodUnbookedAllocations,
   planBatchCashLines,
+  settleSingleSupplierPayment,
   type BatchCashLine,
+  type SupplierAllocation,
 } from '@/lib/invoices/batch-cash-method-guard'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -159,6 +163,17 @@ interface RpcErr {
 }
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
+
+/**
+ * The one supplier allocation a kontantmetoden batch hands to the single bank
+ * match (PH 243): one supplier invoice, no fee rows. Null for any other shape.
+ */
+export function singleSupplierAllocation(input: MatchBatchInput): SupplierAllocation | null {
+  if (input.allocations.length !== 1 || (input.fees?.length ?? 0) > 0) return null
+  const [allocation] = input.allocations
+  if (allocation?.kind !== 'supplier_invoice' || !allocation.supplier_invoice_id) return null
+  return allocation as SupplierAllocation
+}
 
 function failed(error: unknown): Failure {
   return { ok: false, code: 'UNKNOWN_ERROR', error }
@@ -263,6 +278,14 @@ export async function matchTransactionBatch(
   if (!cashCheck.ok) {
     txLog.error('match-batch: kontantmetoden check failed', cashCheck.error as Error)
     return failed(cashCheck.error)
+  }
+  // One unbooked supplier invoice paid by the whole row is the single bank
+  // match (PH 243): its cost and moms are booked at payment by the dashboard's
+  // own function. Not when a force override named vouchers that already
+  // explain the row: that binding is this door's, not the single match's.
+  const singleSupplier = cashCheck.unbooked.length > 0 ? singleSupplierAllocation(input) : null
+  if (singleSupplier && explained.status === 'clear') {
+    return settleSingleSupplierPayment(ctx, transactionId, singleSupplier, { dryRun: options.dryRun === true })
   }
   // The sale of each unbooked customer invoice is booked in the
   // samlingsverifikat itself (crm#1539); what that entry cannot carry keeps

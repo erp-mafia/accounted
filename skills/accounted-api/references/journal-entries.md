@@ -883,11 +883,11 @@ Example response `200`:
 
 BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no external underlag exists (avskrivning, periodisering, internal transfer) the verifikation itself is the documentation. The flag records that judgement and removes the entry from the missing-underlag worklist. It is stored beside the verifikat, which is not changed, and the audit log records who set it. Setting it again replaces the reason. Idempotent. Dry-runnable.
 
-**Use when:** The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts) and it should stop showing as missing underlag.
+**Use when:** The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts), or that an imported verifikat's underlag is kept with the earlier books (previous system, byrå or paper), and it should stop showing as missing underlag.
 **Do not use for:** Hiding a purchase or sale whose receipt or invoice is simply missing: that underlag must be found and attached (POST /documents), not waived.
 
 **Pitfalls:**
-- Only mark what genuinely has no external underlag: a waived receipt is a compliance gap, not a fix.
+- Only mark what genuinely has no external underlag, or imported underlag the user confirms is kept with the earlier books: a waived receipt is a compliance gap, not a fix.
 - Undo with DELETE /journal-entries/{id}/no-document-required.
 
 | Parameter | In | Type | Required | Notes |
@@ -1508,7 +1508,7 @@ Example response `200`:
 
 BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no external underlag exists (avskrivning, periodisering, internal transfer) the verifikation itself is the documentation. The flag records that judgement and removes the entry from the missing-underlag worklist. It is stored beside the verifikat, which is not changed, and the audit log records who set it. Only posted verifikat of this company whose type normally needs an underlag are marked; every other id is returned in skipped_ids, never an error. Already-marked entries keep their existing reason. At most 500 ids. Idempotent. Dry-runnable: the dry run lists what would be marked and what is skipped.
 
-**Use when:** Clearing many entries that by nature have no external underlag (e.g. historical SIE-imported bokslutsposter) out of the missing-underlag worklist after the user has reviewed them.
+**Use when:** Clearing many entries out of the missing-underlag worklist after the user has reviewed them: entries with no external underlag by nature, or SIE-imported verifikat whose underlag the user confirms is kept with the earlier books (reason "Underlag arkiverat utanför Accounted (tidigare system eller papper)").
 **Do not use for:** Waiving receipts that are missing: find and attach them instead.
 
 **Pitfalls:**

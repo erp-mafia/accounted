@@ -158,6 +158,8 @@ export type BookSupplierBankMatchResult =
       paidAt: string | null
       /** The registration verifikat this match booked first (defer_invoice_booking), else null. */
       registrationJournalEntryId: string | null
+      /** The supplier_invoice_payments row this match wrote. */
+      paymentRowId: string
     }
   | {
       ok: false
@@ -734,5 +736,6 @@ export async function bookSupplierBankMatch(
     settledInvoice,
     paidAt,
     registrationJournalEntryId: registration.bookedHere ? registration.journalEntryId : null,
+    paymentRowId: recorded.id,
   }
 }

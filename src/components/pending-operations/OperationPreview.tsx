@@ -831,6 +831,39 @@ function readUpdate(data: Record<string, unknown>) {
   return { fields: Object.keys(changes), before, after }
 }
 
+// Keys a staging tool adds about the change itself, beside the record it
+// stages (update_supplier's payment_details_changed): stated even when the
+// record's own fields are not.
+const UPDATE_SUMMARY_KEYS = new Set(['payment_details_changed'])
+
+// An update staged as the record it leaves: the agent's dry-run answer
+// (company settings, the tax profile, the bookkeeping lock, a supplier), so
+// every changed field is also a top-level key, beside every field the update
+// leaves alone. Those unchanged fields are not what the approval does: the
+// card listed a company's address, bank details and org number under a
+// change of two invoice texts it did not show (crm#1605).
+function isResultingRecord(data: Record<string, unknown>, changedFields: string[]): boolean {
+  return changedFields.length > 0 && changedFields.every((field) => field in data)
+}
+
+// A changed value the card cannot state on one line (an email-text bag, the
+// per-currency payment accounts): the change shows under its label as
+// changed, without the structure.
+function isStructuredValue(value: unknown): boolean {
+  if (isPlainObject(value)) return Object.keys(value).length > 0
+  return Array.isArray(value) && value.length > 0 && !value.every((v) => typeof v === 'string')
+}
+
+// A changed text longer than this (an invoice footer, a late-fee text) shows
+// before and after on lines of their own, and outside the review panel is
+// cut at COMPACT_TEXT.
+const LONG_TEXT = 80
+const COMPACT_TEXT = 160
+
+function isLongText(value: unknown): value is string {
+  return typeof value === 'string' && (value.length > LONG_TEXT || value.includes('\n'))
+}
+
 // What an update replaces, struck, then what it becomes: the reading of the
 // rättelse log on a verifikat.
 function ValueChange({ before, after }: { before: ReactNode; after: ReactNode }) {
@@ -867,22 +900,30 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
     Object.entries(obj).filter(([k, v]) => stated(v) && t.has(`preview_field.${k}`)) as Array<
       [string, string | number | boolean | string[]]
     >
-  const facts = labelled(Object.fromEntries(entries))
+  const update = readUpdate(data)
+  // An update staged as its resulting record states its changes, not the
+  // record (crm#1605).
+  const record = isResultingRecord(data, update.fields)
+  const facts = labelled(Object.fromEntries(entries)).filter(([k]) => !record || UPDATE_SUMMARY_KEYS.has(k))
   // A labelled group shows its own labelled fields, one level down, instead
   // of a JSON dump of raw keys. An update's changes are the one group read
   // against what the record held, below.
   const groups = entries
-    .filter(([k, v]) => k !== 'changes' && isPlainObject(v) && !isEntryPreview(v) && t.has(`preview_field.${k}`))
+    .filter(([k, v]) => !record && k !== 'changes' && isPlainObject(v) && !isEntryPreview(v) && t.has(`preview_field.${k}`))
     .map(([k, v]) => [k, v as Record<string, unknown>, labelled(v as Record<string, unknown>)] as const)
     .filter(([, , rows]) => rows.length > 0)
   // Each changed field with what it held, when the preview says, so the
   // approver judges the change without opening the record (crm#1300). A
-  // field cleared shows as a change when its old value is known.
-  const update = readUpdate(data)
+  // field cleared shows as a change when its old value is known; a
+  // structured one shows as changed.
   const changeFields = update.fields.filter((field) => {
     const after = update.after[field]
+    const before = update.before[field]
     const cleared = after == null || after === ''
-    return t.has(`preview_field.${field}`) && (stated(after) || (cleared && stated(update.before[field])))
+    return (
+      t.has(`preview_field.${field}`) &&
+      (stated(after) || (cleared && stated(before)) || isStructuredValue(after) || isStructuredValue(before))
+    )
   })
   const fact = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>): ReactNode => {
     if (typeof value === 'boolean') return value ? t('preview_yes') : t('preview_no')
@@ -899,18 +940,48 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
       </span>
     </Fragment>
   )
-  // An empty or unreadable value (a dimension bag) shows as '-'.
-  const changeValue = (field: string, value: unknown, scope: Record<string, unknown>): ReactNode =>
-    stated(value) ? fact(field, value, scope) : '-'
+  // An empty or unreadable value (a dimension bag) shows as '-'. A long text
+  // is cut outside the review panel, where the whole text is a click away.
+  const changeValue = (field: string, value: unknown, scope: Record<string, unknown>): ReactNode => {
+    if (!stated(value)) return '-'
+    if (!detail && isLongText(value) && value.length > COMPACT_TEXT) return `${value.slice(0, COMPACT_TEXT).trimEnd()}…`
+    return fact(field, value, scope)
+  }
   const changeRow = (field: string) => {
     const before = update.before[field]
     const after = update.after[field]
     const known = field in update.before && (stated(before) || before == null || before === '')
     const beforeScope = { ...data, ...update.before }
     const afterScope = { ...data, ...update.after }
+    const label = (
+      <span className="min-w-0 break-words pl-3 text-muted-foreground">{t(`preview_field.${field}`)}</span>
+    )
+    if (isStructuredValue(after) || isStructuredValue(before)) {
+      return (
+        <Fragment key={field}>
+          {label}
+          <span className="min-w-0 break-words">{t('preview_change_structured')}</span>
+        </Fragment>
+      )
+    }
+    // A text too long for one line reads as the old text struck above the
+    // new one, each kept as written (line breaks included).
+    if (isLongText(before) || isLongText(after)) {
+      return (
+        <Fragment key={field}>
+          {label}
+          <span className="min-w-0 space-y-1 break-words">
+            {known && stated(before) && (
+              <del className="block whitespace-pre-wrap text-muted-foreground">{changeValue(field, before, beforeScope)}</del>
+            )}
+            <ins className="block whitespace-pre-wrap no-underline">{changeValue(field, after, afterScope)}</ins>
+          </span>
+        </Fragment>
+      )
+    }
     return (
       <Fragment key={field}>
-        <span className="min-w-0 break-words pl-3 text-muted-foreground">{t(`preview_field.${field}`)}</span>
+        {label}
         <span className={cn('min-w-0 break-words', (typeof after === 'number' || typeof before === 'number') && 'font-mono tabular-nums')}>
           {known ? (
             <ValueChange before={changeValue(field, before, beforeScope)} after={changeValue(field, after, afterScope)} />

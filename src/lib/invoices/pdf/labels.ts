@@ -97,6 +97,8 @@ export const PDF_LABELS = {
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Footer
     orgNoLong: 'Org.nr:',
+    // Säte of a legal person (seller-registered-office.ts, crm#1604).
+    registeredOffice: 'Säte:',
     vatRegNo: 'Momsreg.nr:',
     fSkatt: 'Godkänd för F-skatt',
   },
@@ -173,6 +175,7 @@ export const PDF_LABELS = {
     domesticReverseChargeNotice: 'Reverse charge, construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     orgNoLong: 'Reg. no.:',
+    registeredOffice: 'Registered office:',
     vatRegNo: 'VAT reg. no.:',
     // The F-skatt approval must be stated on the invoice, but ML sets no
     // language requirement for invoice text (swedish-invoice-compliance,

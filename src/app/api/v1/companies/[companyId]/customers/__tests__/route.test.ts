@@ -1105,6 +1105,132 @@ describe('DELETE /api/v1/companies/:companyId/customers/:id', () => {
   })
 })
 
+// The archive pre-flight counts what the customer still owes, not every row
+// in an owed status (PH 226): an issued credit note stays 'sent' and the
+// original it fully credits turns 'credited'. The invoices table here holds
+// rows and applies the route's filters to them, so the count is the one the
+// query would return.
+describe('DELETE /api/v1/companies/:companyId/customers/:id: what blocks archiving', () => {
+  type InvoiceRow = {
+    id?: string
+    company_id: string
+    customer_id: string
+    document_type: string
+    status: string
+    credited_invoice_id: string | null
+    total: number
+    remaining_amount: number
+  }
+  const ORIGINAL_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const row = (over: Partial<InvoiceRow>): InvoiceRow => ({
+    company_id: COMPANY_ID,
+    customer_id: CUSTOMER_ID,
+    document_type: 'invoice',
+    status: 'sent',
+    credited_invoice_id: null,
+    total: 1000,
+    remaining_amount: 1000,
+    ...over,
+  })
+
+  function makeInvoiceRowsSupabase(rows: InvoiceRow[]) {
+    const base = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { id: CUSTOMER_ID }, error: null },
+    })
+    type Pred = (r: Record<string, unknown>, col: string, val: unknown) => boolean
+    const ops: Record<string, Pred> = {
+      eq: (r, c, v) => r[c] === v,
+      in: (r, c, v) => (v as unknown[]).includes(r[c]),
+      is: (r, c, v) => r[c] === v,
+      gte: (r, c, v) => Number(r[c]) >= Number(v),
+      gt: (r, c, v) => Number(r[c]) > Number(v),
+    }
+    const invoices = (filters: Array<(r: Record<string, unknown>) => boolean>): unknown =>
+      new Proxy({}, {
+        get(_target, prop) {
+          if (typeof prop === 'symbol') return undefined
+          if (prop === 'then') {
+            const count = rows.filter((r) => filters.every((f) => f(r))).length
+            return (resolve: (v: unknown) => void) => resolve({ data: null, error: null, count })
+          }
+          return (...args: unknown[]) => {
+            if (prop === 'select') return invoices(filters)
+            const op = ops[prop]
+            if (!op) throw new Error(`invoice rows mock: unsupported filter ${prop}`)
+            const [col, val] = args as [string, unknown]
+            return invoices([...filters, (r) => op(r, col, val)])
+          }
+        },
+      })
+    return {
+      from: vi.fn((table: string) => (table === 'invoices' ? invoices([]) : base.from(table))),
+      captured: base.captured,
+    }
+  }
+
+  async function archive(rows: InvoiceRow[]) {
+    withWriteScope()
+    const supabaseMock = makeInvoiceRowsSupabase(rows)
+    mockServiceClient.mockReturnValue(supabaseMock)
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+    return { res, updates: supabaseMock.captured.update }
+  }
+
+  it('archives a customer whose only invoice is fully credited (regression, PH 226)', async () => {
+    const { res, updates } = await archive([
+      row({ id: ORIGINAL_ID, status: 'credited' }),
+      row({ status: 'sent', credited_invoice_id: ORIGINAL_ID, total: -1000, remaining_amount: 0 }),
+    ])
+
+    expect(res.status).toBe(204)
+    expect(updates).toEqual([{ archived_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) }])
+  })
+
+  it('does not count an imported credit note without a link, nor a sent quote', async () => {
+    const { res } = await archive([
+      row({ status: 'overdue', total: -500, remaining_amount: 0 }),
+      row({ document_type: 'quote', status: 'sent' }),
+    ])
+
+    expect(res.status).toBe(204)
+  })
+
+  it('still refuses a customer with a genuinely open invoice', async () => {
+    const { res, updates } = await archive([row({ status: 'sent' })])
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_HAS_INVOICES')
+    expect(body.error.details.open_invoice_count).toBe(1)
+    expect(updates).toEqual([])
+  })
+
+  it('still refuses a partially credited invoice with an amount remaining, counting only the original', async () => {
+    const { res, updates } = await archive([
+      row({ id: ORIGINAL_ID, status: 'sent', total: 1000, remaining_amount: 400 }),
+      row({ status: 'sent', credited_invoice_id: ORIGINAL_ID, total: -600, remaining_amount: 0 }),
+    ])
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_HAS_INVOICES')
+    expect(body.error.details.open_invoice_count).toBe(1)
+    expect(updates).toEqual([])
+  })
+
+  it("does not count another customer's open invoice", async () => {
+    const { res } = await archive([
+      row({ customer_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'overdue' }),
+    ])
+
+    expect(res.status).toBe(204)
+  })
+})
+
 // ──────────────────────────────────────────────────────────────────
 // personal_number handling + company payment-terms default (#1707, #1708)
 // ──────────────────────────────────────────────────────────────────

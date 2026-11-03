@@ -20,7 +20,7 @@ const commitOp = page.slice(page.indexOf('async function commitOp('), page.index
 
 describe('/pending approve', () => {
   it('drops the approved row from the list before the refetch', () => {
-    const okAt = commitOp.indexOf("toast({ title: 'Godkänd'")
+    const okAt = commitOp.indexOf('const signingUrl = signingUrlOf(json.data)')
     const dropAt = commitOp.indexOf('dropFromList(op.id)', okAt)
     const refetchAt = commitOp.indexOf('afterResolve()', okAt)
     expect(okAt).toBeGreaterThan(-1)
@@ -45,6 +45,23 @@ describe('/pending approve', () => {
     expect(branch).toContain('dropFromList(op.id)')
     expect(sv.pending.already_resolved).toBe('Redan hanterad')
     expect(en.pending.already_resolved).toBe('Already handled')
+  })
+
+  // crm#1618: a "Godkänd" toast opened top-right, over the next row's
+  // Godkänn and Avvisa, and stayed while the pointer rested on it, so
+  // approving rows in a row meant closing a toast before each click. The row
+  // leaving the list is the confirmation; failures and a 409 still toast, and
+  // a filing that needs a BankID signature opens its signing step.
+  it('confirms a plain approval by the row leaving the list, not by a toast', () => {
+    const okAt = commitOp.indexOf('const signingUrl = signingUrlOf(json.data)')
+    const success = commitOp.slice(okAt, commitOp.indexOf('} catch (err) {'))
+    expect(success).not.toContain('toast(')
+    expect(success).toContain('setSigningPrompt({ title: op.title, url: signingUrl })')
+    expect(success).toContain('dropFromList(op.id)')
+    expect(commitOp).not.toContain("'Godkänd'")
+    // A failure still says so.
+    const failure = commitOp.slice(commitOp.indexOf('} catch (err) {'))
+    expect(failure).toContain("variant: 'destructive'")
   })
 
   it('re-enables the buttons on every way out, the early return included', () => {

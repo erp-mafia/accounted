@@ -176,7 +176,7 @@ import {
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
@@ -297,6 +297,7 @@ import {
   type RecommendedToolClassification,
 } from './recommended-tools'
 import {
+  RECONNECT_ADVICE,
   SEARCH_ONLY_STAGED_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
   STALE_BRIDGE_NOTE,
@@ -695,6 +696,8 @@ import {
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { resolveInvoicePdfSource, type InvoicePdfDelivery } from '@/lib/invoices/invoice-pdf-source'
+import { renderStoredInvoicePdf } from '@/lib/invoices/stored-invoice-pdf'
 import { documentUploadLimits } from './document-upload-limits'
 import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type ArrivalActor } from '@/lib/intake/arrivals'
@@ -6721,7 +6724,10 @@ export const tools: McpTool[] = [
       // like the briefing's capabilities (tools/list budget). A failed
       // readiness read keeps the old answer (connected).
       const canFile = enabled && (health?.filing ? health.filing.ready : connected)
-      const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
+      // The link names this company: the BankID session is stored for the
+      // company the agent asked about, not for whichever company the user's
+      // browser has open (crm#1622). /authorize checks the membership.
+      const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Fskatteverket&company_id=${encodeURIComponent(companyId)}`
       return {
         available: enabled,
         connected,
@@ -8620,7 +8626,7 @@ export const tools: McpTool[] = [
         gross_amount: { type: 'number', description: 'Amount in SEK: the debit total less self-assessed reverse-charge/import moms (2614/2624/2634, 2615/2625/2635), which is on neither the underlag nor the bank row. 0 when the verifikat only books that moms.' },
       },
     }, {
-      waiver_tool: { type: 'string', description: 'Stages "Inget underlag krävs" for a verifikat with no external underlag by nature. Never for a missing receipt.' },
+      waiver_tool: { type: 'string', description: 'Stages "Inget underlag krävs": none by nature, or imported and kept elsewhere. Never for a missing receipt.' },
     }),
     annotations: ANNOTATIONS_READ_ONLY,
     // Search-only (issue #2748, paying for the draft-invoice writes): the
@@ -11715,6 +11721,141 @@ export const tools: McpTool[] = [
   },
 
   {
+    // crm#1593: an agent asked to save sent invoices' PDFs had no way to the
+    // file: gnubok_get_invoice answers JSON and gnubok_get_document_content
+    // needs a document id an invoice never carries. Same rule as the
+    // dashboard download (lib/invoices/invoice-pdf-source.ts): the archived
+    // copy of the email delivery when Accounted sent it, else a fresh render
+    // through the v1 download's loader. Handed out as a signed URL, never as
+    // bytes in the context.
+    name: 'gnubok_get_invoice_pdf',
+    keywords: ['faktura-pdf', 'fakturapdf', 'ladda ner faktura', 'spara faktura', 'kreditfaktura pdf', 'pdf'],
+    title: 'Get Invoice PDF',
+    description:
+      "An invoice's PDF as a 1-hour signed URL to download. An invoice Accounted emailed gives the archived file the customer got; anything else (draft, marked sent, older) a fresh render, and source says which.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID of the invoice or credit note' },
+      },
+      required: ['invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        invoice_id: { type: 'string' },
+        invoice_number: { type: ['string', 'null'] },
+        file_name: { type: 'string' },
+        source: { type: 'string', enum: ['archived', 'rendered'] },
+        reason: {
+          type: ['string', 'null'],
+          description: 'Why rendered: not_sent_yet, sent_outside_accounted or no_archived_copy.',
+        },
+        document_id: { type: ['string', 'null'], description: 'The archived document, when source is archived.' },
+        size_bytes: { type: ['number', 'null'] },
+        signed_url: { type: 'string' },
+        expires_at: { type: 'string' },
+      },
+      required: ['invoice_id', 'file_name', 'source', 'signed_url', 'expires_at'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    // A file fetch, not a list-time need: found by search (invoice pdf).
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase) {
+      const invoiceId = args.invoice_id
+      if (typeof invoiceId !== 'string' || !UUID_RE.test(invoiceId)) {
+        throw badArgument('invoice_id', 'invoice_id must be the UUID of an invoice in this company')
+      }
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('invoices')
+        .select('id, status, invoice_number')
+        .eq('id', invoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (invoiceError) throw dbError(invoiceError)
+      if (!invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
+
+      // The masking delivery reader, as gnubok_get_invoice_deliveries: only
+      // status, sent_at and the archived document id are used here.
+      const { data: deliveryRows, error: deliveriesError } = await supabase.rpc(
+        'list_invoice_delivery_summaries_for_service',
+        { p_company_id: companyId, p_user_id: userId, p_invoice_id: invoiceId },
+      )
+      const deliveries = (deliveryRows ?? []) as InvoicePdfDelivery[]
+      const source = resolveInvoicePdfSource({
+        invoiceId,
+        invoiceStatus: invoice.status,
+        deliveriesLoaded: !deliveriesError,
+        deliveries,
+      })
+      // Whether an archived copy exists is unknown: a re-render here could
+      // be passed off as the sent document, so this is an error to retry.
+      if (source.kind === 'unavailable') throw dbError(deliveriesError!)
+
+      const SIGNED_URL_TTL_SECONDS = 3600
+      const sign = async (storagePath: string): Promise<{ signed_url: string; expires_at: string }> => {
+        const { data: signed, error: signError } = await supabase.storage
+          .from('documents')
+          .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
+        if (signError || !signed) {
+          throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
+        }
+        return {
+          signed_url: toSameOriginStorageUrl(signed.signedUrl),
+          expires_at: new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString(),
+        }
+      }
+
+      if (source.kind === 'archived') {
+        const documentId = deliveries.find((d) => d.id === source.deliveryId)!.document_attachment_id!
+        const { data: doc, error: docError } = await supabase
+          .from('document_attachments')
+          .select('id, file_name, storage_path, file_size_bytes')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (docError) throw dbError(docError)
+        if (!doc) throw codedRefusal('INVOICE_RESEND_ARCHIVE_UNAVAILABLE', 'The archived copy of the sent invoice could not be read.')
+        return {
+          invoice_id: invoiceId,
+          invoice_number: invoice.invoice_number ?? null,
+          file_name: doc.file_name,
+          source: 'archived',
+          reason: null,
+          document_id: doc.id,
+          size_bytes: doc.file_size_bytes ?? null,
+          ...(await sign(doc.storage_path)),
+        }
+      }
+
+      const rendered = await renderStoredInvoicePdf(supabase, companyId, invoiceId, log)
+      if (!rendered.ok) {
+        if (rendered.code === 'DB_ERROR') throw dbError(rendered.error)
+        throw codedRefusal(rendered.code, getErrorEntry(rendered.code)?.message_en ?? rendered.code)
+      }
+      // One object per invoice, overwritten on every render: a re-render is
+      // never räkenskapsinformation (the sent copy is, and lives elsewhere),
+      // so nothing accumulates under this prefix.
+      const storagePath = `${userId}/invoice-pdfs/${invoiceId}.pdf`
+      const { error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(storagePath, new Uint8Array(rendered.buffer), { contentType: 'application/pdf', upsert: true })
+      if (uploadError) throw new Error(`Failed to store the invoice PDF: ${uploadError.message}`)
+      return {
+        invoice_id: invoiceId,
+        invoice_number: invoice.invoice_number ?? null,
+        file_name: rendered.filename,
+        source: 'rendered',
+        reason: source.reason,
+        document_id: null,
+        size_bytes: rendered.buffer.length,
+        ...(await sign(storagePath)),
+      }
+    },
+  },
+
+  {
     name: 'gnubok_mark_invoice_as_sent',
     keywords: ['faktura skickad', 'kundfaktura', 'kontantfaktura', 'betald direkt', 'kvitto', 'swish', 'kortbetalning'],
     title: 'Mark Invoice as Sent',
@@ -12594,7 +12735,7 @@ export const tools: McpTool[] = [
     outputSchema: {
       type: 'object',
       properties: {
-        suggestions: { type: 'object' },
+        suggestions: { type: 'object', description: 'Category hints (rule, bank text, history). Proposals also read learned counterparts and the assistant.' },
         counterparty_matches: { type: 'object' },
         proposals: {
           type: 'object',
@@ -12603,7 +12744,7 @@ export const tools: McpTool[] = [
         no_signal_transaction_ids: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Transactions where no source (rule, pattern, counterparty history, template) matched. An honest empty: do not infer categories from the other rows; investigate the counterparty (e.g. gnubok_query_journal) instead.',
+          description: 'No source matched: do not copy other rows; check the counterparty (gnubok_query_journal).',
         },
       },
       required: ['suggestions', 'counterparty_matches', 'proposals', 'no_signal_transaction_ids'],
@@ -12669,14 +12810,19 @@ export const tools: McpTool[] = [
 
         const cpMatch = counterpartyMatches.get(tx.id)
         if (cpMatch) {
+          // The legs as this row books them: money against the learned
+          // direction (a likely refund) is mirrored by the booking, so it is
+          // shown mirrored here too, never as the learned expense (crm#1598).
+          const mismatch = contradictsLearnedDirection(cpMatch.template, (tx as Transaction).amount)
           counterpartyResult[tx.id] = {
             template_name: formatCounterpartyName(cpMatch.template.counterparty_name),
-            debit_account: cpMatch.template.debit_account,
-            credit_account: cpMatch.template.credit_account,
+            debit_account: mismatch ? cpMatch.template.credit_account : cpMatch.template.debit_account,
+            credit_account: mismatch ? cpMatch.template.debit_account : cpMatch.template.credit_account,
             category: cpMatch.template.category,
             confidence: cpMatch.confidence,
             match_method: cpMatch.matchMethod,
             occurrence_count: cpMatch.template.occurrence_count,
+            ...(mismatch ? { direction_mismatch: true } : {}),
           }
         }
       }
@@ -12716,6 +12862,7 @@ export const tools: McpTool[] = [
               // always-review and import flags, then the evidence.
               books_without_review: !reviewRequired(p, direct_booking),
               ...(p.contested ? { contested: true } : {}),
+              ...(p.direction_mismatch ? { direction_mismatch: true } : {}),
               ...(box
                 ? {
                     reverse_charge_box: {
@@ -14480,7 +14627,7 @@ export const tools: McpTool[] = [
       if (transaction.amount <= 0) {
         throw codedRefusal(
           'MATCH_INVOICE_NOT_INCOME',
-          'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, or from a foreign-currency account or under kontantmetoden the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
+          'Only income transactions (amount > 0) can be matched to customer invoices. An outgoing payment of a supplier invoice: gnubok_match_batch_allocate with one supplier_invoice allocation, kontantmetoden included; from a foreign-currency account the user matches it in Accounted (Att göra; suggested_match in gnubok_list_uncategorized_transactions).',
         )
       }
 
@@ -29477,7 +29624,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ]
               : []),
             'Discovery:',
-            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}) and then approve with gnubok_approve_pending_operation as for any staged write; "none" commits directly and is out of reach from such a client. A bridge your client does not show means it kept an older copy of tools/list: without gnubok_stage_tool, stage the same tool through gnubok_call_tool, which carries every stage_tool target; otherwise ask the user to refresh or reconnect the Accounted connector.',
+            `• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool absent from tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}), then approve with gnubok_approve_pending_operation; "none" commits directly and is unreachable from such a client. A bridge your client does not show means it kept an older copy of tools/list: without gnubok_stage_tool, stage the same tool through gnubok_call_tool, which carries every stage_tool target; otherwise ${RECONNECT_ADVICE}.`,
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (a missing scope, or a write no bridge carries). A callable tool with a note is not in tools/list: the note names the bridge that reaches it.',
             ...(pinnedCompanyId
               ? [`• Companies: this connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}). Every tool runs for it; do not pass company_id. The company switch (gnubok_list_companies) and the cross-company tools are not available on this connection.`]

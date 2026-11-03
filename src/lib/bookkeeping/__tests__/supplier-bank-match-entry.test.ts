@@ -141,6 +141,28 @@ describe('createSupplierBankMatchEntry / buildSupplierBankMatchLines', () => {
     expect(input.lines).toEqual(preview.lines)
   })
 
+  it('foreign clearing: 2440 carries the EUR it clears, the preview identical; SEK lines carry none (crm#1590)', async () => {
+    const { input, preview } = await bookAndPreview(
+      invoice({ currency: 'EUR', exchange_rate: 11, total: 100, remaining_amount: 100 }),
+      { kind: 'clearing', paymentAmount: 1100, exchangeRateDifference: 50, bankFeeSek: 0, apInInvoiceCurrency: 100 },
+    )
+    const ap = input.lines.find((l) => l.account_number === '2440')
+    expect(ap).toMatchObject({ debit_amount: 1100, currency: 'EUR', amount_in_currency: 100, exchange_rate: 11 })
+    for (const l of input.lines.filter((x) => x.account_number !== '2440')) {
+      expect(l).not.toHaveProperty('currency')
+      expect(l).not.toHaveProperty('amount_in_currency')
+    }
+    expect(input.lines).toEqual(preview.lines)
+  })
+
+  it('a SEK invoice never takes a foreign figure, even if one is passed', async () => {
+    const { input } = await bookAndPreview(
+      invoice(),
+      { kind: 'clearing', paymentAmount: 1000, bankFeeSek: 0, apInInvoiceCurrency: 1000 },
+    )
+    for (const l of input.lines) expect(l).not.toHaveProperty('currency')
+  })
+
   it('kontantmetoden: expense and VAT at payment with the fee, the preview identical', async () => {
     const { input, preview } = await bookAndPreview(
       invoice({ registration_journal_entry_id: null }),

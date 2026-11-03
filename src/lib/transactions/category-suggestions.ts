@@ -401,10 +401,31 @@ function templateForAccount(account: string, direction: 'expense' | 'income', en
   )
 }
 
+/**
+ * `directionMismatch` (contradictsLearnedDirection, decided by the caller on
+ * the stored template, as the booking decides it): the row's money moves
+ * against the template's learned direction, likely a refund. The legs are
+ * shown mirrored, as buildMappingResultFromCounterpartyTemplate books them,
+ * and it never books without a review (crm#1598).
+ */
 export function buildCounterpartySuggestion(
   template: CategorizationTemplate,
   confidence: number,
+  opts: { directionMismatch?: boolean } = {},
 ): SuggestedTemplate {
+  const proposal = counterpartyProposal(template, confidence)
+  if (!opts.directionMismatch) return proposal
+  return {
+    ...proposal,
+    debit_account: proposal.credit_account,
+    credit_account: proposal.debit_account,
+    description_sv: `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`,
+    requires_review: true,
+    direction_mismatch: true,
+  }
+}
+
+function counterpartyProposal(template: CategorizationTemplate, confidence: number): SuggestedTemplate {
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',

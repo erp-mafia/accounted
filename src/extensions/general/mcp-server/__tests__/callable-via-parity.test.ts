@@ -64,7 +64,10 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
-import { handleMcpRequest, tools } from '../server'
+import { handleMcpRequest, isListedFor, tools } from '../server'
+import { MODULES } from '@/lib/modules/manifest'
+import { packageForModule } from '@/lib/modules/packages'
+import { moduleForTool } from '../tool-modules'
 import { resetReachableCompanyCountCache } from '../company-routing'
 
 type Hit = { name: string; callable_via?: string; note?: string }
@@ -268,5 +271,40 @@ describe('a client whose older tools/list lacks a bridge is told what unblocks i
     const json = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } })
     expect(json.result.instructions).toMatch(/A bridge your client does not show means it kept an older copy of tools\/list/)
     expect(json.result.instructions).toMatch(/without gnubok_stage_tool, stage the same tool through gnubok_call_tool/)
+  })
+})
+
+// crm#1628: a ChatGPT connector whose tools/list was fetched before
+// gnubok_call_tool existed was reconnected; the new connection fetched a
+// fresh list (bridge included), yet the agent in the running chat still had
+// no bridge. The server side holds: the read bridge is listed for every
+// connected caller, whatever its scopes or packages, so callable_via
+// "call_tool" always names a route the served tools/list carries. What the
+// server cannot refresh is a running chat, so every refresh advice says to
+// start a new one.
+describe('the read bridge is always listed, and a refresh comes with a new chat (crm#1628)', () => {
+  const connected: Caller[] = [...CALLERS.filter((c) => c.token !== null), { label: 'no scopes', token: 'k', scopes: [], companies: 1 }]
+  it.each(connected)('gnubok_call_tool is in the tools/list of: $label', async (caller) => {
+    useCaller(caller)
+    expect(await listedNames()).toContain('gnubok_call_tool')
+  })
+
+  it('no package switch can hide it: its module is the kernel platform, which has no package', () => {
+    expect(moduleForTool('gnubok_call_tool')).toBe('platform')
+    expect(MODULES.find((m) => m.id === 'platform')!.kind).toBe('kernel')
+    expect(packageForModule('platform')).toBeNull()
+    const bridge = tools.find((t) => t.name === 'gnubok_call_tool')!
+    const switchable = new Set(MODULES.filter((m) => packageForModule(m.id) !== null).map((m) => m.id))
+    expect(isListedFor(bridge, { anonymous: false, simpleCompanyMode: true, keyScopes: [], hiddenModules: switchable })).toBe(true)
+  })
+
+  it('every refresh advice an agent reads says to start a new chat', async () => {
+    useCaller(CALLERS[0])
+    expect((await search('gnubok_update_invoice', 1)).tools_list_note).toMatch(/start a new chat/)
+    expect((await search('gnubok_prepare_payments', 1)).bridge_note).toMatch(/start a new chat/)
+    const { body } = await callTool('gnubok_call_tool', { tool: 'gnubok_update_invoice', arguments: { invoice_id: COMPANY_ID } })
+    expect(JSON.stringify(body)).toMatch(/start a new chat/)
+    const json = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } })
+    expect(json.result.instructions).toMatch(/refresh or reconnect the Accounted connector, then start a new chat/)
   })
 })

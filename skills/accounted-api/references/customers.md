@@ -508,7 +508,7 @@ Sets archived_at on the customer; the record is preserved (invoices and audit hi
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- A customer with any open invoice (sent / partially_paid / overdue) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.
+- A customer who still owes on an invoice (sent / partially_paid / overdue with an amount remaining) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Credit notes and fully credited invoices do not count. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.
 - 204 No Content is returned on success: there is no response body to parse.
 
 | Parameter | In | Type | Required | Notes |

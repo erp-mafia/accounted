@@ -43,6 +43,10 @@ describe('normalizeDate', () => {
     expect(normalizeDate('1 okt. 2026')).toBe('2026-10-01')
   })
 
+  it('reads a day-first date with dashes, as "Oss tillhanda: 25-11-2026" prints it (crm#1610)', () => {
+    expect(normalizeDate('25-11-2026')).toBe('2026-11-25')
+  })
+
   it('refuses a partial or impossible date', () => {
     expect(normalizeDate('mars 2026')).toBeNull()
     expect(normalizeDate('2026-02-30')).toBeNull()

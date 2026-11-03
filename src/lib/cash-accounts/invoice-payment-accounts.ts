@@ -10,7 +10,8 @@ import { formatIbanGroups } from '@/lib/company/connection-iban'
 
 export const INVOICE_PAYMENT_ACCOUNT_CURRENCIES: readonly Currency[] = CURRENCIES
 
-const PAYMENT_FIELDS: readonly (keyof InvoicePaymentAccount)[] = [
+/** The fields of an invoice payment account: where a customer pays an invoice. */
+export const PAYMENT_FIELDS: readonly (keyof InvoicePaymentAccount)[] = [
   'bank_name',
   'clearing_number',
   'account_number',

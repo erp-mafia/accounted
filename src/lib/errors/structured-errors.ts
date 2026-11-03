@@ -3448,10 +3448,14 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
     message_en: 'The connector key lacks Peppol permission. Contact support.',
   },
+  // Not permanent: it clears once the other access point withdraws the id,
+  // which every company moving from another operator waits for. Retryable so
+  // the settings page offers the retry; the inbound cron also retries daily.
   CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
     httpStatus: 409,
-    message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först.',
-    message_en: 'The Peppol id is already published with another access point. Deregister it there first.',
+    message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först och försök sedan igen.',
+    message_en: 'The Peppol id is already published with another access point. Deregister it there first, then try again.',
+    retryable: true,
   },
   CONNECTOR_QUOTA_EXCEEDED: {
     httpStatus: 409,
@@ -8814,9 +8818,9 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
   BATCH_CASH_METHOD_UNBOOKED_INVOICE: {
     httpStatus: 400,
     message_sv:
-      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms bokförs vid betalningen. En samlingsmatchning bokför det för kundfakturor i kronor som betalas i sin helhet, alla på en gång. Leverantörsfakturor, delbetalningar, fakturor i utländsk valuta och en blandning med redan bokförda fakturor går inte: matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
+      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms bokförs vid betalningen. En samlingsmatchning bokför det för kundfakturor i kronor som betalas i sin helhet, alla på en gång, och för en enda leverantörsfaktura som betalas med hela transaktionen. Flera leverantörsfakturor, delbetalningar, fakturor i utländsk valuta och en blandning med redan bokförda fakturor går inte: matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
     message_en:
-      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT are booked at payment. A batch match books that for SEK customer invoices paid in full, all of them at once. Supplier invoices, partial payments, foreign-currency invoices and a mix with booked invoices are not supported: match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
+      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT are booked at payment. A batch match books that for SEK customer invoices paid in full, all of them at once, and for a single supplier invoice paid by the whole transaction. Several supplier invoices, partial payments, foreign-currency invoices and a mix with booked invoices are not supported: match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
   },
   BATCH_CASH_LINES_INVALID: {
     httpStatus: 400,

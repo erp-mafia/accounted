@@ -71,6 +71,18 @@ export const SEARCH_ONLY_STAGED_NOTE =
   'not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation'
 
 /**
+ * What a refresh or reconnect does NOT do on its own: a chat that is already
+ * running keeps the tool list it started with. A ChatGPT connector added
+ * before gnubok_call_tool existed was reconnected, the new connection fetched
+ * a fresh tools/list (bridge included), and the agent in the same chat still
+ * reported the bridge missing four minutes later; a later session on that
+ * connection reached a bridge-only tool (crm#1628). Every place that tells an
+ * agent to have the connector refreshed says this too.
+ */
+export const RECONNECT_ADVICE =
+  'ask the user to refresh or reconnect the Accounted connector, then start a new chat (a chat keeps the tools it began with)'
+
+/**
  * What callable_via "tools_list" cannot know: the server lists the tool today,
  * but some clients keep the tools/list they fetched when the connector was
  * added. A ChatGPT connector worked for weeks on its setup copy and never saw
@@ -80,7 +92,7 @@ export const SEARCH_ONLY_STAGED_NOTE =
  * a stale copy lands.
  */
 export const STALE_TOOLS_LIST_NOTE =
-  'tools_list = in this server\'s tools/list now. A client that kept an older copy of the list (some connectors fetch it once, when added) does not show tools listed since: ask the user to refresh or reconnect the Accounted connector, then call the tool by name.'
+  `tools_list = in this server's tools/list now. A client holding an older copy of the list (some connectors fetch it once, when added) does not show tools listed since: ${RECONNECT_ADVICE}, and call the tool by name there.`
 
 /**
  * The same gap one step out: a tool reached through a bridge is reachable only
@@ -94,7 +106,7 @@ export const STALE_TOOLS_LIST_NOTE =
  * once per search response and briefing that names a bridge.
  */
 export const STALE_BRIDGE_NOTE =
-  'A bridge named in callable_via or a note that your client does not show means it kept an older copy of tools/list. Without gnubok_stage_tool, stage the same tool through gnubok_call_tool({tool, arguments}): it carries every stage_tool target and only stages, whatever its older description says. For anything else, ask the user to refresh or reconnect the Accounted connector. The tool exists, so do not report it as unavailable.'
+  `A bridge named in callable_via or a note that your client does not show means it kept an older copy of tools/list. Without gnubok_stage_tool, stage the same tool through gnubok_call_tool({tool, arguments}): it carries every stage_tool target and only stages, whatever its older description says. Otherwise ${RECONNECT_ADVICE}. The tool exists; do not report it as unavailable.`
 
 /**
  * The same advice for one named tool, appended to a refusal that says "call it
@@ -104,5 +116,5 @@ export const STALE_BRIDGE_NOTE =
  * third of the sessions refused this way in 30 days never reached the tool.
  */
 export function staleToolsListAdvice(toolName: string): string {
-  return `If your client does not show ${toolName}, load it through your client's tool search first when it defers tools; if it is not there either, the client kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.`
+  return `If your client does not show ${toolName}, load it through your client's tool search first when it defers tools; if not, the client kept an older copy of tools/list: ${RECONNECT_ADVICE}.`
 }

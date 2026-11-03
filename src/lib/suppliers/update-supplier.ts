@@ -63,7 +63,7 @@ export type SupplierRecord = z.infer<typeof SupplierRecordSchema>
 /** What a caller may change: the dashboard's schema, plus un-archiving. */
 export type SupplierChanges = z.output<typeof UpdateSupplierSchema> & { archived_at?: null }
 
-const WRITABLE_FIELDS = [
+export const WRITABLE_FIELDS = [
   'name',
   'supplier_type',
   'email',

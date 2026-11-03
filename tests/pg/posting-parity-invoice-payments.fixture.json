@@ -437,18 +437,18 @@
           "notes": null,
           "lines": [
             {
-              "currency": "SEK",
+              "currency": "EUR",
               "tax_code": null,
               "dimensions": {},
               "debit_amount": "0",
               "credit_amount": "3450",
-              "exchange_rate": null,
+              "exchange_rate": "11.5",
               "account_number": "1510",
               "line_description": "Inbetalning kundfaktura 011, Kunde GmbH",
-              "amount_in_currency": null
+              "amount_in_currency": "300"
             },
             {
-              "currency": "SEK",
+              "currency": "EUR",
               "tax_code": null,
               "dimensions": {},
               "debit_amount": "3510",
@@ -456,7 +456,7 @@
               "exchange_rate": null,
               "account_number": "1930",
               "line_description": "Inbetalning kundfaktura 011, Kunde GmbH",
-              "amount_in_currency": null
+              "amount_in_currency": "300"
             },
             {
               "currency": "SEK",

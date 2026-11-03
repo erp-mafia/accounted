@@ -4,6 +4,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
 import {
   buildInvoicePaymentRows,
   INVOICE_AUTOGIRO_TEXT,
@@ -45,6 +46,7 @@ const LABELS = {
     questions: 'Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.',
     sincerely: 'Med vänliga hälsningar,',
     orgNo: 'Org.nr:',
+    registeredOffice: 'Säte:',
     vat: 'VAT:',
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc.toLowerCase()}sammanfattning:`,
@@ -87,6 +89,7 @@ const LABELS = {
     questions: 'Questions about the invoice? Reply directly to this email and we will help you.',
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
+    registeredOffice: 'Registered office:',
     vat: 'VAT:',
     // Statutory Swedish phrase: kept verbatim in both locales. F-skatt is a
     // Swedish tax-authority designation; translating it has no legal standing.
@@ -106,6 +109,15 @@ const LABELS = {
     confirmationQuestions: 'Questions about the payment? Reply directly to this email and we will help you.',
   },
 } as const
+
+/**
+ * The footer's säte segment (crm#1604), the same value the PDF footer prints
+ * (lib/invoices/seller-registered-office.ts). Empty when none is set.
+ */
+function registeredOfficeHtml(company: CompanySettings, L: (typeof LABELS)[EmailLang]): string {
+  const office = sellerRegisteredOffice(company)
+  return office ? ` | ${L.registeredOffice} ${escapeHtml(office)}` : ''
+}
 
 // Placeholder keys available in company-editable email texts
 // (company_settings.invoice_email_texts). Rendered as a legend in the
@@ -474,7 +486,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-        ${L.orgNo} ${company.org_number}
+        ${L.orgNo} ${company.org_number}${registeredOfficeHtml(company, L)}
         ${company.vat_number ? ` | ${L.vat} ${company.vat_number}` : ''}
         ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
       </p>
@@ -545,6 +557,8 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
 
   if (company.org_number) {
     text += `\n${L.orgNo} ${company.org_number}`
+    const office = sellerRegisteredOffice(company)
+    if (office) text += ` | ${L.registeredOffice} ${office}`
     if (company.vat_number) text += ` | ${L.vat} ${company.vat_number}`
     if (company.f_skatt) text += ` | ${L.fSkatt}`
     text += `\n`
@@ -669,7 +683,7 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-        ${L.orgNo} ${escapeHtml(company.org_number)}
+        ${L.orgNo} ${escapeHtml(company.org_number)}${registeredOfficeHtml(company, L)}
         ${company.vat_number ? ` | ${L.vat} ${escapeHtml(company.vat_number)}` : ''}
         ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
       </p>
@@ -705,6 +719,8 @@ export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): st
 
   if (company.org_number) {
     text += `\n${L.orgNo} ${company.org_number}`
+    const office = sellerRegisteredOffice(company)
+    if (office) text += ` | ${L.registeredOffice} ${office}`
     if (company.vat_number) text += ` | ${L.vat} ${company.vat_number}`
     if (company.f_skatt) text += ` | ${L.fSkatt}`
     text += `\n`

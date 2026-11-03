@@ -9,6 +9,8 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 import { getRiskLevel, OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import {
   complianceWarningOf,
@@ -78,6 +80,39 @@ describe('singleActionWarning', () => {
     expect(sentence).toContain('Registreringen kan inte ångras')
     expect(sentence).not.toContain('utkast')
     expect(singleActionWarning('create_invoice', { customer_id: 'c-1' })).toBe(singleActionWarnings.create_invoice)
+  })
+})
+
+/**
+ * crm#1605: a change of two invoice texts was approved under "Betalningsuppgifterna
+ * styr vart kunderna betalar kommande fakturor", though no payment detail
+ * changed. The clause is said only when a payee field changes.
+ */
+describe('singleActionWarning: company settings (crm#1605)', () => {
+  const t = (key: string) => (sv.pending as unknown as Record<string, string>)[key]
+  const PAYMENT_CLAUSE = 'Betalningsuppgifterna styr vart kunderna betalar kommande fakturor.'
+
+  it('leaves the payment clause out of a change without payment details', () => {
+    const sentence = singleActionWarning('update_company_settings', { invoice_footer_text: 'Tack', invoice_late_fee_text: 'Ränta' }, t)
+    expect(sentence).toBe('Genom att klicka godkänn så ändras företagsinställningarna.')
+    expect(singleActionWarning('update_company_settings', { invoice_show_bankgiro: false, invoice_qr_mode: 'none' }, t)).not.toContain(PAYMENT_CLAUSE)
+  })
+
+  it('says it for every field of the invoice payment account and for the per-currency map', () => {
+    for (const field of ['bank_name', 'clearing_number', 'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'invoice_payment_accounts']) {
+      expect(singleActionWarning('update_company_settings', { [field]: null }, t), field).toContain(PAYMENT_CLAUSE)
+    }
+  })
+
+  it('reads a row staged before settings.update under its changes, and keeps the clause when the params are unknown', () => {
+    expect(singleActionWarning('update_company_settings', { changes: { bankgiro: '991-2346' } }, t)).toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', { changes: { email: 'a@b.se' } }, t)).not.toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', null, t)).toContain(PAYMENT_CLAUSE)
+  })
+
+  it('has both sentences in English too', () => {
+    expect(en.pending.warning_update_company_settings).toBeTruthy()
+    expect(en.pending.warning_update_company_settings_payment).toBeTruthy()
   })
 })
 

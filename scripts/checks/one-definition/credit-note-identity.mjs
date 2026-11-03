@@ -23,7 +23,6 @@ export default {
     'app/api/invoices/[id]/mark-sent/route.ts': needsItsOriginal,
     'app/api/invoices/[id]/send/route.ts': needsItsOriginal,
     'app/api/invoices/[id]/pdf/route.ts': wording,
-    'app/api/v1/companies/[companyId]/invoices/[id]/pdf/route.ts': wording,
     'components/invoices/SendInvoiceDialog.tsx': needsItsOriginal,
     'components/invoices/InvoiceEditor.tsx': 'Deductions used on the customer: a row with a deduction is no credit note, and this needs no second filter.',
     'extensions/general/arcim-migration/lib/migration-job-worker.ts': 'A write that fills the link where it is empty.',
@@ -32,6 +31,8 @@ export default {
     'lib/invoices/book-invoice-deferred.ts': 'A compare-and-set on a write: the refusal by identity runs before it.',
     'lib/invoices/is-editable-draft.ts': 'A linked draft mirrors its original; an unlinked one mirrors nothing and stays editable.',
     'lib/invoices/pdf-template.tsx': wording,
+    // The v1 download's loader, shared with gnubok_get_invoice_pdf (crm#1593).
+    'lib/invoices/stored-invoice-pdf.ts': wording,
     'lib/invoices/sync-draft-vat-headers.ts': 'A linked draft keeps the VAT of the original it mirrors; an unlinked one has none to keep.',
   },
 }

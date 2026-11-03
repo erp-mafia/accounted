@@ -255,7 +255,17 @@ export const inboxItemsDelete = defineOperation({
     title: 'Delete Inbox Item',
     description:
       'Stage discarding an inbox item (spam, duplicate delivery). The document stays in the archive. Refused once the item became a supplier invoice or was booked; cannot be undone.',
-    keywords: ['ta bort inkorgspost', 'radera från inkorgen', 'skräppost inkorg', 'dubblett inkorg'],
+    // PH 243: "arkivera" is how people ask for it; the item leaves the Inkorg
+    // and its document stays in the archive (Ta bort ur Inkorgen).
+    keywords: [
+      'ta bort inkorgspost',
+      'radera från inkorgen',
+      'skräppost inkorg',
+      'dubblett inkorg',
+      'arkivera inkorgspost',
+      'fel företag',
+      'archive inbox item',
+    ],
     // The title is all Granskning's list shows: it names the item (crm#1411).
     stage: { pendingType: 'delete_inbox_item', title: (_input, preview = {}) => deleteInboxItemTitle(preview) },
   },

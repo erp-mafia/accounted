@@ -59,7 +59,7 @@
  *                     partially_paid.
  */
 import type { CreateJournalEntryLineInput } from '@/types'
-import { resolveSekAmount } from './currency-utils'
+import { buildCurrencyMetadata, resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek } from './ledger-carried-sek'
 import { bookedOreRounding, fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
@@ -313,6 +313,10 @@ export function buildInvoicePaymentClearingLines(
     })
 
   let arSek: number
+  // Units of the invoice's currency the AR leg clears, when the invoice is
+  // foreign and the figure is known: stamped on the 1510 line beside its
+  // kronor, as the registration stamps its debit (crm#1590).
+  let arInInvoiceCurrency: number | undefined
   let fxDiffSek: number
   let oreRoundingSek = 0
   let overpaymentSek = 0
@@ -364,13 +368,15 @@ export function buildInvoicePaymentClearingLines(
     // 1510 at the settlement-date value: a 1 000 EUR invoice booked at 11,30
     // (11 300,00 on 1510) settled by a tx worth 11 496,70 kr over-credited
     // 1510 by 196,70 and the realized kursvinst never reached 3960.
-    arSek = arSekOf(Math.abs(tx.amount))
+    arInInvoiceCurrency = Math.abs(tx.amount)
+    arSek = arSekOf(arInInvoiceCurrency)
     fxDiffSek = roundOre(arSek - bankSek)
   } else if (paidInInvoiceCurrency != null && paidInInvoiceCurrency > 0) {
     // Proper FX path: caller computed the invoice-currency equivalent
     // using today's spot rate. AR-leg comes off 1510 at the invoice's
     // BOOKING rate (so the GL credit matches what was originally posted
     // for those units of foreign currency). FX diff balances the verifikat.
+    arInInvoiceCurrency = paidInInvoiceCurrency
     arSek = arSekOf(paidInInvoiceCurrency)
     fxDiffSek = roundOre(arSek - bankSek)
   } else {
@@ -379,14 +385,18 @@ export function buildInvoicePaymentClearingLines(
     // pre-FX-rewrite behaviour: full-clear gets FX diff, partial defers.
     const arSekFullRemaining = arSekOf(remainingInInvoiceCurrency)
     if (bankSek >= arSekFullRemaining - 0.005) {
+      arInInvoiceCurrency = remainingInInvoiceCurrency
       arSek = arSekFullRemaining
       fxDiffSek = roundOre(arSek - bankSek)
     } else {
+      // A deferred partial: the units these kronor clear are not known.
       arSek = bankSek
       fxDiffSek = 0
     }
   }
 
+  // The bank line's own currency figure is stamped by the engine from the
+  // entry's bank_booking_context (withBankLegCurrency), for every door alike.
   const lines: CreateJournalEntryLineInput[] = [
     {
       account_number: paymentAccount,
@@ -399,6 +409,9 @@ export function buildInvoicePaymentClearingLines(
       debit_amount: 0,
       credit_amount: arSek,
       line_description: description,
+      ...(arInInvoiceCurrency !== undefined
+        ? buildCurrencyMetadata(invoice.currency, roundOre(arInInvoiceCurrency), invoice.exchange_rate)
+        : {}),
     },
   ]
 

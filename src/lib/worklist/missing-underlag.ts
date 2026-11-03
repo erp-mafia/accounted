@@ -64,7 +64,7 @@ export async function listMissingUnderlagSample(
       ok?: boolean
       code?: string
       total_count?: number
-      verifikat?: { description: string | null }[]
+      verifikat?: { description: string | null; source_type?: string | null }[]
     } | null
     if (!result?.ok) {
       log.error('missing underlag sample failed', {
@@ -91,18 +91,20 @@ export async function listMissingUnderlagSample(
  * description. It also reads each verifikat's lines, which this summary does
  * not: a row that bought nothing counts here under its words, usually as
  * mail. A summary line is therefore never more specific than the per-item
- * sentence, which is the right direction to be wrong in.
+ * sentence, which is the right direction to be wrong in. The source type
+ * the RPC returns is read as the agent reads it: an imported verifikat is
+ * 'imported' in both.
  */
 export function summariseMissingUnderlag(
   total: number,
-  rows: { description: string | null }[],
+  rows: { description: string | null; source_type?: string | null }[],
   companyPortals: readonly CompanyPortal[] = [],
 ): MissingUnderlagSample {
   if (total === 0 || rows.length === 0) return { total, sampled: 0, top: null }
 
   const tally = new Map<NextStepKind, number>()
   for (const row of rows) {
-    const kind = nextStepKind(row.description, companyPortals)
+    const kind = nextStepKind(row.description, companyPortals, undefined, row.source_type)
     tally.set(kind, (tally.get(kind) ?? 0) + 1)
   }
 

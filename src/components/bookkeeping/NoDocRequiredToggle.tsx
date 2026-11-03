@@ -152,6 +152,7 @@ export default function NoDocRequiredToggle({
         <option value={t('no_doc_required_suggestion_internal_transfer')} />
         <option value={t('no_doc_required_suggestion_tax_payment')} />
         <option value={t('no_doc_required_suggestion_salary')} />
+        <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
       </datalist>
     </>
   )

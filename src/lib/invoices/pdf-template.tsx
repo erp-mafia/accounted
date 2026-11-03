@@ -21,6 +21,7 @@ import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut
 import { getCountryName } from '@/lib/vat/country-codes'
 import { unitLabel } from '@/lib/invoices/unit-labels'
 import { deliveryAddressLines } from '@/lib/invoices/delivery-address'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
 import {
   PAYMENT_AREA_GAP_PT,
   PAYMENT_AREA_HEIGHT_PT,
@@ -460,12 +461,15 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     </View>
   )
 
+  const registeredOffice = sellerRegisteredOffice(company)
   const statutoryLine = [
     company.company_name,
     company.address_line1,
     company.address_line2,
     postalLine(company.postal_code, company.city),
     company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumberDisplay(company.org_number)}` : null,
+    // Säte when the company has set it (crm#1604); never the postal town.
+    registeredOffice ? `${bareLabel(L.registeredOffice)} ${registeredOffice}` : null,
     // Momsreg.nr only for a VAT-registered seller (ML 17 kap 24 § p.3);
     // F-skatt only when the company holds it.
     company.vat_registered !== false && company.vat_number ? `${bareLabel(L.vatRegNo)} ${company.vat_number}` : null,

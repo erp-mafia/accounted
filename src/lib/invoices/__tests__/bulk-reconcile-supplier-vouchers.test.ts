@@ -28,6 +28,7 @@ interface InvOver {
   total?: number
   remaining?: number
   due?: string
+  invoiceDate?: string
   isCredit?: boolean
 }
 
@@ -42,6 +43,7 @@ function inv(over: InvOver) {
     total,
     paid_amount: 0,
     remaining_amount: over.remaining ?? total,
+    ...(over.invoiceDate ? { invoice_date: over.invoiceDate } : {}),
     due_date: over.due ?? '2026-02-01',
     paid_at: null,
     exchange_rate: null,
@@ -51,12 +53,12 @@ function inv(over: InvOver) {
   }
 }
 
-function cand(over: { je: string; confidence?: number; amount?: number; n?: number }) {
+function cand(over: { je: string; confidence?: number; amount?: number; n?: number; date?: string }) {
   return {
     journal_entry_id: over.je,
     voucher_series: 'A',
     voucher_number: over.n ?? 1,
-    entry_date: '2026-02-01',
+    entry_date: over.date ?? '2026-02-01',
     description: 'Leverantörsbetalning',
     ap_debit_amount: over.amount ?? 1000,
     currency: 'SEK',
@@ -276,4 +278,49 @@ it('bounds a worker batch to its invoice IDs and candidate payment references', 
   expect(calls).toContainEqual(['limit', 1])
   expect(result.links).toEqual([])
   expect(mLink).not.toHaveBeenCalled()
+})
+
+// PH 241: a recurring supplier's earlier payment (same amount, same name)
+// was auto-linked to a later invoice, before that invoice existed.
+describe('reconcileSupplierInvoiceVouchers: a voucher dated before the invoice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mFind.mockReset()
+    mLink.mockReset()
+  })
+
+  it('is never auto-linked: the invoice goes to review', async () => {
+    queue([inv({ id: 'i1', invoiceDate: '2026-07-11', due: '2026-07-30' })])
+    mFind.mockResolvedValueOnce([cand({ je: 'v-may', date: '2026-05-20', confidence: 0.95 })] as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(0)
+    expect(res.ambiguous).toBe(1)
+    expect(res.review[0]).toMatchObject({ supplier_invoice_id: 'i1', reason: 'paid_before_invoice' })
+    expect(mLink).not.toHaveBeenCalled()
+  })
+
+  it('does not block, or tie with, a payment dated after the invoice', async () => {
+    queue([inv({ id: 'i1', invoiceDate: '2026-07-11', due: '2026-07-30' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v-may', date: '2026-05-20', confidence: 0.95 }),
+      cand({ je: 'v-aug', date: '2026-08-10', confidence: 0.95, n: 2 }),
+    ] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v-aug' }) as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(1)
+    expect(res.links[0]).toMatchObject({ journal_entry_id: 'v-aug' })
+    expect(mLink).toHaveBeenCalledWith({}, 'u1', 'c1', expect.objectContaining({ journalEntryId: 'v-aug' }))
+  })
+
+  it('a payment on the invoice date itself still links', async () => {
+    queue([inv({ id: 'i1', invoiceDate: '2026-02-01' })])
+    mFind.mockResolvedValueOnce([cand({ je: 'v1', date: '2026-02-01' })] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v1' }) as never)
+
+    expect((await run()).autoLinked).toBe(1)
+  })
 })

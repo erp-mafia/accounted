@@ -904,6 +904,26 @@ function rcBasisKey(lines: readonly { account_number: string }[]): string {
 }
 
 /**
+ * Whether a transaction of this sign runs against the template's learned
+ * direction: money in on an expense-learned template (a supplier's refund or
+ * credit) or money out on an income-learned one (a customer refunded). The
+ * one decision: the booking mirrors such a match
+ * (buildMappingResultFromCounterpartyTemplate), and the row's proposal, the
+ * review policy and the MCP suggestion tool say so before it is booked
+ * (crm#1598).
+ */
+export function contradictsLearnedDirection(
+  tmpl: Pick<CategorizationTemplate, 'debit_account' | 'credit_account' | 'line_pattern'>,
+  transactionAmount: number,
+): boolean {
+  const learned = tmpl.line_pattern && tmpl.line_pattern.length > 0
+    ? patternDirection(tmpl.line_pattern)
+    : legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
+  const isExpense = transactionAmount < 0
+  return (learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)
+}
+
+/**
  * Convert a counterparty template match into a MappingResult
  * (same shape the mapping engine expects).
  *
@@ -923,12 +943,10 @@ export function buildMappingResultFromCounterpartyTemplate(
 ): MappingResult {
   const tmpl = match.template
   const isExpense = transaction.amount < 0
+  const mirror = contradictsLearnedDirection(tmpl, transaction.amount)
 
   // Multi-line pattern path
   if (tmpl.line_pattern && tmpl.line_pattern.length > 0) {
-    const learned = patternDirection(tmpl.line_pattern)
-    const mirror =
-      (learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)
     return buildMultiLineMappingResult(tmpl, match, transaction, mirror, vatRegistered)
   }
 
@@ -946,8 +964,7 @@ export function buildMappingResultFromCounterpartyTemplate(
     tmpl.vat_treatment as VatTreatment | null, vatRegistered,
   )
 
-  const learned = legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
-  if ((learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)) {
+  if (mirror) {
     return buildLegacyMismatchResult(tmpl, match, absAmount, isExpense, vatTreatment)
   }
 

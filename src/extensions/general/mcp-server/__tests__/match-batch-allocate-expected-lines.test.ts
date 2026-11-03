@@ -286,16 +286,28 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
-  it('routes an unbooked kontantmetoden supplier invoice to the person, not to the customer-invoice tool (crm#1510)', async () => {
+  // PH 243: one such invoice per call books through the single match
+  // (lib/transactions/__tests__/match-batch-single-supplier.test.ts); several
+  // on one row are refused with that call as the way through.
+  it('routes several unbooked kontantmetoden supplier invoices to one call each, not to the customer-invoice tool (crm#1510)', async () => {
     mockFindCashUnbooked.mockResolvedValueOnce({
       ok: true,
-      unbooked: [{ kind: 'supplier_invoice', id: INV_A, invoice_number: '74' }],
+      unbooked: [
+        { kind: 'supplier_invoice', id: INV_A, invoice_number: '74' },
+        { kind: 'supplier_invoice', id: INV_B, invoice_number: '75' },
+      ],
     })
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: [{ id: INV_A, document_type: 'invoice' }], error: null })
 
     const refusal = allocate.execute(
-      { transaction_id: TX_ID, allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: INV_A, amount: 2494 }] },
+      {
+        transaction_id: TX_ID,
+        allocations: [
+          { kind: 'supplier_invoice', supplier_invoice_id: INV_A, amount: 2494 },
+          { kind: 'supplier_invoice', supplier_invoice_id: INV_B, amount: 6 },
+        ],
+      },
       'company-1',
       'user-1',
       supabase as never,
@@ -303,7 +315,7 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     )
     await expect(refusal).rejects.toMatchObject({
       code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
-      message: expect.stringMatching(/Obokförda fakturor: 74\..*suggested_match/),
+      message: expect.stringMatching(/Obokförda fakturor: 74, 75\..*en enda allocation per faktura/),
     })
     await expect(refusal).rejects.not.toMatchObject({ message: expect.stringContaining('gnubok_match_transaction_to_invoice') })
     expect(findCall('pending_operations', 'insert')).toBeUndefined()

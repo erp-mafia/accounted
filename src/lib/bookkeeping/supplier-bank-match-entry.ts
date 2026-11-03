@@ -88,22 +88,24 @@ export async function createSupplierBankMatchEntry(
     booking.bankFeeSek,
     booking.sekClearingDebt,
     posting,
+    booking.apInInvoiceCurrency,
   )
 }
 
 /**
  * The lines createSupplierBankMatchEntry books for the same plan, without
- * booking them. Throws SupplierInvoiceFxRateMissingError (code
- * SI_FX_RATE_MISSING) for a kontantmetoden foreign invoice with no usable rate,
- * as the booking does. `chartVatTreatments` are the company's momskoder, which
- * the booking reads for a reverse-charge invoice (fetchChartVatTreatments).
+ * booking them, with the verifikat header text the booking writes. Throws
+ * SupplierInvoiceFxRateMissingError (code SI_FX_RATE_MISSING) for a
+ * kontantmetoden foreign invoice with no usable rate, as the booking does.
+ * `chartVatTreatments` are the company's momskoder, which the booking reads
+ * for a reverse-charge invoice (fetchChartVatTreatments).
  */
 export function buildSupplierBankMatchLines(
   invoice: SupplierInvoice,
   booking: SupplierBankMatchBooking,
   paymentAccount: string,
   chartVatTreatments?: ChartVatTreatments,
-): { lines: CreateJournalEntryLineInput[]; oreDiffSek: number } {
+): { description: string; lines: CreateJournalEntryLineInput[]; oreDiffSek: number } {
   if (booking.kind === 'cash') {
     const built = buildSupplierInvoiceCashLines(invoice, invoice.items ?? [], supplierType(invoice), {
       paymentAccount,
@@ -111,7 +113,7 @@ export function buildSupplierBankMatchLines(
       bankFeeSek: booking.bankFeeSek,
       chartVatTreatments,
     })
-    return { lines: built.lines, oreDiffSek: built.oreDiffSek }
+    return { description: built.description, lines: built.lines, oreDiffSek: built.oreDiffSek }
   }
   const built = buildSupplierInvoicePaymentLines(invoice, {
     paymentAmount: booking.paymentAmount,
@@ -120,6 +122,7 @@ export function buildSupplierBankMatchLines(
     paymentAccount,
     bankFeeSek: booking.bankFeeSek,
     sekClearingDebt: booking.sekClearingDebt,
+    apInInvoiceCurrency: booking.apInInvoiceCurrency,
   })
-  return { lines: built.lines, oreDiffSek: built.oreDiffSek }
+  return { description: built.description, lines: built.lines, oreDiffSek: built.oreDiffSek }
 }

@@ -302,6 +302,13 @@ describe('gnubok_search_tools', () => {
       expect(result.tools.map((t) => t.name)).toContain(expected)
     })
 
+    // PH 243: "arkivera en post i inkorgen" is the Inkorg's Ta bort ur Inkorgen
+    // (the document stays in the archive), which the agent did not find.
+    it.each(['arkivera inkorgspost', 'archive inbox item'])('%j finds gnubok_delete_inbox_item first', async (query) => {
+      const result = await call({ query, detail: 'name', limit: 5 })
+      expect(result.tools[0]?.name).toBe('gnubok_delete_inbox_item')
+    })
+
     it('keywords are matcher-side only: never serialized into search results', async () => {
       // A keyword-only match proves the keywords were consulted; the payload
       // must still not carry them at any detail level.

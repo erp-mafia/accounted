@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createElement, type ComponentProps } from 'react'
 import { renderToString } from 'react-dom/server'
 import { NextIntlClientProvider } from 'next-intl'
@@ -274,5 +276,27 @@ describe('ProviderStep, what the stored key is still for', () => {
     const html = render(status(true, [idle]), 'en')
     expect(html).toContain(en.extensions.ext_arcim_key_idle.replaceAll('{provider}', 'Bokio'))
     expect(html).toContain(en.extensions.ext_arcim_key_remove)
+  })
+})
+
+describe('deep-linked provider preselect (PH 245)', () => {
+  // The effect lives in the workspace component, which needs a browser to
+  // mount; its rule is pinned on the source, as for the other effects here.
+  const source = readFileSync(resolve(__dirname, '../ArcimMigrationWorkspace.tsx'), 'utf8')
+  const effect = source.slice(
+    source.indexOf('const preselectedRef = useRef(false)'),
+    source.indexOf('void handleSelectProvider(provider.id)'),
+  )
+
+  it('waits for the connection status before it decides', () => {
+    expect(effect).toContain('if (isLoadingStatus) return')
+  })
+
+  it('stays on the provider list, where Hämta underlag is, once a migration from that provider ran', () => {
+    expect(effect).toMatch(
+      /connectionStatus\?\.hasCompletedSieImport &&\s+connectionStatus\.consents\.some\(\(consent\) => consent\.provider === provider\.id\)/,
+    )
+    const stop = effect.slice(effect.indexOf('connectionStatus.consents.some'))
+    expect(stop.indexOf('preselectedRef.current = true\n      return')).toBeGreaterThan(-1)
   })
 })

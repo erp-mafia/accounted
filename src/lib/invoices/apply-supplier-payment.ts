@@ -153,6 +153,8 @@ export type SupplierBankMatchBooking =
       exchangeRateDifference?: number
       sekClearingDebt?: number
       bankFeeSek: number
+      /** Foreign invoice: the units of its currency cleared off 2440 (crm#1590). */
+      apInInvoiceCurrency?: number
     }
 
 export interface SupplierBankMatchPlan extends SupplierPaymentPlan {
@@ -384,11 +386,15 @@ export function planSupplierBankMatch(args: {
     booking = { kind: 'clearing', paymentAmount: actualBankSek, sekClearingDebt: remaining, bankFeeSek }
   } else {
     // Foreign leg: 2440 cleared at the booked SEK, the bank credited with the
-    // SEK that moved, the difference on 3960/7960.
+    // SEK that moved, the difference on 3960/7960. A foreign invoice's 2440
+    // line also carries the units it clears.
+    const apInInvoiceCurrency = isKronorCurrency(invoice.currency)
+      ? undefined
+      : roundOre(ledger.plan.newPaidAmount - (invoice.paid_amount || 0))
     booking =
       exchangeRateDifference !== 0
-        ? { kind: 'clearing', paymentAmount: originalBookedSek, exchangeRateDifference, bankFeeSek }
-        : { kind: 'clearing', paymentAmount: actualBankSek, bankFeeSek }
+        ? { kind: 'clearing', paymentAmount: originalBookedSek, exchangeRateDifference, bankFeeSek, apInInvoiceCurrency }
+        : { kind: 'clearing', paymentAmount: actualBankSek, bankFeeSek, apInInvoiceCurrency }
   }
 
   return {
