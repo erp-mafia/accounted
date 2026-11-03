@@ -17,7 +17,8 @@
  * moms and its vat_amount is the deductible part. A row whose moms is not
  * deductible at all goes at 0 % with the moms in its amount, because a stored
  * vat_amount of 0 reads as "nothing stored" and would be recomputed from the
- * rate. Pure, so the editor, its review dialog and the payload agree.
+ * rate. Pure, so the editor, its review dialog and the payload agree, and the
+ * MCP inbox door (deductStagedLines) books a row the way the editor does.
  */
 
 import { netVat } from '@/lib/bookkeeping/gross-split'
@@ -26,7 +27,14 @@ import { roundOre } from '@/lib/money'
 export interface LimitedDeductionRow {
   amount: number
   vat_rate: number
+  /** The moms the row books: set only by bookLimitedDeduction, the deductible part. */
   vat_amount?: number
+  /**
+   * The row's moms as the invoice states it, when the door has the figure
+   * (the MCP inbox door: the row's part of the document's moms). The editor's
+   * rows carry none: their moms is amount × moms sats.
+   */
+  invoiced_vat?: number
   /** The share (0 to 1) of the row's moms the person deducts; undefined means all of it. */
   vat_deduction_share?: number
 }
@@ -38,13 +46,14 @@ export interface BookedLimitedDeduction<T> {
   nonDeductibleVat: number[]
 }
 
-/** The row's moms as the invoice states it: amount × moms sats. */
-export function invoicedRowVat(row: Pick<LimitedDeductionRow, 'amount' | 'vat_rate'>): number {
+/** The row's moms as the invoice states it: its invoiced_vat, else amount × moms sats. */
+export function invoicedRowVat(row: Pick<LimitedDeductionRow, 'amount' | 'vat_rate' | 'invoiced_vat'>): number {
+  if (typeof row.invoiced_vat === 'number' && Number.isFinite(row.invoiced_vat)) return roundOre(row.invoiced_vat)
   return netVat(roundOre(row.amount || 0), row.vat_rate || 0)
 }
 
 /** The moms deducted on a row at a share of its moms, in whole öre. */
-export function deductibleRowVat(row: Pick<LimitedDeductionRow, 'amount' | 'vat_rate'>, share: number): number {
+export function deductibleRowVat(row: Pick<LimitedDeductionRow, 'amount' | 'vat_rate' | 'invoiced_vat'>, share: number): number {
   const full = invoicedRowVat(row)
   return Math.min(Math.max(roundOre(full * share), 0), full)
 }
@@ -85,4 +94,55 @@ export function bookLimitedDeduction<T extends LimitedDeductionRow>(
     return { ...row, amount, vat_amount: deductible } as T
   })
   return { items: booked, nonDeductibleVat }
+}
+
+/** A line as the MCP inbox door stages it: vat_amount is its part of the document's moms. */
+export interface StagedDeductionLine {
+  line_number: number
+  line_total: number
+  vat_rate: number
+  vat_amount: number
+}
+
+export interface StagedLineDeduction<T> {
+  /** The lines to stage: a deducted line keeps its share, its amount grown by the moms booked as cost. */
+  lines: Array<T & { vat_deduction_share?: number }>
+  /** Per deducted line: the moms the invoice states, the part deducted and the part booked as cost. */
+  deducted: Array<{ line_number: number; invoiced_vat: number; deductible_vat: number; vat_as_cost: number }>
+  /** Line numbers given a share that the invoice does not have or that carry no moms. */
+  invalidLines: number[]
+}
+
+/**
+ * Begränsat momsavdrag on the MCP inbox door's staged lines, by line number:
+ * each line is booked as bookLimitedDeduction books the editor's row, from the
+ * moms the line carries, so the lines incl. moms stay the invoice total.
+ */
+export function deductStagedLines<T extends StagedDeductionLine>(
+  lines: readonly T[],
+  shares: ReadonlyMap<number, number>,
+): StagedLineDeduction<T> {
+  const invalidLines = [...shares.keys()].filter(
+    (lineNumber) => !((lines.find((line) => line.line_number === lineNumber)?.vat_amount ?? 0) > 0),
+  )
+  const booked = bookLimitedDeduction<LimitedDeductionRow>(
+    lines.map((line) => ({
+      amount: line.line_total,
+      vat_rate: line.vat_rate,
+      invoiced_vat: line.vat_amount,
+      vat_deduction_share: shares.get(line.line_number),
+    })),
+    true,
+  )
+  const deducted: StagedLineDeduction<T>['deducted'] = []
+  const staged = lines.map((line, idx) => {
+    const share = shares.get(line.line_number)
+    const vatAsCost = booked.nonDeductibleVat[idx]
+    if (share === undefined || vatAsCost === 0) return line
+    const row = booked.items[idx]
+    const deductible = row.vat_amount ?? 0
+    deducted.push({ line_number: line.line_number, invoiced_vat: line.vat_amount, deductible_vat: deductible, vat_as_cost: vatAsCost })
+    return { ...line, line_total: row.amount, vat_rate: row.vat_rate, vat_amount: deductible, vat_deduction_share: share }
+  })
+  return { lines: staged, deducted, invalidLines }
 }
