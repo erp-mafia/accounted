@@ -24,6 +24,8 @@ export const API_KEY_SCOPES = {
   'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar, kontoplan (skapa/ändra konton), verifikat-anteckningar' },
   'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal, körjournal' },
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
+  'time:read':          { label: 'Tid: läs',            description: 'Tidrader, tidsammanställning per kund, projekt och konsult, aktivitetskoder och timpriser' },
+  'time:write':         { label: 'Tid: skriv',          description: 'Registrera, ändra och ta bort tidrader (stagas)' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
   'companies:write':    { label: 'Företag: skriv',      description: 'Skapa nya företag och uppdatera företagsinställningar (gnubok_create_company, stagade verktyg, REST POST /api/v1/companies och PATCH /api/v1/companies/{companyId}/settings)' },
@@ -96,6 +98,7 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'documents:read',
   'compliance:read',
   'payroll:read',
+  'time:read',
   'pending_operations:read',
 ]
 
@@ -132,6 +135,8 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'reconciliation:write',
   // gnubok_reconcile_signoff stages reconciliation_signoff.
   'reconciliation:signoff',
+  // The time-entry write tools stage their operations; same SoD reasoning.
+  'time:write',
 ]
 
 /**
@@ -177,6 +182,7 @@ export const SCOPE_GROUPS: readonly ScopeGroup[] = [
   { domain: 'reports',            label: 'Rapporter',           scopes: ['reports:read'] },
   { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
   { domain: 'payroll',            label: 'Löner',               scopes: ['payroll:read', 'payroll:write'] },
+  { domain: 'time',               label: 'Tidrapportering',     scopes: ['time:read', 'time:write'] },
   { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:write'] },
   { domain: 'pending_operations', label: 'Agentförslag',        scopes: ['pending_operations:read', 'pending_operations:approve'] },
   { domain: 'agent',              label: 'Agent',               scopes: ['agent:read', 'agent:write'] },
@@ -349,6 +355,15 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_revert_salary_run: 'payroll:write',
   gnubok_unapprove_salary_run: 'payroll:write',
   gnubok_attach_salary_expense_claims: 'payroll:write',
+  // Time tracking (lib/operations/time-entries.ts).
+  gnubok_list_time_entries: 'time:read',
+  gnubok_get_time_summary: 'time:read',
+  gnubok_list_time_codes: 'time:read',
+  gnubok_log_time: 'time:write',
+  gnubok_update_time_entry: 'time:write',
+  gnubok_delete_time_entry: 'time:write',
+  // Ends in a draft invoice: the invoice scope.
+  gnubok_invoice_time_entries: 'invoices:write',
   // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts).
   gnubok_list_salary_runs: 'payroll:read',
   gnubok_add_salary_run_employee: 'payroll:write',

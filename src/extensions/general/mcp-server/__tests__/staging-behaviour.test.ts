@@ -843,6 +843,44 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { item_type: 'net_deduction_union', description: 'Fackavgift', amount: -350, valid_from: '2026-01-01' },
   },
   gnubok_update_employee_recurring_line: { args: { description: 'Fackavgift Unionen' } },
+  // One priced uninvoiced entry on a Swedish business customer: the preview
+  // runs the shared invoice build (reads only) and writes nothing.
+  gnubok_invoice_time_entries: {
+    args: { customer_id: SOME_UUID, invoice_date: '2026-11-03', due_date: '2026-12-03' },
+    rows: {
+      customers: { ...makeCustomer({ id: SOME_UUID, name: 'Kund AB', customer_type: 'swedish_business', org_number: '556677-8899' }) },
+      time_entries: {
+        id: SOME_UUID, entry_date: '2026-10-14', hours: 2, consultant: 'AB', customer_id: SOME_UUID,
+        customer_name: 'Kund AB', project_code: null, activity_code: '1', comment: null,
+        is_billable: true, invoice_id: null, source: 'manual',
+      },
+      extension_data: {
+        value: { consultants: [], activity_codes: [{ code: '1', name: 'Konsult', hourly_rate: 1000 }], customer_links: [], default_hourly_rate: null },
+      },
+      company_settings: { vat_registered: true },
+    },
+  },
+  // One entry by customer id and consultant code: the preview reads the registers only.
+  gnubok_log_time: {
+    args: { entries: [{ entry_date: '2026-10-14', hours: 2, customer_id: SOME_UUID, consultant: 'AB' }] },
+    rows: {
+      extension_data: {
+        value: { consultants: [{ code: 'AB', name: 'Anna Berg' }], activity_codes: [], customer_links: [], default_hourly_rate: null },
+      },
+      customers: { id: SOME_UUID, name: 'Kund AB', customer_number: null },
+    },
+  },
+  // An uninvoiced entry whose hours change: no reference to resolve, so the preview reads the row and the registers only.
+  gnubok_update_time_entry: {
+    args: { hours: 2 },
+    rows: {
+      time_entries: {
+        id: SOME_UUID, entry_date: '2026-10-14', hours: 3, consultant: 'AB', customer_id: SOME_UUID,
+        customer_name: 'Kund AB', project_code: null, activity_code: null, comment: null,
+        is_billable: true, invoice_id: null, source: 'manual',
+      },
+    },
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

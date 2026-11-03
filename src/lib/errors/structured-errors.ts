@@ -6451,6 +6451,57 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Import av befintliga dimensionskoder misslyckades.',
     message_en: 'Failed to import existing dimension codes from journal lines.',
   },
+  // Time entries (lib/time-tracking/writes.ts, operations time-entries.*):
+  // one set of codes for the dashboard, v1 and MCP.
+  TIME_ENTRY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Tidraden finns inte.',
+    message_en: 'Time entry not found in this company.',
+  },
+  TIME_ENTRY_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Tidraden är fakturerad och kan inte ändras eller tas bort.',
+    message_en: 'The time entry is on an invoice and can no longer be changed or deleted.',
+  },
+  TIME_ENTRY_REFERENCE_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: 'Kunde inte avgöra vilken kund, vilket projekt, vilken aktivitetskod eller medarbetare som avses.',
+    message_en:
+      'A customer, project, activity code or consultant did not match exactly one register entry: details.field names it and details.candidates lists the closest; retry with the code.',
+  },
+  TIME_ENTRY_CONSULTANT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange medarbetare: ditt konto är inte kopplat till någon medarbetarkod i tidrapporteringen.',
+    message_en:
+      'Name the consultant: the acting user is not linked to a consultant in the time-tracking settings. details.consultants lists them.',
+  },
+  TIME_INVOICE_NOTHING_TO_INVOICE: {
+    httpStatus: 400,
+    message_sv: 'Det finns inga ofakturerade debiterbara timmar på kunden i perioden.',
+    message_en: 'The customer has no uninvoiced billable hours in the period.',
+  },
+  TIME_INVOICE_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Några timmar saknar timpris. Ange pris på aktivitetskoden eller ett standardpris under Tidrapportering.',
+    message_en:
+      'Some hours have no hourly rate: set a rate on the activity code or a default rate in the time-tracking settings. details lists the activity codes.',
+  },
+  TIME_INVOICE_ENTRIES_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Tidraderna har ändrats sedan förslaget skapades. Skapa ett nytt förslag.',
+    message_en:
+      'The time entries changed since the draft was previewed (edited, deleted or invoiced elsewhere): preview again. When details.invoice_id is set, that draft was created and only some entries were linked.',
+  },
+  TIME_INVOICE_TOO_MANY_ENTRIES: {
+    httpStatus: 400,
+    message_sv: 'För många tidrader för en faktura. Begränsa perioden med från- och till-datum.',
+    message_en: 'Too many time entries for one invoice: narrow the period with from and to.',
+  },
+  TIME_ENTRY_CUSTOMER_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'Kunden finns inte.',
+    message_en: 'customer_id is not a customer of this company.',
+  },
   // Account dimension rules (lib/dimensions/rules-service.ts, operations
   // dimension-rules.*): one set of codes for the dashboard, v1 and MCP.
   DIMENSION_RULE_NOT_FOUND: {
