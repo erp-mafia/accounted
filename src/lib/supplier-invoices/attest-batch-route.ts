@@ -11,7 +11,7 @@
  * session, no supabase.auth; the service-role client reads the row; a
  * per-token budget bounds a leaked link; the clear token is never logged.
  * Every way a token fails (malformed, unknown, expired, used) answers the
- * same 404, and so does a link whose attester no longer keeps the books or
+ * same 404, and so does a link whose attester's attest can no longer count or
  * whose company is archived (attesterCanStillDecide, the single link's rule).
  *
  * What the link may still decide is per invoice: one listed in it, still
@@ -34,7 +34,7 @@ import { attesterCanStillDecide } from './attest-link-route'
 import { isValidAttestTokenFormat } from './attest-links'
 import { ATTEST_COMMENT_MAX, currentRound, latestRejection } from './attest-policy'
 import { loadAttestLimits, loadAttestPolicy, loadAttestTrails } from './attest-policy-read'
-import { approveSupplierInvoice, attestViewerOf, loadActiveAttestMembers, loadAttestPeople, rejectSupplierInvoice } from './attest-service'
+import { approveSupplierInvoice, attestViewerOf, loadAttestMembers, loadAttestPeople, rejectSupplierInvoice } from './attest-service'
 import { isOverduePayable } from './lifecycle'
 
 // 120 requests per token per 10 minutes: the page, a document per invoice,
@@ -71,7 +71,7 @@ export function withAttestBatchToken<P extends { token: string }>(operation: str
       const { batch } = resolved
       const batchLog = log.child({ companyId: batch.company_id, attestBatchId: batch.id })
       if (!(await attesterCanStillDecide(service, batch))) {
-        return errorResponseFromCode('NOT_FOUND', batchLog, { requestId, reason: 'attest batch of someone no longer a writing member of a live company' })
+        return errorResponseFromCode('NOT_FOUND', batchLog, { requestId, reason: 'attest batch of someone whose attest no longer counts in a live company' })
       }
       return await handler(
         request,
@@ -170,7 +170,7 @@ export async function describeAttestBatch(
     await Promise.all([
       loadAttestPolicy(service, companyId),
       loadAttestLimits(service, companyId),
-      loadActiveAttestMembers(service, companyId),
+      loadAttestMembers(service, companyId),
       service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
       service.from('companies').select('name').eq('id', companyId).maybeSingle(),
       service

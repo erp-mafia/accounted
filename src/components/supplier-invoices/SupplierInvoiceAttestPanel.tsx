@@ -84,12 +84,10 @@ const nameOf = (p: AttestPerson | null | undefined, fallback: string) => p?.name
 export function SupplierInvoiceAttestPanel({
   state,
   onChanged,
-  canWrite,
 }: {
   state: SupplierInvoiceAttestState
   /** After a decision: refetch the invoice and this state. */
   onChanged: () => Promise<void> | void
-  canWrite: boolean
 }) {
   const t = useTranslations('supplier_invoice_attest')
   const locale = useLocale() as ErrorLocale
@@ -166,7 +164,8 @@ export function SupplierInvoiceAttestPanel({
   const sourceLabel = (source: SupplierInvoiceAttestState['attestations'][number]['source']) => t(`source_${source}`)
   // Attestera stays the page header's one primary action (it asks the same
   // service); Neka lives here, beside who is left, while attest is pending.
-  const showReject = canWrite && state.required && state.viewer.may_reject
+  // The service says who may: an attester the policy names, a viewer too.
+  const showReject = state.required && state.viewer.may_reject
 
   return (
     <DetailSection

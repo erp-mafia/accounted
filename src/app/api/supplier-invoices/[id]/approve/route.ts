@@ -10,6 +10,11 @@ import { approveSupplierInvoice } from '@/lib/supplier-invoices/attest-service'
  * operation and the mail's link. `data` is the invoice; `data.attest` says
  * where the attest stands, so the page can tell "attested" from "your attest
  * is recorded, the others' is missing".
+ *
+ * No requireWrite: a viewer the attest policy names attests here too, and
+ * attests nothing else (crm#1569). Who may decide is the service's and the
+ * database's ruling (deciderRefusal, supplier_invoice_attest_ruling): without
+ * a policy that governs the invoice only someone who keeps the books.
  */
 export const POST = withRouteContext(
   'supplier_invoice.approve',
@@ -26,5 +31,4 @@ export const POST = withRouteContext(
     const { invoice, approved, attest } = outcome.data
     return NextResponse.json({ data: { ...invoice, attest: { ...attest, approved } } })
   },
-  { requireWrite: true },
 )

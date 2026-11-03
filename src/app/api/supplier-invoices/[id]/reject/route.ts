@@ -12,7 +12,8 @@ const RejectBody = z.object({ comment: z.string().max(ATTEST_COMMENT_MAX).nullis
  * POST /api/supplier-invoices/:id/reject: "Neka" the attest of an invoice that
  * waits for it, with an optional comment. The round starts over: approvals so
  * far stop counting and the mail's links stop working. Whoever may approve
- * may reject (lib/supplier-invoices/attest-service.ts).
+ * may reject (lib/supplier-invoices/attest-service.ts), a viewer the policy
+ * names included, so there is no requireWrite (see the approve route).
  */
 export const POST = withRouteContext(
   'supplier_invoice.reject',
@@ -30,5 +31,4 @@ export const POST = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
 )

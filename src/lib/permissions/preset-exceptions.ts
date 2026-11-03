@@ -109,12 +109,26 @@ export const OWN_AGENT_KEYS: readonly string[] = [
   'PATCH /api/settings/api-keys/:id',
 ]
 
+/**
+ * Attest (Attestera, Neka) of a supplier invoice: a viewer whom the
+ * company's attest policy names attests the invoices it governs (crm#1569),
+ * so these routes check no role and the attest service and the database
+ * decide (deciderRefusal, supplier_invoice_attest_ruling). The viewer's
+ * preset holds no write, and no preset can say "only where the policy names
+ * you": when the door enforces permissions, these two stay the service's.
+ */
+export const VIEWER_ATTESTS_BY_POLICY: readonly string[] = [
+  'POST /api/supplier-invoices/:id/approve',
+  'POST /api/supplier-invoices/:id/reject',
+]
+
 export type PresetException =
   | 'INVOICER_OUTSIDE_ALLOWLIST'
   | 'VIEWER_PASSES_UNGATED_ROUTE'
   | 'EXTENSION_ROUTE_WITHOUT_ROLE_GATE'
   | 'OWNER_ONLY'
   | 'OWN_AGENT_KEYS'
+  | 'VIEWER_ATTESTS_BY_POLICY'
 
 export const PRESET_EXCEPTIONS: ReadonlyArray<{
   id: PresetException
@@ -125,6 +139,7 @@ export const PRESET_EXCEPTIONS: ReadonlyArray<{
   { id: 'VIEWER_PASSES_UNGATED_ROUTE', routes: VIEWER_PASSES_UNGATED_ROUTE, roles: ['viewer'] },
   { id: 'EXTENSION_ROUTE_WITHOUT_ROLE_GATE', routes: EXTENSION_ROUTE_WITHOUT_ROLE_GATE, roles: ['viewer'] },
   { id: 'OWNER_ONLY', routes: OWNER_ONLY, roles: ['admin'] },
+  { id: 'VIEWER_ATTESTS_BY_POLICY', routes: VIEWER_ATTESTS_BY_POLICY, roles: ['viewer'] },
   { id: 'OWN_AGENT_KEYS', routes: OWN_AGENT_KEYS, roles: ['viewer', 'invoicer'] },
 ]
 

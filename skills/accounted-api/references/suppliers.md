@@ -2567,6 +2567,7 @@ Records the rejection and its comment in the attest trail as the API key's user.
 **Pitfalls:**
 - ATTEST_NOT_PENDING: the invoice is already attested or settled.
 - ATTEST_NOT_ALLOWED: the attest policy does not let this user decide on the invoice.
+- FORBIDDEN: no attest policy governs the invoice and this user does not keep the books (details.reason read_only or not_member).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2795,14 +2796,14 @@ Example response `200`:
 **Save the company's attest policy for supplier invoices.**
 `scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
 
-Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members who may write), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; both left as they are when left out). With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the registrant unless preparer_may_attest) whose approval can count under their limit, approved_at is set when the policy is satisfied, and payments leave an invoice out until then (attest_required). The policy and the limits are saved together. Owners and admins only. Idempotent. Dry-runnable.
+Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members who may write, or viewers), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; both left as they are when left out). With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the registrant unless preparer_may_attest) whose approval can count under their limit, approved_at is set when the policy is satisfied, and payments leave an invoice out until then (attest_required). The policy and the limits are saved together. Owners and admins only. Idempotent. Dry-runnable.
 
 **Use when:** Setting up or changing who attests supplier invoices.
 **Do not use for:** Attesting an invoice (POST /supplier-invoices/{id}/approve).
 
 **Pitfalls:**
 - ATTEST_POLICY_NO_ATTESTERS: a policy that is on needs at least one attester.
-- ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write; details.user_ids names the others.
+- ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write or a viewer; details.user_ids names the others.
 - ATTEST_POLICY_TWO_STEP_NEEDS_TWO: two_step_from_sek with the policy on needs at least two attesters.
 - ATTEST_LIMIT_NOT_ATTESTER: a limit is for an attester; details.user_ids names the others.
 - Keep at least one attester without a limit (null): an invoice above every limit has nobody whose approval covers it.

@@ -118,6 +118,8 @@ describe('supplier-invoices.attestations.list and supplier-invoices.reject', () 
     const { mock, ctx: c } = ctx({
       supplier_invoices: { data: { id: 'inv-1', company_id: 'c1', user_id: 'cilla', status: 'registered', approved_at: null, due_date: '2999-01-01', remaining_amount: 100, currency: 'SEK', total: 100, total_sek: null, exchange_rate: null, is_credit_note: false } },
       company_attest_policies: { data: null },
+      // Without a policy only someone who keeps the books decides (deciderRefusal).
+      company_members: { data: [{ user_id: ANNA, role: 'member' }] },
       supplier_invoice_attestations: { data: { id: 'att-1' } },
     })
     const outcome = await supplierInvoicesReject.run(c, { supplier_invoice_id: ANNA, comment: 'Fel belopp' }, { dryRun: false })

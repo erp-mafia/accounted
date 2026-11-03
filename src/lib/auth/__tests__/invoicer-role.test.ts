@@ -7,6 +7,7 @@ import {
   INVOICER_PAGES,
   INVOICER_ROUTES,
   invoicerRouteAccess,
+  isAttestRole,
   isBookkeepingWriterRole,
   isInvoicerPagePath,
   roleAllowsScope,
@@ -195,5 +196,11 @@ describe('isBookkeepingWriterRole', () => {
       'admin',
       'member',
     ])
+  })
+})
+
+describe('isAttestRole', () => {
+  it('is those who keep the books and viewer, never invoicer (crm#1569)', () => {
+    expect(['owner', 'admin', 'member', 'viewer', 'invoicer', null, undefined].filter(isAttestRole)).toEqual(['owner', 'admin', 'member', 'viewer'])
   })
 })

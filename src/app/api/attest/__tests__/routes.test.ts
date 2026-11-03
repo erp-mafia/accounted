@@ -70,11 +70,22 @@ describe('the attest link token door', () => {
     expect(approveSupplierInvoice).not.toHaveBeenCalled()
   })
 
-  it('answers 404 to a viewer, who keeps no attest', async () => {
+  it('opens for a viewer the policy names, whose decision the attest service rules on (crm#1569), and answers 404 to an invoicer', async () => {
     service.setTable('supplier_invoice_attest_links', { data: link() })
     service.setTable('company_members', { data: { ...writingMember.data, role: 'viewer' } })
-    const res = await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())
-    expect(res.status).toBe(404)
+    approveSupplierInvoice.mockResolvedValue({ ok: true, data: { invoice: { approved_at: null }, approved: false, attest: { remaining: ['bo'] }, attestation_id: 'att-1' } })
+    const viewer = await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())
+    expect(viewer.status).toBe(200)
+    expect(approveSupplierInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: ATTESTER, companyId: 'company-1' }),
+      expect.objectContaining({ invoiceId: 'inv-1', source: 'email_link' }),
+    )
+
+    approveSupplierInvoice.mockClear()
+    service.setTable('supplier_invoice_attest_links', { data: link() })
+    service.setTable('company_members', { data: { ...writingMember.data, role: 'invoicer' } })
+    const invoicer = await decide(createMockRequest('/api/attest/t/decision', { method: 'POST', body: { decision: 'approve' } }), params())
+    expect(invoicer.status).toBe(404)
     expect(approveSupplierInvoice).not.toHaveBeenCalled()
   })
 

@@ -60,12 +60,19 @@ describe('listSupplierInvoiceAttestsDue', () => {
     expect(rows.map((r) => r.supplier_invoice_id)).toEqual(['due', 'given'])
   })
 
-  it('is empty for someone who is not an attester, a viewer, a cash-method company and a policy that is off', async () => {
+  it('is empty for someone who is not an attester, an invoicer, a cash-method company and a policy that is off', async () => {
     expect(await list(db(), 'cilla')).toEqual([])
-    expect(await list(db({ company_members: { data: [{ user_id: 'anna', role: 'viewer' }, { user_id: 'bo', role: 'member' }] } }))).toEqual([])
+    expect(await list(db({ company_members: { data: [{ user_id: 'anna', role: 'invoicer' }, { user_id: 'bo', role: 'member' }] } }))).toEqual([])
     expect(await list(db({ company_settings: { data: { accounting_method: 'cash' } } }))).toEqual([])
     expect(await list(db({ company_attest_policies: { data: { ...POLICY, enabled: false } } }))).toEqual([])
     expect(await list(db({ company_attest_policies: { data: null } }))).toEqual([])
+  })
+
+  it('gives a viewer the policy names the rows a member would have (crm#1569)', async () => {
+    const asViewer = await list(db({ company_members: { data: [{ user_id: 'anna', role: 'viewer' }, { user_id: 'bo', role: 'member' }] } }))
+    const asMember = await list(db({ company_members: { data: [{ user_id: 'anna', role: 'member' }, { user_id: 'bo', role: 'member' }] } }))
+    expect(asViewer.length).toBeGreaterThan(0)
+    expect(asViewer).toEqual(asMember)
   })
 
   it('levels (#135): an invoice above my limit is the row of someone whose limit covers it', async () => {

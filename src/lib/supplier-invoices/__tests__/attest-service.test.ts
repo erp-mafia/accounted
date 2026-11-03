@@ -20,11 +20,14 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import {
   approveSupplierInvoice,
+  attestViewerOf,
+  deciderRefusal,
   loadAttestBlockedInvoiceIds,
   personalAttestCap,
   rejectSupplierInvoice,
   saveAttestPolicy,
 } from '../attest-service'
+import { NO_ATTEST_POLICY, type AttestPolicy } from '../attest-policy'
 import { loadCompanyAttestsSupplierInvoices } from '../attest-policy-read'
 
 const ANNA = 'anna'
@@ -55,6 +58,7 @@ function setup(options: {
   updated?: Record<string, unknown> | null
   policy?: Record<string, unknown> | null
   attestations?: Array<Record<string, unknown>> | Array<Array<Record<string, unknown>>>
+  members?: { data: Array<{ user_id: string; role: string }> }
 }) {
   const invoice = options.invoice === undefined ? makeSupplierInvoice({ id: 'inv-1', user_id: CILLA, due_date: FUTURE }) : options.invoice
   const session = createTableMockSupabase({
@@ -69,7 +73,7 @@ function setup(options: {
   // The service role: the trail and the attest marker (a session may not write it).
   const writer = createTableMockSupabase({
     supplier_invoices: { data: options.updated === undefined ? (invoice ? { ...invoice, status: 'approved', approved_at: 'now' } : null) : options.updated },
-    company_members: members,
+    company_members: options.members ?? members,
     supplier_invoice_attestations: { data: { id: 'att-1' } },
     supplier_invoice_attest_links: { data: null },
   })
@@ -85,22 +89,25 @@ describe('approveSupplierInvoice', () => {
 
   const attested = { ok: true, approved: true, attestation_id: 'att-1', status: 'approved' }
 
-  it('the dashboard attests through the database on the member\'s own session, which names nobody else', async () => {
+  it('the dashboard attests through the database as the service role, naming the signed-in member (crm#1569)', async () => {
     const { session, writer, ctx, writerClient } = setup({})
-    // The service role still reads who keeps the books.
     vi.mocked(createServiceClient).mockReturnValue(writerClient as never)
     session.setTable('supplier_invoices', [{ data: makeSupplierInvoice({ id: 'inv-1', user_id: CILLA, due_date: FUTURE }) }, { data: { id: 'inv-1', status: 'approved' } }])
-    session.setTable('rpc:attest_supplier_invoice', { data: attested })
+    writer.setTable('rpc:attest_supplier_invoice', { data: attested })
     const emit = vi.spyOn(eventBus, 'emit')
     const outcome = await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app' })
     expect(outcome).toMatchObject({ ok: true, data: { approved: true, attestation_id: 'att-1', invoice: { status: 'approved' }, attest: { required: false } } })
-    expect(session.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([{ p_company_id: 'company-1', p_invoice_id: 'inv-1' }])
+    // A viewer's own session could not set the marker (the writer-role trigger
+    // on supplier_invoices), so the app names its member like every other door.
+    expect(writer.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([
+      { p_company_id: 'company-1', p_invoice_id: 'inv-1', p_user_id: CILLA, p_source: 'app', p_via_key: false, p_key_ceiling: null },
+    ])
+    expect(session.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
     // Nobody writes the marker or the trail past the database's function.
     for (const client of [session, writer]) {
       expect(client.payloads('supplier_invoices', 'update')).toEqual([])
       expect(client.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
     }
-    expect(writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
     expect(emit).toHaveBeenCalledTimes(1)
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'supplier_invoice.approved' }))
   })
@@ -476,5 +483,70 @@ describe('saveAttestPolicy', () => {
     const { writer, ctx, writerClient } = setup({})
     writer.setTable('rpc:save_company_attest_policy', { error: { code: '42501', message: 'new row violates row-level security policy' } })
     expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA] }, { writer: writerClient })).toMatchObject({ ok: false, code: 'FORBIDDEN' })
+  })
+})
+
+describe('a viewer the policy names attests, and only there (crm#1569)', () => {
+  const VERA = 'vera'
+  const withViewer = { data: [...members.data, { user_id: VERA, role: 'viewer' }, { user_id: 'ivar', role: 'invoicer' }] }
+  const dryRun = (writer: SupabaseClient) => ({ invoiceId: 'inv-1', source: 'app' as const, dryRun: true, writer })
+
+  it('approves and rejects an invoice the policy asks them to attest', async () => {
+    const { ctx, writerClient } = setup({ policy: policyRow({ attesters: [ANNA, VERA] }), members: withViewer })
+    expect(await approveSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: { attest_required: true, completes_attest: true },
+    })
+    expect(await rejectSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject({ ok: true, dryRun: true, preview: { restarts_attest_round: true } })
+  })
+
+  it('is refused read_only where no policy governs the invoice, while a member still attests it with one click', async () => {
+    const { ctx, writerClient } = setup({ policy: policyRow({ enabled: false, attesters: [ANNA, VERA] }), members: withViewer })
+    const readOnly = { ok: false, code: 'FORBIDDEN', details: { reason: 'read_only' } }
+    expect(await approveSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject(readOnly)
+    expect(await rejectSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject(readOnly)
+    expect(await approveSupplierInvoice(ctx(ANNA), dryRun(writerClient))).toMatchObject({ ok: true, preview: { attest_required: false } })
+  })
+
+  it('is refused as no attester where the policy does not name them, and an invoicer never attests', async () => {
+    const { ctx, writerClient } = setup({ policy: policyRow({ attesters: [ANNA, BO, 'ivar'] }), members: withViewer })
+    const notAttester = { ok: false, code: 'ATTEST_NOT_ALLOWED', details: { reason: 'not_attester' } }
+    expect(await approveSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject(notAttester)
+    expect(await rejectSupplierInvoice(ctx(VERA), dryRun(writerClient))).toMatchObject(notAttester)
+    expect(await approveSupplierInvoice(ctx('ivar'), dryRun(writerClient))).toMatchObject({ ok: false, code: 'FORBIDDEN', details: { reason: 'not_member' } })
+  })
+
+  it('takes a viewer as an attester in the policy, not an invoicer', async () => {
+    const { writer, ctx, writerClient } = setup({ members: withViewer })
+    const base = { enabled: true, threshold_amount: null, mode: 'any' as const, preparer_may_attest: false }
+    expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA, 'ivar'] }, { writer: writerClient })).toMatchObject({
+      ok: false,
+      code: 'ATTEST_POLICY_ATTESTER_NOT_MEMBER',
+      details: { user_ids: ['ivar'] },
+    })
+    expect(writer.findCalls('rpc:save_company_attest_policy', 'rpc')).toEqual([])
+    writer.setTable('rpc:save_company_attest_policy', { data: { ...policyRow({ attesters: [ANNA, VERA] }) } })
+    await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA, VERA] }, { writer: writerClient })
+    expect(writer.findCalls('rpc:save_company_attest_policy', 'rpc')).toHaveLength(1)
+  })
+})
+
+describe('deciderRefusal and attestViewerOf', () => {
+  const members = { attesters: new Set([ANNA, 'vera']), writers: new Set([ANNA]) }
+  const invoice = { user_id: CILLA, currency: 'SEK', total: 5000, status: 'registered', approved_at: null }
+  const governing: AttestPolicy = { ...NO_ATTEST_POLICY, enabled: true, attesters: [ANNA, 'vera'] }
+
+  it('lets someone whose attest can count decide, and only those who keep the books where no policy governs', () => {
+    expect(deciderRefusal(members, ANNA, true)).toBeNull()
+    expect(deciderRefusal(members, 'vera', false)).toBeNull()
+    expect(deciderRefusal(members, 'vera', true)).toBe('read_only')
+    expect(deciderRefusal(members, 'stranger', false)).toBe('not_member')
+  })
+
+  it('offers a viewer the policy names both decisions, and none where no policy governs the invoice', () => {
+    expect(attestViewerOf(governing, 'accrual', invoice, [], 'vera', members, {})).toEqual({ may_approve: true, may_reject: true, reason: null })
+    expect(attestViewerOf(NO_ATTEST_POLICY, 'accrual', invoice, [], 'vera', members, {})).toEqual({ may_approve: false, may_reject: false, reason: 'read_only' })
+    expect(attestViewerOf(NO_ATTEST_POLICY, 'accrual', invoice, [], ANNA, members, {})).toEqual({ may_approve: true, may_reject: true, reason: null })
   })
 })

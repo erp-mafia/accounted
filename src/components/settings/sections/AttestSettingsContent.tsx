@@ -25,7 +25,7 @@ interface Candidate {
   user_id: string
   name: string | null
   email: string | null
-  role: 'owner' | 'admin' | 'member'
+  role: 'owner' | 'admin' | 'member' | 'viewer'
 }
 
 interface AttestSettingsData {
@@ -321,6 +321,7 @@ export function AttestSettingsContent() {
                 label={
                   <span className="min-w-0">
                     <span data-ph-mask="">{nameOf(c)}</span>
+                    {c.role === 'viewer' ? <span className="ml-1.5 text-[12.5px] text-muted-foreground">{t('candidate_viewer')}</span> : null}
                     {c.name && c.email ? (
                       <span className="block truncate text-[12.5px] text-muted-foreground" data-ph-mask="">
                         {c.email}

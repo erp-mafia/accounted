@@ -200,8 +200,8 @@ export function invoiceNeedsAttest(
 /**
  * The attesters who may attest this invoice: the policy's attesters, without
  * the registrant unless the policy lets the registrant attest, and only those
- * still active in the company (`activeMembers`: non-viewer members; omitted =
- * all of them count).
+ * still active in the company (`activeMembers`: members whose attest can
+ * count, isAttestRole; omitted = all of them count).
  */
 export function eligibleAttesters(
   policy: AttestPolicy,
@@ -348,9 +348,10 @@ export type AttestRuling =
 
 /**
  * May this user approve the invoice now, and what does the approval do?
- * `activeMembers` are the company's non-viewer members: an attester who left
- * the company or became a viewer is refused like anyone else. `levels` are
- * the attesters' limits and the key the attest comes through, if any.
+ * `activeMembers` are the company's members whose attest can count
+ * (isAttestRole, a viewer included): an attester who left the company or
+ * became an invoicer is refused like anyone else. `levels` are the
+ * attesters' limits and the key the attest comes through, if any.
  */
 export function ruleOnApproval(
   policy: AttestPolicy,

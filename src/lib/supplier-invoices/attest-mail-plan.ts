@@ -44,8 +44,8 @@ export type AttestMailInvoice = AttestInvoiceFacts & {
 export interface AttestMailCompany {
   policy: AttestPolicy
   accountingMethod: string | null
-  /** Members who keep the books (owner, admin, member): the only attesters who count. */
-  writers: ReadonlySet<string>
+  /** Members whose attest can count (isAttestRole: owner, admin, member, viewer): the only attesters the mails ask. */
+  attesters: ReadonlySet<string>
   limits: AttestLimits
   /** Every decision on the invoices, by invoice id. */
   attestations: ReadonlyMap<string, readonly AttestationRecord[]>
@@ -72,7 +72,7 @@ export function attestMailStanding(company: AttestMailCompany, invoice: AttestMa
   if (!invoiceNeedsAttest(company.policy, company.accountingMethod, invoice)) return { kind: 'closed' }
   const attestations = company.attestations.get(invoice.id) ?? []
   if (latestIsRejection(attestations)) return { kind: 'rejected' }
-  const progress = attestProgress(company.policy, company.accountingMethod, invoice, attestations, company.writers, company.limits)
+  const progress = attestProgress(company.policy, company.accountingMethod, invoice, attestations, company.attesters, company.limits)
   if (progress.satisfied) return { kind: 'closed' }
   if (progress.blocked) return { kind: 'blocked' }
   if (progress.remaining.length === 0) return { kind: 'closed' }
