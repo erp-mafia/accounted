@@ -207,5 +207,23 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "hasOwnData": true,
           "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
     },
+    {
+          "slug": "time-tracking",
+          "name": "Tidredovisning",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Clock",
+          "dataPattern": "manual",
+          "description": "Registrera timmar per kund och projekt och ta fram fakturaunderlag",
+          "longDescription": "Registrera arbetad tid per medarbetare, kund, projekt och arbetskod. Importera en befintlig tidrapport från Excel eller Numbers, se timmar per kund och månad och exportera fakturaunderlag med timpris och belopp. Inget bokförs automatiskt: fakturan skapar du som vanligt och markerar sedan timmarna som fakturerade.",
+          "hasOwnData": true,
+          "quickAction": {
+                "label": "Tidredovisning",
+                "description": "Timmar per kund och projekt",
+                "icon": "Clock",
+                "href": "/e/general/time-tracking",
+                "order": 40
+          }
+    },
   ],
 }

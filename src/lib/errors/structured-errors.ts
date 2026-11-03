@@ -6451,6 +6451,35 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Import av befintliga dimensionskoder misslyckades.',
     message_en: 'Failed to import existing dimension codes from journal lines.',
   },
+  // Time entries (lib/time-tracking/writes.ts, operations time-entries.*):
+  // one set of codes for the dashboard, v1 and MCP.
+  TIME_ENTRY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Tidraden finns inte.',
+    message_en: 'Time entry not found in this company.',
+  },
+  TIME_ENTRY_INVOICED: {
+    httpStatus: 409,
+    message_sv: 'Tidraden är fakturerad och kan inte ändras eller tas bort.',
+    message_en: 'The time entry is on an invoice and can no longer be changed or deleted.',
+  },
+  TIME_ENTRY_REFERENCE_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: 'Kunde inte avgöra vilken kund, vilket projekt, vilken aktivitetskod eller medarbetare som avses.',
+    message_en:
+      'A customer, project, activity code or consultant did not match exactly one register entry: details.field names it and details.candidates lists the closest; retry with the code.',
+  },
+  TIME_ENTRY_CONSULTANT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange medarbetare: ditt konto är inte kopplat till någon medarbetarkod i tidrapporteringen.',
+    message_en:
+      'Name the consultant: the acting user is not linked to a consultant in the time-tracking settings. details.consultants lists them.',
+  },
+  TIME_ENTRY_CUSTOMER_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'Kunden finns inte.',
+    message_en: 'customer_id is not a customer of this company.',
+  },
   // Account dimension rules (lib/dimensions/rules-service.ts, operations
   // dimension-rules.*): one set of codes for the dashboard, v1 and MCP.
   DIMENSION_RULE_NOT_FOUND: {

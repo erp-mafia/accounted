@@ -158,6 +158,21 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     ],
   },
   {
+    workflow: 'log_time',
+    description: 'Log billable hours by name (customer, project, activity), correct them, and total uninvoiced time.',
+    skill: 'time-tracking',
+    tools: [
+      'gnubok_list_time_codes',
+      // Not in the default tools/list (payload ceiling): reached through gnubok_stage_tool.
+      'gnubok_log_time',
+      'gnubok_list_time_entries',
+      'gnubok_update_time_entry',
+      'gnubok_delete_time_entry',
+      'gnubok_get_time_summary',
+      'gnubok_approve_pending_operation',
+    ],
+  },
+  {
     workflow: 'receipt_hunt',
     description: 'Find missing underlag in the user\'s own mailbox and stage the links (Kvittojakten).',
     // The harness-neutral slug; the three chat clients load kvittojakten-<client>.

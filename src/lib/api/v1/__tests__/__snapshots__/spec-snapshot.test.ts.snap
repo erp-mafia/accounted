@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `294`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `300`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -29,6 +29,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "DELETE /api/v1/companies/:companyId/supplier-invoices/:id",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
+  "DELETE /api/v1/companies/:companyId/time-entries/:id",
   "DELETE /api/v1/companies/:companyId/transactions/:id",
   "DELETE /api/v1/companies/:companyId/transactions/:id/ignore",
   "DELETE /api/v1/companies/:companyId/webhooks/:id",
@@ -127,6 +128,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/supplier-payment-batches/:id/file",
   "GET /api/v1/companies/:companyId/suppliers",
   "GET /api/v1/companies/:companyId/suppliers/:id",
+  "GET /api/v1/companies/:companyId/time-entries",
+  "GET /api/v1/companies/:companyId/time-entries/codes",
+  "GET /api/v1/companies/:companyId/time-entries/summary",
   "GET /api/v1/companies/:companyId/transactions",
   "GET /api/v1/companies/:companyId/transactions/:id",
   "GET /api/v1/companies/:companyId/webhooks",
@@ -162,6 +166,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id",
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId",
   "PATCH /api/v1/companies/:companyId/suppliers/:id",
+  "PATCH /api/v1/companies/:companyId/time-entries/:id",
   "PATCH /api/v1/companies/:companyId/transactions/:id",
   "PATCH /api/v1/companies/:companyId/webhooks/:id",
   "POST /api/v1/companies",
@@ -272,6 +277,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/supplier-payment-batches/preview",
   "POST /api/v1/companies/:companyId/suppliers",
   "POST /api/v1/companies/:companyId/suppliers/bulk-create",
+  "POST /api/v1/companies/:companyId/time-entries",
   "POST /api/v1/companies/:companyId/transactions/:id/attach-document",
   "POST /api/v1/companies/:companyId/transactions/:id/categorize",
   "POST /api/v1/companies/:companyId/transactions/:id/detach-document",
@@ -323,6 +329,8 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "reports:read",
   "suppliers:read",
   "suppliers:write",
+  "time:read",
+  "time:write",
   "transactions:read",
   "transactions:write",
   "webhooks:manage",
