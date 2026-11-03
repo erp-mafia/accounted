@@ -34,6 +34,9 @@ function embeddedCompanyName(embedded: unknown): string | null {
  * touches it: its write freeze is in the database, and its statutory archive
  * is read by the replacement company's owner through
  * /api/company/[id]/migration-reset/archive, which does not come through here.
+ * The other sanctioned reader of an archived company is the 18-month export
+ * window of a deleted one (lib/company/deleted-company-export, terms 9.3):
+ * read only, owners and admins, session routes only.
  */
 export async function readLiveMembership(
   supabase: SupabaseClient,

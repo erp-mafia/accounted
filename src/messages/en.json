@@ -2746,6 +2746,7 @@
     "danger_dialog_wrong_company_note": "Once the company is deleted you go straight to adding the right one. Connected a bank here? Disconnect it first under Settings > Connections > Bank: it cannot be done after the delete.",
     "danger_dialog_bank_note": "Connected a bank to this company? Disconnect it first under Settings > Connections > Bank: it cannot be done after the delete.",
     "danger_dialog_subscription_note": "If the company has a subscription, it ends at the same time and no further payments are taken.",
+    "danger_dialog_export_note": "For 18 months after the deletion, owners and admins can download the company's full archive under Security in the settings.",
     "danger_confirm_label": "Type <strong>{companyName}</strong> to confirm",
     "danger_cancel": "Cancel",
     "danger_deleting": "Deleting...",
@@ -3323,6 +3324,12 @@
     "delete_failed_default": "Could not delete the account",
     "blockers_load_failed": "The list of companies you own could not be loaded, so the account cannot be deleted right now.",
     "blockers_load_retry": "Try again"
+  },
+  "settings_deleted_companies": {
+    "heading": "Deleted companies",
+    "help": "The archive contains SIE4 files, reports, journal entries, supporting documents and registers, read only. It can be downloaded for 18 months after the company was deleted. After that the bookkeeping is sealed and deleted when the archiving period under Swedish accounting law has run out. If you delete your account, you can no longer download the archives.",
+    "row_note": "Deleted {deletedOn}. Can be downloaded until {exportUntil}.",
+    "download": "Download archive"
   },
   "settings_billing": {
     "compare_plans": "Compare plans",

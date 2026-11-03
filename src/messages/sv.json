@@ -2746,6 +2746,7 @@
     "danger_dialog_wrong_company_note": "När företaget är raderat kommer du direkt till att lägga till rätt företag. Har du anslutit en bank här? Koppla från den först under Inställningar > Kopplingar > Bank: efter raderingen går det inte.",
     "danger_dialog_bank_note": "Har du kopplat en bank till företaget? Koppla från den först under Inställningar > Kopplingar > Bank: efter raderingen går det inte.",
     "danger_dialog_subscription_note": "Har företaget ett abonnemang avslutas det samtidigt, och inga fler betalningar dras.",
+    "danger_dialog_export_note": "I 18 månader efter raderingen kan ägare och administratörer ladda ner företagets fullständiga arkiv under Säkerhet i inställningarna.",
     "danger_confirm_label": "Skriv <strong>{companyName}</strong> för att bekräfta",
     "danger_cancel": "Avbryt",
     "danger_deleting": "Raderar...",
@@ -3323,6 +3324,12 @@
     "delete_failed_default": "Kunde inte radera kontot",
     "blockers_load_failed": "Listan över företag du äger kunde inte läsas in, så kontot kan inte raderas just nu.",
     "blockers_load_retry": "Försök igen"
+  },
+  "settings_deleted_companies": {
+    "heading": "Raderade företag",
+    "help": "Arkivet innehåller SIE4-filer, rapporter, verifikationer, underlag och register, i skrivskyddat läge. Det kan laddas ner i 18 månader efter att företaget raderades. Därefter spärras bokföringen och raderas när arkiveringstiden enligt bokföringslagen har löpt ut. Raderar du ditt konto kan du inte längre ladda ner arkiven.",
+    "row_note": "Raderat {deletedOn}. Kan laddas ner till och med {exportUntil}.",
+    "download": "Ladda ner arkiv"
   },
   "settings_billing": {
     "compare_plans": "Jämför planer",
