@@ -44,6 +44,7 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'portfolio', label: 'Portfolio', description: 'Cross-company reads for keys that reach more than one company: one overview call over a membership-checked scope (all, byrå team, or explicit ids) instead of one call per company.', matcher: (p) => /\/portfolio(\/|$)/.test(p) },
   { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
   { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
+  { slug: 'time-entries', label: 'Time entries', description: 'Tidrapportering: registered hours per customer, project and consultant, totals with uninvoiced amounts, and the codes an entry can reference.', matcher: (p) => /\/time-entries(\/|$)/.test(p) },
   { slug: 'articles', label: 'Articles', description: 'Read the article/product catalogue used to build invoice line items.', matcher: (p) => /\/articles(\/|$)/.test(p) },
   { slug: 'suppliers', label: 'Suppliers', description: 'AP-side counterparties. Mirrors customers on the supplier vertical.', matcher: (p) => /\/suppliers(\/|$)/.test(p) },
   { slug: 'supplier-invoices', label: 'Supplier invoices', description: 'AP lifecycle: register, approve, book (deferred booking), mark paid, credit. With ROT/RUT and reverse-charge support.', matcher: (p) => /\/supplier-invoices(\/|$)/.test(p) },

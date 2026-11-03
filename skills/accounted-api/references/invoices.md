@@ -2,7 +2,7 @@
 
 # Invoices (AR) endpoints
 
-Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md.
+Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Registered hours (time-entries) and their uninvoiced totals are the invoice basis for time-billed work.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1432,6 +1432,472 @@ Example response `200`:
       "total": 1,
       "succeeded": 1,
       "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/time-entries`
+
+**List registered hours (tidrader), newest first.**
+`scope:time:read · risk:low · idempotent`
+
+Returns time entries newest first: date, consultant, customer, project, activity code, hours, billable flag and the invoice they were billed on. Filter by date range, customer, consultant, project or uninvoiced. Offset pagination: pass next_offset back as offset; it is null on the last page.
+
+**Use when:** Checking what was logged on a day, a customer or a project, or finding hours that are not invoiced yet.
+**Do not use for:** Totals per customer, project or consultant (GET /time-entries/summary).
+
+**Pitfalls:**
+- customer_id is null for imported hours whose customer code is not linked to an Accounted customer; filter those by customer_code.
+- customer_name is the linked customer's current name when linked, otherwise the name from the imported report.
+- hours are decimal hours: 1.5 is one hour and thirty minutes.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `from` | query | `string` | no | First entry date, inclusive (YYYY-MM-DD). |
+| `to` | query | `string` | no | Last entry date, inclusive (YYYY-MM-DD). |
+| `customer_id` | query | `string` | no | Only hours on this Accounted customer. |
+| `customer_code` | query | `string` | no | Only hours on this imported customer code, linked or not. |
+| `consultant` | query | `string` | no | Only hours by this consultant (initials, e.g. "AB"). |
+| `project_code` | query | `string` | no | Only hours on this project (SIE dimension 6 code). |
+| `uninvoiced` | query | `"true" \| "false"` | no | "true" keeps only billable hours not yet on an invoice. |
+| `limit` | query | `number` | no | Page size, 1-500 (default 100). |
+| `offset` | query | `number` | no | next_offset from the previous page. Omit for the first page. |
+
+Response `200`:
+```ts
+{
+  data: {
+    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }[],
+    total: number,
+    has_more: boolean,
+    next_offset: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entries": [
+      {
+        "time_entry_id": "7a2e…",
+        "entry_date": "2026-10-14",
+        "consultant": "AB",
+        "customer_id": "51c0…",
+        "customer_code": "GF",
+        "customer_name": "Galärbryggan AB",
+        "project_code": "P12",
+        "activity_code": "1",
+        "hours": 3.5,
+        "comment": "Månadsavstämning",
+        "is_billable": true,
+        "invoice_id": null,
+        "source": "manual",
+        "created_at": "2026-10-14T15:02:11Z",
+        "updated_at": "2026-10-14T15:02:11Z"
+      }
+    ],
+    "total": 1,
+    "has_more": false,
+    "next_offset": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/time-entries`
+
+**Register hours (tidrader), one or up to 20 in one call.**
+`scope:time:write · risk:low · idempotent · dry-run · reversible`
+
+Registers time entries. Customer, project, activity code and consultant may be given by code or by name: each resolves by exact code, exact name, then a confident fuzzy match, and anything ambiguous is refused with candidates. Nothing is created in the registers. All or nothing. Dry-runnable.
+
+**Use when:** Someone says what they worked on: "3 timmar på Galärbryggan igår, bokslut".
+**Do not use for:** Importing a whole time report (the time-tracking import on the dashboard) or correcting a logged entry (PATCH /time-entries/{id}).
+
+**Pitfalls:**
+- An ambiguous or unknown name answers 400 TIME_ENTRY_REFERENCE_UNRESOLVED with details.candidates: retry with the code.
+- Without consultant, the consultant linked to the acting user is used; with no link, 400 TIME_ENTRY_CONSULTANT_REQUIRED lists the consultants.
+- In a batch, details.entry_index names the entry at fault.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  entries: { entry_date: string, hours: number, customer_id?: string, customer?: string, project?: string | null, activity?: string | null, consultant?: string, comment?: string | null, is_billable?: boolean }[]
+}
+```
+
+Example request:
+```json
+{
+  "entries": [
+    {
+      "entry_date": "2026-11-02",
+      "hours": 3,
+      "customer": "Galärbryggan",
+      "activity": "bokslut"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entries": [
+      {
+        "time_entry_id": "7a2e…",
+        "entry_date": "2026-11-02",
+        "consultant": "AB",
+        "customer_id": "51c0…",
+        "customer_code": null,
+        "customer_name": "Galärbryggan AB",
+        "project_code": null,
+        "activity_code": "2",
+        "hours": 3,
+        "comment": null,
+        "is_billable": true,
+        "invoice_id": null,
+        "source": "manual",
+        "created_at": "2026-11-03T08:12:40Z",
+        "updated_at": "2026-11-03T08:12:40Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/time-entries/{id}`
+
+**Change a time entry that is not invoiced yet.**
+`scope:time:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update: only the fields sent change; project, activity and comment take null to clear. References resolve like on create. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.
+
+**Use when:** Hours, date, customer, project, activity or comment were logged wrong.
+**Do not use for:** Removing an entry (DELETE /time-entries/{id}).
+
+**Pitfalls:**
+- At least one field besides time_entry_id must be sent.
+- Imported entries can be changed too; their import key is kept, so re-importing the same report does not bring the old values back.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  entry_date?: string,
+  hours?: number,
+  customer_id?: string,
+  customer?: string,
+  project?: string | null,
+  activity?: string | null,
+  consultant?: string,
+  comment?: string | null,
+  is_billable?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "hours": 2.5
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    entry: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entry": {
+      "time_entry_id": "7a2e…",
+      "hours": 2.5
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/time-entries/{id}`
+
+**Delete a time entry that is not invoiced yet.**
+`scope:time:write · risk:low · idempotent · dry-run`
+
+Removes the entry. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.
+
+**Use when:** Hours were logged twice or on something that was never done.
+**Do not use for:** Correcting hours or a customer (PATCH /time-entries/{id}).
+
+**Pitfalls:**
+- A deleted imported entry comes back if the same report is imported again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, time_entry_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "time_entry_id": "7a2e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/time-entries/codes`
+
+**The codes a time entry can reference: consultants, activity codes, customer codes and projects.**
+`scope:time:read · risk:low · idempotent`
+
+Returns the time-tracking registers: consultants (initials and name), activity codes with their hourly rates, the default hourly rate, imported customer codes with the Accounted customer each is linked to, and the active projects (SIE dimension 6).
+
+**Use when:** Resolving a name the user said ("Galärbryggan", "bokslut", "Anna") to the code a filter takes.
+**Do not use for:** Listing all customers (GET /customers) or all dimensions (GET /dimensions).
+
+**Pitfalls:**
+- Consultants and activity codes are created on the dashboard or by importing a time report; an empty list means none are set up yet.
+- Only customer codes linked to an existing customer are listed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    consultants: { code: string, name: string }[],
+    activity_codes: { code: string, name: string, hourly_rate: number | null }[],
+    default_hourly_rate: number | null,
+    customer_codes: { code: string, customer_id: string, customer_name: string | null }[],
+    projects: { code: string, name: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "consultants": [
+      {
+        "code": "AB",
+        "name": "Anna Berg"
+      }
+    ],
+    "activity_codes": [
+      {
+        "code": "1",
+        "name": "Löpande bokföring",
+        "hourly_rate": 950
+      }
+    ],
+    "default_hourly_rate": 800,
+    "customer_codes": [
+      {
+        "code": "GF",
+        "customer_id": "51c0…",
+        "customer_name": "Galärbryggan AB"
+      }
+    ],
+    "projects": [
+      {
+        "code": "P12",
+        "name": "Bokslut 2026"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/time-entries/summary`
+
+**Hours and uninvoiced amounts per customer, project or consultant and month.**
+`scope:time:read · risk:low · idempotent`
+
+Totals per group (group_by: customer, project or consultant) and calendar month, newest month first: hours, billable hours, uninvoiced billable hours and their amount at the activity code's hourly rate, else the company default rate. Takes the same filters as the entry list.
+
+**Use when:** Answering "how much is unbilled for this customer", building invoice basis (fakturaunderlag) or following up hours per project or consultant.
+**Do not use for:** The individual rows behind a total (GET /time-entries).
+
+**Pitfalls:**
+- uninvoiced_amount is null when some of the group's uninvoiced billable hours have no known rate: set a rate on the activity code or a default rate in the time-tracking settings.
+- Amounts are SEK excluding VAT.
+- With group_by=project, hours without a project form one group with key "" and label null.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `from` | query | `string` | no | First entry date, inclusive (YYYY-MM-DD). |
+| `to` | query | `string` | no | Last entry date, inclusive (YYYY-MM-DD). |
+| `customer_id` | query | `string` | no | Only hours on this Accounted customer. |
+| `customer_code` | query | `string` | no | Only hours on this imported customer code, linked or not. |
+| `consultant` | query | `string` | no | Only hours by this consultant (initials, e.g. "AB"). |
+| `project_code` | query | `string` | no | Only hours on this project (SIE dimension 6 code). |
+| `uninvoiced` | query | `"true" \| "false"` | no | "true" keeps only billable hours not yet on an invoice. |
+| `group_by` | query | `"customer" \| "project" \| "consultant"` | no | What to total by (default customer). |
+
+Response `200`:
+```ts
+{
+  data: {
+    group_by: "customer" | "project" | "consultant",
+    rows: { key: string, label: string | null, month: string, hours: number, billable_hours: number, uninvoiced_billable_hours: number, uninvoiced_amount: number | null }[],
+    totals: { hours: number, billable_hours: number, uninvoiced_billable_hours: number, uninvoiced_amount: number | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_by": "customer",
+    "rows": [
+      {
+        "key": "51c0…",
+        "label": "Galärbryggan AB",
+        "month": "2026-10",
+        "hours": 12.5,
+        "billable_hours": 12.5,
+        "uninvoiced_billable_hours": 12.5,
+        "uninvoiced_amount": 11875
+      }
+    ],
+    "totals": {
+      "hours": 12.5,
+      "billable_hours": 12.5,
+      "uninvoiced_billable_hours": 12.5,
+      "uninvoiced_amount": 11875
     }
   },
   "meta": {

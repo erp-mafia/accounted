@@ -45,6 +45,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   correct_opening_balances: 'high',
   // Inline rättelse of the IB verifikat (#3313): same tier as correct_entry_lines_inline.
   split_opening_balances_per_project: 'high',
+  // Time entries (lib/operations/time-entries.ts): no ledger effect, an invoiced row is frozen.
+  create_time_entries: 'low',
+  update_time_entry: 'low',
+  delete_time_entry: 'low',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',

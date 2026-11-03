@@ -233,7 +233,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the invoice columns, the same spread the web, v1, webshop and sales-order
 // inserts already carry. Listing the columns literally again would bring
 // back the hand copy this change removes.
-const UNRESOLVED_CEILING = 425
+// Time tracking import (+1): the workbook import upserts time_entries in
+// chunks of mapped rows (rows.slice(i, i + IMPORT_CHUNK)); the row shape is
+// one object literal in the same handler and covered by its unit test.
+// Time entry batch (+1): createTimeEntries (lib/time-tracking/writes.ts)
+// inserts 1-20 resolved entries in one statement so a batch is all or
+// nothing; each row is one object literal inside the map.
+const UNRESOLVED_CEILING = 427
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

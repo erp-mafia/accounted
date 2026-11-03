@@ -1178,6 +1178,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Webshop order rows are booking underlag (and carry customer personal
   // data), so they belong in the archive like transactions do.
   { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  // Time entries are the billing basis behind invoiced hours (fakturaunderlag),
+  // so they travel with the invoices they support.
+  { name: 'time_entries', file: 'time_entries.json', orderBy: 'entry_date' },
   // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
   // their own, but the provenance of invoices created from them
   // (invoices.sales_order_id / invoice_items.sales_order_item_id) points

@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 294 endpoints.
+  pagination, scopes), and all 300 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -149,7 +149,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 294 operations. Paths are shown without
+API version `2026-05-12`, 300 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (11)
@@ -251,7 +251,7 @@ POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-valid
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (17)
+### Invoices (AR) (23)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -273,6 +273,12 @@ POST /companies/{companyId}/invoices/{id}/send : Send a draft invoice to the cus
 POST /companies/{companyId}/invoices/{id}/send-peppol : Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/time-entries : List registered hours (tidrader), newest first [scope:time:read risk:low idempotent]
+POST /companies/{companyId}/time-entries : Register hours (tidrader), one or up to 20 in one call [scope:time:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/time-entries/{id} : Change a time entry that is not invoiced yet [scope:time:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/time-entries/{id} : Delete a time entry that is not invoiced yet [scope:time:write risk:low idempotent dry-run]
+GET /companies/{companyId}/time-entries/codes : The codes a time entry can reference: consultants, activity codes, customer codes and projects [scope:time:read risk:low idempotent]
+GET /companies/{companyId}/time-entries/summary : Hours and uninvoiced amounts per customer, project or consultant and month [scope:time:read risk:low idempotent]
 ```
 
 ### Customers and articles (7)
