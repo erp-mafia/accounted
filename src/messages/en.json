@@ -4278,7 +4278,7 @@
     "system_status_denied": "Missing",
     "system_status_error": "Could not be checked",
     "system_status_unknown": "Not verified",
-    "system_behorighet_lasombud": "Juridiskt läsombud",
+    "system_behorighet_lasombud": "Skattekonto, bara läsbehörighet",
     "system_behorighet_moms": "Momsdeklaration, ombud",
     "system_cert_expires_soon": "{appName}'s certificate with Skatteverket expires in {days} days.",
     "system_verify_failed": "Verification failed",

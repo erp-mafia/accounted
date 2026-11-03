@@ -31,6 +31,7 @@ vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
 
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, isApigwClientRefusal } from '../lib/api-client'
 import { __resetSystemTokenCacheForTests } from '../lib/system-auth/token-provider'
+import { getOmbudRoleDescriptions, listOmbudGrants } from '../lib/ombud-client'
 
 const fakeSupabase = {} as unknown as Parameters<typeof skvRequest>[0]
 
@@ -519,6 +520,32 @@ describe('skvRequestWithAuth: system mode', () => {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
     }
     expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  // Ombudshantering answers a GET without Content-Type with 400 "Required
+  // header 'Content-Type' not specified" (test service, 2026-11-03). The
+  // other services never asked for it on a GET, and Skatteverket warns that
+  // headers outside a service's list can block a call, so only the register
+  // gets it.
+  describe('Content-Type on a body-less GET', () => {
+    const headersOfLastCall = () =>
+      ((global.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as RequestInit).headers as Record<string, string>
+
+    it('the register GETs (/roller, /ombud/autentisieratOmbud) carry Content-Type: application/json', async () => {
+      mockFetchStatus(200, '[]')
+      await getOmbudRoleDescriptions()
+      expect(headersOfLastCall()).toMatchObject({ Accept: 'application/json', 'Content-Type': 'application/json' })
+      mockFetchStatus(200, '[]')
+      await listOmbudGrants({}, 'ombud_register')
+      expect(headersOfLastCall()).toMatchObject({ Accept: 'application/json', 'Content-Type': 'application/json' })
+    })
+
+    it('a GET on the other services still carries none', async () => {
+      mockFetchStatus(200, '{}')
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', SYSTEM_AUDIT)
+      expect(headersOfLastCall()).not.toHaveProperty('Content-Type')
+      expect(headersOfLastCall()).not.toHaveProperty('Accept')
+    })
   })
 })
 

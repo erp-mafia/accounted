@@ -5,14 +5,16 @@
  *
  * Unit tests run the system flow on a stub transport; they cannot tell you
  * whether the certificate, client id, gateway keys, scopes and role codes are
- * ones Skatteverket accepts. This script makes the real calls and prints what
- * the rollout still has to pin (role codes, the register's list envelope,
- * what giltigFrom holds), so day one is one command instead of a debugging
- * session. Steps, stopping at the first failure with Skatteverket's answer:
+ * ones Skatteverket accepts. This script makes the real calls, checks the
+ * built-in role codes (OMBUD_ROLES) against the register and prints what it
+ * holds (grants, giltigFrom), so switching an environment on is one command
+ * instead of a debugging session. Steps, stopping at the first failure with
+ * Skatteverket's answer:
  *
  *   1. Mint a system token. The token and keys are never printed.
- *   2. GET /roller: every role code with its description, and which of
- *      Accounted's two behörigheter each one classifies as.
+ *   2. GET /roller: every role code with its description, which of
+ *      Accounted's two behörigheter each one is, and whether the register
+ *      has both codes Accounted asks for (a missing one fails the step).
  *   3. GET /ombud/autentisieratOmbud: who appointed Accounted, with role and
  *      validity.
  *   4. --huvudman <orgnr>: read that company's skattekonto (saldo and
@@ -34,6 +36,7 @@
  *
  * Usage:
  *   npx tsx scripts/smoke-skv-ombud.ts
+ *   ENV_FILE=/path/to/skv-test.env npx tsx scripts/smoke-skv-ombud.ts
  *   npx tsx scripts/smoke-skv-ombud.ts --huvudman 165566778899 --company <uuid>
  *   npx tsx scripts/smoke-skv-ombud.ts --djuplank 165566778899 --company <uuid>
  *   ENV_FILE=.env.production.local npx tsx scripts/smoke-skv-ombud.ts
@@ -66,12 +69,13 @@ import {
   classifyOmbudRole,
   createUtseOmbudDeepLink,
   getOmbudApiBaseUrl,
+  getOmbudRoleCode,
   getOmbudRoleDescriptions,
   listOmbudGrants,
+  OMBUD_ROLE_KEYS,
+  OMBUD_ROLES,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
 import { getSaldo, getSkattekontoBaseUrl, getTransaktioner } from '@/extensions/general/skatteverket/lib/skattekonto-client'
-
-const ROLE_ENV = { lasombud: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD', moms_ombud: 'SKATTEVERKET_OMBUD_ROLL_MOMS' } as const
 
 function argValue(flag: string): string | null {
   const i = process.argv.indexOf(flag)
@@ -121,6 +125,7 @@ async function main() {
   console.log(`Configuration (${envFile})`)
   console.log(`  token endpoint   ${getSystemTokenUrl() ?? '(SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL missing)'}`)
   console.log(`  client id        ${process.env.SKATTEVERKET_SYSTEM_CLIENT_ID ? 'set' : '(SKATTEVERKET_SYSTEM_CLIENT_ID missing)'}`)
+  console.log(`  client secret    ${process.env.SKATTEVERKET_SYSTEM_CLIENT_SECRET ? 'set (valfritt certifikat)' : 'not set (utpekat certifikat)'}`)
   console.log(`  gateway keys     ${process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID ? 'system pair' : 'shared SKATTEVERKET_APIGW_* pair'}`)
   console.log(`  scopes           ${getSystemScopes().join(' ')}`)
   console.log(`  certificate      ${cert ? `${cert.subject.replace(/\n/g, ', ')}, valid to ${cert.notAfter.slice(0, 10)}` : '(missing or unreadable)'}`)
@@ -140,9 +145,15 @@ async function main() {
     const key = classifyOmbudRole(role)
     console.log(`  ${role.roll.padEnd(12)} ${role.rollbeskrivning ?? ''}${key ? `   <- ${key}` : ''}`)
   }
-  for (const [key, env] of Object.entries(ROLE_ENV)) {
-    const hit = roles.find((role) => classifyOmbudRole(role) === key)
-    console.log(hit ? `  pin: ${env}=${hit.roll}` : `  ${key}: no role matched by description; pick its code above and set ${env}`)
+  const missing = OMBUD_ROLE_KEYS.filter((key) => !roles.some((role) => classifyOmbudRole(role) === key))
+  for (const key of OMBUD_ROLE_KEYS) {
+    const code = getOmbudRoleCode(key)
+    const source = code === OMBUD_ROLES[key].code ? 'default' : OMBUD_ROLES[key].env
+    console.log(`  ${key} = ${code} (${source})${missing.includes(key) ? ': NOT in /roller' : ''}`)
+  }
+  if (missing.length > 0) {
+    console.error(`\nFAILED at 2. GET /roller\n  No role ${missing.map(getOmbudRoleCode).join(', ')} in the register: set the right code in ${missing.map((key) => OMBUD_ROLES[key].env).join(' / ')}.`)
+    process.exit(1)
   }
 
   const grants = await step('3. GET /ombud/autentisieratOmbud', () =>

@@ -102,7 +102,7 @@ beforeEach(() => {
   mockWriteAudit.mockResolvedValue(undefined)
   mockCreateDeepLink.mockResolvedValue({
     djuplank: 'https://sso.skatteverket.se/ombud?x=1',
-    roller: { lasombud: 'JLO', moms_ombud: 'MOMS' },
+    roller: { lasombud: 'skol', moms_ombud: 'momsdeklaration_ombud' },
     expiresOn: '2026-09-22',
   })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -159,7 +159,7 @@ describe('POST /system-connection/deeplink', () => {
     expect(await res.json()).toEqual({
       data: {
         djuplank: 'https://sso.skatteverket.se/ombud?x=1',
-        roller: { lasombud: 'JLO', moms_ombud: 'MOMS' },
+        roller: { lasombud: 'skol', moms_ombud: 'momsdeklaration_ombud' },
         expires_on: '2026-09-22',
       },
     })
@@ -194,11 +194,11 @@ describe('POST /system-connection/deeplink', () => {
     expect(res.status).toBe(500)
   })
 
-  it('502 with the error code when the register refuses or the role codes are unresolved', async () => {
-    mockCreateDeepLink.mockRejectedValue(new OmbudApiError('Rollkod saknas', 'OBR_ROLE_UNRESOLVED'))
+  it('502 with the error code when the register refuses', async () => {
+    mockCreateDeepLink.mockRejectedValue(new OmbudApiError('Ombudshantering svarade 400', 'OBR_HTTP_ERROR', 400))
     const res = await findRoute().handler(request(), makeContext())
     expect(res.status).toBe(502)
-    expect(await res.json()).toMatchObject({ code: 'OBR_ROLE_UNRESOLVED' })
+    expect(await res.json()).toMatchObject({ code: 'OBR_HTTP_ERROR' })
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 })

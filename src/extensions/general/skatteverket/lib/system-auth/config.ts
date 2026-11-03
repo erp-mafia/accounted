@@ -7,13 +7,14 @@ import crypto from 'crypto'
  * itself with an organisationscertifikat via the OAuth2 Client Credentials
  * Grant: one token for the whole tenant, no per-user session, no 65-minute
  * refresh treadmill. Companies authorize it once by granting Accounted's org
- * number a behorighet ("Juridiskt lasombud", "Momsdeklaration, ombud") in
- * Skatteverket's Ombud och behorigheter e-service.
+ * number the behörigheter in OMBUD_ROLES (lib/ombud-client.ts: "Skattekonto,
+ * bara läsbehörighet", "Momsdeklaration, ombud") in Skatteverket's Ombud och
+ * behörigheter e-service.
  *
- * The exact token-endpoint mechanics (mTLS vs private_key_jwt, scope names)
- * are pending Skatteverket's CCG documentation: everything here is behind
- * SKATTEVERKET_SYSTEM_AUTH_MODE (default 'off') and the transport seam in
- * transport.ts, so the mechanism can be finalized without touching callers.
+ * Skatteverket's org flow is "CCG sysorg": mTLS at the token endpoint (the
+ * mtls transport), proven against the test service on 2026-11-03.
+ * Everything here is behind SKATTEVERKET_SYSTEM_AUTH_MODE (default 'off')
+ * and the transport seam in transport.ts.
  *
  * Modes:
  *   off    : system auth never used (default; behavior identical to before)
@@ -43,6 +44,18 @@ export function getSystemTokenUrl(): string | null {
 
 export function getSystemClientId(): string | null {
   return process.env.SKATTEVERKET_SYSTEM_CLIENT_ID ?? null
+}
+
+/**
+ * OAuth2 client secret for the system token request, sent only when set.
+ * Skatteverket registers a CCG sysorg application one of two ways:
+ * "valfritt certifikat" authenticates the client with client_id +
+ * client_secret and takes any org certificate on the TLS handshake (the
+ * test application, arcimtechnologyab_gnubok_1); "utpekat certifikat"
+ * sends client_id and the named certificate, no secret.
+ */
+export function getSystemClientSecret(): string | null {
+  return process.env.SKATTEVERKET_SYSTEM_CLIENT_SECRET || null
 }
 
 /**

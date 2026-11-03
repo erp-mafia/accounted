@@ -717,16 +717,19 @@ async function sendSkvRequest(
   // moms/skattekonto/AGI services never needed it, so it stays opt-in.
   if (options?.accept) headers['Accept'] = options.accept
 
-  // contentType defaults to application/json, which is right for moms +
-  // skattekonto. AGI's POST /underlag takes application/xml: callers pass
-  // the XML as a string body and override contentType.
-  let serializedBody: string | undefined
-  if (body !== undefined) {
-    const contentType = options?.contentType ?? 'application/json'
+  // A body goes with Content-Type application/json unless the caller names
+  // another type (AGI's POST /underlag passes its XML as a string body with
+  // application/xml). A named contentType is sent even without a body:
+  // Ombudshantering answers a GET without it with 400 "Required header
+  // 'Content-Type' not specified", while moms, skattekonto and AGI never
+  // asked for it on a GET, and Skatteverket warns that headers outside a
+  // service's list can block a call. So it stays opt-in, like Accept.
+  const contentType = options?.contentType ?? (body !== undefined ? 'application/json' : undefined)
+  if (contentType) {
     headers['Content-Type'] = contentType
     if (connector) headers[CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER] = contentType
-    serializedBody = typeof body === 'string' ? body : JSON.stringify(body)
   }
+  const serializedBody = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
 
   trace.requestSizeBytes = serializedBody === undefined ? null : Buffer.byteLength(serializedBody, 'utf8')
   trace.sent = true
