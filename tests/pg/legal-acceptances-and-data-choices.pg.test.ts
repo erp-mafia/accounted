@@ -142,6 +142,26 @@ describe('legal_acceptances', () => {
     await expect(insert('terms', 'v1', 'accept_all')).rejects.toThrow(/legal_acceptances_version_check/)
     await expect(insert('terms', '2026-03-05', 'clicked')).rejects.toThrow(/legal_acceptances_method_check/)
   })
+
+  // Migration 20261102124000: the signup routes record the acceptance through
+  // the service role, before the new person has a session.
+  it('accepts a signup row from the service role, with no company', async () => {
+    await runAsServiceRole((client) =>
+      client.query(
+        `INSERT INTO public.legal_acceptances (user_id, company_id, document_key, version, method)
+         VALUES ($1, NULL, 'terms', '2026-03-05', 'signup'), ($1, NULL, 'dpa', '2026-10-21', 'signup')`,
+        [userId],
+      ),
+    )
+    const { rows } = await getPool().query(
+      `SELECT document_key, version, method, company_id FROM public.legal_acceptances WHERE user_id = $1 ORDER BY document_key`,
+      [userId],
+    )
+    expect(rows).toEqual([
+      { document_key: 'dpa', version: '2026-10-21', method: 'signup', company_id: null },
+      { document_key: 'terms', version: '2026-03-05', method: 'signup', company_id: null },
+    ])
+  })
 })
 
 describe('user_preferences.analytics_consent', () => {

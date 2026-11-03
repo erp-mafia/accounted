@@ -47,6 +47,7 @@ import {
 } from '@/lib/auth/brand-signup-gate'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
+import { recordSignupAcceptances } from '@/lib/legal/acceptance'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import crypto from 'crypto'
@@ -1245,6 +1246,11 @@ export const ticExtension: Extension = {
               { status: 500 }
             ))
           }
+
+          // The register page says creating an account accepts the terms and
+          // the DPA: record it now the account exists and can no longer be
+          // rolled back. Never fails the signup (logged with the user id).
+          await recordSignupAcceptances(supabase, userId)
 
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
           await fetchAndStoreEnrichment(sessionId, userId, personalNumber, supabase)

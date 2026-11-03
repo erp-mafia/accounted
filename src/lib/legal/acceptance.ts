@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { ACCEPTED_DOCUMENTS, LEGAL_DOCUMENTS, type LegalDocumentKey } from './documents'
 
 const log = createLogger('legal.acceptance')
@@ -17,7 +18,13 @@ export interface AcceptanceState {
   analyticsConsent: boolean | null
 }
 
-export type AcceptanceMethod = 'accept_all' | 'accept_documents'
+/**
+ * How the documents were accepted: one of the prompt's two buttons, or
+ * 'signup', creating an account on the register page, which says that doing
+ * so accepts them. 'signup' is written by the server only, never sent by a
+ * browser (POST /api/legal/accept takes the two buttons).
+ */
+export type AcceptanceMethod = 'accept_all' | 'accept_documents' | 'signup'
 
 /** The current version of every document a person accepts, in the order the prompt lists them. */
 export function currentAcceptanceVersions(): Array<{ key: LegalDocumentKey; version: string }> {
@@ -89,4 +96,33 @@ export async function storeAnalyticsConsent(supabase: SupabaseClient, userId: st
       { onConflict: 'user_id' },
     )
   if (error) throw new Error(`Failed to store analytics consent: ${error.message}`)
+}
+
+/**
+ * Record that a new account accepted every document at its current version by
+ * signing up (method 'signup', no company). Called by POST /api/auth/signup and
+ * the BankID signup completion once the account exists, with the service
+ * client: the person has no session until the confirmation mail is clicked.
+ *
+ * Never throws: the account is already created, and a failed write must not
+ * turn a working signup into an error. The failure is logged at error level
+ * with the user id so it can be backfilled. Skipped on a self-hosted
+ * deployment, where Arcim's terms are not the operator's terms.
+ *
+ * Returns whether the rows were written.
+ */
+export async function recordSignupAcceptances(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  if (isSelfHosted()) return false
+  const documents = currentAcceptanceVersions()
+  try {
+    await recordAcceptances(supabase, { userId, companyId: null, method: 'signup', documents })
+    return true
+  } catch (err) {
+    log.error('signup acceptance not recorded', {
+      userId,
+      documents: documents.map((d) => `${d.key}@${d.version}`).join(','),
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
 }
