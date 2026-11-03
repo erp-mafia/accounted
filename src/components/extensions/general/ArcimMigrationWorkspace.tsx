@@ -3369,7 +3369,7 @@ function formatSkipReasons(
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
   if (reasons.outsideFiscalYears) {
     parts.push(
-      `${reasons.outsideFiscalYears} avslutad${reasons.outsideFiscalYears > 1 ? 'e' : ''} före importerade räkenskapsår`,
+      `${reasons.outsideFiscalYears} utanför importerade räkenskapsår`,
     )
   }
   // The source returned the record without an amount and without rader, so
@@ -4360,6 +4360,27 @@ export default function ArcimMigrationWorkspace({
     setStep('options')
   }, [])
 
+  /**
+   * Open the company's register fetch that is still open, if there is one,
+   * and say why: true when it was opened. The job route allows one open
+   * fetch per company, and a finished one stays open until its review is
+   * accepted (migration_jobs_one_active_company).
+   */
+  const openActiveProviderJob = useCallback(async (): Promise<boolean> => {
+    const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', { cache: 'no-store' }).catch(() => null) // caller falls back to its error
+    if (!response?.ok) return false
+    const { data } = await response.json().catch(() => ({ data: null })) as { data: ProviderMigrationStatus | null }
+    if (!data || data.job.state === 'completed') return false
+    const waitingForReview = data.job.state === 'needs_attention'
+    toast({
+      title: t(waitingForReview ? 'ext_arcim_job_open_review_title' : 'ext_arcim_job_open_running_title'),
+      description: t(waitingForReview ? 'ext_arcim_job_open_review_description' : 'ext_arcim_job_open_running_description'),
+    })
+    setLatestJobId(data.job.id)
+    setProviderJobId(data.job.id)
+    return true
+  }, [t, toast])
+
   const handleStartMigration = useCallback(async () => {
     if (!consentId) return
     if (migrationInFlightRef.current) return
@@ -4513,7 +4534,15 @@ export default function ArcimMigrationWorkspace({
             body: JSON.stringify({ consentId, resources, ...(allSupplierInvoices ? { allSupplierInvoices: true } : {}) }),
           })
           const body = await response.json()
-          if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
+          if (!response.ok) {
+            // One register fetch per company at a time: an earlier one still
+            // open (finished but waiting for its review to be accepted, or
+            // still running) refuses this one. The SIE import above is done
+            // already, so open that fetch instead of a dead-end error
+            // (crm#1660).
+            if (apiErrorCode(body) === 'MIGRATION_ALREADY_ACTIVE' && await openActiveProviderJob()) return
+            throw apiError(body, `HTTP ${response.status}`)
+          }
           setProviderJobId(body.data.jobId)
           return
         }
@@ -4559,7 +4588,7 @@ export default function ArcimMigrationWorkspace({
       migrationInFlightRef.current = false
       setIsStartingMigration(false)
     }
-  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
+  }, [consentId, migrationOptions, openActiveProviderJob, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
 
   const handleDone = useCallback(() => {
     // Reset wizard

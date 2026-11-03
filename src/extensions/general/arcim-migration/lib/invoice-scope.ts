@@ -9,13 +9,20 @@
  * register, the detail fetches behind it are what push /migrate past the
  * function's 300 s ceiling (#2469).
  *
- * Unpaid invoices are kept from any year: they are open receivables and
- * payables that the user has to follow up on, whichever year booked them.
- * So is a paid invoice settled on or after the scope's first day: it is
- * part of the 1510/2440 opening balance and its payment verifikat sits in
- * the imported ledger, and the kundreskontra as of the opening date has to
- * agree with that balance (BFNAR 2013:2 kap. 9). Only an invoice that was
- * both issued and settled before the imported years is declined.
+ * Unpaid invoices issued up to the scope's last day are kept from any year:
+ * they are open receivables and payables that the user has to follow up on,
+ * whichever imported year booked them. So is a paid invoice issued before
+ * the scope and settled on or after its first day: it is part of the
+ * 1510/2440 opening balance and its payment verifikat sits in the imported
+ * ledger, and the kundreskontra as of the opening date has to agree with
+ * that balance (BFNAR 2013:2 kap. 9). An invoice that was both issued and
+ * settled before the imported years is declined.
+ *
+ * An invoice issued after the scope's last day is declined, paid or not.
+ * Its year was not imported, so no verifikat books it and no opening
+ * balance carries it: it would land as an unbooked invoice the ledger knows
+ * nothing about, and it would hold its number against the user who left
+ * that year out to start it over in Accounted (crm#1660).
  */
 
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
@@ -42,10 +49,11 @@ export function invoiceWithinScope(
   scope: Partial<FiscalYearScope> | null | undefined,
 ): boolean {
   if (!scope?.start || !scope.end) return true
-  if (!dto.paymentStatus?.paid) return true
   const issued = isoDay(dto.issueDate)
   if (!issued) return true
-  if (issued >= scope.start && issued <= scope.end) return true
+  if (issued > scope.end) return false
+  if (!dto.paymentStatus?.paid) return true
+  if (issued >= scope.start) return true
   const settled = isoDay(dto.paymentStatus.lastPaymentDate)
   return settled !== null && settled >= scope.start
 }
