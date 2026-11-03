@@ -10,4 +10,5 @@ export const WORKSPACES: Record<string, ComponentType<WorkspaceComponentProps>> 
   'general/tic': dynamic(() => import('@/components/extensions/general/TicWorkspace')),
   'general/cloud-backup': dynamic(() => import('@/components/extensions/general/CloudBackupWorkspace')),
   'general/invoice-inbox': dynamic(() => import('@/components/extensions/general/InvoiceInboxWorkspace')),
+  'general/time-tracking': dynamic(() => import('@/components/extensions/general/TimeTrackingWorkspace')),
 }
