@@ -12,9 +12,10 @@
  *      limit are refused; payment holds the invoice until the second;
  *   4. concurrent attests take turns on the invoice: the last one sees the
  *      others and the marker is set once;
- *   5. every door: the dashboard (the member's own session), the mail's
- *      link, v1 and MCP, with the key capped by the lower of the person's
- *      limit and the key's ceiling; a session cannot attest as someone else;
+ *   5. every door: the dashboard (the service role naming the signed-in
+ *      user), the mail's link, v1 and MCP, with the key capped by the lower
+ *      of the person's limit and the key's ceiling; a session calling the
+ *      function itself cannot attest as someone else;
  *   6. the policy and its limits are saved together, by an owner or admin
  *      only, and every limit change is in audit_log.
  *
@@ -28,12 +29,14 @@ import type { PoolClient } from 'pg'
 import { createServiceClientNoCookies, generateApiKey } from '@/lib/auth/api-keys'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { mintAttestLink } from '@/lib/supplier-invoices/attest-links'
+import { deciderRefusal } from '@/lib/supplier-invoices/attest-service'
 import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
 import { ruleOnApproval, type AttestationRecord, type AttestPolicy } from '@/lib/supplier-invoices/attest-policy'
 import type { PendingOperation } from '@/types'
 import { tools } from '@/extensions/general/mcp-server/server'
 import type { ActorContext } from '@/extensions/general/mcp-server/server'
 import { POST as approveRoute } from '@/app/api/supplier-invoices/[id]/approve/route'
+import { POST as rejectRoute } from '@/app/api/supplier-invoices/[id]/reject/route'
 import { PUT as savePolicyRoute } from '@/app/api/supplier-invoices/attest-policy/route'
 import { POST as v1ApproveRoute } from '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/approve/route'
 import { POST as attestDecisionRoute } from '@/app/api/attest/[token]/decision/route'
@@ -220,6 +223,20 @@ async function approveInApp(w: World, userId: string, invoiceId: string): Promis
   return approveRoute(new Request(`http://localhost/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' }), params({ id: invoiceId }))
 }
 
+/** The dashboard's Neka, as `userId`. */
+async function rejectInApp(w: World, userId: string, invoiceId: string): Promise<Response> {
+  session.userId = userId
+  session.companyId = w.companyId
+  return rejectRoute(
+    new Request(`http://localhost/api/supplier-invoices/${invoiceId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: 'Fel belopp' }),
+    }),
+    params({ id: invoiceId }),
+  )
+}
+
 /** The attester's Godkänn from the mail. */
 async function approveByLink(w: World, userId: string, invoiceId: string): Promise<Response> {
   const link = await mintAttestLink(createServiceClientNoCookies(), { companyId: w.companyId, invoiceId, attesterUserId: userId })
@@ -252,6 +269,8 @@ describe('the SQL rules and the TypeScript rules agree', () => {
     const departed = await insertAuthUser()
     const people = [w.ownerId, w.annaId, w.boId, w.cillaId, w.veraId, departed]
     const writers = new Set([w.ownerId, w.annaId, w.boId, w.cillaId])
+    // Whose attest can count: those who keep the books, and Vera, the viewer (crm#1569).
+    const members = { attesters: new Set([...writers, w.veraId]), writers }
     const random = sequence(135)
     const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!
     const mismatches: unknown[] = []
@@ -347,13 +366,13 @@ describe('the SQL rules and the TypeScript rules agree', () => {
               [w.companyId, invoiceId, actor, viaKey, keyCeiling],
             )
             const sql = rows[0]!.r
-            // The attest service: who keeps the books first, then the rules.
-            const ts: Record<string, unknown> = !writers.has(actor)
-              ? { kind: 'refused', code: 'FORBIDDEN', reason: 'not_member' }
-              : (ruleOnApproval(p, method, invoice, decisions, actor, p.enabled ? writers : undefined, { limits, viaKey, keyCeiling }) as unknown as Record<
-                  string,
-                  unknown
-                >)
+            // The attest service: a member whose attest can count first, then the
+            // rules, then keeping the books where no policy governs (deciderRefusal).
+            const gate = deciderRefusal(members, actor, false)
+            const rule = gate ? null : ruleOnApproval(p, method, invoice, decisions, actor, p.enabled ? members.attesters : undefined, { limits, viaKey, keyCeiling })
+            const readOnly = rule && rule.kind !== 'refused' ? deciderRefusal(members, actor, rule.kind === 'unrestricted') : null
+            const ts: Record<string, unknown> =
+              gate || readOnly ? { kind: 'refused', code: 'FORBIDDEN', reason: gate ?? readOnly } : (rule as unknown as Record<string, unknown>)
             const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
             const shape = (r: Record<string, unknown>, limitKey: string) => ({
               kind: r.kind,
@@ -387,6 +406,7 @@ describe('the SQL rules and the TypeScript rules agree', () => {
         'refused/ATTEST_NOT_ALLOWED/not_attester',
         'refused/ATTEST_NOT_ALLOWED/registrant',
         'refused/FORBIDDEN/not_member',
+        'refused/FORBIDDEN/read_only',
         'unrestricted',
       ].sort(),
     )
@@ -420,16 +440,76 @@ describe('one step: an attester whose limit covers the invoice', () => {
     expect(await blocked(w, large)).toBe(false)
   })
 
-  it('the external bookkeeper only reads: a viewer cannot attest, whatever the limits', async () => {
+  it('a viewer attests only where the policy names them, and changes nothing else (crm#1569)', async () => {
     const w = await seedWorld()
     await policy(w, { annaLimit: 50000, attesters: [w.annaId, w.boId] })
     const invoiceId = await registeredInvoice(w, 1000)
+    // The external bookkeeper who only reads, not named: no attester.
     session.userId = w.veraId
     session.companyId = w.companyId
     const { data, error } = await memberClient(w.veraId).rpc('attest_supplier_invoice', { p_company_id: w.companyId, p_invoice_id: invoiceId })
     expect(error).toBeNull()
-    expect(data).toMatchObject({ ok: false, code: 'FORBIDDEN', reason: 'not_member' })
+    expect(data).toMatchObject({ ok: false, code: 'ATTEST_NOT_ALLOWED', reason: 'not_attester' })
     expect(await trail(invoiceId)).toEqual([])
+
+    // The byrå's client, named: attests in the app as herself, and the policy is met.
+    await getPool().query(`UPDATE public.company_attest_policies SET attesters = $2::uuid[] WHERE company_id = $1`, [w.companyId, [w.annaId, w.veraId]])
+    const named = await approveInApp(w, w.veraId, invoiceId)
+    expect(named.status, JSON.stringify(await json(named.clone()))).toBe(200)
+    expect(await json(named)).toMatchObject({ data: { status: 'approved', attest: { approved: true, required: true, satisfied: true } } })
+    expect(await marker(invoiceId)).toMatchObject({ status: 'approved', approved_by: w.veraId })
+    expect(await trail(invoiceId)).toEqual([{ user_id: w.veraId, decision: 'approved', source: 'app', step: 1, limit_sek: null, amount_sek: '1000.00' }])
+    expect(await blocked(w, invoiceId)).toBe(false)
+
+    // And through the mail's link, the same rules.
+    const byLink = await registeredInvoice(w, 2000)
+    const linked = await approveByLink(w, w.veraId, byLink)
+    expect(linked.status, JSON.stringify(await json(linked.clone()))).toBe(200)
+    expect(await marker(byLink)).toMatchObject({ status: 'approved', approved_by: w.veraId })
+
+    // No policy governs the invoice: attest is the one click of someone who keeps the books.
+    await getPool().query(`UPDATE public.company_attest_policies SET enabled = false WHERE company_id = $1`, [w.companyId])
+    const unrestricted = await registeredInvoice(w, 1000)
+    const refused = await approveInApp(w, w.veraId, unrestricted)
+    expect(refused.status).toBe(403)
+    expect(await json(refused)).toMatchObject({ error: { code: 'FORBIDDEN', details: { reason: 'read_only' } } })
+    expect(await marker(unrestricted)).toMatchObject({ approved_at: null })
+    expect(await trail(unrestricted)).toEqual([])
+    const byMember = await approveInApp(w, w.annaId, unrestricted)
+    expect(byMember.status, JSON.stringify(await json(byMember.clone()))).toBe(200)
+
+    // Read access stays read access: the invoice itself is still not hers to change.
+    const edited = await withUserContext(w.veraId, (client) =>
+      client.query(`UPDATE public.supplier_invoices SET supplier_invoice_number = 'ÄNDRAD' WHERE id = $1`, [invoiceId]),
+    )
+    expect(edited.rowCount).toBe(0)
+  })
+
+  it('a viewer rejects in the app only where the policy names them (crm#1569)', async () => {
+    const w = await seedWorld()
+    await policy(w, { annaLimit: 50000, attesters: [w.annaId, w.boId] })
+    const invoiceId = await registeredInvoice(w, 1000)
+
+    // Not named: refused, and nothing is written.
+    const refused = await rejectInApp(w, w.veraId, invoiceId)
+    expect(refused.status).toBe(403)
+    expect(await json(refused)).toMatchObject({ error: { code: 'ATTEST_NOT_ALLOWED', details: { reason: 'not_attester' } } })
+    expect(await trail(invoiceId)).toEqual([])
+
+    // Named: her Neka is on the trail, from the app, and the invoice stays unattested.
+    await getPool().query(`UPDATE public.company_attest_policies SET attesters = $2::uuid[] WHERE company_id = $1`, [w.companyId, [w.annaId, w.veraId]])
+    const named = await rejectInApp(w, w.veraId, invoiceId)
+    expect(named.status, JSON.stringify(await json(named.clone()))).toBe(200)
+    expect(await trail(invoiceId)).toMatchObject([{ user_id: w.veraId, decision: 'rejected', source: 'app' }])
+    expect(await marker(invoiceId)).toMatchObject({ approved_at: null })
+
+    // No policy governs the invoice: Neka is for someone who keeps the books.
+    await getPool().query(`UPDATE public.company_attest_policies SET enabled = false WHERE company_id = $1`, [w.companyId])
+    const unrestricted = await registeredInvoice(w, 1000)
+    const readOnly = await rejectInApp(w, w.veraId, unrestricted)
+    expect(readOnly.status).toBe(403)
+    expect(await json(readOnly)).toMatchObject({ error: { code: 'FORBIDDEN', details: { reason: 'read_only' } } })
+    expect(await trail(unrestricted)).toEqual([])
   })
 })
 

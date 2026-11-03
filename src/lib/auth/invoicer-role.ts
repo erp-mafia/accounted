@@ -39,10 +39,23 @@ export function isInvoicerRole(role: string | null | undefined): boolean {
  * Roles that keep the books: they may write anywhere the company is open to
  * writes. Viewer reads everything and writes nothing; invoicer reaches only
  * the invoicing area. Use it wherever a list of people who may act on the
- * books is built (attest candidates, for one).
+ * books is built; who may attest is isAttestRole.
  */
 export function isBookkeepingWriterRole(role: string | null | undefined): boolean {
   return role === 'owner' || role === 'admin' || role === 'member'
+}
+
+/**
+ * Roles whose attest of a supplier invoice counts where the company's attest
+ * policy names them: those who keep the books, and viewer, who can say yes or
+ * no to paying an invoice and change nothing else (a byrå's client who only
+ * reads the books, crm#1569). An invoice no policy governs is still attested
+ * only by isBookkeepingWriterRole, the one click it was before the policy;
+ * invoicer never attests. The database's supplier_invoice_attest_ruling
+ * holds the same roles.
+ */
+export function isAttestRole(role: string | null | undefined): boolean {
+  return isBookkeepingWriterRole(role) || role === 'viewer'
 }
 
 /** The API key and MCP scopes an invoicer membership may use: customers, invoices (quotes and orders included) and articles. */

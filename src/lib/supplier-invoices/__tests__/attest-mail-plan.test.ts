@@ -33,7 +33,7 @@ function company(overrides: Partial<AttestMailCompany> = {}): AttestMailCompany 
   return {
     policy: POLICY,
     accountingMethod: 'accrual',
-    writers: new Set(['alex', 'kim', 'robin']),
+    attesters: new Set(['alex', 'kim', 'robin']),
     limits: new Map(),
     attestations: new Map(),
     optedOut: new Set(),

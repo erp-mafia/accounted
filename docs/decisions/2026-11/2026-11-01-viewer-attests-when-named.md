@@ -1,0 +1,1 @@
+[2026-11-01] A viewer (Läsbehörighet) whom the attest policy names may attest and reject supplier invoices the policy governs; an invoice no policy governs is still attested only by owner, admin or member: a byrå's client says yes or no to paying without write access to the books (crm#1569).

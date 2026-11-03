@@ -133,7 +133,7 @@ export const AttestPolicyInput = z.object({
   attesters: z
     .array(z.string().uuid())
     .max(ATTEST_MAX_ATTESTERS)
-    .describe('User ids of company members who may write (owner, admin, member). At least one when enabled.'),
+    .describe('User ids of company members whose attest can count: owner, admin, member, or viewer (who attests and changes nothing else). At least one when enabled.'),
   preparer_may_attest: z.boolean().default(false),
   two_step_from_sek: z
     .number()
@@ -169,7 +169,7 @@ export const supplierInvoicesAttestPolicyUpdate = defineOperation({
     summary: 'Save the company\'s attest policy for supplier invoices.',
     description:
       'Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members ' +
-      'who may write), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; ' +
+      'who may write, or viewers), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; ' +
       'both left as they are when left out). With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the ' +
       'registrant unless preparer_may_attest) whose approval can count under their limit, approved_at is set when the policy is ' +
       'satisfied, and payments leave an invoice out until then (attest_required). The policy and the limits are saved together. ' +
@@ -178,7 +178,7 @@ export const supplierInvoicesAttestPolicyUpdate = defineOperation({
     doNotUseFor: 'Attesting an invoice (POST /supplier-invoices/{id}/approve).',
     pitfalls: [
       'ATTEST_POLICY_NO_ATTESTERS: a policy that is on needs at least one attester.',
-      'ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write; details.user_ids names the others.',
+      'ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write or a viewer; details.user_ids names the others.',
       'ATTEST_POLICY_TWO_STEP_NEEDS_TWO: two_step_from_sek with the policy on needs at least two attesters.',
       'ATTEST_LIMIT_NOT_ATTESTER: a limit is for an attester; details.user_ids names the others.',
       'Keep at least one attester without a limit (null): an invoice above every limit has nobody whose approval covers it.',
@@ -340,6 +340,7 @@ export const supplierInvoicesReject = defineOperation({
     pitfalls: [
       'ATTEST_NOT_PENDING: the invoice is already attested or settled.',
       'ATTEST_NOT_ALLOWED: the attest policy does not let this user decide on the invoice.',
+      'FORBIDDEN: no attest policy governs the invoice and this user does not keep the books (details.reason read_only or not_member).',
     ],
     example: {
       request: { comment: 'Fel belopp, kontakta leverantören.' },
@@ -355,7 +356,7 @@ export const supplierInvoicesReject = defineOperation({
     attestation_id: z.string().uuid(),
     status: z.string(),
   }),
-  errorCodes: ['SI_NOT_FOUND', 'ATTEST_NOT_PENDING', 'ATTEST_NOT_ALLOWED'],
+  errorCodes: ['SI_NOT_FOUND', 'ATTEST_NOT_PENDING', 'ATTEST_NOT_ALLOWED', 'FORBIDDEN'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/supplier-invoices/:id/reject',

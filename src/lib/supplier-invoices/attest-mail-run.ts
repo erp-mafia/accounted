@@ -41,7 +41,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { isMissingTableError } from '@/lib/bookkeeping/business-event-link'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { AttestBatchEmailInvoice } from '@/lib/email/attest-batch-templates'
@@ -253,11 +253,11 @@ async function loadMailCompany(
     }
   }
 
-  const writers = new Set(
-    ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id),
+  const attesters = new Set(
+    ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isAttestRole(m.role)).map((m) => m.user_id),
   )
   const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
-  return { company: { policy, accountingMethod, writers, limits, attestations, optedOut }, invoices }
+  return { company: { policy, accountingMethod, attesters, limits, attestations, optedOut }, invoices }
 }
 
 function mailInvoice(invoice: MailInvoice): AttestBatchEmailInvoice {

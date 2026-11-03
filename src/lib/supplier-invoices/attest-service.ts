@@ -51,7 +51,7 @@ import {
 } from './attest-policy'
 import { canApproveSupplierInvoice, resolveUnsettledStatus } from './lifecycle'
 import { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { isAttestRole, isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { notifyAttestDecisionSafely, type AttestDecisionBatch, type AttestDecisionNotice } from './attest-decision-notify'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -78,13 +78,41 @@ async function loadAccountingMethod(supabase: SupabaseClient, companyId: string)
   return (data as { accounting_method?: string | null } | null)?.accounting_method ?? null
 }
 
-/** The company's members who may write (owner, admin, member): the only people whose attest counts. */
-export async function loadActiveAttestMembers(service: SupabaseClient, companyId: string): Promise<Set<string>> {
+/** The company's members whose attest can count, and those of them who keep the books. */
+export interface AttestMembers {
+  /** isAttestRole (owner, admin, member, viewer): an attester the policy names counts only while in here. */
+  attesters: ReadonlySet<string>
+  /** isBookkeepingWriterRole (owner, admin, member): an invoice no policy governs is attested or rejected only by them. */
+  writers: ReadonlySet<string>
+}
+
+/** Who among the company's members may attest, from one read of company_members. */
+export async function loadAttestMembers(service: SupabaseClient, companyId: string): Promise<AttestMembers> {
   const { data, error } = await service.from('company_members').select('user_id, role').eq('company_id', companyId)
   if (error) throw error
-  return new Set(
-    ((data ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id),
-  )
+  const rows = (data ?? []) as Array<{ user_id: string; role: string }>
+  return {
+    attesters: new Set(rows.filter((m) => isAttestRole(m.role)).map((m) => m.user_id)),
+    writers: new Set(rows.filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id)),
+  }
+}
+
+/** The company's members whose attest counts where the policy names them (AttestMembers.attesters). */
+export async function loadActiveAttestMembers(service: SupabaseClient, companyId: string): Promise<Set<string>> {
+  return new Set((await loadAttestMembers(service, companyId)).attesters)
+}
+
+/**
+ * Who may decide an invoice before the rules do: someone whose attest can
+ * count, and for an invoice no policy governs (the ruling is unrestricted)
+ * only someone who keeps the books, since that attest is the one click it
+ * was before the policy. A viewer decides only where the policy names them.
+ * The first checks of the database's supplier_invoice_attest_ruling.
+ */
+export function deciderRefusal(members: AttestMembers, userId: string, unrestricted: boolean): 'not_member' | 'read_only' | null {
+  if (!members.attesters.has(userId)) return 'not_member'
+  if (unrestricted && !members.writers.has(userId)) return 'read_only'
+  return null
 }
 
 interface AttestationRow extends AttestationRecord {
@@ -236,12 +264,19 @@ type AttestRpcAnswer =
 function refusalOutcome(refusal: { code: string; reason?: string; limit_sek?: number | null; amount_sek?: number | null }): OperationOutcome<never> {
   switch (refusal.code) {
     case 'FORBIDDEN':
-      return {
-        ok: false,
-        code: 'FORBIDDEN',
-        messageSv: 'Bara den som för företagets bokföring (ägare, administratör eller medlem) kan attestera leverantörsfakturor.',
-        details: { reason: 'not_member' },
-      }
+      return refusal.reason === 'read_only'
+        ? {
+            ok: false,
+            code: 'FORBIDDEN',
+            messageSv: 'Med läsbehörighet kan du bara attestera fakturor som attestreglerna ber dig attestera.',
+            details: { reason: 'read_only' },
+          }
+        : {
+            ok: false,
+            code: 'FORBIDDEN',
+            messageSv: 'Bara den som för företagets bokföring, eller som attestreglerna gör till attestant, kan attestera leverantörsfakturor.',
+            details: { reason: 'not_member' },
+          }
     case 'ATTEST_NOT_ALLOWED':
       return { ok: false, code: 'ATTEST_NOT_ALLOWED', details: { reason: refusal.reason } }
     case 'ATTEST_LIMIT_EXCEEDED':
@@ -265,11 +300,12 @@ function refusalOutcome(refusal: { code: string; reason?: string; limit_sek?: nu
  * once the policy is satisfied.
  *
  * The database decides and writes: attest_supplier_invoice locks the
- * invoice, applies the rules, records the approval and sets the marker. The
- * dashboard calls it on the member's own session, which attests only as
- * itself; the service doors (v1, the approved agent operation, the mail's
- * link) call it as the service role and name the attester, the source and
- * the key. A dry run reads the same rules in TypeScript (attest-policy.ts).
+ * invoice, applies the rules, records the approval and sets the marker.
+ * Every door (the dashboard, v1, the approved agent operation, the mail's
+ * links) calls it as the service role and names the attester, the source and
+ * the key; the dashboard names the signed-in user, since a viewer's own
+ * session could not set the marker (the writer-role trigger, crm#1569). A
+ * dry run reads the same rules in TypeScript (attest-policy.ts).
  */
 export async function approveSupplierInvoice(
   ctx: OperationContext,
@@ -306,19 +342,22 @@ export async function approveSupplierInvoice(
   const selectColumns = input.select ?? '*'
 
   if (input.dryRun) {
-    const [policy, accountingMethod, attestations, writers, limits] = await Promise.all([
+    const [policy, accountingMethod, attestations, members, limits] = await Promise.all([
       loadAttestPolicy(supabase, companyId),
       loadAccountingMethod(supabase, companyId),
       loadAttestations(supabase, companyId, invoice.id),
-      loadActiveAttestMembers(service, companyId),
+      loadAttestMembers(service, companyId),
       loadAttestLimits(supabase, companyId),
     ])
-    if (!writers.has(userId)) return refusalOutcome({ code: 'FORBIDDEN' })
-    const ruling = ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, policy.enabled ? writers : undefined, {
+    // In the database's order: a member whose attest can count, the rules, then keeping the books where no policy governs.
+    if (deciderRefusal(members, userId, false)) return refusalOutcome({ code: 'FORBIDDEN', reason: 'not_member' })
+    const ruling = ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, policy.enabled ? members.attesters : undefined, {
       limits,
       ...key,
     })
     if (ruling.kind === 'refused') return refusalOutcome(ruling)
+    const gate = deciderRefusal(members, userId, ruling.kind === 'unrestricted')
+    if (gate) return refusalOutcome({ code: 'FORBIDDEN', reason: gate })
     const setsMarker = ruling.kind === 'unrestricted' || ruling.satisfies
     return {
       ok: true,
@@ -334,14 +373,18 @@ export async function approveSupplierInvoice(
     }
   }
 
-  // The dashboard's session attests as itself; every other door names the attester as the service role.
-  const viaSession = input.source === 'app' && !input.writer
-  const { data, error } = await (viaSession ? supabase : service).rpc('attest_supplier_invoice', {
+  // Every door names the attester as the service role, the dashboard too: the
+  // approval that completes the attest sets the invoice's marker, and the
+  // writer-role trigger on supplier_invoices refuses that UPDATE from a
+  // viewer's own session (crm#1569). The ruling inside the function decides
+  // who may attest; the actor header keeps the audit log on the signed-in user.
+  const { data, error } = await service.rpc('attest_supplier_invoice', {
     p_company_id: companyId,
     p_invoice_id: invoice.id,
-    ...(viaSession
-      ? {}
-      : { p_user_id: userId, p_source: input.source, p_via_key: key.viaKey, p_key_ceiling: key.keyCeiling }),
+    p_user_id: userId,
+    p_source: input.source,
+    p_via_key: key.viaKey,
+    p_key_ceiling: key.keyCeiling,
   })
   if (error || !data) {
     log.error('supplier invoice attest failed', error ?? new Error('attest_supplier_invoice answered nothing'), { invoiceId: invoice.id })
@@ -473,11 +516,17 @@ export async function rejectSupplierInvoice(
   if (!canApproveSupplierInvoice(invoice)) {
     return { ok: false, code: 'ATTEST_NOT_PENDING', details: { current_status: invoice.status } }
   }
-  const [policy, accountingMethod] = await Promise.all([loadAttestPolicy(supabase, companyId), loadAccountingMethod(supabase, companyId)])
   const service = serviceWriter(input.writer)
-  const members = policy.enabled ? await loadActiveAttestMembers(service, companyId) : undefined
-  const ruling = ruleOnRejection(policy, accountingMethod, invoice, userId, members)
+  const [policy, accountingMethod, members] = await Promise.all([
+    loadAttestPolicy(supabase, companyId),
+    loadAccountingMethod(supabase, companyId),
+    loadAttestMembers(service, companyId),
+  ])
+  const ruling = ruleOnRejection(policy, accountingMethod, invoice, userId, policy.enabled ? members.attesters : undefined)
   if (ruling.kind === 'refused') return { ok: false, code: ruling.code, details: { reason: ruling.reason } }
+  // Neka is decided like Attestera: without a governing policy, only by someone who keeps the books.
+  const gate = deciderRefusal(members, userId, ruling.kind === 'unrestricted')
+  if (gate) return refusalOutcome({ code: 'FORBIDDEN', reason: gate })
   if (input.dryRun) {
     return {
       ok: true,
@@ -584,7 +633,7 @@ export async function loadAttestPeople(service: SupabaseClient, userIds: string[
 export interface AttestViewer {
   may_approve: boolean
   may_reject: boolean
-  /** Why not, when the person may not decide: already_approved, not_pending, already_given, not_member, or the rules' reason. */
+  /** Why not, when the person may not decide: already_approved, not_pending, already_given, not_member, read_only, or the rules' reason. */
   reason: string | null
 }
 
@@ -592,8 +641,9 @@ export interface AttestViewer {
  * What `userId` may do with the invoice now: approve, reject, or why
  * neither. The invoice page and both mail link pages read it, so a page
  * never offers a decision the service would refuse. `members` are the
- * company's members who keep the books; `levels` the limits and the key the
- * decision would come through.
+ * company's members whose attest can count and those who keep the books
+ * (deciderRefusal); `levels` the limits and the key the decision would come
+ * through.
  */
 export function attestViewerOf(
   policy: AttestPolicy,
@@ -601,14 +651,15 @@ export function attestViewerOf(
   invoice: AttestInvoiceFacts & { status: string; approved_at: string | null },
   attestations: readonly AttestationRecord[],
   userId: string,
-  members: ReadonlySet<string>,
+  members: AttestMembers,
   levels: AttestLevels,
 ): AttestViewer {
-  const activeMembers = policy.enabled ? members : undefined
+  const activeMembers = policy.enabled ? members.attesters : undefined
   const pending = canApproveSupplierInvoice(invoice)
   const approval = pending ? ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, activeMembers, levels) : null
   const rejection = pending ? ruleOnRejection(policy, accountingMethod, invoice, userId, activeMembers) : null
-  const isWriter = members.has(userId)
+  const approvalGate = deciderRefusal(members, userId, approval?.kind === 'unrestricted')
+  const rejectionGate = deciderRefusal(members, userId, rejection?.kind === 'unrestricted')
   const reason = !pending
     ? invoice.approved_at
       ? 'already_approved'
@@ -617,12 +668,10 @@ export function attestViewerOf(
       ? approval.code === 'ATTEST_ALREADY_GIVEN'
         ? 'already_given'
         : approval.reason
-      : !isWriter
-        ? 'not_member'
-        : null
+      : approvalGate
   return {
-    may_approve: !!approval && approval.kind !== 'refused' && isWriter,
-    may_reject: !!rejection && rejection.kind !== 'refused' && isWriter,
+    may_approve: !!approval && approval.kind !== 'refused' && approvalGate === null,
+    may_reject: !!rejection && rejection.kind !== 'refused' && rejectionGate === null,
     reason,
   }
 }
@@ -646,10 +695,10 @@ export async function getSupplierInvoiceAttestState(
     loadAttestPolicy(supabase, companyId),
     loadAccountingMethod(supabase, companyId),
     loadAttestations(supabase, companyId, invoice.id),
-    loadActiveAttestMembers(service, companyId),
+    loadAttestMembers(service, companyId),
     loadAttestLimits(supabase, companyId),
   ])
-  const activeMembers = policy.enabled ? members : undefined
+  const activeMembers = policy.enabled ? members.attesters : undefined
   const progress = attestProgress(policy, accountingMethod, invoice, attestations, activeMembers, limits)
   const people = await loadAttestPeople(service, [
     ...attestations.map((a) => a.user_id),
@@ -716,8 +765,9 @@ export interface AttestPolicyInput {
  * transaction (save_company_attest_policy). Owners and admins only: the
  * session door gates with requireAdmin and the RLS policies, a service-role
  * door passes `checkAdmin` (lib/operations/access.ts does the asking). Every
- * attester must be a member who may write; a policy that is on needs at
- * least one, and two from a two-step amount. A limit is for an attester.
+ * attester must be a member whose attest can count (isAttestRole: one who
+ * keeps the books, or a viewer); a policy that is on needs at least one, and
+ * two from a two-step amount. A limit is for an attester.
  */
 export async function saveAttestPolicy(
   ctx: OperationContext,

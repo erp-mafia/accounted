@@ -17,12 +17,12 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => ({
 
 const approveSupplierInvoice = vi.fn()
 const rejectSupplierInvoice = vi.fn()
-const loadActiveAttestMembers = vi.fn()
+const loadAttestMembers = vi.fn()
 vi.mock('@/lib/supplier-invoices/attest-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supplier-invoices/attest-service')>()),
   approveSupplierInvoice: (...args: unknown[]) => approveSupplierInvoice(...args),
   rejectSupplierInvoice: (...args: unknown[]) => rejectSupplierInvoice(...args),
-  loadActiveAttestMembers: (...args: unknown[]) => loadActiveAttestMembers(...args),
+  loadAttestMembers: (...args: unknown[]) => loadAttestMembers(...args),
   loadAttestPeople: async (_s: unknown, ids: string[]) => new Map(ids.map((id) => [id, { user_id: id, name: id === 'alex' ? 'Alex' : 'Kim', email: null }])),
 }))
 const collector = { add: vi.fn(), flush: vi.fn(), size: 0 }
@@ -124,7 +124,7 @@ const approvedOk = { ok: true, data: { approved: true, invoice: { approved_at: '
 describe('the batched attest link door', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    loadActiveAttestMembers.mockResolvedValue(new Set([ATTESTER, 'alex']))
+    loadAttestMembers.mockResolvedValue({ attesters: new Set([ATTESTER, 'alex']), writers: new Set([ATTESTER, 'alex']) })
     collector.flush.mockResolvedValue(undefined)
   })
 
@@ -150,8 +150,16 @@ describe('the batched attest link door', () => {
     expect(approveSupplierInvoice).not.toHaveBeenCalled()
   })
 
-  it('answers 404 to a viewer, who keeps no attest', async () => {
+  it('opens for a viewer the policy names, whose answer the attest service rules on (crm#1569), and answers 404 to an invoicer', async () => {
+    approveSupplierInvoice.mockResolvedValue(approvedOk)
     seed({ company_members: { data: { ...writingMember.data, role: 'viewer' } } })
+    expect((await readBatch(createMockRequest('/api/attest/lista/t'), params())).status).toBe(200)
+    expect((await answer([{ invoice_id: MF1, decision: 'approve' }])).status).toBe(200)
+    expect(approveSupplierInvoice).toHaveBeenCalledTimes(1)
+
+    approveSupplierInvoice.mockClear()
+    seed({ company_members: { data: { ...writingMember.data, role: 'invoicer' } } })
+    expect((await readBatch(createMockRequest('/api/attest/lista/t'), params())).status).toBe(404)
     expect((await answer([{ invoice_id: MF1, decision: 'approve' }])).status).toBe(404)
     expect(approveSupplierInvoice).not.toHaveBeenCalled()
   })

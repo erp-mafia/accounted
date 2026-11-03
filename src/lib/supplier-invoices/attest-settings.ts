@@ -12,18 +12,18 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
 import type { AttestPolicy } from './attest-policy'
 import { loadAttestPeople } from './attest-service'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { isAttestRole } from '@/lib/auth/invoicer-role'
 
 export interface AttestCandidate {
   user_id: string
   name: string | null
   email: string | null
-  role: 'owner' | 'admin' | 'member'
+  role: 'owner' | 'admin' | 'member' | 'viewer'
 }
 
 export interface AttestSettingsView {
   policy: AttestPolicy
-  /** Members who may be attesters: everyone who may write (viewers cannot attest). */
+  /** Members who may be attesters (isAttestRole): everyone who may write, and viewers, who attest only what the policy asks of them. */
   candidates: AttestCandidate[]
   /** The attest limit in SEK per person (null = no limit); someone missing has none. */
   limits: Record<string, number | null>
@@ -50,11 +50,11 @@ export async function loadAttestSettingsView(
     supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
   ])
   if (membersError) throw membersError
-  const writers = ((members ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role))
-  const people = await loadAttestPeople(service, writers.map((m) => m.user_id))
+  const attesters = ((members ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isAttestRole(m.role))
+  const people = await loadAttestPeople(service, attesters.map((m) => m.user_id))
   return {
     policy,
-    candidates: writers.map((m) => ({
+    candidates: attesters.map((m) => ({
       ...(people.get(m.user_id) ?? { user_id: m.user_id, name: null, email: null }),
       role: m.role as AttestCandidate['role'],
     })),

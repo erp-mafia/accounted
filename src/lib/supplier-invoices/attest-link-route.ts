@@ -10,7 +10,8 @@
  * per-token budget bounds a leaked link; the clear token is never logged
  * (the logger gets the link id). Every way a token fails (malformed,
  * unknown, expired, used) answers the same 404, and so does a link whose
- * attester is no longer a member who may write, or whose company is archived.
+ * attester's attest can no longer count (attesterCanStillDecide), or whose
+ * company is archived.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -19,7 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { readLiveMembership } from '@/lib/company/company-access'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -33,16 +34,19 @@ import { getSupplierInvoiceAttestState, loadAttestPeople } from './attest-servic
 const limiter = createTokenRateLimiter({ max: 30, windowMs: 10 * 60_000 })
 
 /**
- * The link's attester still writes in a company that is still live: what opens
- * the link, page and routes alike, for the per-invoice link and the batched
- * mail's list link (attest-batch-route.ts) both.
+ * The link's attester still holds a role whose attest counts (isAttestRole:
+ * one who keeps the books, or a viewer the policy names) in a company that
+ * is still live: what opens the link, page and routes alike, for the
+ * per-invoice link and the batched mail's list link (attest-batch-route.ts)
+ * both. Whether the policy still names them is the attest service's ruling
+ * on the decision.
  */
 export async function attesterCanStillDecide(
   service: SupabaseClient,
   link: Pick<AttestLinkRow, 'attester_user_id' | 'company_id'>,
 ): Promise<boolean> {
   const membership = await readLiveMembership(service, link.attester_user_id, link.company_id)
-  return membership !== null && isBookkeepingWriterRole(membership.role)
+  return membership !== null && isAttestRole(membership.role)
 }
 
 export interface AttestLinkRouteContext {
@@ -75,7 +79,7 @@ export function withAttestLinkToken<P extends { token: string }>(operation: stri
       const { link } = resolved
       const linkLog = log.child({ companyId: link.company_id, attestLinkId: link.id })
       if (!(await attesterCanStillDecide(service, link))) {
-        return errorResponseFromCode('NOT_FOUND', linkLog, { requestId, reason: 'attest link of someone no longer a writing member of a live company' })
+        return errorResponseFromCode('NOT_FOUND', linkLog, { requestId, reason: 'attest link of someone whose attest no longer counts in a live company' })
       }
       return await handler(
         request,

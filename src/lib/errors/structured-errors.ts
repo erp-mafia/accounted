@@ -3571,8 +3571,8 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
   },
   ATTEST_POLICY_ATTESTER_NOT_MEMBER: {
     httpStatus: 400,
-    message_sv: 'En attestant måste vara medlem i företaget med behörighet att ändra, inte bara läsa.',
-    message_en: 'An attester must be a member of the company who may write, not a viewer.',
+    message_sv: 'En attestant måste vara medlem i företaget: ägare, administratör, medlem eller med läsbehörighet.',
+    message_en: 'An attester must be a member of the company: owner, admin, member or viewer.',
   },
   SI_EDIT_CONFLICT: {
     httpStatus: 409,

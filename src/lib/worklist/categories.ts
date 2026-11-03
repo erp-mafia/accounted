@@ -54,7 +54,7 @@ import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycl
 import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
 import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
-import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
@@ -311,11 +311,11 @@ export async function listSupplierInvoiceAttestsDue(
       return []
     }
     const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
-    // The company's members who keep the books: only their approvals count (attest-service's loadActiveAttestMembers).
-    const writers = new Set(
-      ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id),
+    // The company's members whose attest can count, a viewer the policy names among them (attest-service's loadAttestMembers).
+    const attesters = new Set(
+      ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isAttestRole(m.role)).map((m) => m.user_id),
     )
-    if (!writers.has(userId) || !companyAttestsSupplierInvoices(accountingMethod)) return []
+    if (!attesters.has(userId) || !companyAttestsSupplierInvoices(accountingMethod)) return []
 
     const { data: invoices, error } = await supabase
       .from('supplier_invoices')
@@ -365,7 +365,7 @@ export async function listSupplierInvoiceAttestsDue(
     return candidates
       .filter(
         (c) =>
-          ruleOnApproval(policy, accountingMethod, { ...c, total: Number(c.total) }, byInvoice.get(c.id) ?? [], userId, writers, { limits }).kind ===
+          ruleOnApproval(policy, accountingMethod, { ...c, total: Number(c.total) }, byInvoice.get(c.id) ?? [], userId, attesters, { limits }).kind ===
           'record',
       )
       .map((c) => ({

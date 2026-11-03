@@ -609,6 +609,9 @@ export default function SupplierInvoiceDetailPage() {
     !invoice.is_credit_note &&
     companyAttestsSupplierInvoices(companySettings?.accounting_method) &&
     (!attestState?.required || attestState.viewer.may_approve)
+  // A viewer the policy names attests too (crm#1569); everyone else with
+  // read access sees the button locked, as before.
+  const mayAttest = canWrite || (attestState?.required === true && attestState.viewer.may_approve)
   // The strip's dates: when each done or current step happened.
   const stageDate = (s: SupplierInvoiceLadderStage): string | null => {
     switch (s) {
@@ -774,11 +777,11 @@ export default function SupplierInvoiceDetailPage() {
           {canApprove && (
             <Button size="sm"
               onClick={handleApprove}
-              disabled={isProcessing || !canWrite}
+              disabled={isProcessing || !mayAttest}
               loading={processingAction === 'approve'}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              title={!mayAttest ? t('viewer_disabled_tooltip') : undefined}
             >
-              {processingAction === 'approve' ? null : canWrite ? (
+              {processingAction === 'approve' ? null : mayAttest ? (
                 <CheckCircleIcon className="mr-2 h-4 w-4" />
               ) : (
                 <LockClosedIcon className="mr-2 h-4 w-4" />
@@ -879,7 +882,6 @@ export default function SupplierInvoiceDetailPage() {
       {attestState && (
         <SupplierInvoiceAttestPanel
           state={attestState}
-          canWrite={canWrite}
           onChanged={async () => {
             await Promise.all([fetchInvoice(), mutateAttest()])
           }}
