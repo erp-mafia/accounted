@@ -1830,6 +1830,88 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/time-entries/invoice`
+
+**Create a draft invoice from a customer's uninvoiced billable hours.**
+`scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
+
+Builds a draft invoice for one customer from its uninvoiced billable time entries (optionally from/to), priced at the activity code rate or the default rate, and links the entries to it. Built and written exactly like POST /invoices (VAT rules, payee, invoice.created). The draft is not sent or booked. Dry-runnable.
+
+**Use when:** Billing the hours of a month or a project to the customer: "fakturera Galärbryggan för oktober".
+**Do not use for:** Invoices that are not time-based (POST /invoices) or sending the invoice (POST /invoices/{id}/send after review).
+
+**Pitfalls:**
+- Hours without a rate answer 400 TIME_INVOICE_RATE_MISSING: set the activity code rate or a default rate first.
+- Linked entries are frozen while the draft exists; deleting the draft frees them again.
+- lines=activity (default) gives one line per activity code, project and rate; lines=entry one line per entry with its date, consultant and comment.
+- Only hours linked to an Accounted customer can be invoiced: link imported customer codes first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  customer_id: string,
+  from?: string,
+  to?: string,
+  invoice_date: string,
+  due_date?: string,
+  lines?: "activity" | "entry",
+  our_reference?: string | null,
+  your_reference?: string | null,
+  time_entry_ids?: string[],
+  expected_hours?: number,
+  expected_subtotal?: number
+}
+```
+
+Example request:
+```json
+{
+  "customer_id": "51c0…",
+  "from": "2026-10-01",
+  "to": "2026-10-31",
+  "invoice_date": "2026-11-03"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { invoice_id: string, entry_count: number, hours: number, subtotal: number },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "9d4f…",
+    "entry_count": 14,
+    "hours": 12.5,
+    "subtotal": 11875
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/time-entries/summary`
 
 **Hours and uninvoiced amounts per customer, project or consultant and month.**

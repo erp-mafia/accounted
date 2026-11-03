@@ -14,6 +14,7 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { fetchAllTimeEntries, listTimeEntries, TIME_ENTRY_LIST_LIMIT_MAX } from '@/lib/time-tracking/service'
 import { createTimeEntries, deleteTimeEntry, updateTimeEntry } from '@/lib/time-tracking/writes'
 import type { TimeEntryInput } from '@/lib/time-tracking/writes'
+import { invoiceTimeEntries } from '@/lib/time-tracking/invoice'
 
 const SETTINGS_KEY = 'settings'
 const RATE_LIMIT_IMPORT = { maxRequests: 10, windowMs: 60_000 }
@@ -65,6 +66,14 @@ const periodQuery = z.object({
   customer_id: z.uuid().optional(),
   customer_code: code(40).optional(),
   uninvoiced: z.enum(['true', 'false']).optional(),
+})
+
+const invoiceDraftSchema = z.object({
+  customer_id: z.uuid(),
+  from: isoDate,
+  to: isoDate,
+  invoice_date: isoDate,
+  lines: z.enum(['activity', 'entry']).optional(),
 })
 
 const customerLinkSchema = z.object({ code: code(40), customer_id: z.uuid().nullable() })
@@ -309,6 +318,21 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: 'Tidraderna kunde inte uppdateras.' }, { status: 500 })
       }
       return NextResponse.json({ data: { updated: data?.length ?? 0 } })
+    },
+  },
+  {
+    method: 'POST',
+    path: '/invoice-draft',
+    handler: async (request, rawCtx) => {
+      const ctx = requireCtx(rawCtx)
+      if (ctx instanceof NextResponse) return ctx
+      const body = await validateBody(request, invoiceDraftSchema)
+      if (!body.success) return body.response
+      // The person confirmed the hours and amount in the dialog; the draft itself is the review step.
+      const outcome = await invoiceTimeEntries(ctx, { ...body.data, lines: body.data.lines ?? 'activity' }, { dryRun: false })
+      if (!outcome.ok) return failure(outcome)
+      if (outcome.dryRun) return failure({ code: 'UNKNOWN_ERROR' })
+      return NextResponse.json({ data: outcome.data }, { status: 201 })
     },
   },
   {

@@ -317,6 +317,7 @@ import '@/app/api/v1/companies/[companyId]/time-entries/route'
 import '@/app/api/v1/companies/[companyId]/time-entries/summary/route'
 import '@/app/api/v1/companies/[companyId]/time-entries/codes/route'
 import '@/app/api/v1/companies/[companyId]/time-entries/[id]/route'
+import '@/app/api/v1/companies/[companyId]/time-entries/invoice/route'
 
 // Portfolio: cross-company overview for multi-company keys.
 import '@/app/api/v1/portfolio/overview/route'

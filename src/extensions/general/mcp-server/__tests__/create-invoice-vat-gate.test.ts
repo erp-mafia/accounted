@@ -2,7 +2,7 @@
  * gnubok_create_invoice VAT-rate gate.
  *
  * The tool validates every line's rate at STAGING time, so a gate that is too
- * narrow refuses the invoice before the executor (commitCreateInvoice) is ever
+ * narrow refuses the invoice before the executor (createInvoiceFromStagedParams) is ever
  * reached: the MCP surface was the last one that could not issue a lawful
  * taxed-where-performed invoice to a foreign business.
  *

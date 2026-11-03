@@ -6475,6 +6475,28 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_en:
       'Name the consultant: the acting user is not linked to a consultant in the time-tracking settings. details.consultants lists them.',
   },
+  TIME_INVOICE_NOTHING_TO_INVOICE: {
+    httpStatus: 400,
+    message_sv: 'Det finns inga ofakturerade debiterbara timmar på kunden i perioden.',
+    message_en: 'The customer has no uninvoiced billable hours in the period.',
+  },
+  TIME_INVOICE_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Några timmar saknar timpris. Ange pris på aktivitetskoden eller ett standardpris under Tidrapportering.',
+    message_en:
+      'Some hours have no hourly rate: set a rate on the activity code or a default rate in the time-tracking settings. details lists the activity codes.',
+  },
+  TIME_INVOICE_ENTRIES_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Tidraderna har ändrats sedan förslaget skapades. Skapa ett nytt förslag.',
+    message_en:
+      'The time entries changed since the draft was previewed (edited, deleted or invoiced elsewhere): preview again. When details.invoice_id is set, that draft was created and only some entries were linked.',
+  },
+  TIME_INVOICE_TOO_MANY_ENTRIES: {
+    httpStatus: 400,
+    message_sv: 'För många tidrader för en faktura. Begränsa perioden med från- och till-datum.',
+    message_en: 'Too many time entries for one invoice: narrow the period with from and to.',
+  },
   TIME_ENTRY_CUSTOMER_NOT_FOUND: {
     httpStatus: 400,
     message_sv: 'Kunden finns inte.',

@@ -900,6 +900,7 @@
     "type_create_time_entries": "Log time",
     "type_update_time_entry": "Change time entry",
     "type_delete_time_entry": "Delete time entry",
+    "type_create_invoice_from_time_entries": "Draft invoice from time entries",
     "type_delete_supplier_invoice": "Delete supplier invoice",
     "type_uncredit_supplier_invoice": "Undo supplier invoice credit",
     "type_update_supplier_invoice_item_account": "Move supplier invoice line to another account",
@@ -12531,6 +12532,11 @@
     "apply_error": "The split failed"
   },
   "time_tracking_workspace": {
+    "col_invoice": "Invoice",
+    "draft_action": "Create draft invoice",
+    "draft_confirm_title": "Create draft invoice",
+    "draft_confirm_body": "A draft invoice to {customer} is created from the uninvoiced hours in {month}: {hours} h, {amount} excl. VAT. The time entries are linked to the draft. Nothing is sent or booked until you do it.",
+    "draft_error": "The draft invoice could not be created.",
     "my_consultant_title": "Your consultant code",
     "my_consultant_help": "Time you log without naming a consultant, for example through Claude, is registered under this code.",
     "my_consultant_none": "None selected",

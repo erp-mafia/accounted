@@ -16,6 +16,8 @@ import {
 import { MAX_HOURS_PER_ENTRY } from '@/lib/time-tracking/types'
 import type { TimeEntry as TimeEntryRecord } from '@/lib/time-tracking/types'
 import { createTimeEntries, deleteTimeEntry, pinnedEntryInput, updateTimeEntry } from '@/lib/time-tracking/writes'
+import { invoiceTimeEntries, TIME_INVOICE_MAX_ENTRIES } from '@/lib/time-tracking/invoice'
+import type { TimeInvoicePreview } from '@/lib/time-tracking/invoice'
 import type { CreateTimeEntriesPreview, UpdateTimeEntryPreview } from '@/lib/time-tracking/writes'
 import { defineOperation } from './types'
 
@@ -460,4 +462,73 @@ export const timeEntriesDelete = defineOperation({
     stage: { pendingType: 'delete_time_entry', title: () => 'Ta bort tidrad' },
   },
   run: (ctx, { time_entry_id }, { dryRun }) => deleteTimeEntry(ctx, time_entry_id, { dryRun }),
+})
+
+export const timeEntriesInvoice = defineOperation({
+  id: 'time-entries.invoice',
+  kind: 'write',
+  scope: 'invoices:write',
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Create a draft invoice from a customer\'s uninvoiced billable hours.',
+    description:
+      'Builds a draft invoice for one customer from its uninvoiced billable time entries (optionally from/to), priced at the activity code rate or the default rate, and links the entries to it. Built and written exactly like POST /invoices (VAT rules, payee, invoice.created). The draft is not sent or booked. Dry-runnable.',
+    useWhen: 'Billing the hours of a month or a project to the customer: "fakturera Galärbryggan för oktober".',
+    doNotUseFor: 'Invoices that are not time-based (POST /invoices) or sending the invoice (POST /invoices/{id}/send after review).',
+    pitfalls: [
+      'Hours without a rate answer 400 TIME_INVOICE_RATE_MISSING: set the activity code rate or a default rate first.',
+      'Linked entries are frozen while the draft exists; deleting the draft frees them again.',
+      'lines=activity (default) gives one line per activity code, project and rate; lines=entry one line per entry with its date, consultant and comment.',
+      'Only hours linked to an Accounted customer can be invoiced: link imported customer codes first.',
+    ],
+    example: {
+      request: { customer_id: '51c0…', from: '2026-10-01', to: '2026-10-31', invoice_date: '2026-11-03' },
+      response: { data: { invoice_id: '9d4f…', entry_count: 14, hours: 12.5, subtotal: 11875 }, meta: META },
+    },
+  },
+  input: z.object({
+    customer_id: z.string().uuid().describe('The customer to invoice (key of a customer row in the time summary).'),
+    from: saneIsoDateSchema.optional().describe('First entry date to include (YYYY-MM-DD).'),
+    to: saneIsoDateSchema.optional().describe('Last entry date to include (YYYY-MM-DD).'),
+    invoice_date: saneIsoDateSchema.describe('Invoice date (YYYY-MM-DD), usually today.'),
+    due_date: saneIsoDateSchema.optional().describe('Omit for the customer\'s payment terms, else the company default.'),
+    lines: z.enum(['activity', 'entry']).default('activity').describe('activity: one line per activity code, project and rate (default); entry: one line per entry.'),
+    our_reference: z.string().trim().max(200).nullable().optional(),
+    your_reference: z.string().trim().max(200).nullable().optional(),
+    time_entry_ids: z.array(z.string().uuid()).min(1).max(TIME_INVOICE_MAX_ENTRIES).optional().describe('Set by staging to the entries the approver saw; omit.'),
+    expected_hours: z.number().optional().describe('Set by staging; omit.'),
+    expected_subtotal: z.number().optional().describe('Set by staging; omit.'),
+  }),
+  output: z.object({
+    invoice_id: z.string().uuid(),
+    entry_count: z.number().int(),
+    hours: z.number(),
+    subtotal: z.number(),
+  }),
+  errorCodes: ['TIME_INVOICE_NOTHING_TO_INVOICE', 'TIME_INVOICE_RATE_MISSING', 'TIME_INVOICE_ENTRIES_CHANGED', 'TIME_INVOICE_TOO_MANY_ENTRIES', 'TIME_ENTRY_CUSTOMER_NOT_FOUND'],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/time-entries/invoice' },
+  mcp: {
+    name: 'gnubok_invoice_time_entries',
+    title: 'Invoice Time Entries',
+    description:
+      'Stage a draft invoice (not sent, not booked) from one customer\'s uninvoiced billable hours, optionally from/to, priced at the activity or default rate, and link the hours to it. Built like gnubok_create_invoice.',
+    keywords: ['fakturera tid', 'fakturera timmar', 'fakturaunderlag', 'faktura från tidrapport', 'debitera timmar'],
+    stage: {
+      pendingType: 'create_invoice_from_time_entries',
+      title: () => 'Fakturautkast från tidrapporter',
+      // Commit exactly the rows and totals the approver saw.
+      pinParams: (input, preview) => {
+        const p = preview as TimeInvoicePreview
+        return {
+          ...input,
+          due_date: p.due_date,
+          time_entry_ids: p.time_entry_ids,
+          expected_hours: p.hours,
+          expected_subtotal: p.subtotal,
+        }
+      },
+    },
+  },
+  run: (ctx, input, { dryRun }) => invoiceTimeEntries(ctx, input, { dryRun }),
 })

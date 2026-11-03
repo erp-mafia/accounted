@@ -25,6 +25,7 @@ import {
   timeEntriesDelete,
   timeEntriesList,
   timeEntriesSummary,
+  timeEntriesInvoice,
   timeEntriesUpdate,
 } from './time-entries'
 import {
@@ -382,6 +383,7 @@ export const OPERATIONS: readonly AnyOperation[] = [
   timeEntriesCreate,
   timeEntriesUpdate,
   timeEntriesDelete,
+  timeEntriesInvoice,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

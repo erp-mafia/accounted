@@ -228,7 +228,7 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // documents.list and inbox-items.list (lib/documents/document-actions.ts,
 // lib/documents/inbox-item-actions.ts) is a runtime or-string, the same
 // shape expense-claims.list already carries.
-// MCP create_invoice on the shared builder (+1): commitCreateInvoice inserts
+// MCP create_invoice on the shared builder (+1): createInvoiceFromStagedParams inserts
 // buildInvoiceWriteData's invoiceFields instead of its own literal copy of
 // the invoice columns, the same spread the web, v1, webshop and sales-order
 // inserts already carry. Listing the columns literally again would bring

@@ -26,11 +26,11 @@ describe('time-tracking skill', () => {
     }
   })
 
-  it('has a log_time loadout with every time-entry tool, ending in approval', () => {
+  it('has a log_time loadout with every time-entry tool, the draft invoice included, ending in approval', () => {
     const loadout = RECOMMENDED_WORKFLOW_LOADOUTS.find((l) => l.workflow === 'log_time')
     expect(loadout?.skill).toBe('time-tracking')
     const timeTools = [...toolNames].filter((n) => /time_(entry|entries|codes|summary)|log_time/.test(n))
-    expect(timeTools).toHaveLength(6)
+    expect(timeTools).toHaveLength(7)
     expect(loadout?.tools).toEqual(expect.arrayContaining(timeTools))
     expect(loadout?.tools.at(-1)).toBe('gnubok_approve_pending_operation')
   })

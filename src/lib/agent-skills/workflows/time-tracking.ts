@@ -87,9 +87,26 @@ customer, project, activity, amount. Mention every entry in \`matched\`
   the rate before quoting a sum.
 - \`group_by: 'project'\` or \`'consultant'\` for project follow-up and
   per-person totals.
-- Invoicing itself goes through \`gnubok_create_invoice\` (see
-  \`invoicing-rules\`); the dashboard's export gives the line-by-line
-  fakturaunderlag.
+- The dashboard's export gives the line-by-line fakturaunderlag.
+
+## Workflow: draft the invoice
+
+1. \`gnubok_get_time_summary({ group_by: 'customer', uninvoiced: 'true', from, to })\`:
+   the row's \`key\` is the customer_id, and the amount must not be null.
+2. \`gnubok_invoice_time_entries({ customer_id, from, to, invoice_date })\` stages
+   a draft invoice: one line per activity code, project and rate
+   (\`lines: 'entry'\` for one line per entry with date, consultant and
+   comment). It is built exactly like \`gnubok_create_invoice\` (VAT rules
+   per customer, see \`invoicing-rules\`), and \`due_date\` defaults to the
+   customer's payment terms.
+3. Read back the preview: lines, hours, subtotal, VAT, total, and any
+   \`vat_warnings\`. Approve after the user says yes. The draft is not sent
+   or booked: the user reviews it on the invoice page and sends it from
+   there (\`gnubok_send_invoice\` when asked).
+4. The linked hours are frozen while the draft exists. If the draft is
+   wrong, deleting it (\`gnubok_delete_draft_invoice\`) frees the hours for a
+   new one. TIME_INVOICE_ENTRIES_CHANGED means hours changed after the
+   preview: preview again.
 
 ## Tools
 
@@ -99,13 +116,14 @@ customer, project, activity, amount. Mention every entry in \`matched\`
 - \`gnubok_get_time_summary\`: totals and uninvoiced amounts per customer, project or consultant and month
 - \`gnubok_update_time_entry\`: stage a change to an uninvoiced entry
 - \`gnubok_delete_time_entry\`: stage deleting an uninvoiced entry
+- \`gnubok_invoice_time_entries\`: stage a draft invoice from a customer's uninvoiced hours
 - \`gnubok_approve_pending_operation\`: commit after the user confirms
 `
 
 export const timeTrackingSkill: Skill = {
   slug: 'time-tracking',
   name: 'Time Tracking',
-  summary: 'Log billable hours by voice or chat (resolve names, never guess), correct or remove entries, and total uninvoiced time per customer, project or consultant.',
+  summary: 'Log billable hours by voice or chat (resolve names, never guess), correct or remove entries, total uninvoiced time per customer, project or consultant, and draft its invoice.',
   tags: ['time-tracking', 'tidrapportering', 'consulting', 'invoicing'],
   body,
   tier: 'workflow',

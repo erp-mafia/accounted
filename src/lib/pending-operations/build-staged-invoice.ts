@@ -15,7 +15,7 @@ import {
 /**
  * The one build of a staged create_invoice.
  *
- * gnubok_create_invoice stages these params and commitCreateInvoice writes
+ * gnubok_create_invoice stages these params and createInvoiceFromStagedParams writes
  * them. Both run buildStagedInvoice on the same params, so the approval
  * preview and the stored invoice come out of one computation: the shared
  * buildInvoiceWriteData every other invoice door uses (web, v1, webshop,

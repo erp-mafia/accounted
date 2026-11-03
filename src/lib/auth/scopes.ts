@@ -309,6 +309,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/time-entries': 'time:write',
   'PATCH /api/v1/companies/:companyId/time-entries/:id': 'time:write',
   'DELETE /api/v1/companies/:companyId/time-entries/:id': 'time:write',
+  // Ends in a draft invoice, so it takes the invoice scope, not time:write.
+  'POST /api/v1/companies/:companyId/time-entries/invoice': 'invoices:write',
   // Operation registry, wave 4: Peppol, årsredovisning, opening balances,
   // supplier-invoice actions, inbox matches, Skatteverket helpers.
   'GET /api/v1/companies/:companyId/invoices/:id/peppol': 'invoices:read',

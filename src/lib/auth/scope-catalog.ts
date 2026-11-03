@@ -362,6 +362,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_log_time: 'time:write',
   gnubok_update_time_entry: 'time:write',
   gnubok_delete_time_entry: 'time:write',
+  // Ends in a draft invoice: the invoice scope.
+  gnubok_invoice_time_entries: 'invoices:write',
   // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts).
   gnubok_list_salary_runs: 'payroll:read',
   gnubok_add_salary_run_employee: 'payroll:write',

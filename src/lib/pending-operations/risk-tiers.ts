@@ -49,6 +49,8 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_time_entries: 'low',
   update_time_entry: 'low',
   delete_time_entry: 'low',
+  // A draft invoice: nothing sent or booked, but it is a claim on the customer in the making.
+  create_invoice_from_time_entries: 'medium',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',

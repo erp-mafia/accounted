@@ -900,6 +900,7 @@
     "type_create_time_entries": "Registrera tid",
     "type_update_time_entry": "Ändra tidrad",
     "type_delete_time_entry": "Ta bort tidrad",
+    "type_create_invoice_from_time_entries": "Fakturautkast från tidrapporter",
     "type_delete_supplier_invoice": "Ta bort leverantörsfaktura",
     "type_uncredit_supplier_invoice": "Ångra kreditering av leverantörsfaktura",
     "type_update_supplier_invoice_item_account": "Flytta leverantörsfakturarad till annat konto",
@@ -12531,6 +12532,11 @@
     "apply_error": "Uppdelningen misslyckades"
   },
   "time_tracking_workspace": {
+    "col_invoice": "Fakturera",
+    "draft_action": "Skapa fakturautkast",
+    "draft_confirm_title": "Skapa fakturautkast",
+    "draft_confirm_body": "Ett fakturautkast till {customer} skapas av de ofakturerade timmarna i {month}: {hours} h, {amount} exkl. moms. Tidraderna kopplas till utkastet. Inget skickas eller bokförs förrän du gör det.",
+    "draft_error": "Fakturautkastet kunde inte skapas.",
     "my_consultant_title": "Din medarbetarkod",
     "my_consultant_help": "Tid du registrerar utan att ange medarbetare, till exempel via Claude, bokförs på den här koden.",
     "my_consultant_none": "Ingen vald",

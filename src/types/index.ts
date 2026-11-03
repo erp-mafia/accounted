@@ -2731,6 +2731,7 @@ export type PendingOperationType =
   | 'create_time_entries'
   | 'update_time_entry'
   | 'delete_time_entry'
+  | 'create_invoice_from_time_entries'
   | 'delete_supplier_invoice'
   | 'uncredit_supplier_invoice'
   | 'update_supplier_invoice_item_account'

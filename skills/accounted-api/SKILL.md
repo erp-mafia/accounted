@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 300 endpoints.
+  pagination, scopes), and all 301 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -149,7 +149,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 300 operations. Paths are shown without
+API version `2026-05-12`, 301 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (11)
@@ -251,7 +251,7 @@ POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-valid
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (23)
+### Invoices (AR) (24)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -278,6 +278,7 @@ POST /companies/{companyId}/time-entries : Register hours (tidrader), one or up 
 PATCH /companies/{companyId}/time-entries/{id} : Change a time entry that is not invoiced yet [scope:time:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/time-entries/{id} : Delete a time entry that is not invoiced yet [scope:time:write risk:low idempotent dry-run]
 GET /companies/{companyId}/time-entries/codes : The codes a time entry can reference: consultants, activity codes, customer codes and projects [scope:time:read risk:low idempotent]
+POST /companies/{companyId}/time-entries/invoice : Create a draft invoice from a customer's uninvoiced billable hours [scope:invoices:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/time-entries/summary : Hours and uninvoiced amounts per customer, project or consultant and month [scope:time:read risk:low idempotent]
 ```
 

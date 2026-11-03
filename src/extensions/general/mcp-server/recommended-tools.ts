@@ -159,7 +159,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
   },
   {
     workflow: 'log_time',
-    description: 'Log billable hours by name (customer, project, activity), correct them, and total uninvoiced time.',
+    description: 'Log billable hours by name (customer, project, activity), correct them, total uninvoiced time and draft its invoice.',
     skill: 'time-tracking',
     tools: [
       'gnubok_list_time_codes',
@@ -169,6 +169,8 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_update_time_entry',
       'gnubok_delete_time_entry',
       'gnubok_get_time_summary',
+      // Draft invoice from the uninvoiced hours (invoices:write).
+      'gnubok_invoice_time_entries',
       'gnubok_approve_pending_operation',
     ],
   },

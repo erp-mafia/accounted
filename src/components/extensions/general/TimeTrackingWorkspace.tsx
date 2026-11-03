@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { useRouter } from 'next/navigation'
 import { Download, Trash2, Upload } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -58,6 +59,13 @@ function isoDaysAgo(days: number): string {
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
+
+/** First and last day of a YYYY-MM month. */
+function monthRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, '0')}` }
+}
 
 function formatHours(hours: number): string {
   return hours.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -290,7 +298,24 @@ function SummaryTab({
   onError: (m: string) => void
 }) {
   const t = useTranslations('time_tracking_workspace')
+  const router = useRouter()
   const [rows, setRows] = useState<CustomerMonthSummary[] | null>(null)
+  const [drafting, setDrafting] = useState<CustomerMonthSummary | null>(null)
+  const [draftBusy, setDraftBusy] = useState(false)
+
+  async function createDraft(row: CustomerMonthSummary) {
+    setDraftBusy(true)
+    const res = await fetch(`${API}/invoice-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer_id: row.customer_id, ...monthRange(row.month), invoice_date: today() }),
+    })
+    setDraftBusy(false)
+    setDrafting(null)
+    if (!res.ok) return onError(await readError(res, t('draft_error')))
+    const { data } = await res.json()
+    router.push(`/invoices/${data.invoice_id}`)
+  }
 
   const load = useCallback(async () => {
     const res = await fetch(`${API}/summary?${new URLSearchParams({ from, to })}`)
@@ -345,6 +370,7 @@ function SummaryTab({
                 <TableHead className="text-right">{t('col_uninvoiced')}</TableHead>
                 <TableHead className="text-right">{t('col_amount')}</TableHead>
                 <TableHead>{t('col_link')}</TableHead>
+                <TableHead><span className="sr-only">{t('col_invoice')}</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -374,12 +400,39 @@ function SummaryTab({
                       />
                     ) : null}
                   </TableCell>
+                  <TableCell className="text-right">
+                    {row.customer_id && row.uninvoiced_billable_hours > 0 && row.uninvoiced_amount !== null ? (
+                      <Button size="sm" variant="secondary" onClick={() => setDrafting(row)}>
+                        {t('draft_action')}
+                      </Button>
+                    ) : null}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </div>
+      <Dialog open={drafting !== null} onOpenChange={(open) => !open && setDrafting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('draft_confirm_title')}</DialogTitle>
+            <DialogDescription>
+              {drafting &&
+                t('draft_confirm_body', {
+                  customer: drafting.customer_name ?? drafting.customer_code ?? '',
+                  month: drafting.month,
+                  hours: formatHours(drafting.uninvoiced_billable_hours),
+                  amount: formatCurrency(drafting.uninvoiced_amount ?? 0),
+                })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setDrafting(null)}>{t('cancel')}</Button>
+            <Button onClick={() => drafting && void createDraft(drafting)} loading={draftBusy}>{t('draft_action')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {settings && settings.consultants.length > 0 && (
         <MyConsultantSection settings={settings} value={myConsultant} onSaved={onMyConsultantSaved} onError={onError} />
       )}
