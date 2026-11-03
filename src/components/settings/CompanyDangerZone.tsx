@@ -176,6 +176,9 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
           {/* The delete ends the company's subscription (crm#1373), from
               either door: a hidden company is never charged again. */}
           <p className="text-sm text-muted-foreground">{t('danger_dialog_subscription_note')}</p>
+          {/* Terms 9.3: the archive stays downloadable from Säkerhet for 18
+              months (DeletedCompaniesExport), from either door. */}
+          <p className="text-sm text-muted-foreground">{t('danger_dialog_export_note')}</p>
           <div className="space-y-2">
             {/* data-ph-mask: the label interpolates the company name */}
             <Label data-ph-mask="" htmlFor="company-delete-confirm">

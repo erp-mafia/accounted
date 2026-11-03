@@ -7597,6 +7597,14 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företaget kunde inte hittas.',
     message_en: 'Company not found.',
   },
+  // A deleted company's archive after its 18-month export window (terms 9.3,
+  // lib/company/deleted-company-export). 410: the window does not reopen;
+  // the records stay sealed until the BFL archiving period has run out.
+  DELETED_COMPANY_EXPORT_CLOSED: {
+    httpStatus: 410,
+    message_sv: 'Tiden för att ladda ner arkivet för det raderade företaget har gått ut. Kontakta supporten om du behöver uppgifter ur bokföringen.',
+    message_en: 'The window for downloading this deleted company\'s archive has closed (18 months after the deletion). The records are sealed; contact support for accounting records still under the BFL retention period.',
+  },
   // An API key minted for an account that has not created its first company
   // yet (signup from the MCP OAuth popup, issue #1814). Not a lookup miss:
   // there is nothing to look up until the company exists.

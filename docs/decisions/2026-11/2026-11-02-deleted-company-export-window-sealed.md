@@ -1,0 +1,1 @@
+[2026-11-02] Deleted companies: 18-month read-only archive export (a 2nd sanctioned exception to company-archived-access), then sealed, not deleted, until the BFL 7-year horizon: deleting at 18 months needs a path past migration 017 triggers (founder choice, terms 9.3).

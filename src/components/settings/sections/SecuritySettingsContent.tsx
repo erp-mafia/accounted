@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
+import { DeletedCompaniesExport } from '@/components/settings/DeletedCompaniesExport'
 import {
   SettingsGroup,
   SettingsRow,
@@ -48,6 +49,10 @@ export function SecuritySettingsContent() {
           </SettingsRowEnd>
         </SettingsRow>
       </SettingsGroup>
+
+      {/* Deleted companies still in their 18-month export window (terms
+          9.3): here, above the account deletion that ends access to them. */}
+      <DeletedCompaniesExport />
 
       {/* Delete account: only for non-sandbox */}
       {!settings?.is_sandbox && <AccountDangerZone />}
