@@ -306,6 +306,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/time-entries': 'time:read',
   'GET /api/v1/companies/:companyId/time-entries/summary': 'time:read',
   'GET /api/v1/companies/:companyId/time-entries/codes': 'time:read',
+  'POST /api/v1/companies/:companyId/time-entries': 'time:write',
+  'PATCH /api/v1/companies/:companyId/time-entries/:id': 'time:write',
+  'DELETE /api/v1/companies/:companyId/time-entries/:id': 'time:write',
   // Operation registry, wave 4: Peppol, årsredovisning, opening balances,
   // supplier-invoice actions, inbox matches, Skatteverket helpers.
   'GET /api/v1/companies/:companyId/invoices/:id/peppol': 'invoices:read',

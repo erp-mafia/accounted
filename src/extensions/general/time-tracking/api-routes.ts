@@ -10,8 +10,10 @@ import type { ParsedTimeWorkbook } from './lib/workbook-import'
 import { buildInvoiceBasisCsv, summarizeByCustomerMonth } from '@/lib/time-tracking/summary'
 import { DEFAULT_SETTINGS, MAX_HOURS_PER_ENTRY, MAX_IMPORT_FILE_BYTES } from './types'
 import type { TimeTrackingSettings } from './types'
-import { fetchAllTimeEntries, listTimeEntries, TIME_ENTRY_LIST_LIMIT_MAX, withCustomerName } from '@/lib/time-tracking/service'
-import type { TimeEntryRow } from '@/lib/time-tracking/service'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { fetchAllTimeEntries, listTimeEntries, TIME_ENTRY_LIST_LIMIT_MAX } from '@/lib/time-tracking/service'
+import { createTimeEntries, deleteTimeEntry, updateTimeEntry } from '@/lib/time-tracking/writes'
+import type { TimeEntryInput } from '@/lib/time-tracking/writes'
 
 const SETTINGS_KEY = 'settings'
 const RATE_LIMIT_IMPORT = { maxRequests: 10, windowMs: 60_000 }
@@ -31,6 +33,8 @@ const settingsSchema = z.object({
   activity_codes: z.array(z.object({ code: code(20), name: code(120), hourly_rate: rate })).max(500),
   customer_links: z.array(z.object({ code: code(40), customer_id: z.uuid() })).max(2000),
   default_hourly_rate: rate,
+  /** The consultant code the acting user registers time as; null unlinks. Only ever links the caller. */
+  my_consultant: code(20).nullable().optional(),
 })
 
 const entrySchema = z.object({
@@ -97,57 +101,36 @@ async function customerBelongsToCompany(ctx: ExtensionContext, customerId: strin
   return Boolean(data)
 }
 
-/** A project code must be a value of the company's SIE dimension 6 (Projekt). */
-async function projectExists(ctx: ExtensionContext, projectCode: string): Promise<boolean> {
-  const { data } = await ctx.supabase
-    .from('dimension_values')
-    .select('id, dimensions!inner(sie_dim_no)')
-    .eq('company_id', ctx.companyId)
-    .eq('code', projectCode)
-    .eq('dimensions.sie_dim_no', 6)
-    .limit(1)
-  return Boolean(data && data.length > 0)
-}
-
-async function validateEntryRefs(
-  ctx: ExtensionContext,
-  entry: { customer_id?: string; project_code?: string | null },
-): Promise<NextResponse | null> {
-  if (entry.customer_id && !(await customerBelongsToCompany(ctx, entry.customer_id))) {
-    return NextResponse.json({ error: 'Kunden finns inte.' }, { status: 400 })
-  }
-  if (entry.project_code && !(await projectExists(ctx, entry.project_code))) {
-    return NextResponse.json(
-      { error: `Projektet ${entry.project_code} finns inte. Lägg upp det under Inställningar, Dimensioner.` },
-      { status: 400 },
-    )
-  }
-  return null
-}
-
 function entryIdOf(request: Request): string | null {
   const id = new URL(request.url).searchParams.get('_id')
   return id && z.uuid().safeParse(id).success ? id : null
 }
 
-/** Load an entry of this company that may still change: 404 when absent, 409 when invoiced. */
-async function loadEditableEntry(
-  ctx: ExtensionContext,
-  id: string,
-  verb: 'ändras' | 'tas bort',
-): Promise<NextResponse | null> {
-  const { data: existing } = await ctx.supabase
-    .from('time_entries')
-    .select('id, invoice_id')
-    .eq('id', id)
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (!existing) return NextResponse.json({ error: 'Tidraden finns inte.' }, { status: 404 })
-  if (existing.invoice_id) {
-    return NextResponse.json({ error: `Tidraden är fakturerad och kan inte ${verb}.` }, { status: 409 })
-  }
-  return null
+/** A refused write in the extension's { error } envelope, status from the shared error registry. */
+function failure(outcome: { code: string; messageSv?: string }): NextResponse {
+  const entry = getErrorEntry(outcome.code)
+  return NextResponse.json(
+    { error: outcome.messageSv ?? entry?.message_sv ?? 'Tidraden kunde inte sparas.' },
+    { status: entry?.httpStatus ?? 500 },
+  )
 }
+
+/** The dialog's row, by code and id, as the shared write takes it. */
+function entryInput(body: z.infer<typeof entrySchema>): TimeEntryInput {
+  return {
+    entry_date: body.entry_date,
+    hours: body.hours,
+    customer_id: body.customer_id,
+    project: body.project_code ?? null,
+    activity: body.activity_code ?? null,
+    consultant: body.consultant,
+    comment: body.comment ?? null,
+    is_billable: body.is_billable ?? true,
+  }
+}
+
+const myConsultant = (settings: TimeTrackingSettings, userId: string) =>
+  settings.consultants.find((c) => c.user_id === userId)?.code ?? null
 
 function periodFilters({ uninvoiced, ...rest }: z.infer<typeof periodQuery>) {
   return { ...rest, uninvoiced: uninvoiced === 'true' }
@@ -204,7 +187,8 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
     handler: async (_request, rawCtx) => {
       const ctx = requireCtx(rawCtx)
       if (ctx instanceof NextResponse) return ctx
-      return NextResponse.json({ data: await loadSettings(ctx) })
+      const settings = await loadSettings(ctx)
+      return NextResponse.json({ data: settings, my_consultant: myConsultant(settings, ctx.userId) })
     },
   },
   {
@@ -215,8 +199,25 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       if (ctx instanceof NextResponse) return ctx
       const body = await validateBody(request, settingsSchema)
       if (!body.success) return body.response
-      await ctx.settings.set(SETTINGS_KEY, body.data)
-      return NextResponse.json({ data: body.data })
+      const { my_consultant, ...incoming } = body.data
+      // Links are kept by code from what is stored: a settings save never
+      // links or unlinks anyone but the caller, and only via my_consultant.
+      const stored = await loadSettings(ctx)
+      const linked = new Map(stored.consultants.map((c) => [c.code, c.user_id ?? null]))
+      let consultants = incoming.consultants.map((c) => ({ ...c, user_id: linked.get(c.code) ?? null }))
+      if (my_consultant !== undefined) {
+        const mine = my_consultant?.toUpperCase() ?? null
+        if (mine && !consultants.some((c) => c.code === mine)) {
+          return NextResponse.json({ error: `Medarbetaren ${mine} finns inte.` }, { status: 400 })
+        }
+        consultants = consultants.map((c) => ({
+          ...c,
+          user_id: c.code === mine ? ctx.userId : c.user_id === ctx.userId ? null : c.user_id,
+        }))
+      }
+      const next = { ...incoming, consultants }
+      await ctx.settings.set(SETTINGS_KEY, next)
+      return NextResponse.json({ data: next, my_consultant: myConsultant(next, ctx.userId) })
     },
   },
   {
@@ -244,31 +245,10 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       if (ctx instanceof NextResponse) return ctx
       const body = await validateBody(request, entrySchema)
       if (!body.success) return body.response
-      const invalid = await validateEntryRefs(ctx, body.data)
-      if (invalid) return invalid
-
-      const { data, error } = await ctx.supabase
-        .from('time_entries')
-        .insert({
-          company_id: ctx.companyId,
-          user_id: ctx.userId,
-          entry_date: body.data.entry_date,
-          consultant: body.data.consultant.toUpperCase(),
-          customer_id: body.data.customer_id,
-          project_code: body.data.project_code ?? null,
-          activity_code: body.data.activity_code ?? null,
-          hours: body.data.hours,
-          comment: body.data.comment || null,
-          is_billable: body.data.is_billable ?? true,
-          source: 'manual',
-        })
-        .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
-        .single()
-      if (error || !data) {
-        ctx.log.error('time_entries insert failed', error)
-        return NextResponse.json({ error: 'Tidraden kunde inte sparas.' }, { status: 500 })
-      }
-      return NextResponse.json({ data: withCustomerName(data as unknown as TimeEntryRow) }, { status: 201 })
+      const outcome = await createTimeEntries(ctx, [entryInput(body.data)], { dryRun: false, dashboard: true })
+      if (!outcome.ok) return failure(outcome)
+      if (outcome.dryRun) return failure({ code: 'UNKNOWN_ERROR' })
+      return NextResponse.json({ data: outcome.data.entries[0] }, { status: 201 })
     },
   },
   {
@@ -282,32 +262,10 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       // Full replacement, not a partial merge: the editor always sends the whole row.
       const body = await validateBody(request, entrySchema)
       if (!body.success) return body.response
-      const blocked = await loadEditableEntry(ctx, id, 'ändras')
-      if (blocked) return blocked
-      const invalid = await validateEntryRefs(ctx, body.data)
-      if (invalid) return invalid
-
-      const { data, error } = await ctx.supabase
-        .from('time_entries')
-        .update({
-          entry_date: body.data.entry_date,
-          consultant: body.data.consultant.toUpperCase(),
-          customer_id: body.data.customer_id,
-          project_code: body.data.project_code ?? null,
-          activity_code: body.data.activity_code ?? null,
-          hours: body.data.hours,
-          comment: body.data.comment || null,
-          is_billable: body.data.is_billable ?? true,
-        })
-        .eq('id', id)
-        .eq('company_id', ctx.companyId)
-        .select('id, company_id, user_id, entry_date, consultant, customer_id, customer_code, customer_name, project_code, activity_code, hours, comment, is_billable, invoice_id, source, import_key, created_at, updated_at, customers(name)')
-        .single()
-      if (error || !data) {
-        ctx.log.error('time_entries update failed', error)
-        return NextResponse.json({ error: 'Tidraden kunde inte sparas.' }, { status: 500 })
-      }
-      return NextResponse.json({ data: withCustomerName(data as unknown as TimeEntryRow) })
+      const outcome = await updateTimeEntry(ctx, id, entryInput(body.data), { dryRun: false, dashboard: true })
+      if (!outcome.ok) return failure(outcome)
+      if (outcome.dryRun) return failure({ code: 'UNKNOWN_ERROR' })
+      return NextResponse.json({ data: outcome.data.entry })
     },
   },
   {
@@ -318,13 +276,8 @@ export const timeTrackingApiRoutes: ApiRouteDefinition[] = [
       if (ctx instanceof NextResponse) return ctx
       const id = entryIdOf(request)
       if (!id) return NextResponse.json({ error: 'Tidraden finns inte.' }, { status: 404 })
-      const blocked = await loadEditableEntry(ctx, id, 'tas bort')
-      if (blocked) return blocked
-      const { error } = await ctx.supabase.from('time_entries').delete().eq('id', id).eq('company_id', ctx.companyId)
-      if (error) {
-        ctx.log.error('time_entries delete failed', error)
-        return NextResponse.json({ error: 'Tidraden kunde inte tas bort.' }, { status: 500 })
-      }
+      const outcome = await deleteTimeEntry(ctx, id, { dryRun: false })
+      if (!outcome.ok) return failure(outcome)
       return NextResponse.json({ data: { id } })
     },
   },

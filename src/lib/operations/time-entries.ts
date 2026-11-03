@@ -2,7 +2,8 @@
  * Time-entry operations (tidrapportering): reads over the hours registered
  * per customer, project and consultant. Rules live in
  * lib/time-tracking/service.ts, shared with the time-tracking extension's
- * dashboard routes. Writes stay on the dashboard for now.
+ * dashboard routes. Writes stage over MCP: nothing is registered until a
+ * person approves the preview, which names every resolved reference.
  */
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
@@ -12,6 +13,10 @@ import {
   summarizeTimeEntries,
   TIME_ENTRY_LIST_LIMIT_MAX,
 } from '@/lib/time-tracking/service'
+import { MAX_HOURS_PER_ENTRY } from '@/lib/time-tracking/types'
+import type { TimeEntry as TimeEntryRecord } from '@/lib/time-tracking/types'
+import { createTimeEntries, deleteTimeEntry, pinnedEntryInput, updateTimeEntry } from '@/lib/time-tracking/writes'
+import type { CreateTimeEntriesPreview, UpdateTimeEntryPreview } from '@/lib/time-tracking/writes'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -32,6 +37,12 @@ const TimeEntry = z.object({
   source: z.enum(['manual', 'import']),
   created_at: z.string(),
   updated_at: z.string(),
+})
+
+/** company_id, user_id and import_key are internal: the doors answer the documented shape. */
+const toOutputEntry = ({ id, company_id: _c, user_id: _u, import_key: _k, ...e }: TimeEntryRecord) => ({
+  time_entry_id: id,
+  ...e,
 })
 
 const Totals = {
@@ -138,11 +149,7 @@ export const timeEntriesList = defineOperation({
     const { entries, ...page } = outcome.data
     return {
       ok: true,
-      // company_id, user_id and import_key are internal: the door answers the documented shape.
-      data: {
-        entries: entries.map(({ id, company_id: _c, user_id: _u, import_key: _k, ...e }) => ({ time_entry_id: id, ...e })),
-        ...page,
-      },
+      data: { entries: entries.map(toOutputEntry), ...page },
     }
   },
 })
@@ -252,4 +259,205 @@ export const timeEntriesCodes = defineOperation({
     keywords: ['medarbetare', 'konsulter', 'aktivitetskoder', 'arbetskoder', 'timpris', 'kundkoder', 'projektkoder'],
   },
   run: (ctx) => listTimeCodes(ctx),
+})
+
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+const TIME_ENTRY_ID = z.string().uuid().describe('The time entry id (time_entry_id from the list).')
+const ENTRY_PATH = '/api/v1/companies/:companyId/time-entries/:id'
+const MAX_ENTRIES_PER_CALL = 20
+
+const hours = z
+  .number()
+  .positive()
+  .max(MAX_HOURS_PER_ENTRY)
+  .refine((h) => Math.abs(Math.round(h * 100) - h * 100) < 1e-6, 'at most two decimals')
+  .describe(`Decimal hours, at most ${MAX_HOURS_PER_ENTRY} and two decimals: 1.5 is one hour thirty minutes.`)
+
+const ref = (what: string) => z.string().trim().min(1).max(120).describe(what)
+
+const entryFields = {
+  entry_date: saneIsoDateSchema.describe('The day the work was done (YYYY-MM-DD). Resolve "igår" or "i måndags" to a date first.'),
+  hours,
+  customer_id: z.string().uuid().optional().describe('The Accounted customer. Give this or customer.'),
+  customer: ref('Customer by name, customer number or imported customer code; resolved, never created. Give this or customer_id.').optional(),
+  project: ref('Project (SIE dimension 6) by code or name.').nullable().optional(),
+  activity: ref('Activity code (arbetskod) by code or name; sets the hourly rate.').nullable().optional(),
+  consultant: ref('Consultant by initials or name. Omit to use the consultant linked to the acting user.').optional(),
+  comment: z.string().trim().max(1000).nullable().optional().describe('What was done; shown on the invoice basis.'),
+  is_billable: z.boolean().optional().describe('Default true.'),
+}
+
+const EntryInput = z
+  .object(entryFields)
+  .refine((e) => Boolean(e.customer_id) !== Boolean(e.customer), {
+    message: 'give exactly one of customer_id and customer',
+    path: ['customer'],
+  })
+
+export const timeEntriesCreate = defineOperation({
+  id: 'time-entries.create',
+  kind: 'write',
+  scope: 'time:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Register hours (tidrader), one or up to 20 in one call.',
+    description:
+      'Registers time entries. Customer, project, activity code and consultant may be given by code or by name: each resolves by exact code, exact name, then a confident fuzzy match, and anything ambiguous is refused with candidates. Nothing is created in the registers. All or nothing. Dry-runnable.',
+    useWhen: 'Someone says what they worked on: "3 timmar på Galärbryggan igår, bokslut".',
+    doNotUseFor: 'Importing a whole time report (the time-tracking import on the dashboard) or correcting a logged entry (PATCH /time-entries/{id}).',
+    pitfalls: [
+      'An ambiguous or unknown name answers 400 TIME_ENTRY_REFERENCE_UNRESOLVED with details.candidates: retry with the code.',
+      'Without consultant, the consultant linked to the acting user is used; with no link, 400 TIME_ENTRY_CONSULTANT_REQUIRED lists the consultants.',
+      'In a batch, details.entry_index names the entry at fault.',
+    ],
+    example: {
+      request: { entries: [{ entry_date: '2026-11-02', hours: 3, customer: 'Galärbryggan', activity: 'bokslut' }] },
+      response: {
+        data: {
+          entries: [
+            {
+              time_entry_id: '7a2e…',
+              entry_date: '2026-11-02',
+              consultant: 'AB',
+              customer_id: '51c0…',
+              customer_code: null,
+              customer_name: 'Galärbryggan AB',
+              project_code: null,
+              activity_code: '2',
+              hours: 3,
+              comment: null,
+              is_billable: true,
+              invoice_id: null,
+              source: 'manual',
+              created_at: '2026-11-03T08:12:40Z',
+              updated_at: '2026-11-03T08:12:40Z',
+            },
+          ],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    entries: z.array(EntryInput).min(1).max(MAX_ENTRIES_PER_CALL).describe(`1-${MAX_ENTRIES_PER_CALL} entries, registered together.`),
+  }),
+  output: z.object({ entries: z.array(TimeEntry) }),
+  errorCodes: ['TIME_ENTRY_REFERENCE_UNRESOLVED', 'TIME_ENTRY_CONSULTANT_REQUIRED', 'TIME_ENTRY_CUSTOMER_NOT_FOUND'],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/time-entries' },
+  mcp: {
+    name: 'gnubok_log_time',
+    title: 'Log Time',
+    description:
+      'Stage registering hours (1-20 entries) for approval. Customer, project, activity and consultant by code or name; ambiguous names are refused with candidates. Omit consultant to use the caller\'s. Resolve relative dates first.',
+    keywords: ['logga tid', 'registrera tid', 'tidrapportera', 'rapportera timmar', 'timmar', 'tidrad', 'jobbade'],
+    stage: {
+      pendingType: 'create_time_entries',
+      title: (input) => {
+        const entries = (input.entries as Array<{ hours: number; entry_date: string }>) ?? []
+        const total = Math.round(entries.reduce((s, e) => s + e.hours, 0) * 100) / 100
+        return entries.length === 1
+          ? `Registrera ${total} h den ${entries[0].entry_date}`
+          : `Registrera ${entries.length} tidrader, ${total} h`
+      },
+      // Commit with the references the approver saw, by id and code.
+      pinParams: (_input, preview) => ({
+        entries: (preview as CreateTimeEntriesPreview).entries.map(pinnedEntryInput),
+      }),
+    },
+  },
+  run: async (ctx, input, { dryRun }) => {
+    const outcome = await createTimeEntries(ctx, input.entries, { dryRun })
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return { ...outcome, data: { entries: outcome.data.entries.map(toOutputEntry) } }
+  },
+})
+
+export const timeEntriesUpdate = defineOperation({
+  id: 'time-entries.update',
+  kind: 'write',
+  scope: 'time:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Change a time entry that is not invoiced yet.',
+    description:
+      'Sparse update: only the fields sent change; project, activity and comment take null to clear. References resolve like on create. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.',
+    useWhen: 'Hours, date, customer, project, activity or comment were logged wrong.',
+    doNotUseFor: 'Removing an entry (DELETE /time-entries/{id}).',
+    pitfalls: [
+      'At least one field besides time_entry_id must be sent.',
+      'Imported entries can be changed too; their import key is kept, so re-importing the same report does not bring the old values back.',
+    ],
+    example: { request: { hours: 2.5 }, response: { data: { entry: { time_entry_id: '7a2e…', hours: 2.5 } }, meta: META } },
+  },
+  input: z
+    .object({
+      time_entry_id: TIME_ENTRY_ID,
+      entry_date: entryFields.entry_date.optional(),
+      hours: hours.optional(),
+      customer_id: entryFields.customer_id,
+      customer: entryFields.customer,
+      project: entryFields.project,
+      activity: entryFields.activity,
+      consultant: entryFields.consultant,
+      comment: entryFields.comment,
+      is_billable: entryFields.is_billable,
+    })
+    .refine((p) => Object.keys(p).some((k) => k !== 'time_entry_id'), { message: 'send at least one field to change' })
+    .refine((p) => !(p.customer_id && p.customer), { message: 'give customer_id or customer, not both', path: ['customer'] }),
+  output: z.object({ entry: TimeEntry }),
+  errorCodes: ['TIME_ENTRY_NOT_FOUND', 'TIME_ENTRY_INVOICED', 'TIME_ENTRY_REFERENCE_UNRESOLVED', 'TIME_ENTRY_CUSTOMER_NOT_FOUND'],
+  http: { method: 'PATCH', path: ENTRY_PATH, pathParams: { id: 'time_entry_id' } },
+  mcp: {
+    name: 'gnubok_update_time_entry',
+    title: 'Update Time Entry',
+    description:
+      'Stage a change to a time entry that is not invoiced: send only the fields to change (project, activity, comment take null to clear). References by code or name, resolved like gnubok_log_time.',
+    keywords: ['ändra tidrad', 'rätta tid', 'ändra timmar'],
+    stage: {
+      pendingType: 'update_time_entry',
+      title: () => 'Ändra tidrad',
+      pinParams: (input, preview) => ({
+        time_entry_id: input.time_entry_id,
+        ...(preview as UpdateTimeEntryPreview).changes,
+      }),
+    },
+  },
+  run: async (ctx, { time_entry_id, ...patch }, { dryRun }) => {
+    const outcome = await updateTimeEntry(ctx, time_entry_id, patch, { dryRun })
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return { ...outcome, data: { entry: toOutputEntry(outcome.data.entry) } }
+  },
+})
+
+export const timeEntriesDelete = defineOperation({
+  id: 'time-entries.delete',
+  kind: 'write',
+  scope: 'time:write',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Delete a time entry that is not invoiced yet.',
+    description: 'Removes the entry. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.',
+    useWhen: 'Hours were logged twice or on something that was never done.',
+    doNotUseFor: 'Correcting hours or a customer (PATCH /time-entries/{id}).',
+    pitfalls: ['A deleted imported entry comes back if the same report is imported again.'],
+    example: { response: { data: { deleted: true, time_entry_id: '7a2e…' }, meta: META } },
+  },
+  input: z.object({ time_entry_id: TIME_ENTRY_ID }),
+  output: z.object({ deleted: z.literal(true), time_entry_id: z.string().uuid() }),
+  errorCodes: ['TIME_ENTRY_NOT_FOUND', 'TIME_ENTRY_INVOICED'],
+  http: { method: 'DELETE', path: ENTRY_PATH, pathParams: { id: 'time_entry_id' } },
+  mcp: {
+    name: 'gnubok_delete_time_entry',
+    title: 'Delete Time Entry',
+    description: 'Stage deleting a time entry that is not invoiced, e.g. hours logged twice. To correct hours or the customer, use gnubok_update_time_entry instead.',
+    keywords: ['ta bort tidrad', 'radera tid'],
+    stage: { pendingType: 'delete_time_entry', title: () => 'Ta bort tidrad' },
+  },
+  run: (ctx, { time_entry_id }, { dryRun }) => deleteTimeEntry(ctx, time_entry_id, { dryRun }),
 })

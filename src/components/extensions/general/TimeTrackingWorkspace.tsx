@@ -80,11 +80,15 @@ export default function TimeTrackingWorkspace(_props: WorkspaceComponentProps) {
   const [to, setTo] = useState(today)
   const [customers, setCustomers] = useState<CustomerOption[]>([])
   const [settings, setSettings] = useState<TimeTrackingSettings | null>(null)
+  const [myConsultant, setMyConsultant] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
 
   const loadSettings = useCallback(async () => {
     const res = await fetch(`${API}/settings`)
-    if (res.ok) setSettings((await res.json()).data)
+    if (!res.ok) return
+    const json = await res.json()
+    setSettings(json.data)
+    setMyConsultant(json.my_consultant ?? null)
   }, [])
 
   useEffect(() => {
@@ -138,6 +142,11 @@ export default function TimeTrackingWorkspace(_props: WorkspaceComponentProps) {
           customers={customers}
           settings={settings}
           onSettingsSaved={setSettings}
+          myConsultant={myConsultant}
+          onMyConsultantSaved={(s, mine) => {
+            setSettings(s)
+            setMyConsultant(mine)
+          }}
           onError={fail}
         />
       )}
@@ -157,6 +166,7 @@ export default function TimeTrackingWorkspace(_props: WorkspaceComponentProps) {
         onOpenChange={setNewOpen}
         customers={customers}
         settings={settings}
+        myConsultant={myConsultant}
         onSaved={() => {
           setNewOpen(false)
           toast({ title: t('saved') })
@@ -266,6 +276,8 @@ function SummaryTab({
   customers,
   settings,
   onSettingsSaved,
+  myConsultant,
+  onMyConsultantSaved,
   onError,
 }: {
   from: string
@@ -273,6 +285,8 @@ function SummaryTab({
   customers: CustomerOption[]
   settings: TimeTrackingSettings | null
   onSettingsSaved: (s: TimeTrackingSettings) => void
+  myConsultant: string | null
+  onMyConsultantSaved: (s: TimeTrackingSettings, mine: string | null) => void
   onError: (m: string) => void
 }) {
   const t = useTranslations('time_tracking_workspace')
@@ -366,7 +380,57 @@ function SummaryTab({
           </Table>
         )}
       </div>
+      {settings && settings.consultants.length > 0 && (
+        <MyConsultantSection settings={settings} value={myConsultant} onSaved={onMyConsultantSaved} onError={onError} />
+      )}
       {settings && <RatesSection settings={settings} onSaved={onSettingsSaved} onError={onError} />}
+    </div>
+  )
+}
+
+/** Which consultant the signed-in user is: entries logged without one (e.g. by voice through Claude) default to it. */
+function MyConsultantSection({
+  settings,
+  value,
+  onSaved,
+  onError,
+}: {
+  settings: TimeTrackingSettings
+  value: string | null
+  onSaved: (s: TimeTrackingSettings, mine: string | null) => void
+  onError: (m: string) => void
+}) {
+  const t = useTranslations('time_tracking_workspace')
+  const [busy, setBusy] = useState(false)
+
+  async function save(next: string | null) {
+    setBusy(true)
+    const res = await fetch(`${API}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...settings, my_consultant: next }),
+    })
+    setBusy(false)
+    if (!res.ok) return onError(await readError(res, t('save_error')))
+    const json = await res.json()
+    onSaved(json.data, json.my_consultant ?? null)
+  }
+
+  return (
+    <div className="space-y-2">
+      <h2 className="font-display text-lg">{t('my_consultant_title')}</h2>
+      <p className="max-w-xl text-sm text-muted-foreground">{t('my_consultant_help')}</p>
+      <Select value={value ?? NONE} onValueChange={(v) => void save(v === NONE ? null : v)} disabled={busy}>
+        <SelectTrigger className="h-8 w-56" aria-label={t('my_consultant_title')}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE}>{t('my_consultant_none')}</SelectItem>
+          {settings.consultants.map((c) => (
+            <SelectItem key={c.code} value={c.code}>{c.code} · {c.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
@@ -643,6 +707,7 @@ function NewEntryDialog({
   onOpenChange,
   customers,
   settings,
+  myConsultant,
   onSaved,
   onError,
 }: {
@@ -650,6 +715,7 @@ function NewEntryDialog({
   onOpenChange: (open: boolean) => void
   customers: CustomerOption[]
   settings: TimeTrackingSettings | null
+  myConsultant: string | null
   onSaved: () => void
   onError: (m: string) => void
 }) {
@@ -662,8 +728,8 @@ function NewEntryDialog({
   const [hours, setHours] = useState('')
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
-  // Until the user types initials, default to the first registered consultant.
-  const effectiveConsultant = consultant || settings?.consultants[0]?.code || ''
+  // Until the user types initials, default to their own consultant, else the first registered one.
+  const effectiveConsultant = consultant || myConsultant || settings?.consultants[0]?.code || ''
 
   async function save() {
     const parsedHours = parseRate(hours)

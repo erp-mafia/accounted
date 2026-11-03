@@ -359,6 +359,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_time_entries: 'time:read',
   gnubok_get_time_summary: 'time:read',
   gnubok_list_time_codes: 'time:read',
+  gnubok_log_time: 'time:write',
+  gnubok_update_time_entry: 'time:write',
+  gnubok_delete_time_entry: 'time:write',
   // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts).
   gnubok_list_salary_runs: 'payroll:read',
   gnubok_add_salary_run_employee: 'payroll:write',

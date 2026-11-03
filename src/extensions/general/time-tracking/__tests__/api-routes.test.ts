@@ -71,21 +71,34 @@ describe('POST /entries', () => {
   })
 
   it('creates the entry scoped to the company with upper-cased initials', async () => {
-    mock.enqueue({ data: { id: CUSTOMER_ID } })
+    mock.enqueue({ data: null }) // settings: none yet
+    mock.enqueue({ data: [{ id: CUSTOMER_ID, name: 'Galärbryggan', customer_number: null }] })
     mock.enqueue({
-      data: { ...validEntry, id: ENTRY_ID, consultant: 'GK', hours: '2.50', customer_name: null, customers: { name: 'Galärbryggan' } },
+      data: [{ ...validEntry, id: ENTRY_ID, consultant: 'GK', hours: '2.50', customer_name: null, customers: { name: 'Galärbryggan' } }],
     })
     const res = await route('POST', '/entries')(createMockRequest('/x', { method: 'POST', body: validEntry }), ctx)
     const { status, body } = await parseJsonResponse<{ data: { hours: number; customer_name: string } }>(res)
 
     expect(status).toBe(201)
     expect(body.data).toMatchObject({ hours: 2.5, customer_name: 'Galärbryggan' })
-    expect(mock.findCall('time_entries', 'insert')?.[0]).toMatchObject({
+    expect((mock.findCall('time_entries', 'insert')?.[0] as unknown[])[0]).toMatchObject({
       company_id: 'company-1',
       user_id: 'user-1',
       consultant: 'GK',
       source: 'manual',
     })
+  })
+
+  it('takes project codes exactly: no near-miss match without an approver', async () => {
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: [{ id: CUSTOMER_ID, name: 'Galärbryggan', customer_number: null }] })
+    mock.enqueue({ data: [{ code: 'P12', name: 'Bokslut 2026' }] })
+    const res = await route('POST', '/entries')(
+      createMockRequest('/x', { method: 'POST', body: { ...validEntry, project_code: 'P1' } }),
+      ctx,
+    )
+    expect(res.status).toBe(400)
+    expect(mock.findCall('time_entries', 'insert')).toBeUndefined()
   })
 })
 
@@ -110,14 +123,46 @@ describe('PATCH and DELETE /entries/:id', () => {
   })
 
   it('deletes an uninvoiced entry', async () => {
-    mock.enqueue({ data: { id: ENTRY_ID, invoice_id: null } })
-    mock.enqueue({ data: null })
+    mock.enqueue({ data: { ...validEntry, id: ENTRY_ID, invoice_id: null, customers: null } })
+    mock.enqueue({ data: [{ id: ENTRY_ID }] })
     const res = await route('DELETE', '/entries/:id')(
       createMockRequest('/x', { method: 'DELETE', searchParams: { _id: ENTRY_ID } }),
       ctx,
     )
     expect(res.status).toBe(200)
     expect(mock.findCalls('time_entries', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(mock.findCalls('time_entries', 'is')).toContainEqual(['invoice_id', null])
+  })
+})
+
+describe('PUT /settings', () => {
+  const base = { consultants: [{ code: 'AB', name: 'Anna' }, { code: 'GK', name: 'Gustav' }], activity_codes: [], customer_links: [], default_hourly_rate: null }
+
+  it('links only the caller, via my_consultant, and keeps others\' links', async () => {
+    stored.settings = { ...base, consultants: [{ code: 'AB', name: 'Anna', user_id: 'user-2' }, { code: 'GK', name: 'Gustav' }] }
+    const res = await route('PUT', '/settings')(
+      createMockRequest('/x', {
+        method: 'PUT',
+        // A client trying to move user-2's link is ignored; only my_consultant links, and only the caller.
+        body: { ...base, consultants: [{ code: 'AB', name: 'Anna', user_id: 'user-1' }, { code: 'GK', name: 'Gustav' }], my_consultant: 'gk' },
+      }),
+      ctx,
+    )
+    const { status, body } = await parseJsonResponse<{ my_consultant: string | null }>(res)
+    expect(status).toBe(200)
+    expect(body.my_consultant).toBe('GK')
+    expect((stored.settings as { consultants: unknown[] }).consultants).toEqual([
+      { code: 'AB', name: 'Anna', user_id: 'user-2' },
+      { code: 'GK', name: 'Gustav', user_id: 'user-1' },
+    ])
+  })
+
+  it('refuses a my_consultant that is not registered', async () => {
+    const res = await route('PUT', '/settings')(
+      createMockRequest('/x', { method: 'PUT', body: { ...base, my_consultant: 'ZZ' } }),
+      ctx,
+    )
+    expect(res.status).toBe(400)
   })
 })
 

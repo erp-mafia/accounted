@@ -680,9 +680,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC),
 
   // time-tracking
-  'POST /api/extensions/ext/time-tracking/entries': gap('P2', 'register billable hours per customer and project'),
-  'PATCH /api/extensions/ext/time-tracking/entries/:id': gap('P2'),
-  'DELETE /api/extensions/ext/time-tracking/entries/:id': gap('P2'),
+  'POST /api/extensions/ext/time-tracking/entries': covered([`POST ${V}/time-entries`, 'gnubok_log_time']),
+  'PATCH /api/extensions/ext/time-tracking/entries/:id': covered([`PATCH ${V}/time-entries/:id`, 'gnubok_update_time_entry']),
+  'DELETE /api/extensions/ext/time-tracking/entries/:id': covered([`DELETE ${V}/time-entries/:id`, 'gnubok_delete_time_entry']),
   'POST /api/extensions/ext/time-tracking/entries/mark-invoiced': gap('P2', 'link hours to the invoice that billed them'),
   'PUT /api/extensions/ext/time-tracking/customer-links': gap('P3', 'map imported customer codes to customers'),
   'PUT /api/extensions/ext/time-tracking/settings': gap('P3', 'consultants, activity codes and hourly rates'),
@@ -694,4 +694,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 141
+export const GAP_CEILING = 138

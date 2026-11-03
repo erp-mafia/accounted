@@ -897,6 +897,9 @@
     "type_set_opening_balances_manual": "Bokför ingående balanser",
     "type_correct_opening_balances": "Rätta ingående balanser",
     "type_split_opening_balances_per_project": "Dela upp ingående balanser per projekt",
+    "type_create_time_entries": "Registrera tid",
+    "type_update_time_entry": "Ändra tidrad",
+    "type_delete_time_entry": "Ta bort tidrad",
     "type_delete_supplier_invoice": "Ta bort leverantörsfaktura",
     "type_uncredit_supplier_invoice": "Ångra kreditering av leverantörsfaktura",
     "type_update_supplier_invoice_item_account": "Flytta leverantörsfakturarad till annat konto",
@@ -12528,6 +12531,9 @@
     "apply_error": "Uppdelningen misslyckades"
   },
   "time_tracking_workspace": {
+    "my_consultant_title": "Din medarbetarkod",
+    "my_consultant_help": "Tid du registrerar utan att ange medarbetare, till exempel via Claude, bokförs på den här koden.",
+    "my_consultant_none": "Ingen vald",
     "tabs_label": "Vy",
     "tab_entries": "Tidrader",
     "tab_summary": "Per kund",

@@ -1528,6 +1528,227 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/time-entries`
+
+**Register hours (tidrader), one or up to 20 in one call.**
+`scope:time:write · risk:low · idempotent · dry-run · reversible`
+
+Registers time entries. Customer, project, activity code and consultant may be given by code or by name: each resolves by exact code, exact name, then a confident fuzzy match, and anything ambiguous is refused with candidates. Nothing is created in the registers. All or nothing. Dry-runnable.
+
+**Use when:** Someone says what they worked on: "3 timmar på Galärbryggan igår, bokslut".
+**Do not use for:** Importing a whole time report (the time-tracking import on the dashboard) or correcting a logged entry (PATCH /time-entries/{id}).
+
+**Pitfalls:**
+- An ambiguous or unknown name answers 400 TIME_ENTRY_REFERENCE_UNRESOLVED with details.candidates: retry with the code.
+- Without consultant, the consultant linked to the acting user is used; with no link, 400 TIME_ENTRY_CONSULTANT_REQUIRED lists the consultants.
+- In a batch, details.entry_index names the entry at fault.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  entries: { entry_date: string, hours: number, customer_id?: string, customer?: string, project?: string | null, activity?: string | null, consultant?: string, comment?: string | null, is_billable?: boolean }[]
+}
+```
+
+Example request:
+```json
+{
+  "entries": [
+    {
+      "entry_date": "2026-11-02",
+      "hours": 3,
+      "customer": "Galärbryggan",
+      "activity": "bokslut"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    entries: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entries": [
+      {
+        "time_entry_id": "7a2e…",
+        "entry_date": "2026-11-02",
+        "consultant": "AB",
+        "customer_id": "51c0…",
+        "customer_code": null,
+        "customer_name": "Galärbryggan AB",
+        "project_code": null,
+        "activity_code": "2",
+        "hours": 3,
+        "comment": null,
+        "is_billable": true,
+        "invoice_id": null,
+        "source": "manual",
+        "created_at": "2026-11-03T08:12:40Z",
+        "updated_at": "2026-11-03T08:12:40Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/time-entries/{id}`
+
+**Change a time entry that is not invoiced yet.**
+`scope:time:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update: only the fields sent change; project, activity and comment take null to clear. References resolve like on create. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.
+
+**Use when:** Hours, date, customer, project, activity or comment were logged wrong.
+**Do not use for:** Removing an entry (DELETE /time-entries/{id}).
+
+**Pitfalls:**
+- At least one field besides time_entry_id must be sent.
+- Imported entries can be changed too; their import key is kept, so re-importing the same report does not bring the old values back.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  entry_date?: string,
+  hours?: number,
+  customer_id?: string,
+  customer?: string,
+  project?: string | null,
+  activity?: string | null,
+  consultant?: string,
+  comment?: string | null,
+  is_billable?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "hours": 2.5
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    entry: { time_entry_id: string, entry_date: string, consultant: string, customer_id: string | null, customer_code: string | null, customer_name: string | null, project_code: string | null, activity_code: string | null, hours: number, comment: string | null, is_billable: boolean, invoice_id: string | null, source: "manual" | "import", created_at: string, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entry": {
+      "time_entry_id": "7a2e…",
+      "hours": 2.5
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/time-entries/{id}`
+
+**Delete a time entry that is not invoiced yet.**
+`scope:time:write · risk:low · idempotent · dry-run`
+
+Removes the entry. An invoiced entry is frozen and answers 409 TIME_ENTRY_INVOICED. Dry-runnable.
+
+**Use when:** Hours were logged twice or on something that was never done.
+**Do not use for:** Correcting hours or a customer (PATCH /time-entries/{id}).
+
+**Pitfalls:**
+- A deleted imported entry comes back if the same report is imported again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, time_entry_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "time_entry_id": "7a2e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/time-entries/codes`
 
 **The codes a time entry can reference: consultants, activity codes, customer codes and projects.**

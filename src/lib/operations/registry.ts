@@ -19,7 +19,14 @@ import {
   dimensionRulesUpdate,
 } from './dimension-rules'
 import { dimensionsRetagLines, dimensionsRetagLog } from './dimension-retag'
-import { timeEntriesCodes, timeEntriesList, timeEntriesSummary } from './time-entries'
+import {
+  timeEntriesCodes,
+  timeEntriesCreate,
+  timeEntriesDelete,
+  timeEntriesList,
+  timeEntriesSummary,
+  timeEntriesUpdate,
+} from './time-entries'
 import {
   accountsActivate,
   accountsCreate,
@@ -372,6 +379,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   timeEntriesList,
   timeEntriesSummary,
   timeEntriesCodes,
+  timeEntriesCreate,
+  timeEntriesUpdate,
+  timeEntriesDelete,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

@@ -2,6 +2,8 @@
 export interface Consultant {
   code: string
   name: string
+  /** The Accounted user who registers time as this consultant; entries without a consultant default to it. */
+  user_id?: string | null
 }
 
 /** An activity code (arbetskod) with an optional hourly rate in SEK, ex moms. */
