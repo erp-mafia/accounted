@@ -470,6 +470,7 @@ import { resolveInboxPurchaseCategories } from '@/lib/categories/inbox-purchase-
 import { keepPersonChoices } from '@/lib/documents/person-corrections'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseChargeKind } from '@/lib/supplier-invoices/create'
+import { deductStagedLines } from '@/lib/supplier-invoices/limited-deduction'
 import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
 import { requireCompanyAdmin } from '@/lib/operations/access'
@@ -17323,7 +17324,7 @@ export const tools: McpTool[] = [
         exchange_rate_override: { type: 'number', description: 'SEK per 1 unit of invoice currency; skips the Riksbanken lookup.' },
         line_overrides: {
           type: 'array',
-          description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line; apply_slp books särskild löneskatt on a 741x pension line.',
+          description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line; apply_slp books särskild löneskatt on a 741x pension line; vat_deduction_share deducts only part of the line\'s moms.',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -17333,6 +17334,12 @@ export const tools: McpTool[] = [
               apply_slp: {
                 type: 'boolean',
                 description: 'Book särskild löneskatt (24.26%, 7533 D / 2514 K) for this line at commit. Only valid when the line resolves to a 741x pension-premium account (tjänstepension); any other account is rejected at staging.',
+              },
+              vat_deduction_share: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: 'Begränsat momsavdrag, per line: the share of this line\'s moms that is deductible ingående moms, e.g. 0.5 for leasing or hiring a personbil. Representation: deductible moms / the line\'s moms. The rest is booked as cost on the line\'s account, so the payable stays the invoice total. 0 = none deductible; omit = all of it. Set it on each line it applies to; other lines on the same invoice (a fee, insurance at 0 %) keep their own moms. Only on a line with Swedish moms, never under reverse charge, exempt or export.',
               },
               dimensions: {
                 type: 'object',
@@ -17853,7 +17860,22 @@ export const tools: McpTool[] = [
       }
 
       // Build lookups for per-line overrides keyed by 1-based line number.
-      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number?: string; apply_slp?: boolean; dimensions?: unknown }> | undefined) ?? []
+      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number?: string; apply_slp?: boolean; vat_deduction_share?: unknown; dimensions?: unknown }> | undefined) ?? []
+      // Begränsat momsavdrag (crm#1617): the share of a line's moms the
+      // company deducts, as the web editor's per-row panel takes it.
+      const lineDeductionShares = new Map<number, number>()
+      rawLineOverrides.forEach((o, i) => {
+        const share = o.vat_deduction_share
+        if (share === undefined) return
+        if (typeof share !== 'number' || !Number.isFinite(share) || share < 0 || share > 1) {
+          throw badArgument(
+            `line_overrides.${i}.vat_deduction_share`,
+            `line_overrides[line_number=${o.line_number}].vat_deduction_share must be a number from 0 to 1 (the share of the line's moms that is deductible, e.g. 0.5); got ${JSON.stringify(share)}`,
+            'Andelen avdragsgill moms anges som ett tal från 0 till 1, till exempel 0,5 för halva momsen.',
+          )
+        }
+        lineDeductionShares.set(o.line_number, share)
+      })
       const lineOverrideMap = new Map(
         rawLineOverrides.filter((o) => o.account_number).map((o) => [o.line_number, o.account_number as string]),
       )
@@ -18119,9 +18141,37 @@ export const tools: McpTool[] = [
           },
         }
       }
-      const { fold: sellerVatFold, lines: pricedLineItems } = linesReadAsGross
+      const { fold: sellerVatFold, lines: readLineItems } = linesReadAsGross
         ? priceLines(linesReadAsGross.lines)
         : netReading
+      // Begränsat momsavdrag (crm#1617): the moms a line does not deduct
+      // moves into its amount (the cost account) and the line books the
+      // deductible part, by the rule the web editor books with. The line's
+      // moms is its part of the document's moms, so the lines incl. moms,
+      // and with them the payable on 2440, stay the invoice total. The share
+      // stays on the staged line: what the approver saw, and a field no
+      // grant pattern covers, so it is never confirmed unattended.
+      if (lineDeductionShares.size > 0 && (vatIsCost || noDeductibleSellerVat)) {
+        const why = vatIsCost
+          ? 'the company is not registered for VAT, so none of the seller\'s moms is deductible: it is all cost already'
+          : `${reverseCharge ? 'omvänd skattskyldighet' : `vat_treatment '${vatTreatment}'`} carries no deductible seller moms`
+        throw Object.assign(
+          codedRefusal('SI_CREATE_INVALID_INPUT', `vat_deduction_share: ${why}. Retry without vat_deduction_share.`),
+          { reason: 'limited_deduction_without_seller_vat' },
+        )
+      }
+      const limitedDeduction = lineDeductionShares.size > 0 ? deductStagedLines(readLineItems, lineDeductionShares) : null
+      if (limitedDeduction && limitedDeduction.invalidLines.length > 0) {
+        throw Object.assign(
+          codedRefusal(
+            'SI_CREATE_INVALID_INPUT',
+            `line_overrides vat_deduction_share on line ${limitedDeduction.invalidLines.join(', ')}: the invoice has no such line or it carries no Swedish moms to deduct. Lines are numbered as in items_preview.`,
+          ),
+          { reason: 'limited_deduction_line_without_vat' },
+        )
+      }
+      const pricedLineItems = limitedDeduction?.lines ?? readLineItems
+      const limitedVatDeduction = limitedDeduction?.deducted ?? []
       // The foreign VAT the cost lines carry, as the lines were read.
       const foreignVatAsCost = roundOre(
         printedLines.reduce(
@@ -18283,8 +18333,10 @@ export const tools: McpTool[] = [
         vat_amount: params.vat_amount,
         total: params.total,
         // VAT per rate as booked, and whether it is the document's own figure
-        // ('stated') or the VAT on the summed base ('computed').
-        ...(vatByRate && !linesReadAsGross ? { vat_by_rate: vatByRate } : {}),
+        // ('stated') or the VAT on the summed base ('computed'). A limited
+        // deduction books less than the document's VAT: limited_vat_deduction
+        // says what, and vat_amount is what is booked.
+        ...(vatByRate && !linesReadAsGross && limitedVatDeduction.length === 0 ? { vat_by_rate: vatByRate } : {}),
         ...(payableRecomputed ? { payable_recomputed: payableRecomputed, warning: payableWarning } : {}),
         ...(foreignVatAsCost !== 0
           ? {
@@ -18318,6 +18370,14 @@ export const tools: McpTool[] = [
                 account_number: oreRounding.account_number,
                 amount: oreRounding.amount,
                 note: `The document total ${roundOre(total)} differs from the lines incl. VAT by ${oreRounding.amount}: a zero-VAT öresavrundning line on ${oreRounding.account_number} carries it, so 2440 is credited with the billed total.`,
+              },
+            }
+          : {}),
+        ...(limitedVatDeduction.length > 0
+          ? {
+              limited_vat_deduction: {
+                lines: limitedVatDeduction,
+                note: 'Begränsat momsavdrag: on these lines only deductible_vat is booked as ingående moms; vat_as_cost is added to the line amount on its cost account. The payable stays the invoice total.',
               },
             }
           : {}),

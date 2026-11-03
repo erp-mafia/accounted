@@ -6572,6 +6572,16 @@ export const SI_CREATE_INVALID_INPUT_REASONS = {
     message_en:
       'The underlag shows no VAT and the supplier is not typed EU or non-EU: state the VAT treatment (exempt or reverse_charge) from the underlag.',
   },
+  limited_deduction_without_seller_vat: {
+    message_sv:
+      'Begränsat momsavdrag gäller bara avdragsgill moms som leverantören tagit ut, inte när företaget saknar momsregistrering eller köpet har omvänd skattskyldighet, är momsfritt eller är export.',
+    message_en:
+      'vat_deduction_share only applies to deductible Swedish moms the supplier charged: not for a company outside the VAT register, nor under reverse charge, exempt or export. Omit it.',
+  },
+  limited_deduction_line_without_vat: {
+    message_sv: 'Begränsat momsavdrag kan bara anges på en fakturarad med svensk moms. Kontrollera radnumret och radens momssats.',
+    message_en: 'vat_deduction_share names a line without Swedish moms, or a line the invoice does not have: lines are numbered as in items_preview.',
+  },
 } as const satisfies Record<string, { message_sv: string; message_en: string }>
 
 export type SiCreateInvalidInputReason = keyof typeof SI_CREATE_INVALID_INPUT_REASONS

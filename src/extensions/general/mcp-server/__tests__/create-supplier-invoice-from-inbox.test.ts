@@ -12,6 +12,10 @@ import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { buildSupplierInvoiceRegistrationEntryInput } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { makeSupplierInvoice } from '@/tests/helpers'
+import { bookLimitedDeduction, type LimitedDeductionRow } from '@/lib/supplier-invoices/limited-deduction'
+import { stagedConversion } from '@/lib/operations/inbox-convert'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { SI_CREATE_INVALID_INPUT_REASONS } from '@/lib/errors/structured-errors'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -2379,5 +2383,122 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
       expect(toToolError(err).error.code).toBe(code)
     }
     expect(inserts).toHaveLength(0)
+  })
+})
+
+describe('gnubok_create_supplier_invoice_from_inbox: begränsat momsavdrag per line (crm#1617)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // A leasing invoice as the report had it: the personbil leasing deducts
+  // half its moms, the uppläggningsavgift all of it, the insurance has none.
+  const leasingExtracted = {
+    ...baseExtracted,
+    totals: { subtotal: 15350, vat: 3637.5, total: 18987.5 },
+    lineItems: [
+      { description: 'Leasingavgift personbil', quantity: 1, unit_price: 14055, line_total: 14055, vat_rate: 25 },
+      { description: 'Uppläggningsavgift', quantity: 1, unit_price: 495, line_total: 495, vat_rate: 25 },
+      { description: 'Försäkringspremie', quantity: 1, unit_price: 800, line_total: 800, vat_rate: 0 },
+    ],
+  }
+  const accounts = [
+    { line_number: 1, account_number: '5615' },
+    { line_number: 2, account_number: '5690' },
+    { line_number: 3, account_number: '5612' },
+  ]
+
+  async function stage(lineOverrides: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-lease',
+        status: 'received',
+        extracted_data: leasingExtracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-lease',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-lease', line_overrides: lineOverrides, ...extra },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+    return { result, params: inserts[0]?.params as StagedParams & { items: Array<{ vat_deduction_share?: number }> } }
+  }
+
+  it('deducts half the leasing line\'s moms and books the rest on its cost account, as the web editor does', async () => {
+    const { result, params } = await stage([
+      { ...accounts[0], vat_deduction_share: 0.5 },
+      accounts[1],
+      accounts[2],
+    ])
+
+    expect(result.staged).toBe(true)
+    // The web editor books the same row the same way (bookLimitedDeduction).
+    const web = bookLimitedDeduction<LimitedDeductionRow>([{ amount: 14055, vat_rate: 0.25, vat_deduction_share: 0.5 }], true).items[0]
+    expect(params.items[0]).toMatchObject({ line_total: web.amount, vat_rate: 0.25, vat_amount: web.vat_amount, vat_deduction_share: 0.5 })
+    expect(params.items[0]).toMatchObject({ line_total: 15811.87, vat_amount: 1756.88 })
+    expect(params.items[1]).toMatchObject({ line_total: 495, vat_amount: 123.75 })
+    expect(params.items[1].vat_deduction_share).toBeUndefined()
+    expect(params.items[2]).toMatchObject({ line_total: 800, vat_amount: 0 })
+    expect(params.vat_amount).toBe(1880.63)
+    expect(params.total).toBe(18987.5)
+    expect(result.preview.limited_vat_deduction).toMatchObject({
+      lines: [{ line_number: 1, invoiced_vat: 3513.75, deductible_vat: 1756.88, vat_as_cost: 1756.87 }],
+    })
+    // The document's VAT per rate is not what is booked here: one figure only.
+    expect(result.preview.vat_by_rate).toBeUndefined()
+    expect(result.preview.vat_amount).toBe(1880.63)
+
+    // The registration verifikat: half the leasing moms on 2641, the other
+    // half on 5615, and 2440 credited with the invoice total.
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '5615')?.debit_amount).toBe(15811.87)
+    expect(lines.find((l) => l.account_number === '5690')?.debit_amount).toBe(495)
+    expect(lines.find((l) => l.account_number === '5612')?.debit_amount).toBe(800)
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(1880.63)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(18987.5)
+
+    // What the approval commits: the staged lines go in as they are.
+    const conversion = stagedConversion(params as unknown as Record<string, unknown>)
+    expect(conversion.ok).toBe(true)
+    if (conversion.ok) {
+      expect(conversion.body.items[0]).toMatchObject({ amount: 15811.87, vat_rate: 0.25, vat_amount: 1756.88 })
+    }
+  })
+
+  it('a share of 0 books the line at 0 % with all its moms as cost', async () => {
+    const { params } = await stage([{ ...accounts[0], vat_deduction_share: 0 }, accounts[1], accounts[2]])
+    expect(params.items[0]).toMatchObject({ line_total: 17568.75, vat_rate: 0, vat_amount: 0 })
+    expect(params.vat_amount).toBe(123.75)
+    expect(params.total).toBe(18987.5)
+  })
+
+  it('refuses a share on a line without moms', async () => {
+    await expect(stage([accounts[0], accounts[1], { ...accounts[2], vat_deduction_share: 0.5 }]))
+      .rejects.toThrow(/line 3: .*no Swedish moms/)
+  })
+
+  it('refuses a share on a line the invoice does not have', async () => {
+    await expect(stage([...accounts, { line_number: 4, vat_deduction_share: 0.5 }]))
+      .rejects.toThrow(/line 4: the invoice has no such line/)
+  })
+
+  it('refuses a share outside 0 to 1', async () => {
+    await expect(stage([{ ...accounts[0], vat_deduction_share: 50 }, accounts[1], accounts[2]]))
+      .rejects.toThrow(/from 0 to 1/)
+  })
+
+  it('refuses a share under reverse charge, where the seller charges no deductible moms', async () => {
+    const err = await stage(
+      [{ ...accounts[0], vat_deduction_share: 0.5 }, accounts[1], accounts[2]],
+      { vat_treatment_override: 'reverse_charge' },
+    ).catch((e: unknown) => e)
+    expect((err as Error).message).toMatch(/omvänd skattskyldighet/)
+    // The person the agent relays to reads why, not the generic sentence.
+    expect(getStructuredError(err).message_sv).toBe(SI_CREATE_INVALID_INPUT_REASONS.limited_deduction_without_seller_vat.message_sv)
   })
 })

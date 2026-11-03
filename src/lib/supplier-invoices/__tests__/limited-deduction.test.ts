@@ -7,7 +7,13 @@ import {
   supplierInvoiceRegistrationLines,
   type SupplierInvoiceBookingItem,
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
-import { bookLimitedDeduction, limitedDeductionApplies } from '../limited-deduction'
+import {
+  bookLimitedDeduction,
+  deductStagedLines,
+  invoicedRowVat,
+  limitedDeductionApplies,
+  type LimitedDeductionRow,
+} from '../limited-deduction'
 import {
   buildSupplierInvoicePayload,
   statedVatFromInvoiceField,
@@ -150,5 +156,53 @@ describe('bookLimitedDeduction', () => {
     const selfBilled = payloadOfData({ ...header, is_self_billed: true, items: [row({ vat_deduction_share: 0.5 })] })
     expect(selfBilled.items[0]).toMatchObject({ amount: 4000, vat_rate: 0.25 })
     expect(selfBilled.items[0]).not.toHaveProperty('vat_amount')
+  })
+})
+
+describe('invoicedRowVat', () => {
+  it('is amount × moms sats on an editor row, which states no moms of its own', () => {
+    expect(invoicedRowVat({ amount: 4000, vat_rate: 0.25 })).toBe(1000)
+  })
+
+  it('is the row\'s invoiced_vat when the door has the figure, even an öre off amount × sats', () => {
+    // 100.03 × 25 % is 25.01; the seller's per-line rounding printed 25.00.
+    // The deduction splits what the invoice charged, so the row incl. moms
+    // stays what the invoice bills.
+    expect(invoicedRowVat({ amount: 100.03, vat_rate: 0.25, invoiced_vat: 25 })).toBe(25)
+    const booked = bookLimitedDeduction<LimitedDeductionRow>([{ amount: 100.03, vat_rate: 0.25, invoiced_vat: 25, vat_deduction_share: 0.5 }], true)
+    expect(booked.items[0]).toMatchObject({ amount: 112.53, vat_amount: 12.5 })
+    expect(roundOre(booked.items[0].amount + (booked.items[0].vat_amount ?? 0))).toBe(125.03)
+  })
+})
+
+describe('deductStagedLines', () => {
+  // The MCP inbox door's lines for the leasing invoice of the report: the
+  // personbil leasing deducts half its moms, the fee all, the insurance has none.
+  const lines = [
+    { line_number: 1, line_total: 14055, vat_rate: 0.25, vat_amount: 3513.75, account_number: '5615' },
+    { line_number: 2, line_total: 495, vat_rate: 0.25, vat_amount: 123.75, account_number: '5690' },
+    { line_number: 3, line_total: 800, vat_rate: 0, vat_amount: 0, account_number: '5612' },
+  ]
+
+  it('books a line at its share as the editor books the same row, and leaves the others', () => {
+    const result = deductStagedLines(lines, new Map([[1, 0.5]]))
+    const editor = bookLimitedDeduction<LimitedDeductionRow>([{ amount: 14055, vat_rate: 0.25, vat_deduction_share: 0.5 }], true).items[0]
+    expect(result.invalidLines).toEqual([])
+    expect(result.lines[0]).toEqual({ ...lines[0], line_total: editor.amount, vat_amount: editor.vat_amount, vat_deduction_share: 0.5 })
+    expect(result.lines[0]).toMatchObject({ line_total: 15811.87, vat_amount: 1756.88 })
+    expect(result.lines.slice(1)).toEqual(lines.slice(1))
+    expect(result.deducted).toEqual([{ line_number: 1, invoiced_vat: 3513.75, deductible_vat: 1756.88, vat_as_cost: 1756.87 }])
+    const inclVat = (rows: typeof lines) => roundOre(rows.reduce((sum, row) => sum + row.line_total + row.vat_amount, 0))
+    expect(inclVat(result.lines)).toBe(inclVat(lines))
+  })
+
+  it('names the lines given a share that the invoice lacks or that carry no moms', () => {
+    expect(deductStagedLines(lines, new Map([[3, 0.5], [4, 0.5]])).invalidLines).toEqual([3, 4])
+  })
+
+  it('a share of 1 changes nothing', () => {
+    const result = deductStagedLines(lines, new Map([[1, 1]]))
+    expect(result.lines).toEqual(lines)
+    expect(result.deducted).toEqual([])
   })
 })
