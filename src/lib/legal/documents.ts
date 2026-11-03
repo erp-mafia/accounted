@@ -35,30 +35,37 @@ export interface LegalDocument {
   updatedAt: string
   /** The version a user accepts. ISO date of the last change that needs re-acceptance; null when the document is never accepted. */
   acceptanceVersion: string | null
+  /** Earlier wordings that still bind the customers who agreed to them, each at its own public path. */
+  previousVersionPaths?: string[]
 }
 
 export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
   terms: {
     key: 'terms',
     path: '/terms',
-    updatedAt: '2026-10-22',
-    // 6.4–6.8 (volumes, soft limits, agent-read documents) were added
-    // 2026-10-22 for customers who sign up from that date (6.8). The
-    // acceptance version is NOT moved yet: moving it prompts every existing
-    // user to re-accept, and the owner has not notified existing customers.
-    // Move it to the notice date when that mail goes out (14.1).
-    acceptanceVersion: '2026-03-05',
+    updatedAt: '2026-11-04',
+    // Terms v2 (founder decisions 2026-11-02/03: no notice e-mail, no counsel
+    // review). It binds the customers who sign up from acceptanceVersion (its
+    // 14.4; the signup records it in legal_acceptances). Customers who signed
+    // up before stay on the previous wording below until a notice under 14.1
+    // moves them. Both dates are the day it went live.
+    acceptanceVersion: '2026-11-04',
+    previousVersionPaths: ['/terms/2026-10-22'],
   },
   privacy: {
     key: 'privacy',
     path: '/privacy',
-    updatedAt: '2026-10-22',
+    updatedAt: '2026-11-04',
     acceptanceVersion: null,
   },
   dpa: {
     key: 'dpa',
     path: '/dpa',
-    updatedAt: '2026-10-22',
+    // Point 13 now matches terms v2 9.3 (18 months of export, then sealed and
+    // released on written request). The acceptance version stays (founder
+    // decision 2026-11-03): the customer still reaches the records for the
+    // whole archiving period, so nothing is taken away.
+    updatedAt: '2026-11-04',
     acceptanceVersion: '2026-10-21',
   },
   // Part of the DPA (its point 6), kept on its own page so it can change
@@ -67,14 +74,14 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
   subprocessors: {
     key: 'subprocessors',
     path: '/subprocessors',
-    updatedAt: '2026-10-21',
+    updatedAt: '2026-11-04',
     acceptanceVersion: null,
   },
 }
 
-/** Every legal page path; the middleware serves these without a session. */
-export const LEGAL_PATHS: string[] = (Object.values(LEGAL_DOCUMENTS) as LegalDocument[]).map(
-  (d) => d.path,
+/** Every legal page path, earlier versions included; the middleware serves these without a session. */
+export const LEGAL_PATHS: string[] = (Object.values(LEGAL_DOCUMENTS) as LegalDocument[]).flatMap(
+  (d) => [d.path, ...(d.previousVersionPaths ?? [])],
 )
 
 /** The documents a user must have accepted at their current version. */

@@ -98,6 +98,12 @@ export default function PrivacyPolicyPage() {
               'Så länge kontot finns',
             ],
             [
+              'Vilken version av användarvillkoren och personuppgiftsbiträdesavtalet du har godkänt, och när',
+              'Kunna visa vilka villkor som gäller mellan oss',
+              'Avtal (art. 6.1 b)',
+              'Tills du raderar kontot',
+            ],
+            [
               'Räknare per förkortad IP-adress och per användar- eller företags-ID; inloggningshändelser med tidpunkt och IP-adress',
               'Skydda konton och tjänsten mot obehörig åtkomst, överbelastning och missbruk',
               'Berättigat intresse (art. 6.1 f): säkerhet',
@@ -308,13 +314,18 @@ export default function PrivacyPolicyPage() {
           bättre. En tolkning tas med först när minst två företag har gjort den, och bara för
           motparter som klassats som handlare, myndigheter, banker eller betalväxlar, aldrig
           privatpersoner. Katalogen innehåller motpartens namn och typ, inte vilka företag tolkningen
-          kom från. Ett företags ägare eller administratör kan stänga av företagets medverkan under
-          Inställningar, Datadelning och AI; då räknas företagets tolkningar inte in.
+          kom från.
+        </p>
+        <p>
+          Ett företags ägare eller administratör kan stänga av båda under Inställningar, Datadelning
+          och AI, valet Dela anonyma mönster: då sparas ingen statistik från företagets bokningar och
+          företagets tolkningar räknas inte in i katalogen.
         </p>
         <p>
           Själva anonymiseringen och sammanställningen är en behandling, och den sker med stöd av
-          berättigat intresse (art. 6.1 f): vårt intresse av att förbättra tolkningen och
-          konteringen, vägt mot att inget identifierbart innehåll ingår i resultatet. Statistiken
+          berättigat intresse (art. 6.1 f): vårt intresse av att förbättra tjänstens förslag och
+          övriga funktioner, även dem som bygger på AI, vägt mot att inget identifierbart innehåll
+          ingår i resultatet. Statistiken
           används aldrig för marknadsföring, säljs inte, och lämnas inte till någon utanför
           Accounted. Ert eget företags bokföring, med transaktionstexter, motpartsnamn, kvitton och
           fakturor, används inte i utvärderingskörningar eller för att träna modeller, om inte en
