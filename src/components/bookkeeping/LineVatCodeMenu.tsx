@@ -77,7 +77,7 @@ export function LineVatCodeMenu({ rule, code, onChange }: LineVatCodeMenuProps) 
           title={label}
           className={code ? 'text-foreground' : 'text-muted-foreground'}
         >
-          <PercentBadgeIcon className="h-3.5 w-3.5" />
+          <PercentBadgeIcon className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">

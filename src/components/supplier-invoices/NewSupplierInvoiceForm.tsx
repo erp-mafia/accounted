@@ -2543,7 +2543,7 @@ export default function NewSupplierInvoiceForm({
                               >
                                 <PercentBadgeIcon
                                   className={cn(
-                                    'h-3.5 w-3.5',
+                                    'h-4 w-4',
                                     isLimitedDeductionOpen(index) ? 'text-foreground' : undefined,
                                   )}
                                 />
