@@ -6,6 +6,7 @@ import {
   getSystemCaPem,
   getSystemCertPem,
   getSystemClientId,
+  getSystemClientSecret,
   getSystemKeyPassphrase,
   getSystemKeyPem,
   getSystemTokenUrl,
@@ -14,11 +15,11 @@ import {
 /**
  * Token transport seam for the system (Client Credentials) flow.
  *
- * The exact mechanism Skatteverket uses for the org flow is pending their
- * CCG documentation: it is either mTLS at the token endpoint (client
- * certificate on the TLS handshake) or RFC 7523 private_key_jwt (a signed
- * client_assertion over plain TLS). Both are implemented behind one
- * interface so switching is an env var, not a refactor. The stub transport
+ * Skatteverket's org flow ("CCG sysorg") is mTLS at the token endpoint: the
+ * org certificate on the TLS handshake, the client identified in the form
+ * (mtlsTransport, proven against the test service on 2026-11-03). The RFC
+ * 7523 private_key_jwt variant (a signed client_assertion over plain TLS)
+ * stays behind the same interface, selected by env. The stub transport
  * exists for tests and local development without certificate material.
  *
  * The repo deliberately avoids undici (see lib/webhooks/pinned-fetch.ts);
@@ -65,7 +66,11 @@ function parseTokenResponse(status: number, body: string): SystemTokenResult {
   return { accessToken: parsed.access_token, expiresAt: Date.now() + expiresInSec * 1000 }
 }
 
-/** Client Credentials over mTLS: the org certificate rides the TLS handshake. */
+/**
+ * Client Credentials over mTLS: the org certificate rides the TLS handshake,
+ * client_id (and, for a "valfritt certifikat" registration, client_secret)
+ * the form body, as in Skatteverket's CCG sysorg description.
+ */
 export const mtlsTransport: SystemAuthTransport = {
   async fetchToken(scopes: string[]): Promise<SystemTokenResult> {
     const tokenUrl = getSystemTokenUrl()
@@ -81,6 +86,8 @@ export const mtlsTransport: SystemAuthTransport = {
     if (scopes.length > 0) params.set('scope', scopes.join(' '))
     const clientId = getSystemClientId()
     if (clientId) params.set('client_id', clientId)
+    const clientSecret = getSystemClientSecret()
+    if (clientSecret) params.set('client_secret', clientSecret)
     const bodyString = params.toString()
 
     // https.request always speaks TLS, so an http:// value would be upgraded

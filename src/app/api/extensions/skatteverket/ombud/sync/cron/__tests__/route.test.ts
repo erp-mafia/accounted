@@ -68,15 +68,15 @@ function connection(
   }
 }
 
-const JLO = (huvudman: string) => ({
+const SKOL = (huvudman: string) => ({
   huvudman,
-  roll: 'JLO',
-  rollbeskrivning: 'Juridiskt läsombud',
+  roll: 'skol',
+  rollbeskrivning: 'Skattekonto, bara läsbehörighet',
   giltigFrom: '2026-07-19',
 })
 const MOMS = (huvudman: string) => ({
   huvudman,
-  roll: 'MOMS',
+  roll: 'momsdeklaration_ombud',
   rollbeskrivning: 'Momsdeklaration, ombud',
   giltigFrom: '2026-07-19',
 })
@@ -153,7 +153,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
 
   it("reads the register on the Swedish day: a grant from today counts on New Year's night", async () => {
     mockListConnections.mockResolvedValue([connection('c-1', '165560000000', 'unknown', 'unknown', 'pending')])
-    mockListOmbudGrants.mockResolvedValue([{ ...JLO('165560000000'), giltigFrom: '2027-01-01' }])
+    mockListOmbudGrants.mockResolvedValue([{ ...SKOL('165560000000'), giltigFrom: '2027-01-01' }])
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
     try {
@@ -170,11 +170,11 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-partial', '195001011234', 'denied', 'denied', 'pending'),
     ])
     mockListOmbudGrants.mockResolvedValue([
-      JLO('165560000000'),
+      SKOL('165560000000'),
       MOMS('165560000000'),
-      { ...JLO('195001011234'), roll: 'DEKL', rollbeskrivning: 'Deklarationsombud' },
+      { ...SKOL('195001011234'), roll: 'DEKL', rollbeskrivning: 'Deklarationsombud' },
       MOMS('195001011234'),
-      JLO('165550000000'), // no row for this org number: the twin/unmatched case
+      SKOL('165550000000'), // no row for this org number: the twin/unmatched case
     ])
 
     const body = await (await GET(request())).json()
@@ -203,9 +203,9 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-same-day', '195001011234', 'unknown', 'unknown', 'pending', '2026-07-19T06:00:00Z'),
     ])
     mockListOmbudGrants.mockResolvedValue([
-      JLO('165560000000'),
+      SKOL('165560000000'),
       MOMS('165560000000'),
-      JLO('195001011234'),
+      SKOL('195001011234'),
     ])
 
     const body = await (await GET(request())).json()
@@ -225,7 +225,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
 
   it('skips rows the tenant revoked locally even though the grant still stands at Skatteverket', async () => {
     mockListConnections.mockResolvedValue([connection('c-off', '165560000000', 'unknown', 'unknown', 'revoked')])
-    mockListOmbudGrants.mockResolvedValue([JLO('165560000000'), MOMS('165560000000')])
+    mockListOmbudGrants.mockResolvedValue([SKOL('165560000000'), MOMS('165560000000')])
 
     const body = await (await GET(request())).json()
 
@@ -243,9 +243,9 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-fresh', '165510000000', 'unknown', 'unknown', 'pending'),
     ])
     mockListOmbudGrants.mockResolvedValue([
-      JLO('165560000000'), MOMS('165560000000'),
-      JLO('165570000000'), MOMS('165570000000'),
-      JLO('165580000000'), MOMS('165580000000'),
+      SKOL('165560000000'), MOMS('165560000000'),
+      SKOL('165570000000'), MOMS('165570000000'),
+      SKOL('165580000000'), MOMS('165580000000'),
     ])
 
     const body = await (await GET(request())).json()
@@ -264,7 +264,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
 
   it('a failed upsert is counted once and never turns into a downgrade', async () => {
     mockListConnections.mockResolvedValue([connection('c-1', '165560000000', 'unknown', 'unknown', 'pending')])
-    mockListOmbudGrants.mockResolvedValue([JLO('165560000000')])
+    mockListOmbudGrants.mockResolvedValue([SKOL('165560000000')])
     mockRecordProbeResult.mockResolvedValue(null)
 
     const body = await (await GET(request())).json()
@@ -293,7 +293,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-4', '165540000000'),
       connection('c-new', '165550000000', 'unknown', 'unknown', 'pending'),
     ])
-    mockListOmbudGrants.mockResolvedValue([JLO('165510000000'), MOMS('165510000000'), JLO('165550000000'), MOMS('165550000000')])
+    mockListOmbudGrants.mockResolvedValue([SKOL('165510000000'), MOMS('165510000000'), SKOL('165550000000'), MOMS('165550000000')])
 
     const body = await (await GET(request())).json()
 
@@ -309,7 +309,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-clear', '165570000000', 'unknown', 'unknown', 'pending'),
     ])
     mockContested.mockResolvedValue(new Set(['165560000000']))
-    mockListOmbudGrants.mockResolvedValue([JLO('165560000000'), MOMS('165560000000'), JLO('165570000000')])
+    mockListOmbudGrants.mockResolvedValue([SKOL('165560000000'), MOMS('165560000000'), SKOL('165570000000')])
 
     const body = await (await GET(request())).json()
 
@@ -340,7 +340,7 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       connection('c-1', '165510000000'),
       connection('c-2', '165520000000'),
     ])
-    mockListOmbudGrants.mockResolvedValue([JLO('165510000000'), MOMS('165510000000')])
+    mockListOmbudGrants.mockResolvedValue([SKOL('165510000000'), MOMS('165510000000')])
 
     const body = await (await GET(request())).json()
 

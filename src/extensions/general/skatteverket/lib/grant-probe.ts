@@ -155,12 +155,12 @@ export async function probeViaOmbudsregister(
     const summary = summarizeGrants(posts, today).get(orgNumber)
     const roles = summary?.roles ?? []
     // The company granted Accounted something, but none of it classifies as
-    // either behörighet: far more likely an unrecognised rollbeteckning (codes
-    // not pinned yet, or a renamed rollbeskrivning) than a company that chose
-    // only unrelated roles. 'error' never downgrades a granted row; 'denied'
-    // would. Pin the codes and the ambiguity disappears.
+    // either behörighet: possibly an unrecognised rollbeteckning (a wrong or
+    // renamed code in OMBUD_ROLES or its env override) rather than a company
+    // that chose only unrelated roles. 'error' never downgrades a granted row;
+    // 'denied' would.
     if (roles.length > 0 && !summary?.recognized) {
-      const detail = `ombudsregister: roller okända (${roles.join(', ')}); pinna rollkoderna`
+      const detail = `ombudsregister: roller okända (${roles.join(', ')}); kontrollera rollkoderna (OMBUD_ROLES, SKATTEVERKET_OMBUD_ROLL_*)`
       return {
         result: {
           lasombud: { status: 'error', detail },

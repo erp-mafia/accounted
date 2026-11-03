@@ -13,7 +13,8 @@ const log = createLogger('skatteverket-ombud-client')
  * Source: Tjänstebeskrivning Ombudshantering via API v2.0, dokumentversion
  * 1.0 (2022-06-16).
  * Base URI `{host}/behorighet/ombudshantering/v2`, JSON over HTTPS, headers
- * Accept + content-type application/json, Authorization Bearer, client_id,
+ * Accept + content-type application/json (on every call: a GET without
+ * Content-Type is answered 400), Authorization Bearer, client_id,
  * client_secret, skv_client_correlation_id. Operations:
  *
  *   GET  /ombud/autentisieratOmbud?huvudman&roll&giltigFrom&giltigTom
@@ -36,14 +37,10 @@ const log = createLogger('skatteverket-ombud-client')
  * the register what companies granted Accounted, and to mint deep links
  * that name Accounted as the ombud.
  *
- * Two things the service description does not pin down, deliberately
- * handled tolerantly and logged so the first live call against the test
- * service settles them:
- *   - the JSON envelope of list responses (bare array vs. an object holding
- *     the list): both are accepted,
- *   - the rollbeteckning codes for "Juridiskt läsombud" and "Momsdeklaration,
- *     ombud": pin them via env once known; until then roles are classified
- *     by their rollbeskrivning text, which the register returns alongside.
+ * The first live calls against the test service (2026-11-03) settled what
+ * the service description left open: both list operations answer with a
+ * bare JSON array (an enveloped list is still accepted), and the role codes
+ * are the ones in OMBUD_ROLES below.
  */
 
 export const OMBUD_API_TEST_BASE_URL = 'https://api.test.skatteverket.se/behorighet/ombudshantering/v2'
@@ -62,55 +59,36 @@ export function getOmbudApiBaseUrl(): string {
 export const OMBUD_ROLE_KEYS: readonly SkvBehorighet[] = ['lasombud', 'moms_ombud'] as const
 
 /**
- * Pinned rollbeteckning codes (exact match on `roll`). Unknown until read
- * from GET /roller in the test service; env-configurable so no deploy is
- * needed when Skatteverket confirms them.
+ * The register role (rollbeteckning) behind each behörighet, with
+ * Skatteverket's name for it (the role the company picks in the e-service
+ * "Ombud och behörigheter"; the settings page shows it from the
+ * system_behorighet_* messages). Read from GET /roller in the test service on
+ * 2026-11-03, where no role called "Juridiskt läsombud" exists.
+ *   lasombud    skol, "Skattekonto, bara läsbehörighet": the skattekonto
+ *               saldo and transaktioner reads. A huvudman that gave only
+ *               momsdeklaration_ombud answers the saldo read with 403
+ *               felkod 6 "Auktorisation saknas".
+ *   moms_ombud  momsdeklaration_ombud, "Momsdeklaration, ombud"; not the
+ *               broader "Momsdeklaration, deklarationsombud".
+ * Matching is on the code alone, never on the description text. The env
+ * var overrides a code without a deploy, should production differ.
  */
-const ROLE_CODE_ENV: Record<SkvBehorighet, string> = {
-  lasombud: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD',
-  moms_ombud: 'SKATTEVERKET_OMBUD_ROLL_MOMS',
+export const OMBUD_ROLES: Record<SkvBehorighet, { code: string; env: string }> = {
+  lasombud: { code: 'skol', env: 'SKATTEVERKET_OMBUD_ROLL_LASOMBUD' },
+  moms_ombud: { code: 'momsdeklaration_ombud', env: 'SKATTEVERKET_OMBUD_ROLL_MOMS' },
 }
 
-/**
- * Description-text fallback. Skatteverket's own labels in the e-service are
- * "Juridiskt läsombud" and "Momsdeklaration, ombud"; the register returns a
- * rollbeskrivning with every behörighetspost, so the text is available even
- * before the codes are pinned. Matching is exact on the whole label (case and
- * whitespace aside): "Momsdeklaration, deklarationsombud" is a broader role
- * and must never be read as "Momsdeklaration, ombud".
- */
-const ROLE_DESCRIPTION_PATTERNS: Record<SkvBehorighet, RegExp> = {
-  lasombud: /^juridiskt\s+l[äa]sombud$/i,
-  moms_ombud: /^momsdeklaration,\s*ombud$/i,
-}
-
-export function getPinnedRoleCode(key: SkvBehorighet): string | null {
-  const raw = process.env[ROLE_CODE_ENV[key]]?.trim()
-  return raw ? raw : null
-}
-
-export interface OmbudRoleLike {
-  roll: string
-  rollbeskrivning?: string | null
+/** The rollbeteckning for a behörighet: the env override, else the register's code. */
+export function getOmbudRoleCode(key: SkvBehorighet): string {
+  return process.env[OMBUD_ROLES[key].env]?.trim() || OMBUD_ROLES[key].code
 }
 
 /**
  * Which of Accounted's behörigheter a register role represents, or null
  * when it is some other role (companies hand out many; only two matter).
- * A pinned code wins over the text match, and a pinned code that does NOT
- * match disqualifies the text fallback for that key: once the code is known,
- * a differently-coded role with similar wording is a different role.
  */
-export function classifyOmbudRole(role: OmbudRoleLike): SkvBehorighet | null {
-  for (const key of OMBUD_ROLE_KEYS) {
-    const pinned = getPinnedRoleCode(key)
-    if (pinned) {
-      if (role.roll === pinned) return key
-      continue
-    }
-    if (role.rollbeskrivning && ROLE_DESCRIPTION_PATTERNS[key].test(role.rollbeskrivning)) return key
-  }
-  return null
+export function classifyOmbudRole(role: Rollbeskrivningspost): SkvBehorighet | null {
+  return OMBUD_ROLE_KEYS.find((key) => role.roll === getOmbudRoleCode(key)) ?? null
 }
 
 // ── Wire schemas ─────────────────────────────────────────────────────
@@ -176,7 +154,6 @@ export type OmbudApiErrorCode =
   | 'OBR_FORBIDDEN' // 401/403 for the system identity: scope/avtal missing, not a company-level fact
   | 'OBR_BAD_RESPONSE'
   | 'OBR_HTTP_ERROR'
-  | 'OBR_ROLE_UNRESOLVED'
 
 export class OmbudApiError extends Error {
   constructor(
@@ -210,6 +187,9 @@ async function ombudRequest(method: 'GET' | 'POST', path: string, audit: SkvAudi
     return await skvRequestWithAuth({ mode: 'system' }, method, path, audit, body, {
       baseUrl: getOmbudApiBaseUrl(),
       accept: 'application/json',
+      // Named, so it goes on the GETs too: the register answers 400
+      // "Required header 'Content-Type' not specified" without it.
+      contentType: 'application/json',
     })
   } catch (err) {
     // api-client maps a system-mode 403 to OMBUD_GRANT_MISSING because on the
@@ -296,7 +276,8 @@ export async function listOmbudGrants(
 /**
  * GET /roller: all rollbeteckningar with descriptions (or one, when filtered).
  * A lookup about the register itself, never about a company: not audited in
- * the company table (see OmbudCaller).
+ * the company table (see OmbudCaller). Diagnostics only (the smoke script):
+ * the codes Accounted asks for are in OMBUD_ROLES.
  */
 export async function getOmbudRoleDescriptions(roll?: string): Promise<Rollbeskrivningspost[]> {
   const response = await ombudRequest('GET', `/roller${buildQuery({ roll })}`, ombudAudit('ombud_register', 'roller'))
@@ -307,42 +288,6 @@ export async function getOmbudRoleDescriptions(roll?: string): Promise<Rollbeskr
     throw new OmbudApiError('Rollbeskrivningar från Ombudshantering kunde inte tolkas.', 'OBR_BAD_RESPONSE')
   }
   return parsed.data
-}
-
-/**
- * The rollbeteckning codes to put in a deep link: pinned env values first,
- * otherwise resolved from GET /roller by description. Throws when a key
- * cannot be resolved rather than minting a link with a guessed role.
- */
-export async function resolveOmbudRoleCodes(keys: readonly SkvBehorighet[]): Promise<Record<SkvBehorighet, string>> {
-  const resolved: Partial<Record<SkvBehorighet, string>> = {}
-  const missing: SkvBehorighet[] = []
-  for (const key of keys) {
-    const pinned = getPinnedRoleCode(key)
-    if (pinned) resolved[key] = pinned
-    else missing.push(key)
-  }
-  if (missing.length > 0) {
-    const roles = await getOmbudRoleDescriptions()
-    for (const key of missing) {
-      const hit = roles.find((role) => classifyOmbudRole(role) === key)
-      if (hit) resolved[key] = hit.roll
-    }
-    const unresolved = missing.filter((key) => !resolved[key])
-    if (unresolved.length > 0) {
-      log.warn('ombud role codes unresolved from /roller', {
-        unresolved,
-        available: roles.map((r) => `${r.roll}=${r.rollbeskrivning ?? ''}`),
-      })
-      throw new OmbudApiError(
-        `Rollkod saknas för ${unresolved.join(', ')}: sätt ${unresolved
-          .map((key) => ROLE_CODE_ENV[key])
-          .join(' och ')} efter uppslag i GET /roller.`,
-        'OBR_ROLE_UNRESOLVED'
-      )
-    }
-  }
-  return resolved as Record<SkvBehorighet, string>
 }
 
 export interface UtseOmbudDeepLink {
@@ -365,10 +310,9 @@ export async function createUtseOmbudDeepLink(
   giltigTom?: string,
   now: Date = new Date()
 ): Promise<UtseOmbudDeepLink> {
-  const roller = await resolveOmbudRoleCodes(keys)
-  const body: { ombudsroller: string[]; giltigTom?: string } = {
-    ombudsroller: keys.map((key) => roller[key]),
-  }
+  const ombudsroller = keys.map(getOmbudRoleCode)
+  const roller = Object.fromEntries(keys.map((key, i) => [key, ombudsroller[i]])) as Record<SkvBehorighet, string>
+  const body: { ombudsroller: string[]; giltigTom?: string } = { ombudsroller }
   if (giltigTom) body.giltigTom = giltigTom
   const response = await ombudRequest(
     'POST',
@@ -418,8 +362,8 @@ export interface HuvudmanGrantSummary {
   /**
    * True when at least one post (active or not) classified as one of
    * Accounted's behörigheter. False with a non-empty `roles` means the
-   * register lists roles we cannot name: a code-pinning problem, not a
-   * company decision.
+   * register lists roles we cannot name: a wrong role code (OMBUD_ROLES or
+   * its env override), not a company decision.
    */
   recognized: boolean
   /**

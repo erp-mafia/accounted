@@ -65,8 +65,8 @@ beforeEach(() => {
 describe('probeCompanyGrants via the ombudsregister', () => {
   it('both roles active today -> both granted, source registry, no service probes', async () => {
     registryAnswers([
-      { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', ombud: '165590000000', giltigFrom: '2026-07-19' },
-      { huvudman: ORG, roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', ombud: '165590000000', giltigFrom: '2026-07-19', giltigTom: '' },
+      { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', ombud: '165590000000', giltigFrom: '2026-07-19' },
+      { huvudman: ORG, roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', ombud: '165590000000', giltigFrom: '2026-07-19', giltigTom: '' },
     ])
 
     const result = await probeCompanyGrants('company-1', ORG)
@@ -96,7 +96,7 @@ describe('probeCompanyGrants via the ombudsregister', () => {
 
   it('only läsombud granted -> moms denied with the roles listed in the detail', async () => {
     registryAnswers([
-      { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-07-19' },
+      { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-07-19' },
       { huvudman: ORG, roll: 'DEKL', rollbeskrivning: 'Deklarationsombud', giltigFrom: '2026-07-19' },
     ])
 
@@ -104,7 +104,7 @@ describe('probeCompanyGrants via the ombudsregister', () => {
 
     expect(result.lasombud.status).toBe('granted')
     expect(result.momsOmbud.status).toBe('denied')
-    expect(result.momsOmbud.detail).toContain('JLO, DEKL')
+    expect(result.momsOmbud.detail).toContain('skol, DEKL')
     expect(mockRecordProbeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         lasombud: expect.objectContaining({ status: 'granted' }),
@@ -126,17 +126,17 @@ describe('probeCompanyGrants via the ombudsregister', () => {
 
   it('a future-dated or expired grant does not count', async () => {
     const future = await probeViaOmbudsregisterWith([
-      { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-12-01' },
+      { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-12-01' },
     ])
     expect(future.result?.lasombud.status).toBe('denied')
 
     const expired = await probeViaOmbudsregisterWith([
-      { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2025-01-01', giltigTom: '2026-08-31' },
+      { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2025-01-01', giltigTom: '2026-08-31' },
     ])
     expect(expired.result?.lasombud.status).toBe('denied')
 
     const active = await probeViaOmbudsregisterWith([
-      { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2025-01-01', giltigTom: '2026-09-01' },
+      { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2025-01-01', giltigTom: '2026-09-01' },
     ])
     expect(active.result?.lasombud.status).toBe('granted')
   })
@@ -205,7 +205,7 @@ describe('the Swedish day and month', () => {
   it("a first Verifiera on New Year's night opts in on the new year's first day", async () => {
     newYearNight()
     mockGetConnection.mockResolvedValueOnce(null)
-    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2027-01-01' }])
+    registryAnswers([{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2027-01-01' }])
 
     const result = await probeCompanyGrants('company-1', ORG)
 
@@ -215,7 +215,7 @@ describe('the Swedish day and month', () => {
   it("an opt-in made on New Year's night is dated on the Swedish day", async () => {
     newYearNight()
     mockGetConnection.mockResolvedValueOnce({ id: 'conn-1', org_number: ORG, created_at: '2026-12-31T23:30:00Z' })
-    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-12-31' }])
+    registryAnswers([{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-12-31' }])
 
     const result = await probeCompanyGrants('company-1', ORG)
 
@@ -238,7 +238,7 @@ describe('the Swedish day and month', () => {
 describe('org-number proof: only grants signed on or after the opt-in count', () => {
   it('a grant signed before the opt-in is denied with reason predates_opt_in', async () => {
     const result = await probeViaOmbudsregisterWith(
-      [{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-05-10' }],
+      [{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-05-10' }],
       '2026-08-20'
     )
     expect(result.result?.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
@@ -249,15 +249,15 @@ describe('org-number proof: only grants signed on or after the opt-in count', ()
 
   it('a grant signed on the opt-in day counts, and a re-signed newer post wins over an old one', async () => {
     const sameDay = await probeViaOmbudsregisterWith(
-      [{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-08-20' }],
+      [{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-08-20' }],
       '2026-08-20'
     )
     expect(sameDay.result?.lasombud.status).toBe('granted')
 
     const resigned = await probeViaOmbudsregisterWith(
       [
-        { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2025-02-01' },
-        { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-08-21' },
+        { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2025-02-01' },
+        { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-08-21' },
       ],
       '2026-08-20'
     )
@@ -266,7 +266,7 @@ describe('org-number proof: only grants signed on or after the opt-in count', ()
 
   it('a first Verifiera (no row yet) opts in today: an older grant does not count', async () => {
     mockGetConnection.mockResolvedValueOnce(null)
-    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-15' }])
+    registryAnswers([{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-01-15' }])
 
     const result = await probeCompanyGrants('company-1', ORG)
 
@@ -286,7 +286,7 @@ describe('org-number proof: only grants signed on or after the opt-in count', ()
 
   it('a row recorded for another org number opts in today for the new one', async () => {
     mockGetConnection.mockResolvedValueOnce({ id: 'conn-1', org_number: '165599999999', created_at: '2025-01-01T00:00:00Z' })
-    registryAnswers([{ huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-15' }])
+    registryAnswers([{ huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-01-15' }])
 
     const result = await probeCompanyGrants('company-1', ORG)
 
@@ -413,7 +413,7 @@ describe('probeCompanyGrants service-probe fallback', () => {
 
 describe('recordGrantRefusal: a refused system read asks the register before touching the grant (#115)', () => {
   const CONNECTION = { id: 'conn-1', company_id: 'company-1', org_number: ORG, created_at: OPT_IN_AT, last_error: null }
-  const LASOMBUD = { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', ombud: '165590000000', giltigFrom: '2026-07-19' }
+  const LASOMBUD = { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', ombud: '165590000000', giltigFrom: '2026-07-19' }
   const recorded = () => mockRecordProbeResult.mock.calls.map(([input]) => input)
 
   beforeEach(() => {

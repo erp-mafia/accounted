@@ -236,25 +236,37 @@ const SkattekontoGroupMatchSchema = z.object({
  * The hybrid model's background-read credentials. All code ships behind
  * SKATTEVERKET_SYSTEM_AUTH_MODE=off; flipping to shadow/on requires:
  *
- *   1. Skatteverket's CCG/org-flow docs (token endpoint URL, mechanism
- *      mTLS vs private_key_jwt, scope names, whether APIGW headers persist,
- *      whether resource calls need the client cert).
+ *   1. DONE: Skatteverket's CCG docs. The org flow is "CCG sysorg": mTLS at
+ *      the token endpoint (SKATTEVERKET_SYSTEM_AUTH_MECHANISM=mtls), the
+ *      APIGW Client_Id/Client_Secret headers persist on resource calls,
+ *      which need no client cert. Token URLs:
+ *        test https://sysorgoauth2.test.skatteverket.se/oauth2/v1/sysorg/token
+ *        prod https://sysorgoauth2.skatteverket.se/oauth2/v1/sysorg/token
+ *      Two registrations exist: "valfritt certifikat" (client_id +
+ *      client_secret in the form, any org cert on the handshake; the test
+ *      application) and "utpekat certifikat" (client_id + the named cert,
+ *      no secret). Set SKATTEVERKET_SYSTEM_CLIENT_SECRET only for the first.
  *   2. Organisationscertifikat from Expisoft (test + prod) for Accounted's
  *      org number, base64-wrapped into SKATTEVERKET_SYSTEM_CERT_PEM_B64 /
- *      _KEY_PEM_B64.
- *   3. Bilateral avtal per API for the org flow (skattekonto read, AGI read,
- *      momsdeklaration ombud) + APIGW subscriptions for the system client.
- *   4. Set SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL, _SCOPES, _CLIENT_ID,
- *      _AUTH_MECHANISM per the docs; SKATTEVERKET_OMBUD_ORG_NUMBER =
- *      Accounted's org number (shown to users in the grant instructions).
- *   5. First live call against Ombudshantering v2 in the test service
- *      (scope `obr` was added to application id arcimtechnologyab_gnubok_1
- *      on 2026-09-01): confirm the list envelope, read the rollbeteckning
- *      codes from GET /roller and pin them in SKATTEVERKET_OMBUD_ROLL_LASOMBUD
- *      / SKATTEVERKET_OMBUD_ROLL_MOMS (lib/ombud-client.ts). Grant
- *      verification then runs on the register; the read-service probes in
- *      grant-probe.ts stay as the fallback and still need their 403 bodies
- *      validated (shadow mode in the test environment first).
+ *      _KEY_PEM_B64 (scripts/skv-cert-to-env.sh).
+ *   3. Bilateral avtal per API for the org flow (skattekonto read,
+ *      momsdeklaration ombud, obr) + APIGW subscriptions for the system
+ *      client (SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID / _SECRET).
+ *   4. Set SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL, _CLIENT_ID, _CLIENT_SECRET
+ *      (valfritt certifikat only), _AUTH_MECHANISM=mtls;
+ *      SKATTEVERKET_OMBUD_ORG_NUMBER = Accounted's org number (shown to
+ *      users in the grant instructions).
+ *   5. DONE in test (2026-11-03, Expisoft test cert, application
+ *      arcimtechnologyab_gnubok_1): token 200 for `ska momsdeklaration obr`,
+ *      /roller and /ombud/autentisieratOmbud 200 (bare JSON arrays; the
+ *      register needs Content-Type on GETs), a `skol` grant unlocks the
+ *      skattekonto saldo read. Role codes are built in (OMBUD_ROLES in
+ *      lib/ombud-client.ts: skol, momsdeklaration_ombud); the
+ *      SKATTEVERKET_OMBUD_ROLL_* vars only override them. Before prod, run
+ *      scripts/smoke-skv-ombud.ts against prod and check step 2 finds both
+ *      codes. The read-service probes in grant-probe.ts stay as the
+ *      fallback and still need their 403 bodies validated (shadow mode in
+ *      the test environment first).
  *   6. Godkännandetest per API, then SKATTEVERKET_SYSTEM_AUTH_MODE=on in
  *      prod. User tokens remain the fallback indefinitely. The daily ombud
  *      sync cron (/api/extensions/skatteverket/ombud/sync/cron) runs from
@@ -955,7 +967,7 @@ export const skatteverketExtension: Extension = {
           ombud_org_number: getOmbudOrgNumber(),
           grant_url: 'https://skatteverket.se/ombud',
           behorigheter: [
-            { key: 'lasombud', label: 'Juridiskt läsombud' },
+            { key: 'lasombud', label: 'Skattekonto, bara läsbehörighet' },
             { key: 'moms_ombud', label: 'Momsdeklaration, ombud' },
           ],
           cert: getSystemCertInfo(),

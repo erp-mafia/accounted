@@ -26,8 +26,8 @@ const TIME_BUDGET_MS = 50_000
 
 /**
  * Downgrade guard: a single run may not turn more than this share of the
- * currently granted rows into fully denied ones. A mistyped pinned role code,
- * a renamed rollbeskrivning, or a partial register response would otherwise
+ * currently granted rows into fully denied ones. A mistyped role code
+ * override, a renamed role code, or a partial register response would otherwise
  * deny every company in one night and silently push their background reads
  * back onto 65-minute personal tokens. Below MIN_ROWS the share test is
  * meaningless (one of two rows is 50%), so small fleets are guarded by the
@@ -208,7 +208,7 @@ type Decision =
       momsOmbud?: GrantStatus
       detail?: string
     }
-  /** The register lists roles we cannot name (codes unpinned/renamed): never a denial. */
+  /** The register lists roles we cannot name (a wrong or renamed role code): never a denial. */
   | { kind: 'unrecognized'; row: SkvCompanyConnection }
   | {
       /** 'record' updates from the register; 'downgrade' is a granted row that would lose every grant. */
@@ -248,8 +248,8 @@ export function planDecisions(
     }
     const summary = grants.get(row.org_number)
     if (summary && summary.roles.length > 0 && !summary.recognized) {
-      // Same rule as probeViaOmbudsregister: unknown role codes are a
-      // pinning problem on our side, not a company withdrawing anything.
+      // Same rule as probeViaOmbudsregister: unknown role codes may be a
+      // wrong role code on our side, not a company withdrawing anything.
       decisions.push({ kind: 'unrecognized', row })
       continue
     }

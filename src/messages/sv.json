@@ -4278,7 +4278,7 @@
     "system_status_denied": "Saknas",
     "system_status_error": "Kunde inte kontrolleras",
     "system_status_unknown": "Inte verifierad",
-    "system_behorighet_lasombud": "Juridiskt läsombud",
+    "system_behorighet_lasombud": "Skattekonto, bara läsbehörighet",
     "system_behorighet_moms": "Momsdeklaration, ombud",
     "system_cert_expires_soon": "{appName}s certifikat mot Skatteverket går ut om {days} dagar.",
     "system_verify_failed": "Verifieringen misslyckades",

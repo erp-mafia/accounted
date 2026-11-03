@@ -1,7 +1,7 @@
 /**
- * Ombudshantering v2 client: base URL selection, role classification (pinned
- * code vs. description text), list envelope tolerance, 404-as-empty on the
- * list, the 403 remap, deep-link role resolution, and the pure grant helpers.
+ * Ombudshantering v2 client: base URL selection, role classification (by
+ * code, default or env), list envelope tolerance, 404-as-empty on the list,
+ * the 403 remap, deep-link roles, and the pure grant helpers.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -26,7 +26,6 @@ import {
   listOmbudGrants,
   normalizeHuvudman,
   OmbudApiError,
-  resolveOmbudRoleCodes,
   summarizeGrants,
   grantCountsFor,
   grantPredatesOptIn,
@@ -64,30 +63,28 @@ describe('getOmbudApiBaseUrl', () => {
 })
 
 describe('classifyOmbudRole', () => {
-  it('matches by description text when no code is pinned', () => {
-    expect(classifyOmbudRole({ roll: 'X1', rollbeskrivning: 'Juridiskt läsombud' })).toBe('lasombud')
-    expect(classifyOmbudRole({ roll: 'X2', rollbeskrivning: 'Momsdeklaration, ombud' })).toBe('moms_ombud')
-    expect(classifyOmbudRole({ roll: 'X3', rollbeskrivning: 'Deklarationsombud' })).toBeNull()
-    expect(classifyOmbudRole({ roll: 'X4' })).toBeNull()
-    // Broader roles that merely contain the words are not the narrow ones.
+  it('matches on the code alone, never on the description text', () => {
+    expect(classifyOmbudRole({ roll: 'skol', rollbeskrivning: 'whatever' })).toBe('lasombud')
+    expect(classifyOmbudRole({ roll: 'momsdeklaration_ombud' })).toBe('moms_ombud')
+    // The right wording under another code is another role.
+    expect(classifyOmbudRole({ roll: 'X1', rollbeskrivning: 'Skattekonto, bara läsbehörighet' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'X2', rollbeskrivning: 'Momsdeklaration, ombud' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'X3', rollbeskrivning: 'Juridiskt läsombud' })).toBeNull()
     expect(classifyOmbudRole({ roll: 'X5', rollbeskrivning: 'Momsdeklaration, deklarationsombud' })).toBeNull()
-    expect(classifyOmbudRole({ roll: 'X6', rollbeskrivning: 'Juridiskt läsombud och skattekonto' })).toBeNull()
-    expect(classifyOmbudRole({ roll: 'X7', rollbeskrivning: ' momsdeklaration,ombud ' .trim() })).toBe('moms_ombud')
+    // Codes are exact: no case folding, no prefix match.
+    expect(classifyOmbudRole({ roll: 'SKOL' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'momsdeklaration' })).toBeNull()
   })
 
-  it('a pinned code wins and disables the text fallback for that key', () => {
-    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
-    expect(classifyOmbudRole({ roll: 'JLO', rollbeskrivning: 'whatever' })).toBe('lasombud')
-    // Same wording, different code: not the pinned role.
-    expect(classifyOmbudRole({ roll: 'OTHER', rollbeskrivning: 'Juridiskt läsombud' })).toBeNull()
-    // The un-pinned key still falls back to text.
-    expect(classifyOmbudRole({ roll: 'M', rollbeskrivning: 'Momsdeklaration, ombud' })).toBe('moms_ombud')
+  it('a blank env override falls back to the default code', () => {
+    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = '  '
+    expect(classifyOmbudRole({ roll: 'skol' })).toBe('lasombud')
   })
 })
 
 describe('listOmbudGrants', () => {
   it('accepts a bare array and an enveloped list', async () => {
-    const post = { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-01' }
+    const post = { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-01-01' }
     mockSkvRequestWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => [post] })
     expect(await listOmbudGrants({}, 'ombud_register')).toEqual([post])
     // The whole register belongs to no company: not audited in the company table.
@@ -145,42 +142,11 @@ describe('roles and deep links', () => {
     mockSkvRequestWithAuth.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: async () => ({ roller: [{ roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud' }] }),
+      json: async () => ({ roller: [{ roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet' }] }),
     })
-    expect(await getOmbudRoleDescriptions()).toEqual([{ roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud' }])
+    expect(await getOmbudRoleDescriptions()).toEqual([{ roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet' }])
     expect(mockSkvRequestWithAuth.mock.calls[0][2]).toBe('/roller')
     expect(mockSkvRequestWithAuth.mock.calls[0][3]).toEqual({ unaudited: 'ombud_register', operation: 'roller' })
-  })
-
-  it('resolveOmbudRoleCodes uses pinned codes without a network call', async () => {
-    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
-    process.env.SKATTEVERKET_OMBUD_ROLL_MOMS = 'MOMS'
-    expect(await resolveOmbudRoleCodes(['lasombud', 'moms_ombud'])).toEqual({ lasombud: 'JLO', moms_ombud: 'MOMS' })
-    expect(mockSkvRequestWithAuth).not.toHaveBeenCalled()
-  })
-
-  it('resolveOmbudRoleCodes looks unpinned codes up in /roller and refuses to guess', async () => {
-    mockSkvRequestWithAuth.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => [
-        { roll: 'A1', rollbeskrivning: 'Juridiskt läsombud' },
-        { roll: 'B2', rollbeskrivning: 'Deklarationsombud' },
-      ],
-    })
-    await expect(resolveOmbudRoleCodes(['lasombud', 'moms_ombud'])).rejects.toMatchObject({
-      code: 'OBR_ROLE_UNRESOLVED',
-    })
-
-    mockSkvRequestWithAuth.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => [
-        { roll: 'A1', rollbeskrivning: 'Juridiskt läsombud' },
-        { roll: 'C3', rollbeskrivning: 'Momsdeklaration, ombud' },
-      ],
-    })
-    expect(await resolveOmbudRoleCodes(['lasombud', 'moms_ombud'])).toEqual({ lasombud: 'A1', moms_ombud: 'C3' })
   })
 
   // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
@@ -199,7 +165,7 @@ describe('roles and deep links', () => {
     expect(link.expiresOn).toBe(expiresOn)
   })
 
-  it('createUtseOmbudDeepLink posts the resolved codes for the huvudman and returns the link', async () => {
+  it('createUtseOmbudDeepLink posts the env-overridden codes for the huvudman and returns the link', async () => {
     process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
     process.env.SKATTEVERKET_OMBUD_ROLL_MOMS = 'MOMS'
     mockSkvRequestWithAuth.mockResolvedValueOnce({
@@ -275,11 +241,11 @@ describe('pure helpers', () => {
   it('summarizeGrants collapses posts per huvudman with only active, known roles deciding', () => {
     const summary = summarizeGrants(
       [
-        { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-01' },
-        { huvudman: '16556000-0000', roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-12-01' },
+        { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-01-01' },
+        { huvudman: '16556000-0000', roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-12-01' },
         { huvudman: '165560000000', roll: 'DEKL', rollbeskrivning: 'Deklarationsombud', giltigFrom: '2026-01-01' },
-        { huvudman: '195001011234', roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-01-01' },
-        { huvudman: 'bad', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-01-01' },
+        { huvudman: '195001011234', roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-01-01' },
+        { huvudman: 'bad', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-01-01' },
       ],
       '2026-09-01',
     )
@@ -287,9 +253,9 @@ describe('pure helpers', () => {
       huvudman: '165560000000',
       lasombud: true,
       moms_ombud: false,
-      roles: ['JLO', 'MOMS', 'DEKL'],
+      roles: ['skol', 'momsdeklaration_ombud', 'DEKL'],
       recognized: true,
-      // The future-dated MOMS post is not active, so it sets no signing day.
+      // The future-dated moms post is not active, so it sets no signing day.
       signedFrom: { lasombud: '2026-01-01', moms_ombud: null },
     })
     expect(summary.get('195001011234')).toMatchObject({ lasombud: false, moms_ombud: true, recognized: true })
@@ -306,9 +272,9 @@ describe('pure helpers', () => {
   it('grantCountsFor: only an active grant signed on or after the opt-in day counts', () => {
     const summary = summarizeGrants(
       [
-        { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-03-01' },
-        { huvudman: '165560000000', roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', giltigFrom: '2026-06-15T00:00:00' },
-        { huvudman: '165560000000', roll: 'MOMS', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-02-01' },
+        { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-03-01' },
+        { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-06-15T00:00:00' },
+        { huvudman: '165560000000', roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-02-01' },
       ],
       '2026-09-01',
     ).get('165560000000')
@@ -323,5 +289,64 @@ describe('pure helpers', () => {
     // Nothing granted is neither counted nor "predating".
     expect(grantCountsFor(undefined, 'lasombud', '2026-01-01')).toBe(false)
     expect(grantPredatesOptIn(undefined, 'lasombud', '2026-01-01')).toBe(false)
+  })
+})
+
+// The live register (Skatteverket test service, GET /roller and
+// /ombud/autentisieratOmbud, 2026-11-03) has no role called "Juridiskt
+// läsombud". Skattekonto reads are unlocked by `skol` ("Skattekonto, bara
+// läsbehörighet"): a huvudman holding only momsdeklaration_ombud answers the
+// saldo read with 403 felkod 6. The rows below keep the register's shape and
+// role codes; the identities are placeholders.
+describe("the register's real role codes (live test service, 2026-11-03)", () => {
+  const LIVE_POSTS = [
+    { ombud: '165560000167', roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', huvudman: '161100000001', giltigFrom: '2025-05-09' },
+    { ombud: '165560000167', roll: 'es', rollbeskrivning: 'Firmatecknare', huvudman: '162700000002', giltigFrom: '2026-01-01' },
+    { ombud: '165560000167', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', huvudman: '162700000002', giltigFrom: '2015-01-01' },
+    { ombud: '165560000167', roll: 'esol', rollbeskrivning: 'Moms och AG, bara läsbehörighet', huvudman: '165100000003', giltigFrom: '2020-01-01' },
+  ]
+
+  it('classifies skol and momsdeklaration_ombud with no env set, and nothing else', () => {
+    expect(classifyOmbudRole({ roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet' })).toBe('lasombud')
+    expect(classifyOmbudRole({ roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud' })).toBe('moms_ombud')
+    expect(classifyOmbudRole({ roll: 'esol', rollbeskrivning: 'Moms och AG, bara läsbehörighet' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'sk', rollbeskrivning: 'Firmatecknare skattekonto' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'es', rollbeskrivning: 'Firmatecknare' })).toBeNull()
+  })
+
+  it('an env code still overrides the default, and then the default no longer counts', () => {
+    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'skol_prod'
+    expect(classifyOmbudRole({ roll: 'skol_prod' })).toBe('lasombud')
+    expect(classifyOmbudRole({ roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet' })).toBeNull()
+    expect(classifyOmbudRole({ roll: 'momsdeklaration_ombud' })).toBe('moms_ombud')
+  })
+
+  it('summarizeGrants recognizes the skattekonto grant and the moms grant from the live response', () => {
+    const summary = summarizeGrants(LIVE_POSTS, '2026-11-03')
+    expect(summary.get('162700000002')).toMatchObject({ lasombud: true, moms_ombud: false, recognized: true })
+    expect(summary.get('161100000001')).toMatchObject({ lasombud: false, moms_ombud: true, recognized: true })
+    expect(summary.get('165100000003')).toMatchObject({ lasombud: false, moms_ombud: false, recognized: false })
+  })
+
+  it('a deep link pre-selects skol and momsdeklaration_ombud without asking /roller first', async () => {
+    mockSkvRequestWithAuth.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ djuplank: 'https://sso.test.skatteverket.se/ombud?x=1' }),
+    })
+    const link = await createUtseOmbudDeepLink('165560000000', ACTOR)
+    expect(link.roller).toEqual({ lasombud: 'skol', moms_ombud: 'momsdeklaration_ombud' })
+    expect(mockSkvRequestWithAuth).toHaveBeenCalledTimes(1)
+    expect(mockSkvRequestWithAuth.mock.calls[0][4]).toEqual({ ombudsroller: ['skol', 'momsdeklaration_ombud'] })
+  })
+
+  it('every register call names Content-Type: application/json, GETs included', async () => {
+    mockSkvRequestWithAuth.mockResolvedValue({ ok: true, status: 200, json: async () => [] })
+    await getOmbudRoleDescriptions()
+    await listOmbudGrants({}, 'ombud_register')
+    for (const call of mockSkvRequestWithAuth.mock.calls) {
+      expect(call[1]).toBe('GET')
+      expect(call[5]).toMatchObject({ accept: 'application/json', contentType: 'application/json' })
+    }
   })
 })
