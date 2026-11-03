@@ -14,6 +14,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { peppolReceivingOn } from '@/lib/invoices/peppol-access'
 import { useLocale } from 'next-intl'
 
 interface PeppolRegistrationView {
@@ -99,7 +100,7 @@ export function PeppolReceiveSettings() {
   const localeKey: UiLocale = locale.startsWith('sv') ? 'sv' : 'en'
   const access = state?.access ?? null
   const registration = state?.registration ?? null
-  const isOn = registration?.status === 'registered' || registration?.status === 'pending'
+  const isOn = peppolReceivingOn(registration?.status)
   const transportAvailable = !!state?.transport.available
   const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
   // The company cannot be a Peppol participant at all (personnummer, no org
