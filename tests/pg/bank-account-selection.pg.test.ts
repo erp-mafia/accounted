@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getClient, getPool } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 let owner: Awaited<ReturnType<typeof seedCompany>>
 let client: PoolClient
@@ -581,9 +581,9 @@ describe('ledger changes keep the bank account row', () => {
 
     it.each([
       ['a reconciliation attachment', 'reconciliation-attachment'],
-      ['invoice payee details', 'invoice-configuration'],
+      ['invoice payee details and the keeper has its own', 'invoice-configuration'],
     ])('refuses the move and names the account when its own row has %s', async (_label, dependency) => {
-      await seededRow()
+      const seeded = await seededRow()
       const own = await onOwnLedger()
       if (dependency === 'reconciliation-attachment') {
         await client.query(`INSERT INTO account_reconciliation_attachments(id,company_id,account_key,through_date,uploaded_by,
@@ -591,7 +591,9 @@ describe('ledger changes keep the bank account row', () => {
           VALUES($1::uuid,$2,$3,'2026-09-30',$4,'statement.pdf','application/pdf',0,'pg-crm-1021',$1::uuid::text,repeat('a',64))`,
         [randomUUID(), owner.companyId, `bank:${own.id}`, owner.userId])
       } else {
+        // Two sets of payee details would have to be merged: that stays a person's call.
         await client.query("UPDATE cash_accounts SET bankgiro='123-4567' WHERE id=$1", [own.id])
+        await client.query("UPDATE cash_accounts SET bankgiro='765-4321' WHERE id=$1", [seeded])
       }
 
       const refused = await refusal(move('1930'), chartsFor('1930', b.ledger_account))
@@ -600,6 +602,83 @@ describe('ledger changes keep the bank account row', () => {
         ledger_account: '1930', dependencies: [dependency],
         cash_account: { id: own.id, ledger_account: '1931', iban_last4: '0041', currency: 'SEK', connection_live: true },
       } })
+    })
+
+    // crm#1445: connecting the bank made the account's own row the invoice
+    // payee (the account's details and the SEK default) while its history was
+    // on the keeper. Those details describe the account, so they move with it.
+    describe('the payee details of the account move with it (crm#1445)', () => {
+      async function payeeOn(cashAccountId: string) {
+        await client.query(`UPDATE cash_accounts SET invoice_payee=true, payee_iban=$2, bank_name='Testbanken',
+          clearing_number='1234', account_number='5678901', bic='TESTSESS' WHERE id=$1`, [cashAccountId, accounts[0].iban])
+        await client.query("INSERT INTO invoice_payee_defaults(company_id, currency, cash_account_id) VALUES ($1, 'SEK', $2)",
+          [owner.companyId, cashAccountId])
+      }
+      async function payeeOf(cashAccountId: string) {
+        return (await client.query(`SELECT invoice_payee, payee_iban, bank_name, clearing_number, account_number, bic
+          FROM cash_accounts WHERE id=$1`, [cashAccountId])).rows[0]
+      }
+      async function defaults() {
+        return (await client.query('SELECT currency, cash_account_id FROM invoice_payee_defaults WHERE company_id=$1',
+          [owner.companyId])).rows
+      }
+      const carried = { invoice_payee: true, payee_iban: accounts[0].iban, bank_name: 'Testbanken',
+        clearing_number: '1234', account_number: '5678901', bic: 'TESTSESS' }
+      const cleared = { invoice_payee: false, payee_iban: null, bank_name: null,
+        clearing_number: null, account_number: null, bic: null }
+
+      it('carries the payee details and the default onto the keeper and retires the row', async () => {
+        const seeded = await seededRow()
+        const own = await onOwnLedger()
+        await payeeOn(own.id)
+        // A feed copy of a row the keeper already holds, ignored before the move.
+        const copy = await transactionOn(own.id)
+        await client.query('UPDATE transactions SET is_ignored = true WHERE id = $1', [copy])
+
+        const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+        expect(result.mirrors[0]).toEqual({ cashAccountId: seeded, moved: 1,
+          retired: [{ id: own.id, ledger_account: '1931', outcome: 'deleted', moved: 1 }] })
+        expect(await payeeOf(seeded)).toEqual(carried)
+        expect(await defaults()).toEqual([{ currency: 'SEK', cash_account_id: seeded }])
+        expect(await transactionsOf(seeded)).toEqual([copy])
+      })
+
+      it('leaves a row kept for its booked history without the payee details', async () => {
+        const seeded = await seededRow()
+        const own = await onOwnLedger()
+        await payeeOn(own.id)
+        await transactionOn(own.id, voucherId)
+
+        const result = await save((await snapshot()).token, move('1930'), chartsFor('1930', b.ledger_account))
+
+        expect(result.mirrors[0]).toMatchObject({ cashAccountId: seeded,
+          retired: [{ id: own.id, outcome: 'demoted-to-manual' }] })
+        expect(await payeeOf(seeded)).toEqual(carried)
+        expect(await payeeOf(own.id)).toEqual(cleared)
+        expect(await defaults()).toEqual([{ currency: 'SEK', cash_account_id: seeded }])
+      })
+
+      it('still refuses a member, who may not change where invoices are paid', async () => {
+        await seededRow()
+        const own = await onOwnLedger()
+        await payeeOn(own.id)
+        const memberId = await insertAuthUser()
+        await insertCompanyMember({ companyId: owner.companyId, userId: memberId, role: 'member' })
+        const before = await state()
+        const token = (await snapshot()).token
+
+        await client.query('SAVEPOINT member_move')
+        await asRole('authenticated', memberId)
+        const error = await save(token, move('1930'), chartsFor('1930', b.ledger_account), client, memberId)
+          .then(() => null, (e: { code: string; message: string; detail?: string }) => e)
+        await client.query('ROLLBACK TO SAVEPOINT member_move')
+
+        expect(error).toMatchObject({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES' })
+        expect(JSON.parse(error?.detail ?? '{}')).toMatchObject({
+          dependencies: ['invoice-configuration', 'invoice-default'], cash_account: { id: own.id } })
+        expect(await state()).toEqual(before)
+      })
     })
 
     it('names the account and its bank when another live connection syncs the same account onto the ledger', async () => {
