@@ -31,6 +31,10 @@ function fakeService(tables: Record<string, Row[]>) {
         filters.push((row) => (row[column] ?? null) === value)
         return builder
       },
+      neq: (column: string, value: unknown) => {
+        filters.push((row) => row[column] !== value)
+        return builder
+      },
       order: () => builder,
       range: () => builder,
       upsert: (rows: Row[]) => {
@@ -260,6 +264,59 @@ describe('closeUsagePeriod', () => {
       expect.objectContaining({ kind: 'bank_payment', status: 'failed', error: 'rate_limited', stripe_invoice_item_id: 'ii_1' }),
       expect.objectContaining({ kind: 'peppol_send', status: 'failed', error: 'rate_limited', stripe_invoice_item_id: null }),
     ])
+  })
+
+  describe('a byrå client covered by its byrå\'s agreement', () => {
+    const byraTables = (extra: Record<string, Row[]> = {}): Record<string, Row[]> => ({
+      companies: [{ id: 'c2', team_id: 't1' }],
+      teams: [{ id: 't1', name: 'Byrån AB', kind: 'byra' }],
+      capability_grants: [{ team_id: 't1', source: 'manual', capability_key: 'bookkeeping', expires_at: null }],
+      ...extra,
+    })
+    const accountsOpen = { company_id: 'c2', kind: 'bank_account', unit_price_ore: 2000, included: 2, accepted_by: 'u1', accepted_at: '2026-09-12T08:00:00Z', revoked_at: null }
+    const billed = new Set<UsageKind>(['bank_account'])
+
+    it('writes its open lines as manual, for the byrå\'s invoice, and makes no Stripe line', async () => {
+      counts({ bank_account: { c2: 4 } })
+      const { service, upserts } = fakeService(byraTables({ usage_consents: [accountsOpen] }))
+      const s = fakeStripe()
+
+      const result = await closeUsagePeriod(service, PERIOD, { stripe: s.stripe, billed, log })
+
+      expect(s.invoiceItemsCreate).not.toHaveBeenCalled()
+      expect(upserts).toEqual([
+        expect.objectContaining({ company_id: 'c2', kind: 'bank_account', used: 4, included: 2, billable: 2, amount_ore: 4000, status: 'manual', reason: 'byra_agreement' }),
+      ])
+      expect(result.manual).toEqual([{ companyId: 'c2', teamId: 't1', teamName: 'Byrån AB', lines: [expect.objectContaining({ kind: 'bank_account', billable: 2 })] }])
+      expect(result.billed).toEqual([])
+    })
+
+    it('previews what the byrå has not asked to open', async () => {
+      counts({ bank_account: { c2: 4 } })
+      const { service, upserts } = fakeService(byraTables())
+      const result = await closeUsagePeriod(service, PERIOD, { stripe: fakeStripe().stripe, billed, log })
+      expect(upserts).toEqual([expect.objectContaining({ company_id: 'c2', status: 'preview', reason: 'no_consent' })])
+      expect(result.manual).toEqual([])
+    })
+
+    it('never writes or lists a manual line twice on a rerun', async () => {
+      counts({ bank_account: { c2: 4 } })
+      const { service, upserts } = fakeService(
+        byraTables({ usage_consents: [accountsOpen], usage_statements: [{ id: 's1', company_id: 'c2', kind: 'bank_account', status: 'manual', period: PERIOD }] }),
+      )
+      const result = await closeUsagePeriod(service, PERIOD, { stripe: fakeStripe().stripe, billed, log })
+      expect(upserts).toEqual([])
+      expect(result.manual).toEqual([])
+    })
+
+    it('treats a byrå team whose agreement ended as nobody paying', async () => {
+      counts({ bank_account: { c2: 4 } })
+      const ended = byraTables({ usage_consents: [accountsOpen] })
+      ended.capability_grants = [{ team_id: 't1', source: 'manual', capability_key: 'bookkeeping', expires_at: '2026-01-01T00:00:00Z' }]
+      const { service, upserts } = fakeService(ended)
+      await closeUsagePeriod(service, PERIOD, { stripe: fakeStripe().stripe, billed, log })
+      expect(upserts).toEqual([expect.objectContaining({ status: 'preview', reason: 'not_paying' })])
+    })
   })
 
   it('refuses the current month', async () => {

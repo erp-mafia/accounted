@@ -1,7 +1,7 @@
 /**
  * A company's usage this month (or another), kind by kind: what the billing
- * page's "Användning" tab shows, with whether more than the included amount
- * is on offer and accepted. Read with the service role and an explicit
+ * page's "Användning" tab shows, with whether the kind stops at the included
+ * amount and whether the charge for more is open for the company. Read with the service role and an explicit
  * company filter: the counts must not depend on which tables the viewer's
  * role can read (payslip deliveries are salary data).
  */
@@ -14,19 +14,19 @@ import { billedUsageKinds, USAGE_GATED_KINDS, USAGE_KINDS, usageLine, type Usage
 import { readCompanyPays } from './paying'
 
 export interface CompanyUsageLine extends UsageLine {
-  /** Whether more than the included amount can be accepted: the kind is billed, priced and stops at the limit. */
+  /** Whether the kind stops at the included amount and more can be asked for: it is billed, priced and gated. */
   offered: boolean
-  /** Whether an admin has accepted the charge at today's price. */
+  /** Whether a founder opened the charge for the company at today's price (consent.ts). */
   accepted: boolean
   accepted_at: string | null
-  /** Whether units above the included amount are billed: offered, accepted, and the company pays. */
+  /** Whether units above the included amount are billed: offered, open, and someone pays (paying.ts). */
   billed: boolean
 }
 
 export interface CompanyUsage {
   /** YYYY-MM in Stockholm time. */
   period: string
-  /** Whether the company has a subscription of its own: without one, nothing above the included amount can be accepted (paying.ts). */
+  /** Whether someone pays for the company (its own subscription, or its byrå's agreement): without that, nothing above the included amount can be opened (paying.ts). */
   paying: boolean
   lines: CompanyUsageLine[]
 }

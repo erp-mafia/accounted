@@ -87,7 +87,7 @@ describe('bankPaymentsAllowanceRefusal while extra payments are billed', () => {
     company_settings: { data: { is_sandbox: false } },
   }
 
-  it('stops at what is included until an admin accepts, and says what more would cost', async () => {
+  it('stops at what is included until the charge is open, and says what more would cost and where to ask', async () => {
     process.env.USAGE_BILLING_KINDS = 'bank_payment'
     const db = createTableMockSupabase({ payment_orders: { data: sent(10) }, ...paying })
     const refusal = await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1'], '2026-10')
@@ -96,11 +96,11 @@ describe('bankPaymentsAllowanceRefusal while extra payments are billed', () => {
       code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
       details: { period: '2026-10', used: 10, included: 10, cap: 10, extra_offered: true, billed: false, subscription_required: false, unit_price_ore: 200, remaining: 0, requested: 1 },
       messageSv:
-        'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och faktureras i efterskott. En admin godkänner det under Inställningar, Abonnemang, Användning.',
+        'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st. Begär fler under Inställningar, Kopplingar, Betalningar via banken, så öppnar vi.',
     })
   })
 
-  it('lets payments above what is included through once accepted, up to the safety ceiling', async () => {
+  it('lets payments above what is included through once the charge is open, up to the safety ceiling', async () => {
     process.env.USAGE_BILLING_KINDS = 'bank_payment'
     const db = createTableMockSupabase({ payment_orders: { data: sent(30) }, usage_consents: accepted, ...paying })
     expect(await bankPaymentsAllowanceRefusal(db.supabase as unknown as SupabaseClient, COMPANY, ['n1', 'n2'], '2026-10')).toBeNull()

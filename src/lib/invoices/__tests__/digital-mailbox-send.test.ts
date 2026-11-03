@@ -155,7 +155,7 @@ describe('sendInvoiceToDigitalMailbox', () => {
   })
 
   it('stops at what the month includes before anything is matched, issued or sent, and asks the gate for this provider', async () => {
-    const refusal = { ok: false, code: 'USAGE_CONSENT_REQUIRED', details: { kind: 'kivra_send', included: 0, unit_price_ore: 300 }, messageSv: 'x' }
+    const refusal = { ok: false, code: 'USAGE_LIMIT_REACHED', details: { kind: 'kivra_send', included: 0, unit_price_ore: 300 }, messageSv: 'x' }
     usageGateRefusal.mockResolvedValue(refusal)
     expect(await sendInvoiceToDigitalMailbox(ctx(), 'inv-1', 'kivra')).toBe(refusal)
     expect(usageGateRefusal).toHaveBeenCalledWith(service, 'company-1', 'kivra_send')

@@ -426,7 +426,7 @@ describe('createSigningRequest', () => {
   })
 
   it('stops at the signings the month includes before anything is stored or mailed', async () => {
-    const refusal = { ok: false, code: 'USAGE_CONSENT_REQUIRED', details: { kind: 'signing', included: 3, unit_price_ore: 1000 }, messageSv: 'x' }
+    const refusal = { ok: false, code: 'USAGE_LIMIT_REACHED', details: { kind: 'signing', included: 3, unit_price_ore: 1000 }, messageSv: 'x' }
     usageGate.mockResolvedValue(refusal)
     expect(await createSigningRequest(ctx, input())).toBe(refusal)
     expect(usageGate).toHaveBeenCalledWith(mock.supabase, COMPANY, 'signing')
@@ -435,7 +435,7 @@ describe('createSigningRequest', () => {
   })
 
   it('carries the slots of an annual-report request', async () => {
-    usageGate.mockResolvedValue({ ok: false, code: 'USAGE_CONSENT_REQUIRED' })
+    usageGate.mockResolvedValue({ ok: false, code: 'USAGE_LIMIT_REACHED' })
     const result = await createSigningRequest(
       ctx,
       input({ annualReportVersionId: VERSION, signers: [{ name: 'Anna', annualReportSignatureId: 'slot-1' }, { name: 'Erik', annualReportSignatureId: 'slot-2' }] }),

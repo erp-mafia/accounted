@@ -1,13 +1,17 @@
 /**
- * A company's acceptance that use above what a month includes costs money
+ * The charge for use above what a month includes, open for one company
  * (usage_consents). When a company reaches the included amount of a priced
- * kind, the paid action stops until a person with the admin role accepts
- * the unit price; the acceptance holds, month after month, until someone
- * turns it off. Nothing above the included amount is billed without it.
+ * kind, the paid action stops; the company asks for more (requests.ts) and a
+ * founder opens the charge by writing the company's row at today's price and
+ * included amount. It holds, month after month, until a founder closes it
+ * (revoked_at). Nothing above the included amount is billed without it.
  *
- * An acceptance covers the price it was given at or lower: a price raised
- * since needs a new acceptance. Agents never accept: the route is a session
- * route for admins only.
+ *   insert into usage_consents (company_id, kind, unit_price_ore, included, accepted_by)
+ *   values ('<company>', '<kind>', <price in öre>, <included>, '<founder user id>');
+ *
+ * An open row covers the price it was given at or lower: a price raised
+ * since needs a new row. No route writes it: neither the company nor an
+ * agent opens a charge itself.
  *
  * Imports only the registry, so the payments cap (lib/payments/usage.ts) can
  * read it without a cycle.
@@ -63,39 +67,4 @@ export async function readOpenConsentsByCompany(db: SupabaseClient, companyIds: 
 export function consentCovers(consent: UsageConsent | undefined, kind: UsageKind): boolean {
   const price = USAGE_PRICES[kind].unitPriceOre
   return !!consent && price !== null && price > 0 && consent.unit_price_ore >= price
-}
-
-/**
- * Record an admin's acceptance at today's price and included amount. An open
- * acceptance at the same price is kept as it is; one at a lower price is
- * closed and replaced. The caller has checked that the kind is offered.
- */
-export async function acceptUsageCharges(
-  service: SupabaseClient,
-  input: { companyId: string; kind: UsageKind; userId: string; included: number },
-): Promise<UsageConsent> {
-  const price = USAGE_PRICES[input.kind].unitPriceOre
-  if (price === null || price <= 0) throw new Error(`usage kind ${input.kind} has no price to accept`)
-  const open = (await readOpenConsents(service, input.companyId)).get(input.kind)
-  if (consentCovers(open, input.kind)) return open!
-  if (open) await revokeUsageCharges(service, { companyId: input.companyId, kind: input.kind, userId: input.userId })
-
-  const { data, error } = await service
-    .from('usage_consents')
-    .insert({ company_id: input.companyId, kind: input.kind, unit_price_ore: price, included: input.included, accepted_by: input.userId })
-    .select(CONSENT_COLUMNS)
-    .single()
-  if (error) throw new Error(`usage_consents write failed: ${error.message}`)
-  return data as UsageConsent
-}
-
-/** Turn the charge off: the kind stops at the included amount again from the next action. */
-export async function revokeUsageCharges(service: SupabaseClient, input: { companyId: string; kind: UsageKind; userId: string }): Promise<void> {
-  const { error } = await service
-    .from('usage_consents')
-    .update({ revoked_at: new Date().toISOString(), revoked_by: input.userId })
-    .eq('company_id', input.companyId)
-    .eq('kind', input.kind)
-    .is('revoked_at', null)
-  if (error) throw new Error(`usage_consents write failed: ${error.message}`)
 }

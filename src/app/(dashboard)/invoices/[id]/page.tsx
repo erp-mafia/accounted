@@ -148,7 +148,7 @@ import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import type { StatusChip } from '@/lib/status-display'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
-import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
+import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
 import type { UsageKind } from '@/lib/usage/kinds'
 import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import {
@@ -402,9 +402,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showResendDialog, setShowResendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [isSendingPeppol, setIsSendingPeppol] = useState(false)
-  // A send refused at the month's included e-invoices: the charge to accept before sending again.
-  // A send stopped at what the month includes: the charge to accept, and the send to retry once it is.
-  const [usageCharge, setUsageCharge] = useState<{ kind: UsageKind; included: number; unitPriceOre: number; retry: () => void } | null>(null)
+  // A send stopped at what the month includes: the service to ask for more of.
+  const [usageCharge, setUsageCharge] = useState<{ kind: UsageKind; included: number; unitPriceOre: number } | null>(null)
   const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
   // A file uploading into the Peppol dialog's Bilagor: the send waits (crm#1545).
   const [peppolAttachmentsBusy, setPeppolAttachmentsBusy] = useState(false)
@@ -1461,12 +1460,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data?: { issued?: boolean; journal_entry_id?: string | null }
         error?: { code?: string; details?: { included?: number; unit_price_ore?: number } }
       } | null
-      if (body?.error?.code === 'USAGE_CONSENT_REQUIRED') {
+      if (body?.error?.code === 'USAGE_LIMIT_REACHED') {
         setUsageCharge({
           kind: `${provider}_send`,
           included: body.error.details?.included ?? 0,
           unitPriceOre: body.error.details?.unit_price_ore ?? 0,
-          retry: () => void sendToMailbox(provider),
         })
       } else if (!response.ok) {
         toast({
@@ -1512,13 +1510,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data?: { already_submitted?: boolean; issuance?: { ok: boolean } | null }
         error?: { code?: string; message?: string; message_en?: string; details?: { included?: number; unit_price_ore?: number } }
       } | null
-      if (body?.error?.code === 'USAGE_CONSENT_REQUIRED') {
+      if (body?.error?.code === 'USAGE_LIMIT_REACHED') {
         setShowPeppolSendDialog(false)
         setUsageCharge({
           kind: 'peppol_send',
           included: body.error.details?.included ?? 0,
           unitPriceOre: body.error.details?.unit_price_ore ?? 0,
-          retry: () => void sendViaPeppol(),
         })
         return
       }
@@ -3568,18 +3565,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Peppol send confirmation (convention 10: confirm up front). */}
       {usageCharge && (
-        <UsageConsentDialog
+        <UsageLimitDialog
           kind={usageCharge.kind}
           included={usageCharge.included}
           unitPriceOre={usageCharge.unitPriceOre}
           open
           onOpenChange={(open) => {
             if (!open) setUsageCharge(null)
-          }}
-          onAccepted={() => {
-            const retry = usageCharge.retry
-            setUsageCharge(null)
-            retry()
           }}
         />
       )}

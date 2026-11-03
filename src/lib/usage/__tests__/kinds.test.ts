@@ -66,7 +66,7 @@ describe('billedUsageKinds', () => {
 
   it('takes every priced kind for *', () => {
     const all = billedUsageKinds({ USAGE_BILLING_KINDS: '*' })
-    expect(all).toEqual(new Set(['bank_payment', 'peppol_send', 'kivra_send', 'signing']))
+    expect(all).toEqual(new Set(['bank_payment', 'peppol_send', 'kivra_send', 'signing', 'bank_account']))
     for (const kind of all) expect(isPricedKind(kind)).toBe(true)
   })
 })

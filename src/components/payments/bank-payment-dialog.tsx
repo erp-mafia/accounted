@@ -112,14 +112,7 @@ export function useBankPaymentDialog(
   // Packs bought from the allowance line raise the cap now: the counter and
   // the over-the-cap gate follow without a second read.
   const raiseIncluded = useCallback((included: number) => setUsage((current) => withIncludedPayments(current, included)), [])
-  // An admin accepted the charge above what is included: the cap moved on the server, so read it again.
-  const refreshUsage = useCallback(() => {
-    fetchBankPaymentsUsage().then(setUsage, () => {
-      // Without the counter the dialog stands; the server decides at signing.
-    })
-  }, [])
-
-  return { availability, usage, raiseIncluded, refreshUsage, accountId, setAccountId, payableAccounts, account, primaryAccount, unsupportedBank, readiness, verificationLine, fail }
+  return { availability, usage, raiseIncluded, accountId, setAccountId, payableAccounts, account, primaryAccount, unsupportedBank, readiness, verificationLine, fail }
 }
 
 /**

@@ -116,7 +116,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),
   'POST /api/billing/payment-packs': uiOnly('buying bank payment packs on the Stripe subscription: the owner\'s card is charged at once'),
-  'PUT /api/billing/usage/consent': uiOnly('accepting that use above what is included costs money: an admin decides, an agent never accepts a cost'),
+  'POST /api/billing/usage/requests': uiOnly('asking Accounted for more of a priced service: a person asks, the founders open the charge by hand'),
 
   // ── Credentials, OAuth, membership (privilege) ─────────────────────
   'POST /api/settings/api-keys': uiOnly(PRIVILEGE),

@@ -34,7 +34,6 @@ import { useFormat } from '@/lib/hooks/use-format'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { NEEDS_LINK_STATES } from '@/lib/payments/orders/verification-state'
 import { formatCurrency } from '@/lib/utils'
-import { UsageConsentDialog } from '@/components/settings/UsageConsentDialog'
 
 /**
  * Kopplingar → Betalningar via banken: whether the payment provider has
@@ -58,7 +57,6 @@ export function BankPaymentsSettingsContent() {
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [requesting, setRequesting] = useState(false)
-  const [accepting, setAccepting] = useState(false)
   const [buying, setBuying] = useState(false)
   const { formatDateLong } = useFormat()
   // The company's packs and whether this person may buy more. Without them
@@ -147,12 +145,12 @@ export function BankPaymentsSettingsContent() {
   // The cap is hard: at it, no bank payment goes out this month until it is raised.
   // While extra payments are billed it is the safety ceiling, not what is included.
   const capReached = usage !== null && usage.payments_sent >= (usage.cap_payments ?? usage.included_payments)
-  // More than what is included on offer and not yet accepted: the way on is to accept the charge.
-  const acceptable = usage?.extra_offered === true && !usage.billed_above_included
+  // More than what is included on offer and not open yet: the way on is to ask for it.
+  const offered = usage?.extra_offered === true && !usage.billed_above_included
   // An owner where packs are sold buys more; everyone else asks for more.
-  const canBuy = packs?.can_buy === true
-  const moreLabel = acceptable ? t('accept_charge') : canBuy ? t('buy_more') : t('request_more')
-  const askOrBuy = () => (acceptable ? setAccepting(true) : canBuy ? setBuying(true) : setRequesting(true))
+  const canBuy = !offered && packs?.can_buy === true
+  const moreLabel = canBuy ? t('buy_more') : t('request_more')
+  const askOrBuy = () => (canBuy ? setBuying(true) : setRequesting(true))
   const checkedAtText = checkedAt
     ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
     : null
@@ -248,20 +246,6 @@ export function BankPaymentsSettingsContent() {
           )}
 
           {requesting && <RequestMorePaymentsDialog included={usage?.included_payments ?? null} onOpenChange={setRequesting} />}
-          {accepting && usage && (
-            <UsageConsentDialog
-              kind="bank_payment"
-              included={usage.included_payments}
-              unitPriceOre={usage.unit_price_ore ?? 0}
-              open={accepting}
-              onOpenChange={setAccepting}
-              onAccepted={() => {
-                fetchBankPaymentsUsage().then(setUsage, () => {
-                  // The row keeps its numbers; the next read shows the new cap.
-                })
-              }}
-            />
-          )}
           {buying && packs?.can_buy && (
             <BuyPaymentPacksDialog
               view={packs}

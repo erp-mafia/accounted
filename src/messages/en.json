@@ -3445,6 +3445,8 @@
     "usage_kind_kivra_send": "Sent to Kivra",
     "usage_kind_billo_send": "Sent to Billo",
     "usage_kind_signing": "Documents signed with BankID",
+    "usage_kind_bank_account": "Connected bank accounts",
+    "usage_kind_ai_document": "Documents read by AI",
     "usage_unit_price": "{price} each",
     "usage_included": "Included",
     "usage_all_included": "All",
@@ -3452,13 +3454,11 @@
     "usage_empty": "Nothing used in {month} yet.",
     "usage_load_failed": "Usage could not be loaded right now.",
     "usage_charges_label": "Above what is included",
-    "usage_charges_help": "When the month's included amount is used up, the service stops until an admin accepts the charge. The acceptance holds until someone turns it off here.",
-    "usage_charge_off": "{included, plural, =0 {Costs {price} each. Stops until you accept.} other {Stops at # a month. Then {price} each if you accept.}}",
-    "usage_charge_on": "{included, plural, =0 {Accepted {date}: {price} each.} other {Accepted {date}: {price} each above # a month.}}",
-    "usage_charge_needs_subscription": "{included, plural, =0 {Costs {price} each and needs a subscription.} other {Stops at # a month. More cost {price} each and need a subscription.}}",
-    "usage_charge_accept": "Accept charge",
-    "usage_charge_turn_off": "Turn off",
-    "usage_charge_off_failed": "The charge could not be turned off"
+    "usage_charges_help": "When what is included is used up, the service stops. Ask for more and we open it; what goes over is then added to the invoice in arrears.",
+    "usage_charge_off": "{included, plural, =0 {Costs {price} each. Ask for it and we open it.} other {Stops at #. More cost {price} each: ask for more and we open it.}}",
+    "usage_charge_on": "{included, plural, =0 {Open since {date}: {price} each.} other {Open since {date}: {price} each above #.}}",
+    "usage_charge_needs_subscription": "{included, plural, =0 {Costs {price} each and needs a subscription.} other {Stops at #. More cost {price} each and need a subscription.}}",
+    "usage_charge_request": "Ask for more"
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Default \"Our reference\"",
@@ -16520,8 +16520,7 @@
     "refused_cap_none_left": "You have sent {used} bank payments in {month}, and the limit is {cap} a month.",
     "billed_within": "{left} of {included} included bank payments left in {month}, then {price} each.",
     "billed_extra": "{extra, plural, one {# payment goes} other {# payments go}} above what {month} includes and {extra, plural, one {costs} other {cost}} {price} each, billed in arrears.",
-    "accept_charge": "Accept charge",
-    "offered_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each, added to the subscription's invoice.",
+    "offered_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each: ask for more and we open it.",
     "subscription_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and need a subscription.",
     "start_subscription": "Start a subscription"
   },
@@ -16621,8 +16620,7 @@
     "buy_more": "Buy more payments",
     "usage_of_with_packs": "{used} of {included} ({base} included + {bought} bought)",
     "packs_scheduled": "The bought payments go down to {packs, plural, one {# pack} other {# packs}} on {date}.",
-    "usage_of_billed": "{used} sent, {included} included, then {price} each",
-    "accept_charge": "Accept charge"
+    "usage_of_billed": "{used} sent, {included} included, then {price} each"
   },
   "bank_ledger_suggestion": {
     "move_transactions": "Bank account {account} is booked on {from}, but {hits, plural, one {# of its bank transactions is already booked} other {# of its bank transactions are already booked}} on {to}. Switch to {toNumber} and the transactions are linked to their vouchers.",
@@ -19933,14 +19931,14 @@
       "description": "Change company details, packages and settings that apply to the whole company."
     }
   },
-  "usage_consent": {
-    "title": "{included, plural, =0 {{service} costs {price} each} other {{service}: the # included this month are used up}}",
-    "body": "{included, plural, =0 {If you accept, each one costs {price} excl. VAT.} other {If you accept, each one more costs {price} excl. VAT.}} It is added to the subscription's invoice in arrears and holds until someone turns it off under Settings, Billing, Usage.",
-    "admin_only": "Only an admin of the company can accept the charge. Ask an admin to do it.",
-    "accept": "Accept the charge",
+  "usage_limit": {
+    "title": "{included, plural, =0 {{service} costs {price} each} other {{service}: the # included are used up}}",
+    "body": "{included, plural, =0 {Each one costs {price} excl. VAT.} other {Each one more costs {price} excl. VAT.}} Send a request and we open it for more. It is then added to the subscription's invoice in arrears.",
+    "message_label": "Message (optional)",
+    "message_placeholder": "Roughly how many do you need?",
+    "send": "Ask for more",
     "cancel": "Cancel",
-    "close": "Close",
-    "accepted": "The charge for {service} is accepted",
-    "failed": "The charge could not be accepted"
+    "sent": "The request for {service} is sent. We will be in touch.",
+    "failed": "The request could not be sent"
   }
 }

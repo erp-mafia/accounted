@@ -11,6 +11,10 @@
  *   billo_send    the same for Billo
  *   signing       completed signing requests, by completed_at; an annual
  *                 report's signing is part of the plan and not counted
+ *   bank_account  live bank accounts now, not events (bank-accounts.ts)
+ *   ai_document   inbox documents our AI read, by created_at: a document
+ *                 the customer's own agent read (bring your own extraction),
+ *                 or that was not read at all, has extraction_skipped
  *
  * A failed or refused send is never counted: its row carries another status.
  */
@@ -18,6 +22,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { usagePeriodBounds } from '@/lib/payments/usage'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { countLiveBankAccountsByCompany, readLiveBankAccounts } from './bank-accounts'
 import type { UsageKind } from './kinds'
 
 export interface UsageSource {
@@ -41,6 +46,8 @@ export const USAGE_SOURCES: Readonly<Record<UsageKind, readonly UsageSource[]>> 
     { table: 'salary_payslip_deliveries', at: 'created_at', eq: { provider: 'billo', status: 'sent' } },
   ],
   signing: [{ table: 'signing_requests', at: 'completed_at', eq: { status: 'completed' }, isNull: ['annual_report_version_id'] }],
+  bank_account: [],
+  ai_document: [{ table: 'invoice_inbox_items', at: 'created_at', eq: { extraction_skipped: 'false' } }],
 })
 
 /**
@@ -67,13 +74,14 @@ function applySource<Row>(query: UsageQuery<Row>, source: UsageSource, period: s
   return q
 }
 
-/** One company's units of a kind in a month. Throws on a failed read. */
+/** One company's units of a kind in a month (live bank accounts: now). Throws on a failed read. */
 export async function countCompanyUsage(
   supabase: SupabaseClient,
   companyId: string,
   kind: UsageKind,
   period: string,
 ): Promise<number> {
+  if (kind === 'bank_account') return (await readLiveBankAccounts(supabase, companyId)).size
   let total = 0
   for (const source of USAGE_SOURCES[kind]) {
     const query = supabase.from(source.table).select('id', { count: 'exact', head: true }) as unknown as UsageQuery<never>
@@ -84,8 +92,9 @@ export async function countCompanyUsage(
   return total
 }
 
-/** Every company's units of a kind in a month, for the monthly statements. Companies with none are absent. */
+/** Every company's units of a kind in a month (live bank accounts: now), for the monthly statements. Companies with none are absent. */
 export async function countUsageByCompany(service: SupabaseClient, kind: UsageKind, period: string): Promise<Map<string, number>> {
+  if (kind === 'bank_account') return countLiveBankAccountsByCompany(service)
   const counts = new Map<string, number>()
   for (const source of USAGE_SOURCES[kind]) {
     const rows = await fetchAllRows<{ id: string; company_id: string }>(({ from, to }) => {

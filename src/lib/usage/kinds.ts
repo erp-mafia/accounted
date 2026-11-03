@@ -15,7 +15,7 @@
  * This file imports nothing, so any module may read it.
  */
 
-export const USAGE_KINDS = ['bank_payment', 'peppol_send', 'kivra_send', 'billo_send', 'signing'] as const
+export const USAGE_KINDS = ['bank_payment', 'peppol_send', 'kivra_send', 'billo_send', 'signing', 'bank_account', 'ai_document'] as const
 
 export type UsageKind = (typeof USAGE_KINDS)[number]
 
@@ -27,10 +27,12 @@ export interface UsagePrice {
 }
 
 /**
- * Bank payments and Peppol sends carry the prices published on
- * accounted.se/priser (2026-10-30); Kivra sends and signed documents the
- * prices set 2026-11-02. Billo is included. An annual report's signing is
- * not counted (counters.ts), so it is always included.
+ * Bank payments, Peppol sends and live bank accounts carry the prices
+ * published on accounted.se/priser (2026-10-30); Kivra sends and signed
+ * documents the prices set 2026-11-02. Billo is included. An annual report's
+ * signing is not counted (counters.ts), so it is always included. Documents
+ * our AI read are counted against the published 25 a month but not billed
+ * (founder decision 2026-11-02): no price here until that changes.
  *
  * The bank payments figure is BANK_PAYMENTS_INCLUDED_PER_MONTH: written out
  * here because lib/payments/usage.ts reads this file, and a test pins the two
@@ -42,6 +44,8 @@ export const USAGE_PRICES: Readonly<Record<UsageKind, UsagePrice>> = Object.free
   kivra_send: { includedPerMonth: 0, unitPriceOre: 300 },
   billo_send: { includedPerMonth: null, unitPriceOre: 0 },
   signing: { includedPerMonth: 3, unitPriceOre: 1000 },
+  bank_account: { includedPerMonth: 2, unitPriceOre: 2000 },
+  ai_document: { includedPerMonth: 25, unitPriceOre: null },
 })
 
 /** What a kind is called on the invoice line (Swedish: the invoice is). */
@@ -51,6 +55,8 @@ export const USAGE_INVOICE_LABELS: Readonly<Record<UsageKind, string>> = Object.
   kivra_send: 'Utskick till Kivra',
   billo_send: 'Utskick till Billo',
   signing: 'Signerade dokument med BankID',
+  bank_account: 'Kopplade bankkonton',
+  ai_document: 'Underlag lästa med AI',
 })
 
 /** The units in a Swedish sentence ("Månadens 10 bankbetalningar som ingår är använda"). */
@@ -60,16 +66,19 @@ export const USAGE_UNITS_SV: Readonly<Record<UsageKind, string>> = Object.freeze
   kivra_send: 'utskick till Kivra',
   billo_send: 'utskick till Billo',
   signing: 'signeringar',
+  bank_account: 'kopplade bankkonton',
+  ai_document: 'underlag lästa med AI',
 })
 
 /**
- * The kinds whose paid action stops at the included amount until an admin
- * accepts the charge (lib/usage/gate.ts; bank payments in
- * lib/payments/allowance.ts). A kind gets a price only once its action is
- * here: a test fails on a priced kind that is not, so nothing is ever
- * charged that nobody was asked about.
+ * The kinds whose paid action stops at the included amount until the
+ * company asks for more and a founder opens the charge for it
+ * (lib/usage/gate.ts and requests.ts; bank payments in
+ * lib/payments/allowance.ts; bank accounts where accounts are switched on).
+ * A kind gets a price only once its action is here: a test fails on a priced
+ * kind that is not, so nothing is ever charged that nobody asked for.
  */
-export const USAGE_GATED_KINDS: ReadonlySet<UsageKind> = new Set<UsageKind>(['bank_payment', 'peppol_send', 'kivra_send', 'signing'])
+export const USAGE_GATED_KINDS: ReadonlySet<UsageKind> = new Set<UsageKind>(['bank_payment', 'peppol_send', 'kivra_send', 'signing', 'bank_account'])
 
 export function isUsageKind(value: unknown): value is UsageKind {
   return typeof value === 'string' && (USAGE_KINDS as readonly string[]).includes(value)
@@ -121,6 +130,14 @@ export function usageLine(kind: UsageKind, used: number, includedOverride?: numb
   const billable = unit ? Math.max(0, used - (included ?? 0)) : 0
   return { kind, used, included, billable, unit_price_ore: unit, amount_ore: billable * (unit ?? 0) }
 }
+
+/**
+ * Kinds counted as a state at the moment of reading (live bank accounts),
+ * not as events in the month: the current month shows today's count, and
+ * the monthly close bills what is live when it runs, the first of the next
+ * month.
+ */
+export const USAGE_GAUGE_KINDS: ReadonlySet<UsageKind> = new Set<UsageKind>(['bank_account'])
 
 /** "2,00 kr" for 200 öre: the invoice line's unit price, without a float. */
 export function formatOre(ore: number): string {

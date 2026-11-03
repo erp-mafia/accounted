@@ -282,10 +282,11 @@ const RETAINED = new Set([
   'digital_mailbox_connections.receive_connected_by',
   'digital_mailbox_connections.send_activated_by',
   'digital_mailbox_dispatches.sent_by',
-  // Priced usage: who accepted that use above what is included costs money,
-  // and who turned it off. The company's record of what it agreed to pay for.
+  // Priced usage: who asked for use above what is included, who opened its
+  // charge and who turned it off. The company's record of what it pays for.
   'usage_consents.accepted_by',
   'usage_consents.revoked_by',
+  'usage_requests.requested_by',
   // Autogiro: who wrote each file for Bankgirot or read each report. The
   // company's record of which debits it asked its bank for, and on whose word.
   'autogiro_files.created_by',

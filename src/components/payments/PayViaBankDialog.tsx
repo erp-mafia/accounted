@@ -110,7 +110,7 @@ function skippedFromError(error: unknown): Skipped | null {
 
 export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoiceLabelById, onDone }: PayViaBankDialogProps) {
   const t = useTranslations('bank_payments')
-  const { availability, usage, raiseIncluded, refreshUsage, accountId, setAccountId, payableAccounts, account, unsupportedBank, verificationLine, fail } =
+  const { availability, usage, raiseIncluded, accountId, setAccountId, payableAccounts, account, unsupportedBank, verificationLine, fail } =
     useBankPaymentDialog(open)
 
   const [phase, setPhase] = useState<Phase>('preview')
@@ -464,7 +464,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                 <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
               )}
               {lines.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>}
-              {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest onIncluded={raiseIncluded} onAccepted={refreshUsage} />}
+              {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest onIncluded={raiseIncluded} />}
             </BankPaymentAccountGate>
             <DialogFooter>
               {closeButton}

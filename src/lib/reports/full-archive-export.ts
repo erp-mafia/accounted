@@ -1613,7 +1613,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_members: 'membership state, meaningless outside the platform',
   company_subscriptions: 'billing state',
   usage_statements: "billing state: Accounted's monthly usage statements and invoice ids, not räkenskapsinformation (the usage itself is in the exported payment orders, deliveries and signings)",
-  usage_consents: 'billing state: who accepted the charge for use above what the plan includes, and at what price; not räkenskapsinformation',
+  usage_consents: 'billing state: the charge for use above what the plan includes, opened for the company, by whom and at what price; not räkenskapsinformation',
+  usage_requests: 'support requests for more of a priced service than the month includes; platform correspondence, not räkenskapsinformation',
   deadlines: 'regenerable operational calendar state',
   dimension_retag_log: 'operation log',
   // Page text Arkiv reads out of each archived document (text layer or model

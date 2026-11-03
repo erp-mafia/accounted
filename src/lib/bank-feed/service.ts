@@ -61,6 +61,7 @@ import { resolvePsd2LedgerAccount } from '@/lib/cash-accounts/service'
 import { normalizeIban, physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { endOfDayIsoStockholm } from '@/lib/dates/iso'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import { eventBus } from '@/lib/events/bus'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SigningChallenge } from '@/lib/payments/initiation/provider'
@@ -283,6 +284,12 @@ function providerFailure(error: unknown, log?: Pick<OperationContext['log'], 'wa
 
 /** A database refusal raised by name (the finalize, selection and supersede RPCs) keeps that name as its code. */
 function databaseFailure(error: unknown): Failure {
+  // A refusal written for the reader (the bank accounts the plan includes, lib/usage/gate.ts) keeps its sentence.
+  const readable = userFacingCode(error)
+  if (readable && hasErrorEntry(readable)) {
+    const details = (error as { details?: unknown }).details
+    return { ok: false, code: readable, messageSv: (error as Error).message, ...(details && typeof details === 'object' ? { details: details as Record<string, unknown> } : {}) }
+  }
   const message = (error as { message?: unknown } | null)?.message
   if (typeof message === 'string' && hasErrorEntry(message)) return { ok: false, code: message }
   const code = (error as { code?: unknown } | null)?.code

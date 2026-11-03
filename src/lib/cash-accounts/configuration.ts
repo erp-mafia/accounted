@@ -3,6 +3,9 @@ import { buildSIEAccountRows } from '@/lib/import/account-sync'
 import { bankLedgerName } from '@/lib/cash-accounts/ledger-slots'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { userFacing } from '@/lib/errors/user-facing'
+import { createServiceClient } from '@/lib/supabase/server'
+import { bankAccountsSelectionRefusal } from '@/lib/usage/gate'
+import { billedUsageKinds } from '@/lib/usage/kinds'
 import { namedSelectionRefusal, parseSelectionRefusalDetail } from '@/lib/cash-accounts/selection-refusal'
 
 export interface BankConfigurationSnapshot {
@@ -59,10 +62,34 @@ export interface InitialSyncWindow {
  * `initialSync` is the window of the first import, saved on activation so the
  * cron takes it when the inline import is deferred or fails.
  */
+/**
+ * The stop at the live bank accounts the plan includes (lib/usage/gate.ts),
+ * before the selection is saved: the connection's accounts with the
+ * selection's choices applied (an account switched on is taken over here, so
+ * another company's claim no longer counts) against the company's other live
+ * accounts. A refusal is a sentence the picker shows. Only while bank
+ * accounts are billed (USAGE_BILLING_KINDS).
+ */
+async function refuseAccountsAboveIncluded(companyId: string, connectionId: string, selections: BankAccountSelection[]): Promise<void> {
+  if (!billedUsageKinds().has('bank_account')) return
+  const service = createServiceClient()
+  const { data, error } = await service.from('bank_connections').select('accounts_data').eq('id', connectionId).eq('company_id', companyId).maybeSingle()
+  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  const chosen = new Map(selections.map((s) => [s.uid, s.enabled]))
+  const stored = (data as { accounts_data: unknown } | null)?.accounts_data
+  const accounts = (Array.isArray(stored) ? stored : []).map((account: { uid?: string; enabled?: boolean | null; claimed_by_company_id?: string | null }) => {
+    const enabled = (account.uid !== undefined ? chosen.get(account.uid) : undefined) ?? account.enabled === true
+    return { ...account, enabled, claimed_by_company_id: enabled ? null : (account.claimed_by_company_id ?? null) }
+  })
+  const refusal = await bankAccountsSelectionRefusal(service, companyId, connectionId, accounts)
+  if (refusal) throw userFacing(Object.assign(new Error(refusal.messageSv ?? ''), { code: refusal.code, details: refusal.details }), refusal.code)
+}
+
 export async function saveBankAccountSelection(
   supabase: SupabaseClient, companyId: string, userId: string, connectionId: string,
   expectedToken: string, selections: BankAccountSelection[], initialSync?: InitialSyncWindow,
 ): Promise<{ status: string; accounts: unknown[]; yielded?: YieldedCashAccount[] }> {
+  await refuseAccountsAboveIncluded(companyId, connectionId, selections)
   const chartAccounts = buildBankChartAccounts(companyId, userId, selections)
   const args = {
     p_company_id: companyId, p_user_id: userId, p_connection_id: connectionId,
