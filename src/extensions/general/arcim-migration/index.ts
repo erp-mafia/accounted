@@ -1,3 +1,4 @@
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { readSIEIntakeFile } from '@/lib/import/sie-intake'
@@ -271,6 +272,16 @@ async function buildBjornLundenActivationUrl(
  * only the error itself holds. Without the override the code would fall
  * through entryFor() to INTERNAL_ERROR and answer 500.
  */
+/** Keep SIE permission failures consistent across preview and year selection. */
+function bokioSiePermissionResponse(error: unknown): NextResponse | null {
+  if (!(error instanceof BokioApiError) || error.statusCode !== 403) return null
+  return errorResponseFromCode('PROVIDER_RESOURCE_FORBIDDEN', moduleLog, {
+    status: 403,
+    messageSv: 'Bokio nekade SIE-exporten. Kontrollera att integrationstoken har behörigheten sie:read och att abonnemanget tillåter API-export. Uppdatera token i anslutningen om du skapar en ny.',
+    messageEn: 'Bokio denied the SIE export. Check that the integration token has the sie:read scope and that your plan allows API export. Update the connection token if you create a new one.',
+  })
+}
+
 function providerFailureResponse(error: unknown, fallbackCode: string): NextResponse {
   const classified = classifyProviderError(error)
   const ctx = {
@@ -1090,6 +1101,8 @@ export const arcimMigrationExtension: Extension = {
                 }
               }
             } catch (err) {
+              const denied = bokioSiePermissionResponse(err)
+              if (denied) return denied
               log.info('SIE export failed:', err instanceof Error ? err.message : String(err))
             }
           }
@@ -1432,6 +1445,8 @@ export const arcimMigrationExtension: Extension = {
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)
+          const denied = bokioSiePermissionResponse(error)
+          if (denied) return denied
           return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
       },

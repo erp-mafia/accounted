@@ -10,6 +10,7 @@
  * Shared by /preview (latest year, for stats) and /sie-data (all years).
  */
 
+import { BokioClient, BokioApiError } from '@/lib/providers/bokio/client'
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import { BrioxClient } from '@/lib/providers/briox/client'
 import { BjornLundenClient } from '@/lib/providers/bjornlunden/client'
@@ -120,6 +121,7 @@ export interface SourceFiscalYear {
 }
 
 // Singleton clients (they hold rate limiters)
+const bokioClient = new BokioClient()
 const fortnoxClient = new FortnoxClient()
 const brioxClient = new BrioxClient()
 const bjornLundenClient = new BjornLundenClient()
@@ -133,7 +135,7 @@ const wintClient = new WintClient()
  * from a provider export and goes through the same parse/validate/import path.
  */
 export function providerSupportsSie(provider: ProviderName): boolean {
-  return provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden' || provider === 'wint'
+  return provider === 'bokio' || provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden' || provider === 'wint'
 }
 
 interface FiscalYearRef {
@@ -194,6 +196,7 @@ export async function fetchProviderSieFiles(
 
   const files: ProviderSieFile[] = []
   const failedYears: { year: number; error: string }[] = []
+  const deniedBokioExports: BokioApiError[] = []
   for (const fy of toFetch) {
     try {
       const rawContent = await fetcher.fetchSie(accessToken, fy)
@@ -203,12 +206,21 @@ export async function fetchProviderSieFiles(
         failedYears.push({ year: fy.year, error: 'Provider returned an empty SIE export' })
       }
     } catch (err) {
+      if (provider === 'bokio' && err instanceof BokioApiError && err.statusCode === 403) {
+        deniedBokioExports.push(err)
+      }
       const reason = err instanceof Error ? err.message : String(err)
       log.warn(`Failed to fetch SIE for ${provider} fiscal year ${fy.year} (id ${fy.id})`, {
         reason,
       })
       failedYears.push({ year: fy.year, error: reason })
     }
+  }
+
+  // A working year listing does not imply permission to download SIE.
+  // Keep partial exports usable, but do not present an all-denied run as empty.
+  if (deniedBokioExports.length > 0 && deniedBokioExports.length === toFetch.length) {
+    throw deniedBokioExports[0]
   }
 
   return { files, availableYears, sourceYears, failedYears, omittedYears }
@@ -224,6 +236,40 @@ function getSieFetcher(
   providerCompanyId: string | undefined,
   selectedYears?: number[],
 ): SieFetcher | null {
+  if (provider === 'bokio') {
+    if (!providerCompanyId) throw new Error('Bokio SIE export requires a company id')
+    const companyId = providerCompanyId
+    return {
+      async listYears(accessToken) {
+        const years: FiscalYearRef[] = []
+        let page = 1
+        let totalPages = 1
+        do {
+          const result = await bokioClient.getPage<{
+            id: string; startDate: string; endDate: string
+          }>(accessToken, companyId, '/fiscal-years', { page, pageSize: 100 })
+          for (const fy of result.items) {
+            years.push({
+              id: fy.id,
+              year: new Date(fy.startDate).getUTCFullYear(),
+              fromDate: fy.startDate,
+              toDate: fy.endDate,
+            })
+          }
+          totalPages = result.totalPages
+          page += 1
+        } while (page <= totalPages)
+        return years
+      },
+      async fetchSie(accessToken, fy) {
+        const { bytes } = await bokioClient.getBytes(
+          accessToken, companyId, `/sie/${fy.id}/download`,
+        )
+        return decodeBuffer(bytes, detectEncoding(bytes))
+      },
+    }
+  }
+
   if (provider === 'fortnox') {
     return {
       async listYears(accessToken) {

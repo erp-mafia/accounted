@@ -71,7 +71,7 @@ type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | '
 const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: true },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
   { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
   { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true },
@@ -589,8 +589,8 @@ function ProviderStep({
   const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
   // A returning customer whose last connect stalled gets it back here. The
-  // retry follows the same gate as the provider list below: Visma and Bokio
-  // stay behind "SIE krävs först", so only the upload is offered for them.
+  // retry follows the same gate as the provider list below: Visma
+  // stays behind "SIE krävs först", so only the upload is offered for it.
   const unfinished = connectionStatus?.unfinishedConnect ?? null
   const unfinishedInfo = unfinished ? ARCIM_PROVIDERS.find(p => p.id === unfinished.provider) : undefined
   const unfinishedCanRetry = !!unfinishedInfo
@@ -609,9 +609,7 @@ function ProviderStep({
           banner. */}
       {showSieRequiredBanner && (
         <AttnLine action={{ label: 'Ladda upp SIE-fil', href: '/import?mode=sie' }}>
-          Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera
-          bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
-          Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
+          {t('ext_arcim_sie_manual_required')}
         </AttnLine>
       )}
 
@@ -3301,8 +3299,8 @@ export default function ArcimMigrationWorkspace({
 
   // Deep-linked provider preselect (onboarding branch question, and the
   // unfinished-connect retry). Only when this mount is not an OAuth return
-  // (that flow owns the wizard state). Visma and Bokio need a completed SIE
-  // import first, so for them the preselect waits for the connection status
+  // (that flow owns the wizard state). Visma needs a completed SIE
+  // import first, so its preselect waits for the connection status
   // and leaves the provider list with its "SIE krävs först" gate in place
   // when that import is missing.
   const preselectedRef = useRef(false)

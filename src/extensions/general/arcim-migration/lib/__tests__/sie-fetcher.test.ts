@@ -85,7 +85,7 @@ describe('providerSupportsSie', () => {
     expect(providerSupportsSie('bjornlunden')).toBe(true)
     expect(providerSupportsSie('wint')).toBe(true)
     expect(providerSupportsSie('visma')).toBe(false)
-    expect(providerSupportsSie('bokio')).toBe(false)
+    expect(providerSupportsSie('bokio')).toBe(true)
   })
 })
 
@@ -104,6 +104,97 @@ describe('fetchProviderSieFiles', () => {
     await expect(fetchProviderSieFiles('visma', 't', undefined)).rejects.toThrow(
       /does not support SIE over API/,
     )
+  })
+
+  describe('bokio', () => {
+    function yearsResponse(page: number) {
+      return jsonResponse({
+        items: [{ id: `fy-${page}`, startDate: `${CY - 2 + page}-07-01`, endDate: `${CY - 1 + page}-06-30` }],
+        currentPage: page, totalPages: 2, totalItems: 2,
+      })
+    }
+
+    it('pages fiscal years and downloads company-scoped exports with decoded Swedish text', async () => {
+      routeFetch(fetchSpy, [
+        { match: '/companies/company-1/fiscal-years?page=1', respond: () => yearsResponse(1) },
+        { match: '/companies/company-1/fiscal-years?page=2', respond: () => yearsResponse(2) },
+        { match: '/companies/company-1/sie/fy-1/download', respond: () => octetResponse(cp437SieBytes('Bokio')) },
+        { match: '/companies/company-1/sie/fy-2/download', respond: () => new Response('#KONTO 1930 "Företagskonto"') },
+      ])
+      const result = await fetchProviderSieFiles('bokio', 'token', 'company-1')
+      expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+      expect(result.files.every((f) => f.rawContent.includes('Företagskonto'))).toBe(true)
+      expect(result.sourceYears[0]).toMatchObject({ fromDate: `${CY - 1}-07-01`, toDate: `${CY}-06-30` })
+      expect(result.failedYears).toEqual([])
+      expect(fetchSpy).toHaveBeenCalledTimes(4)
+      for (const [, init] of fetchSpy.mock.calls) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer token')
+      }
+    })
+
+    it('fetches only the latest selected year for preview', async () => {
+      routeFetch(fetchSpy, [
+        { match: '/fiscal-years?page=1', respond: () => yearsResponse(1) },
+        { match: '/fiscal-years?page=2', respond: () => yearsResponse(2) },
+        { match: '/sie/fy-2/download', respond: () => new Response('#FLAGGA 0') },
+      ])
+      const result = await fetchProviderSieFiles('bokio', 'token', 'company-1', { latestOnly: true })
+      expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+    })
+
+    it.each([401, 404])('reports an HTTP %s export as a failed year', async (status) => {
+      routeFetch(fetchSpy, [
+        { match: '/fiscal-years', respond: () => jsonResponse({ items: [{ id: 'fy', startDate: `${CY}-01-01`, endDate: `${CY}-12-31` }], totalPages: 1, currentPage: 1, totalItems: 1 }) },
+        { match: '/sie/fy/download', respond: () => new Response('Refused', { status }) },
+      ])
+      const result = await fetchProviderSieFiles('bokio', 'token', 'company-1')
+      expect(result.files).toEqual([])
+      expect(result.failedYears).toEqual([{ year: CY, error: expect.stringContaining(String(status)) }])
+    })
+
+    it('propagates all-denied exports instead of returning an empty preview', async () => {
+      routeFetch(fetchSpy, [
+        { match: '/fiscal-years?page=1', respond: () => yearsResponse(1) },
+        { match: '/fiscal-years?page=2', respond: () => yearsResponse(2) },
+        { match: '/sie/', respond: () => new Response('Forbidden', { status: 403 }) },
+      ])
+      await expect(fetchProviderSieFiles('bokio', 'token', 'company-1')).rejects.toMatchObject({ statusCode: 403 })
+    })
+
+    it('keeps successful years when another export is denied', async () => {
+      routeFetch(fetchSpy, [
+        { match: '/fiscal-years?page=1', respond: () => yearsResponse(1) },
+        { match: '/fiscal-years?page=2', respond: () => yearsResponse(2) },
+        { match: '/sie/fy-1/', respond: () => new Response('Forbidden', { status: 403 }) },
+        { match: '/sie/fy-2/', respond: () => new Response('#FLAGGA 0') },
+      ])
+      const result = await fetchProviderSieFiles('bokio', 'token', 'company-1')
+      expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
+      expect(result.failedYears).toEqual([{ year: CY - 1, error: expect.stringContaining('403') }])
+    })
+
+    it('labels January fiscal years consistently west of UTC', async () => {
+      const previousTZ = process.env.TZ
+      process.env.TZ = 'America/Los_Angeles'
+      try {
+        routeFetch(fetchSpy, [
+          { match: '/fiscal-years', respond: () => jsonResponse({ items: [{ id: 'fy', startDate: `${CY}-01-01`, endDate: `${CY}-12-31` }], currentPage: 1, totalPages: 1, totalItems: 1 }) },
+          { match: '/sie/fy/', respond: () => new Response('#FLAGGA 0') },
+        ])
+        const result = await fetchProviderSieFiles('bokio', 'token', 'company-1', { years: [CY] })
+        expect(result.availableYears).toEqual([CY])
+        expect(result.files[0].fiscalYear).toBe(CY)
+      } finally {
+        if (previousTZ === undefined) delete process.env.TZ
+        else process.env.TZ = previousTZ
+      }
+    })
+
+    it('rejects a missing company id before making requests', async () => {
+      await expect(fetchProviderSieFiles('bokio', 'token', undefined)).rejects.toThrow('company id')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
   })
 
   describe('briox', () => {

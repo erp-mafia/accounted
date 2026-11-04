@@ -30,7 +30,7 @@ export type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlund
 export const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: true },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
   { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
   // WINT's "token" is the user's WINT login exchanged once for a JWT pair
