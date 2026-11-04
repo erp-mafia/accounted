@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { pdfAmount } from '@/lib/pdf/number-text'
 
 /**
@@ -21,6 +22,12 @@ export interface SetoffNoteInput {
   /** e.g. "A123" once booked. */
   voucherLabel: string | null
   amount: number
+  /**
+   * The öresavrundning the set-off absorbed on 3740 (SetoffPlan
+   * invoice.oreRounding): > 0 Dr, < 0 Cr, 0 or omitted none. The customer
+   * invoice's line then clears amount + oreRounding.
+   */
+  oreRounding?: number
   invoice: { number: string | null; invoiceDate: string; total: number; remainingBefore: number; remainingAfter: number }
   supplierInvoice: {
     number: string | null
@@ -108,6 +115,10 @@ function netSentence(input: SetoffNoteInput): string {
 }
 
 export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
+  const ore = input.oreRounding ?? 0
+  const receivableCredit = roundOre(input.amount + ore)
+  const debitSum = roundOre(input.amount + Math.max(ore, 0))
+  const creditSum = roundOre(receivableCredit + Math.max(-ore, 0))
   const supplierLabel = supplierInvoiceLabel(input.supplierInvoice)
   return (
     <Document>
@@ -156,7 +167,7 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
           <Text style={styles.colDate}>{input.invoice.invoiceDate}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.total)}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingBefore)}</Text>
-          <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(receivableCredit)}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingAfter)}</Text>
         </View>
         <View style={styles.row} wrap={false}>
@@ -168,6 +179,11 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
           <Text style={styles.colAmount}>{pdfAmount(input.supplierInvoice.remainingAfter)}</Text>
         </View>
         <Text style={styles.note}>{netSentence(input)}</Text>
+        {ore !== 0 ? (
+          <Text style={styles.note}>
+            Kundfakturan är reglerad i sin helhet: öresavrundningen på {pdfAmount(Math.abs(ore))} kr bokförs på konto {ORE_ROUNDING_ACCOUNT}.
+          </Text>
+        ) : null}
 
         {input.receivableAccount && input.payableAccount ? (
           <View>
@@ -188,13 +204,21 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
               <Text style={styles.colShort}>{input.receivableAccount}</Text>
               <Text style={styles.colName}>Kundfaktura {input.invoice.number ?? ''}</Text>
               <Text style={styles.colAmount}></Text>
-              <Text style={styles.colAmount}>{pdfAmount(input.amount)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(receivableCredit)}</Text>
             </View>
+            {ore !== 0 ? (
+              <View style={styles.row} wrap={false}>
+                <Text style={styles.colShort}>{ORE_ROUNDING_ACCOUNT}</Text>
+                <Text style={styles.colName}>Öresavrundning</Text>
+                <Text style={styles.colAmount}>{ore > 0 ? pdfAmount(ore) : ''}</Text>
+                <Text style={styles.colAmount}>{ore < 0 ? pdfAmount(-ore) : ''}</Text>
+              </View>
+            ) : null}
             <View style={styles.totalRow}>
               <Text style={styles.colShort}></Text>
               <Text style={[styles.colName, styles.bold]}>Summa</Text>
-              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(input.amount)}</Text>
-              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(input.amount)}</Text>
+              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(debitSum)}</Text>
+              <Text style={[styles.colAmount, styles.bold]}>{pdfAmount(creditSum)}</Text>
             </View>
             <Text style={styles.note}>Momsen påverkas inte: den bokfördes när fakturorna registrerades.</Text>
           </View>

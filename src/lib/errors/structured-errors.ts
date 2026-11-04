@@ -11804,8 +11804,11 @@ const SETOFF: Record<string, StructuredErrorEntry> = {
   },
   SETOFF_INVOICE_NOT_BOOKED: {
     httpStatus: 422,
-    message_sv: 'Fakturan är inte bokförd som fordran respektive skuld (till exempel med kontantmetoden), så den kan inte kvittas här. Bokför kvittningen manuellt.',
-    message_en: 'The invoice is not booked as a receivable or payable (under the cash method, for example), so it cannot be set off here. Book the set-off by hand.',
+    message_sv: 'Fakturan är inte bokförd än, så det finns ingen fordran eller skuld att kvitta. Bokför fakturan först och kvitta sedan. Med kontantmetoden bokförs fakturan först vid betalning och kan inte kvittas här.',
+    message_en: 'The invoice has no booking voucher yet, so there is no receivable or payable to set off. Book the invoice first, then set it off. Under the cash method an invoice is booked only at payment and cannot be set off here.',
+    remediation: {
+      description: 'Book the invoice the details name (side customer: gnubok_book_invoice, side supplier: gnubok_book_supplier_invoice), then retry the set-off.',
+    },
   },
   SETOFF_NO_PARTY: {
     httpStatus: 422,

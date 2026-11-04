@@ -148,6 +148,33 @@ describe('bookCounterpartySetoff: dry run', () => {
     expect(h.recordEventsForSql).not.toHaveBeenCalled()
   })
 
+  it('previews the 3740 line when the set-off absorbs öresavrundning (crm#1644)', async () => {
+    const state = pair()
+    h.loadSetoffPair.mockResolvedValueOnce({
+      ok: true,
+      state: { ...state, invoice: { ...state.invoice, total: 3136.18, remaining: 3136.18 } },
+    })
+    const outcome = await bookCounterpartySetoff(
+      context(),
+      { invoiceId: 'inv-1', supplierInvoiceId: 'si-1', amount: 3136, setoffDate: '2026-09-30' },
+      { dryRun: true },
+    )
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: {
+        amount: 3136,
+        invoice: { remaining_after: 0, status_after: 'paid', ore_rounding: 0.18 },
+        net: { direction: 'we_pay', amount: 1368 },
+        lines: [
+          { account_number: '2440', debit_amount: 3136, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 3136.18 },
+          { account_number: '3740', debit_amount: 0.18, credit_amount: 0 },
+        ],
+      },
+    })
+  })
+
   it('refuses before the database: not found, planner refusals, a pinned party, a locked or missing period', async () => {
     h.loadSetoffPair.mockResolvedValueOnce({ ok: false, code: 'SETOFF_INVOICE_NOT_FOUND' })
     expect(await bookCounterpartySetoff(context(), { invoiceId: 'x', supplierInvoiceId: 'si-1' }, { dryRun: false })).toEqual({

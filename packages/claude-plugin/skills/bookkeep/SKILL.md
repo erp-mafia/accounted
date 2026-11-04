@@ -11,7 +11,7 @@ Work through unbooked bank transactions and receipts and stage correct vouchers.
 ## Flow
 
 1. If not already done this session, call `accounted_get_agent_briefing` (accounting method changes how income is booked: faktureringsmetoden credits 1510 via invoices, kontantmetoden books on payment).
-2. Find what is unbooked: start from `Accounted://attention`, then discover the listing and categorization tools with `accounted_search_tools` (for example "uncategorized transactions", "categorize", "upload receipt").
+2. Find what is unbooked: start from `Accounted://attention` (for a company other than the default: `Accounted://company/{company_id}/attention`), then discover the listing and categorization tools with `accounted_search_tools` (for example "uncategorized transactions", "categorize", "upload receipt").
 3. For each item, decide the posting in this order of authority:
    1. Explicit mapping rules the company has configured.
    2. Observed history in `Accounted://ledger/context`: how THIS company booked this counterparty before (dominant account, VAT treatment, frequency as evidence). Prefer these over textbook answers, but frequency is not permission to auto-post.
