@@ -183,8 +183,13 @@ export function foldDocumentImportSlice(
   if (cursor !== null && !continues) return null
   const base = continues ? previous : null
 
+  // A refusal holds until a reconnect; an error (a timeout, a 5xx) is the
+  // answer of the slice that met it only. Every slice lists every source
+  // again, so a later slice that got through must not keep the earlier error.
   const unreachableByScope = new Map(
-    (base?.unreachableSources ?? []).map((entry) => [entry.scope, entry]),
+    (base?.unreachableSources ?? [])
+      .filter((entry) => entry.reason !== 'error')
+      .map((entry) => [entry.scope, entry]),
   )
   for (const entry of slice.unreachableSources) unreachableByScope.set(entry.scope, entry)
   const consentId = source.consentId ?? base?.consentId

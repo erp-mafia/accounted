@@ -115,6 +115,7 @@ import {
   type UnresolvedRefReason,
 } from '@/lib/documents/voucher-ref-resolver'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { createLogger } from '@/lib/logger'
@@ -416,6 +417,32 @@ function fortnoxSource(
   let financialYearById = new Map<number, FortnoxFinancialYear>()
 
   /**
+   * The register's list form, read as an index of booking vouchers, or null
+   * when Fortnox did not answer it. The index only saves calls: an invoice it
+   * does not name is asked on its own detail form (resolveRef), which names
+   * the booking voucher by definition. So a list that failed for a reason a
+   * retry may cure (a timeout, a 5xx) turns every file's booking into that
+   * question instead of dropping the files. It used to drop them: a large
+   * register's list timed out on 3 of 65 slices over three runs, and each
+   * such slice ended its run with its supplier-invoice files unreached
+   * (crm#1642). A refusal still propagates: the detail form would be refused
+   * the same way, and the caller names the scope.
+   */
+  const supplierInvoiceBookingIndex = async () => {
+    try {
+      return await fetchFortnoxSupplierInvoiceBookings(client, accessToken())
+    } catch (error) {
+      if (isFortnoxPermissionError(error) || error instanceof ExecutionBudgetExceeded) throw error
+      log.warn('fortnox supplier-invoice list not read: each file asks its invoice instead', {
+        providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+        providerMessage: fortnoxErrorMessage(error),
+        reason: error instanceof Error ? error.name : 'unknown',
+      })
+      return null
+    }
+  }
+
+  /**
    * Files on supplier invoices, linked through each invoice's booking
    * voucher. Additive to the voucher files: any refusal or failure here is
    * reported and the voucher files carry on, because this source must never
@@ -430,11 +457,11 @@ function fortnoxSource(
       if (connections.length === 0) return { attachments: [], unreachable: [] }
 
       scope = 'supplierinvoice'
-      const bookings = await fetchFortnoxSupplierInvoiceBookings(client, accessToken())
+      const bookings = await supplierInvoiceBookingIndex()
 
       const attachments: ProviderAttachment[] = []
       for (const connection of connections) {
-        const booking = bookings.get(connection.givenNumber) ?? { state: 'unknown' as const }
+        const booking = bookings?.get(connection.givenNumber) ?? { state: 'unknown' as const }
         // A file on an unbooked or cancelled invoice has no verifikat to sit
         // on, so it is not an attachment "linked to a voucher" (the listing's
         // definition, as Bokio uploads without a journal entry).
@@ -945,6 +972,20 @@ export async function importProviderDocuments(
         voucher: `${target.series}${target.number}`,
       })
     }
+  }
+
+  // A source that failed for now (not refused: a timeout, a 5xx) left its
+  // files out of this listing, so the end of the listing is not the end of
+  // the provider's list. The run stays open at the last handled file and the
+  // next slice lists again. It used to report the run complete, so a run past
+  // its voucher files ended on a failed listing with the supplier-invoice
+  // files it had not reached, and the user started over from the top
+  // (crm#1642). A slice that moved nothing reads as stalled to both drivers,
+  // which retry it from the saved point (bounded), never as a finished run.
+  if (!dryRun && !result.partial && result.unreachableSources.some((entry) => entry.reason === 'error')) {
+    result.partial = true
+    result.nextCursor =
+      startIndex < attachments.length ? attachments[attachments.length - 1].id : startCursor
   }
 
   result.lockedPeriods = [...lockedPeriodIds]

@@ -146,12 +146,18 @@ export interface ArcimUnreachableDocumentSource {
 
 const MAX_UNMATCHED_SAMPLES = 20
 
-/** One entry per scope: the latest answer wins, as the slices run in order. */
+/**
+ * One entry per scope: the latest answer wins, as the slices run in order.
+ * An error (a timeout, a 5xx) belongs to the slice that met it only: every
+ * slice lists every source again, so a later slice that got through drops it.
+ */
 function mergeUnreachableSources(
   accumulated: ArcimUnreachableDocumentSource[],
   next: ArcimUnreachableDocumentSource[],
 ): ArcimUnreachableDocumentSource[] {
-  const byScope = new Map(accumulated.map((entry) => [entry.scope, entry]))
+  const byScope = new Map(
+    accumulated.filter((entry) => entry.reason !== 'error').map((entry) => [entry.scope, entry]),
+  )
   for (const entry of next) byScope.set(entry.scope, entry)
   return [...byScope.values()]
 }

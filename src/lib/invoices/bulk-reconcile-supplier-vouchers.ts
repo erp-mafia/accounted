@@ -35,6 +35,7 @@ import {
   type SupplierVoucherCandidate,
 } from './supplier-voucher-matching'
 import { CONFIDENCE } from './invoice-matching'
+import { counterpartySearchTerms } from './duplicate-payment-guard'
 import type { SupplierInvoice, Supplier } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
@@ -44,7 +45,7 @@ const log = createLogger('bulk-reconcile-supplier-vouchers')
 /**
  * Minimum confidence for an UNATTENDED auto-link. 0.95 = a reference hit whose
  * amount settles the invoice (0.99) or exact-remaining-amount AND supplier-name
- * corroboration (0.95). A reference with another amount (0.90) and amount-only
+ * corroboration (0.95, the whole name: voucherNamesSupplier). A reference with another amount (0.90) and amount-only
  * matches (0.80, even with the +0.05 date bump → 0.85) are deliberately
  * excluded: the first is at best a partial payment a person should confirm,
  * the second collides on round amounts.
@@ -63,6 +64,32 @@ const AUTO_LINK_MIN_MARGIN = 0.1
  */
 function autoLinkBasis(confidence: number): ScopeFreeLinkBasis {
   return confidence >= CONFIDENCE.OCR_REFERENCE_MATCH ? 'rule_ocr_reference' : 'rule_counterparty'
+}
+
+/** What separates words, on both sides of voucherNamesSupplier. */
+const WORD_SEPARATORS = /[^A-Za-z0-9À-ɏ]+/g
+
+/**
+ * Whether the voucher text names the supplier in full: every distinctive word
+ * of its name (counterpartySearchTerms: three characters or more, legal forms
+ * dropped) stands in the text as a word of its own.
+ *
+ * The scorer's name corroboration is any one word of the name anywhere in the
+ * text. That is a fair hint for a person choosing in the picker, but no reason
+ * to link with nobody looking: a town or trade word is shared by unrelated
+ * suppliers, and another supplier's payment of the same amount, whose text
+ * named the same town, read as this supplier's (crm#1648). An exact amount
+ * with the name only in part stays a candidate for review.
+ */
+export function voucherNamesSupplier(
+  supplierName: string | null | undefined,
+  description: string | null | undefined,
+): boolean {
+  if (!supplierName || !description) return false
+  const terms = counterpartySearchTerms(supplierName.replace(WORD_SEPARATORS, ' '))
+  if (terms.length === 0) return false
+  const words = new Set(description.toLowerCase().split(WORD_SEPARATORS))
+  return terms.every((term) => words.has(term))
 }
 /** 0.5 öre: mirrors the tolerance used across the matching/RPC paths. */
 const AMOUNT_TOLERANCE = 0.005
@@ -292,7 +319,11 @@ export async function reconcileSupplierInvoiceVouchers(
     const runnerUp = datable[1]
     const remaining = remainingOf(invoice)
 
+    // Below a reference hit, what cleared the bar is the exact amount with the
+    // supplier's name: the whole name, not one word of it (voucherNamesSupplier).
     const confidentEnough = top.confidence >= AUTO_LINK_MIN_CONFIDENCE
+      && (top.confidence >= CONFIDENCE.OCR_REFERENCE_MATCH
+        || voucherNamesSupplier(invoice.supplier?.name, top.description))
     const clearMargin = !runnerUp || top.confidence - runnerUp.confidence >= AUTO_LINK_MIN_MARGIN
     // The RPC rejects a voucher whose AP debit exceeds the remaining amount; a
     // total-amount match on a partly paid invoice could trip this, so screen
