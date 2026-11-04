@@ -133,6 +133,7 @@ export default function AccountMappingStep({
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
+  const [openTargetAccount, setOpenTargetAccount] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Targets the dropdown can name: the caller's list (the company chart, or
@@ -145,6 +146,11 @@ export default function AccountMappingStep({
   // "created on import" option.
   const knownTargets = useMemo(
     () => new Set(basAccounts.map((a) => a.account_number)),
+    [basAccounts],
+  )
+
+  const targetsByNumber = useMemo(
+    () => new Map(basAccounts.map((account) => [account.account_number, account])),
     [basAccounts],
   )
 
@@ -462,6 +468,10 @@ export default function AccountMappingStep({
                     </TableCell>
                     <TableCell>
                       <Select
+                        open={openTargetAccount === mapping.sourceAccount}
+                        onOpenChange={(open) => setOpenTargetAccount((current) =>
+                          open ? mapping.sourceAccount : current === mapping.sourceAccount ? null : current
+                        )}
                         value={mapping.targetAccount || 'none'}
                         onValueChange={(value) => {
                           const account = basAccounts.find((a) => a.account_number === value)
@@ -491,7 +501,10 @@ export default function AccountMappingStep({
                               </span>
                             </SelectItem>
                           ))}
-                          {Object.entries(accountsByClass).map(([className, accounts]) => (
+                          {/* Radix mounts closed content in a DocumentFragment.
+                              Keep its selected item for the label, but only
+                              mount the full chart for the open row. */}
+                          {openTargetAccount === mapping.sourceAccount ? Object.entries(accountsByClass).map(([className, accounts]) => (
                             <div key={className}>
                               <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
                                 {className}
@@ -506,7 +519,12 @@ export default function AccountMappingStep({
                                 </SelectItem>
                               ))}
                             </div>
-                          ))}
+                          )) : mapping.targetAccount && knownTargets.has(mapping.targetAccount) ? (
+                            <SelectItem value={mapping.targetAccount}>
+                              <span className="font-mono mr-2">{mapping.targetAccount}</span>
+                              {targetsByNumber.get(mapping.targetAccount)?.account_name}
+                            </SelectItem>
+                          ) : null}
                         </SelectContent>
                       </Select>
                     </TableCell>
