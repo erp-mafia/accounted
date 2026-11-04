@@ -223,7 +223,8 @@ describe('Fortnox attachments', () => {
       '116': { state: 'unbooked' },
       '117': { state: 'unknown' },
     });
-    expect(getPaginated).toHaveBeenCalledWith('token', '/supplierinvoices', 'SupplierInvoices', { pageSize: 500 });
+    // Fortnox's default page: a 500-item page of whole invoices outlasted the 15 s request timeout (crm#1642).
+    expect(getPaginated).toHaveBeenCalledWith('token', '/supplierinvoices', 'SupplierInvoices', { pageSize: 100 });
   });
 
   it('reads the booking voucher from the detail form, null when Fortnox names none', async () => {

@@ -1,0 +1,1 @@
+[2026-11-04] An unattended supplier payment link below a reference hit needs the supplier's whole name in the voucher text, not one word of it; the counterparty rule stays: dropping it would send about 110 correct links to review, while the gate refused 4 past links, 2 of them wrong (crm#1648).

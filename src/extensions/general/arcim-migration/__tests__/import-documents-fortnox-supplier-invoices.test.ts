@@ -19,6 +19,11 @@ import {
 import { importProviderDocuments } from '../lib/import-documents'
 
 vi.mock('@/lib/providers/bokio/client', () => ({ BokioClient: class {} }))
+// The client waits between retries of a timeout or 5xx; the tests do not.
+vi.mock('@/lib/http/execution-budget', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/http/execution-budget')>()),
+  waitInExecutionBudget: vi.fn(async () => {}),
+}))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
@@ -131,7 +136,7 @@ const SUPPLIER_INVOICE_113 = {
   },
 }
 
-type Route = { status?: number; json?: unknown; bytes?: string; body?: string }
+type Route = { status?: number; json?: unknown; bytes?: string; body?: string; timeout?: true }
 
 function forbidden(message: string, code: number): Route {
   return { status: 403, body: JSON.stringify({ ErrorInformation: { error: 1, message, code } }) }
@@ -145,7 +150,7 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     '/voucherfileconnections?financialyear=6&page=1&limit=500': { json: NO_VOUCHER_FILES },
     '/supplierinvoicefileconnections?page=1&limit=500': { json: SUPPLIER_FILES_PAGE_1 },
     '/supplierinvoicefileconnections?page=2&limit=500': { json: SUPPLIER_FILES_PAGE_2 },
-    '/supplierinvoices?page=1&limit=500': { json: SUPPLIER_INVOICES },
+    '/supplierinvoices?page=1&limit=100': { json: SUPPLIER_INVOICES },
     '/supplierinvoices/113': { json: SUPPLIER_INVOICE_113 },
     [`/archive/${FILE_A34}`]: { bytes: 'PDF-A34' },
     [`/archive/${FILE_SI_112}`]: { bytes: 'PDF-SI-112' },
@@ -158,6 +163,8 @@ function stubFortnox(overrides: Record<string, Route> = {}) {
     const route = routes[path]
     // 418: a status the client never retries, so a stray request fails fast.
     if (!route) return new Response(`unrouted ${path}`, { status: 418 })
+    // What AbortSignal.timeout throws when Fortnox outlasts the 15 s limit.
+    if (route.timeout) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
     if (route.bytes !== undefined) {
       return new Response(new TextEncoder().encode(route.bytes), {
         status: 200,
@@ -397,7 +404,7 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
 
   it('names a missing supplierinvoice licence apart from a missing permission', async () => {
     stubFortnox({
-      '/supplierinvoices?page=1&limit=500': forbidden('Det finns ingen aktiv licens för önskat scope.', 2001101),
+      '/supplierinvoices?page=1&limit=100': forbidden('Det finns ingen aktiv licens för önskat scope.', 2001101),
     })
 
     const result = await importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' })
@@ -419,6 +426,78 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
     expect(result.unreachableSources).toEqual([
       { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'error', providerMessage: 'Ogiltig parameter.' },
     ])
+    // The files that source keeps were not listed, so the run is not over:
+    // the next slice lists again after the last handled file (crm#1642).
+    expect(result).toMatchObject({ partial: true, nextCursor: FILE_A34 })
+  })
+
+  it('keeps a run open, without moving, when a later slice cannot list the supplier-invoice files (crm#1642)', async () => {
+    stubFortnox({
+      '/supplierinvoicefileconnections?page=1&limit=500': { timeout: true },
+    })
+
+    // The run is past its voucher files: everything it has left is on supplier invoices.
+    const result = await importProviderDocuments({
+      supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1', cursor: FILE_A34,
+    })
+
+    // It used to answer partial: false here, so the run ended "complete" with
+    // its supplier-invoice files never reached. Not moving reads as stalled to
+    // both drivers, which retry from the saved point.
+    expect(result).toMatchObject({ scanned: 0, linked: 0, partial: true, nextCursor: FILE_A34 })
+    expect(result.unreachableSources).toMatchObject([{ scope: 'connectfile', reason: 'error' }])
+  })
+
+  it('still ends a run that a refusal, not an error, left without the supplier-invoice files', async () => {
+    stubFortnox({
+      '/supplierinvoicefileconnections?page=1&limit=500': forbidden('Har inte behörighet för scope.', 2000663),
+    })
+
+    const result = await importProviderDocuments({
+      supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1', cursor: FILE_A34,
+    })
+
+    expect(result).toMatchObject({ scanned: 0, partial: false, nextCursor: null })
+    expect(result.unreachableSources).toMatchObject([{ scope: 'connectfile', reason: 'permission' }])
+  })
+
+  it('previews a failing listing as a finished look, not a run left open', async () => {
+    stubFortnox({
+      '/supplierinvoicefileconnections?page=1&limit=500': { timeout: true },
+    })
+
+    const result = await importProviderDocuments({
+      supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true,
+    })
+
+    expect(result).toMatchObject({ dryRun: true, total: 1, partial: false, nextCursor: null })
+  })
+
+  it('links every supplier-invoice file through its detail form when the invoice list times out (crm#1642)', async () => {
+    const { requested } = stubFortnox({
+      '/supplierinvoices?page=1&limit=100': { timeout: true },
+      '/supplierinvoices/112': {
+        json: { SupplierInvoice: { GivenNumber: '112', Booked: true, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 17, VoucherYear: 5 } },
+      },
+      '/supplierinvoices/114': {
+        json: { SupplierInvoice: { GivenNumber: '114', Booked: false, Cancelled: false, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+      '/supplierinvoices/115': {
+        json: { SupplierInvoice: { GivenNumber: '115', Booked: false, Cancelled: true, VoucherSeries: 'D', VoucherNumber: 0, VoucherYear: 6 } },
+      },
+    })
+
+    const result = await importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    // Six attempts at the list, as in prod, then each invoice is asked on its own.
+    expect(requested().filter((path) => path === '/supplierinvoices?page=1&limit=100')).toHaveLength(6)
+    // The files come in as with the list: 112 on D17 of 2024, 113 on D3 of
+    // 2025. 114 (never booked) and 115 (cancelled) have no verifikat; without
+    // the list they are counted as unmatched instead of being left out.
+    expect(result).toMatchObject({ total: 5, linked: 3, unmatched: 2, failed: 0, partial: false, unreachableSources: [] })
+    expect(linkedEntries()).toEqual(['je-a34', 'je-d17-2024', 'je-d3-2025'])
+    expect(requested()).not.toContain(`/archive/${FILE_SI_114}`)
+    expect(requested()).not.toContain(`/archive/${FILE_SI_115}`)
   })
 
   it('stops supplier-invoice downloads Fortnox refuses (archive) without failing the voucher files', async () => {
@@ -438,7 +517,7 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
 
   it('counts a supplier invoice whose financial year Fortnox does not list as unmatched', async () => {
     stubFortnox({
-      '/supplierinvoices?page=1&limit=500': {
+      '/supplierinvoices?page=1&limit=100': {
         json: {
           MetaInformation: meta(1),
           SupplierInvoices: [listItem('112', { Vouchers: [{ Number: 17, Series: 'D', ReferenceType: 'SUPPLIERINVOICE', Year: 2024 }] })],

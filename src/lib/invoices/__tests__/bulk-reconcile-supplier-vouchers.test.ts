@@ -15,7 +15,7 @@ import {
   findMatchingVouchersForSupplierInvoice,
   linkSupplierInvoiceToVoucher,
 } from '../supplier-voucher-matching'
-import { reconcileSupplierInvoiceVouchers } from '../bulk-reconcile-supplier-vouchers'
+import { reconcileSupplierInvoiceVouchers, voucherNamesSupplier } from '../bulk-reconcile-supplier-vouchers'
 
 const mFetchAll = vi.mocked(fetchAllRows)
 const mFind = vi.mocked(findMatchingVouchersForSupplierInvoice)
@@ -30,6 +30,7 @@ interface InvOver {
   due?: string
   invoiceDate?: string
   isCredit?: boolean
+  supplierName?: string
 }
 
 function inv(over: InvOver) {
@@ -49,17 +50,18 @@ function inv(over: InvOver) {
     exchange_rate: null,
     supplier_id: 's1',
     is_credit_note: over.isCredit ?? false,
-    supplier: { id: 's1', name: 'Leverantör AB' },
+    supplier: { id: 's1', name: over.supplierName ?? 'Leverantör AB' },
   }
 }
 
-function cand(over: { je: string; confidence?: number; amount?: number; n?: number; date?: string }) {
+function cand(over: { je: string; confidence?: number; amount?: number; n?: number; date?: string; desc?: string }) {
   return {
     journal_entry_id: over.je,
     voucher_series: 'A',
     voucher_number: over.n ?? 1,
     entry_date: over.date ?? '2026-02-01',
-    description: 'Leverantörsbetalning',
+    // Names the fixture supplier in full, as a 0.95 match must (voucherNamesSupplier).
+    description: over.desc ?? 'Levbet Leverantör AB',
     ap_debit_amount: over.amount ?? 1000,
     currency: 'SEK',
     ap_line_currency: 'SEK',
@@ -322,5 +324,86 @@ describe('reconcileSupplierInvoiceVouchers: a voucher dated before the invoice',
     mLink.mockResolvedValueOnce(okLink({ je: 'v1' }) as never)
 
     expect((await run()).autoLinked).toBe(1)
+  })
+})
+
+// crm#1648: an exact amount with one word of the supplier's name (a town both
+// suppliers carry) linked another supplier's payment to this invoice.
+describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mFind.mockReset()
+    mLink.mockReset()
+  })
+
+  it('is never auto-linked: the invoice goes to review', async () => {
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v-other', confidence: 0.95, amount: 968, desc: 'Levbet Färgservice i Växjö AB (2247)' }),
+    ] as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(0)
+    expect(res.ambiguous).toBe(1)
+    expect(res.review[0]).toMatchObject({ supplier_invoice_id: 'i1', reason: 'low_confidence' })
+    expect(res.review[0].candidates.map((c) => c.journal_entry_id)).toEqual(['v-other'])
+    expect(mLink).not.toHaveBeenCalled()
+  })
+
+  it('neither in a dry run, which the provider migration settles from', async () => {
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v-other', confidence: 0.989, amount: 968, desc: 'Levbet Färgservice i Växjö AB (2247)' }),
+    ] as never)
+
+    const res = await reconcileSupplierInvoiceVouchers({ supabase: {} as never, companyId: 'c1', userId: 'u1', dryRun: true })
+
+    expect(res.links).toEqual([])
+    expect(res.review[0]).toMatchObject({ reason: 'low_confidence' })
+  })
+
+  it('still links the exact amount when the text names the supplier in full', async () => {
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v1', confidence: 0.95, amount: 968, desc: 'Leverantörsbetalning VÄXJÖ BYGGTEAM' }),
+    ] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v1', paymentAmount: 968 }) as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(1)
+    expect(res.links[0]).toMatchObject({ journal_entry_id: 'v1', link_basis: 'rule_counterparty' })
+  })
+
+  it('leaves a reference hit alone: the reference, not the name, identifies the invoice', async () => {
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v1', confidence: 0.99, amount: 968, desc: 'Bankgiro 123-4567 OCR 26535900' }),
+    ] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v1', paymentAmount: 968 }) as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(1)
+    expect(res.links[0].link_basis).toBe('rule_ocr_reference')
+  })
+})
+
+describe('voucherNamesSupplier', () => {
+  it.each([
+    ['every distinctive word, any case', 'Växjö Byggteam AB', 'Levbet VÄXJÖ BYGGTEAM AB (17)', true],
+    ['legal forms and short words are not required', 'Mälarbygg Handelsbolag', 'Betalning Mälarbygg', true],
+    ['(publ) is a legal form too', 'Nordkraft Energi AB (publ)', 'Nordkraft Energi oktober', true],
+    ['a hyphenated name, written with a hyphen', 'Wiik-Bygg AB', 'Levbet Wiik-Bygg AB (3)', true],
+    ['a hyphenated name, written with a space', 'Wiik-Bygg AB', 'Levbet Wiik Bygg', true],
+    ['one word of the name only', 'Växjö Byggteam AB', 'Levbet Färgservice i Växjö AB (2247)', false],
+    ['the same trade, another company', 'Kronvik Installation AB', 'Levbet Kronvik Bygg AB (6045)', false],
+    ['a word inside a longer word', 'Leverantör AB', 'Leverantörsbetalning', false],
+    ['a name of legal forms only', 'AB', 'Levbet AB', false],
+    ['no name', null, 'Levbet Leverantör AB', false],
+    ['no text', 'Leverantör AB', null, false],
+  ])('%s', (_case, name, text, expected) => {
+    expect(voucherNamesSupplier(name, text)).toBe(expected)
   })
 })

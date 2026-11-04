@@ -187,6 +187,28 @@ describe('foldDocumentImportSlice', () => {
   })
 })
 
+describe('foldDocumentImportSlice: a passing error', () => {
+  it('drops the error of an earlier slice once a later slice got through, but keeps a refusal (crm#1642)', () => {
+    const first = foldDocumentImportSlice(
+      null,
+      slice({
+        unreachableSources: [
+          { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'error', providerMessage: null },
+          { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: null },
+        ],
+      }),
+      null,
+      't1',
+    )
+    const second = foldDocumentImportSlice(first, slice({ partial: false, nextCursor: null }), 'file-40', 't2')
+
+    expect(second).toMatchObject({ complete: true })
+    expect(second?.unreachableSources).toEqual([
+      { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: null },
+    ])
+  })
+})
+
 describe('continuationCursor', () => {
   const saved = { provider: 'fortnox', complete: false, nextCursor: 'file-80' }
 

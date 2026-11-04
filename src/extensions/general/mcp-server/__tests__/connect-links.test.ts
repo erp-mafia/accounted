@@ -374,6 +374,83 @@ describe('gnubok_connect_migration', () => {
       migrationTool.execute({ provider: 'monopol' }, COMPANY_ID, 'user-1', {} as never)
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
   })
+
+  // crm#1649: the migration brings no underlag; a step of its own does. The
+  // tool promised "documents" with the migration and said nothing when they
+  // never came.
+  describe('underlag (crm#1649)', () => {
+    const run = (value: Record<string, unknown> | null) =>
+      createTableMockSupabase({ extension_data: { data: value ? { value } : null } }).supabase
+
+    it('says the underlag step has not run and how the user runs it, without promising documents', async () => {
+      const result = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1', run(null) as never
+      )) as Record<string, unknown>
+
+      expect(result.underlag).toEqual({ status: 'not_fetched' })
+      expect(result.instructions).toContain('Hämta underlag')
+      expect(result.instructions).toContain('approves Fortnox file access once')
+      expect(result.instructions).not.toMatch(/suppliers and documents/)
+      expect(migrationTool.description).not.toMatch(/documents/)
+    })
+
+    it('reports a finished run with what came and what was left out', async () => {
+      const result = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1',
+        run({
+          provider: 'fortnox', complete: true, updatedAt: '2026-11-03T13:07:02.863Z', total: 50,
+          linked: 30, skipped: 18, unmatched: 2, failed: 0, locked: 0,
+          unreachableSources: [{ source: 'supplier_invoice_files', scope: 'connectfile', reason: 'permission', providerMessage: null }],
+        }) as never
+      )) as Record<string, unknown>
+
+      expect(result.underlag).toEqual({
+        status: 'complete', updated_at: '2026-11-03T13:07:02.863Z', on_verifikat: 48, total: 50,
+        unmatched: 2, failed: 0, locked: 0, left_out: ['connectfile:permission'],
+      })
+    })
+
+    it('tells an unfinished run, and one waiting for a reconnect, apart from a finished one', async () => {
+      const open = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1',
+        run({ provider: 'fortnox', complete: false, total: 50, linked: 10, skipped: 0 }) as never
+      )) as { underlag: { status: string } }
+      const refused = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1',
+        run({ provider: 'fortnox', complete: false, needsReconnect: true, total: 50, linked: 10, skipped: 0 }) as never
+      )) as { underlag: { status: string } }
+
+      expect(open.underlag.status).toBe('incomplete')
+      expect(refused.underlag.status).toBe('needs_reconnect')
+    })
+
+    it('does not count another provider run as this one', async () => {
+      const result = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1',
+        run({ provider: 'bokio', complete: true, total: 5, linked: 5, skipped: 0 }) as never
+      )) as Record<string, unknown>
+
+      expect(result.underlag).toEqual({ status: 'not_fetched' })
+    })
+
+    it('says a provider without an underlag import has none, and reads nothing', async () => {
+      const result = (await migrationTool.execute(
+        { provider: 'briox' }, COMPANY_ID, 'user-1', {} as never
+      )) as Record<string, unknown>
+
+      expect(result.underlag).toBeUndefined()
+      expect(result.instructions).toContain('underlag are not fetched')
+    })
+
+    it('keeps the connect card when the run cannot be read', async () => {
+      const result = (await migrationTool.execute(
+        { provider: 'fortnox' }, COMPANY_ID, 'user-1', {} as never
+      )) as Record<string, unknown>
+
+      expect(result.connect_url).toBe('https://app.example.test/import?mode=migration&provider=fortnox')
+      expect(result.underlag).toEqual({ status: 'unknown' })
+    })
+  })
 })
 
 /**

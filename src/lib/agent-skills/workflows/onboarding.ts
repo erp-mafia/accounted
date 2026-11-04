@@ -153,8 +153,11 @@ reaches far enough back anyway.
      card (same feel as bank/Skatteverket) whose button opens the wizard
      that logs into the old system and fetches the three latest fiscal
      years by default (older years can be ticked in the wizard; they take
-     longer) PLUS invoices, customers, suppliers and documents: recommend
-     it when they have open fakturor or want underlag along. The QUICK path is a SIE
+     longer) PLUS invoices, customers and suppliers. Fortnox underlag
+     follow in a step of their own there ("Hämta underlag", one more
+     Fortnox approval for file access; gnubok_connect_migration says if it
+     ran); the others bring none. Recommend it when they have open
+     fakturor or want underlag along. The QUICK path is a SIE
      export dropped here (Fortnox: Register → Exportera → SIE 4): ledger
      only, fastest. Either way the result lands in the same books.
    - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE

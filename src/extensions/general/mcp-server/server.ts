@@ -463,6 +463,8 @@ import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
 import type { DocumentReading } from '@/lib/documents/reading/types'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
+import { migrationUnderlagStatus } from './migration-underlag-status'
 import { documentHeldElsewhereReasonEn } from '@/lib/documents/link-holder'
 import { checkDocumentLink } from '@/lib/documents/link-document'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
@@ -6754,7 +6756,7 @@ export const tools: McpTool[] = [
     keywords: ['migrering', 'byta system', 'flytta bokföring'],
     title: 'Connect Previous System',
     description:
-      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch the three latest fiscal years by default (older years selectable) plus invoices, customers and documents; visma/bokio complement AFTER a SIE import.',
+      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch the three latest fiscal years by default (older years selectable) plus invoices and customers; visma/bokio complement AFTER a SIE import.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6780,7 +6782,7 @@ export const tools: McpTool[] = [
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args) {
+    async execute(args, companyId, _userId, supabase) {
       const PROVIDERS: Record<string, { name: string; api: boolean }> = {
         fortnox: { name: 'Fortnox', api: true },
         bjornlunden: { name: 'Björn Lundén', api: true },
@@ -6798,14 +6800,28 @@ export const tools: McpTool[] = [
         )
       }
       const connectUrl = `${connectLinkBaseUrl()}/import?mode=migration&provider=${provider}`
+      // Underlag (the files behind each verifikat) are not part of the
+      // migration: they come in a step of their own on the same page, which
+      // for Fortnox asks the user to approve file access once. The tool used
+      // to promise them with the migration, and an agent-driven migration
+      // ended with none and nothing that said why (crm#1649). Undeclared in
+      // outputSchema, like gnubok_connect_skatteverket's can_file (tools/list
+      // budget).
+      const underlag = supportsUnderlagImport(provider)
+        ? await migrationUnderlagStatus(supabase, companyId, provider)
+        : null
+      const underlagStep = underlag
+        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped. underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
+        : ` ${info.name} underlag are not fetched: the user uploads them ("Ladda upp underlag").`
       return {
         provider,
         provider_name: info.name,
         api_connected: info.api,
         connect_url: connectUrl,
-        instructions: info.api
-          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches the three latest fiscal years by default (older years can be ticked in the wizard; they take longer) and imports bookkeeping PLUS invoices, customers, suppliers and documents. The user comes back here when the wizard reports done.`
-          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`,
+        instructions: (info.api
+          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches the three latest fiscal years by default (older years can be ticked in the wizard; they take longer) and imports bookkeeping PLUS invoices, customers and suppliers. The user comes back here when the wizard reports done.`
+          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`) + underlagStep,
+        ...(underlag ? { underlag } : {}),
       }
     },
   },

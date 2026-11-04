@@ -498,6 +498,22 @@ describe('resumable import (one server slice per call)', () => {
     ])
   })
 
+  it('drops the error of an earlier slice once a later slice got through, but keeps a refusal (crm#1642)', () => {
+    const merged = mergeArcimDocumentImportResults(
+      result({
+        unreachableSources: [
+          { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'error', providerMessage: null },
+          { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: null },
+        ],
+      }),
+      result({ unreachableSources: [] }),
+    )
+
+    expect(merged.unreachableSources).toEqual([
+      { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: null },
+    ])
+  })
+
   it('reads an older server answer without unreachable sources as none, and drops malformed entries', async () => {
     const { unreachableSources: _u, ...legacy } = result({ scanned: 4 })
     const legacyFetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: legacy }))
