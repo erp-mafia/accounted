@@ -1,0 +1,1 @@
+[2026-11-04] Bank history starts at the books' start: a first bank import never asks past the day after the last imported verifikat (else the first fiscal period), bounded by the first own verifikat and never short of the ordinary window: older rows have no verifikat here.
