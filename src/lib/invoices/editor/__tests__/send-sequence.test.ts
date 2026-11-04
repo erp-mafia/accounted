@@ -101,6 +101,28 @@ describe('persistAndSend', () => {
     expect(result).toEqual({ ok: true, invoiceId: 'inv-1', invoiceNumber: '1043', partial: false, message: null })
   })
 
+  it('reports a Peppol send whose follow-up failed after the verifikat as partial', async () => {
+    const { fetchImpl } = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      {
+        json: {
+          data: {
+            network_submitted: true,
+            issuance: { ok: true, partial_failures: [{ step: 'pdf_archive', message: 'storage down' }] },
+          },
+        },
+      },
+    ])
+    const result = await persistAndSend(input({ channel: 'peppol' }), fetchImpl)
+    expect(result).toMatchObject({ ok: true, partial: true })
+
+    const clean = stubFetch([
+      { json: { data: { id: 'inv-1', invoice_number: '1043' } } },
+      { json: { data: { network_submitted: true, issuance: { ok: true, partial_failures: [] } } } },
+    ])
+    expect(await persistAndSend(input({ channel: 'peppol' }), clean.fetchImpl)).toMatchObject({ ok: true, partial: false })
+  })
+
   it('sends to the customer’s Kivra or Billo mailbox with the provider, never a mark-sent or the email texts', async () => {
     for (const channel of ['kivra', 'billo'] as const) {
       const { fetchImpl, calls } = stubFetch([

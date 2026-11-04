@@ -117,7 +117,7 @@ import {
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import { roundOre } from '@/lib/money'
 import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
-import { isFiscalYear } from '@/lib/invariants'
+import { isFiscalYear, normalizeOrgNumber } from '@/lib/invariants'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -150,16 +150,20 @@ import type { InvoiceAttachmentFile, InvoiceAttachmentsTarget } from '@/componen
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
 import {
+  CHANNEL_BLOCK_KEYS,
   emailPreviewBlock,
   isMailboxChannel,
   resolveChannelOptions,
   resolveEffectiveChannel,
   resolveMailboxReady,
+  resolvePeppolChannel,
   type ChannelContext,
   type EditorChannel,
-  type EmailBlockReason,
   type MailboxChannel,
+  type PeppolSending,
 } from '@/lib/invoices/editor/channel'
+import { fetchPeppolSending } from '@/lib/invoices/editor/peppol-sending'
+import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES, fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
 import {
   booksOnIssue as resolveBooksOnIssue,
@@ -341,14 +345,6 @@ const PAYEE_DEFAULT = '__default__'
 // The intents that go through the confirm dialog: a send, a create without
 // sending, or a kontantfaktura issued already paid (all lock a number).
 type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' } | { kind: 'issue_paid' }>
-
-// Why email is not possible, as keys of the invoice_editor_shell namespace.
-const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
-  not_emailable: 'email_block_not_emailable',
-  sandbox: 'email_block_sandbox',
-  no_email_plan: 'email_block_no_email_plan',
-  no_customer_email: 'email_block_no_customer_email',
-}
 
 // The one VAT treatment the editor states for the invoice itself (crm#1007):
 // omvänd betalningsskyldighet for construction services (ML 16 kap. 13 §).
@@ -1026,6 +1022,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     let cancelled = false
     void fetchActiveSendingProviders().then((providers) => {
       if (!cancelled) setMailboxProviders(providers)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  // Whether the company sends e-fakturor (Peppol access and a transport),
+  // read once: the caret menu lists Peppol only then. A failed read lists
+  // none, as before.
+  const [peppolSending, setPeppolSending] = useState<PeppolSending | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void fetchPeppolSending().then((sending) => {
+      if (!cancelled) setPeppolSending(sending)
     })
     return () => {
       cancelled = true
@@ -3037,9 +3046,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     isSandbox,
     customerSelected: Boolean(selectedCustomer),
     customerEmail: selectedCustomer?.email ?? null,
-    // No company-access or customer-participant signal exists before the
-    // invoice does; e-fakturor are sent from the detail page.
-    peppolReady: false,
+    // Peppol: a SEK faktura to a customer with a Peppol id (0007 and the
+    // organisationsnummer), where the company sends e-fakturor.
+    peppol: resolvePeppolChannel({
+      sending: peppolSending,
+      documentType: watchDocumentType,
+      isCreditNote: isCreditNoteDocument(initial ?? {}),
+      currency: watchCurrency,
+      customer: selectedCustomer,
+    }),
     // Kivra, Billo: a plain SEK faktura to a customer the mailbox can be
     // addressed to, where the company sends through the provider.
     mailboxReady: resolveMailboxReady({
@@ -3063,7 +3078,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           ? tShell('email_unavailable_peppol')
           : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
             ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
-            : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+            : tShell(CHANNEL_BLOCK_KEYS[emailTabBlock])
   const editorMode = isEditMode ? 'edit' : 'create'
   const primaryContext = { mode: editorMode, isSelfBilled, documentType: watchDocumentType, channel, booksOnIssue } as const
   const primaryAction = resolvePrimaryAction(primaryContext)
@@ -3476,18 +3491,31 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? 'confirm_title_paid'
         : confirmChannel === 'email'
         ? 'confirm_title_email'
-        : confirmMailbox
-          ? 'confirm_title_mailbox'
-          : 'confirm_title_manual'
+        : confirmChannel === 'peppol'
+          ? 'confirm_title_peppol'
+          : confirmMailbox
+            ? 'confirm_title_mailbox'
+            : 'confirm_title_manual'
   const confirmTitle = confirmNumber
     ? tShell(confirmTitleKey, { doc: confirmDoc, number: confirmNumber, customer: confirmCustomer, provider: confirmProvider })
     : tShell(`${confirmTitleKey}_no_number`, { doc: confirmDoc, customer: confirmCustomer, provider: confirmProvider })
   const confirmCurrency = (confirmData?.currency ?? watchCurrency) as Currency
   const confirmRows: Array<{ label: string; value: string }> = []
+  // An e-faktura carries the product rows only: say so before the send, as
+  // the invoice page's Peppol confirm does.
+  const confirmPeppolTextRowsLeftOut =
+    confirmChannel === 'peppol' ? countTextRowsLeftOutOfPeppol(confirmData?.items ?? []) : 0
   if (confirmChannel === 'email') {
     confirmRows.push({
       label: tShell('confirm_row_to'),
       value: [tShell('confirm_to_with_pdf', { email: selectedCustomer?.email ?? '' }), ...(isCompanyAdmin ? extraCc : [])].join(', '),
+    })
+  } else if (confirmChannel === 'peppol') {
+    confirmRows.push({
+      label: tShell('confirm_row_channel'),
+      value: tShell('confirm_channel_peppol', {
+        recipient: `0007:${normalizeOrgNumber(selectedCustomer?.org_number) ?? ''}`,
+      }),
     })
   } else if (confirmMailbox) {
     confirmRows.push({
@@ -3674,7 +3702,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           disabled: !entry.available || !canWrite,
           // A mailbox says where the faktura lands ("Till kundens Kivra").
           reason: entry.reason
-            ? tShell(EMAIL_BLOCK_KEYS[entry.reason])
+            ? tShell(CHANNEL_BLOCK_KEYS[entry.reason])
             : isMailboxChannel(entry.channel)
               ? tShell('channel_mailbox_hint', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[entry.channel] })
               : null,
@@ -5287,6 +5315,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         attachmentsChannel={confirmChannel === 'peppol' ? 'peppol' : 'email'}
         extra={
           <>
+            {confirmPeppolTextRowsLeftOut > 0 && (
+              <AttnLine>{tShell('confirm_peppol_text_rows_left_out', { count: confirmPeppolTextRowsLeftOut })}</AttnLine>
+            )}
             {isPaidConfirm && (
               <div className="space-y-3">
                 <div className="space-y-1.5">

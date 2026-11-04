@@ -1,5 +1,5 @@
 import type { InvoiceDocumentType } from '@/types'
-import { isMailboxChannel, type ChannelOption, type EditorChannel, type EmailBlockReason, type MailboxChannel } from './channel'
+import { isMailboxChannel, type ChannelBlockReason, type ChannelOption, type EditorChannel, type MailboxChannel } from './channel'
 
 /**
  * What the invoice editor's top-bar primary and its caret menu do, and what
@@ -118,7 +118,7 @@ export interface MenuChannelEntry extends EditorAction {
   /** The channel the primary currently uses (the menu's check mark). */
   selected: boolean
   available: boolean
-  reason: EmailBlockReason | null
+  reason: ChannelBlockReason | null
 }
 
 export interface EditorMenu {
