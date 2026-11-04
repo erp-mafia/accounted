@@ -822,7 +822,7 @@ describe('buildInvoiceWriteData article company scope (issue #2059)', () => {
     if (!result.ok) return
     expect(result.items.map((i) => i.article_number)).toEqual(['A-100', null, null, null])
     // Read from the same company-scoped select as the tenancy check.
-    expect(findCall('articles', 'select')).toEqual(['id, article_number'])
+    expect(findCall('articles', 'select')).toEqual(['id, article_number, type, revenue_account'])
   })
 })
 

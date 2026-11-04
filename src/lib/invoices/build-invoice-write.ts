@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Currency, Customer, DeductionType, InvoiceDocumentType, InvoiceQrMode } from '@/types'
+import type { ArticleType, Currency, Customer, DeductionType, InvoiceDocumentType, InvoiceQrMode } from '@/types'
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
@@ -36,6 +36,15 @@ import {
 } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import {
+  accountsWithBookedSales,
+  articleTypeCandidateAccount,
+  articleTypeHistoryWindow,
+  deriveArticleTypeRevenueAccount,
+  usableArticleTypeAccounts,
+} from '@/lib/invoices/article-type-revenue-account'
 
 /**
  * Shared invoice write-builder.
@@ -297,7 +306,7 @@ export async function buildInvoiceWriteData(params: {
   // rate for every customer type, so the allowedRates guard below still passes.
   const { data: vatSettings } = await supabase
     .from('company_settings')
-    .select('vat_registered')
+    .select('vat_registered, fiscal_year_start_month')
     .eq('company_id', companyId)
     .maybeSingle()
   const notVatRegistered = vatSettings?.vat_registered === false
@@ -531,6 +540,9 @@ export async function buildInvoiceWriteData(params: {
   // The same read gives each line its article number, copied onto the line
   // (crm#1084) so the invoice prints the number it was written with.
   const articleNumbers = new Map<string, string | null>()
+  // The article's type and whether it still derives its account ("Härleds
+  // automatiskt"), for the tjänst/vara account below (crm#1661).
+  const articleDerivation = new Map<string, { type: ArticleType | null; derives: boolean }>()
   const articleIds = Array.from(
     new Set(
       items
@@ -542,15 +554,21 @@ export async function buildInvoiceWriteData(params: {
   if (articleIds.length > 0) {
     const { data: articleRows, error: articlesError } = await supabase
       .from('articles')
-      .select('id, article_number')
+      .select('id, article_number, type, revenue_account')
       .eq('company_id', companyId)
       .in('id', articleIds)
 
     if (articlesError) {
       return { ok: false, dbError: articlesError }
     }
-    for (const row of (articleRows ?? []) as Array<{ id: string; article_number: string | null }>) {
+    for (const row of (articleRows ?? []) as Array<{
+      id: string
+      article_number: string | null
+      type?: ArticleType | null
+      revenue_account?: string | null
+    }>) {
       articleNumbers.set(row.id, row.article_number?.trim() || null)
+      articleDerivation.set(row.id, { type: row.type ?? null, derives: !row.revenue_account })
     }
     const foundArticleIds = new Set((articleRows ?? []).map((a) => a.id))
     const invalidArticleIds = articleIds.filter((a) => !foundArticleIds.has(a))
@@ -695,6 +713,70 @@ export async function buildInvoiceWriteData(params: {
   const vatHeader = deriveInvoiceVatHeader(vatRules, [...uniqueRates], {
     vatRegistered: !notVatRegistered,
   })
+
+  // "Härleds automatiskt" by article type (crm#1661), following the
+  // company's own practice: a line takes its tjänst/vara account (3041-3053)
+  // only when the account is active, the momsdeklaration counts it at the
+  // line's rate, and the company credited it in this or the previous
+  // räkenskapsår. At most two reads per invoice (the chart, then the
+  // history), for exactly the accounts its lines ask for, and none when no
+  // line's article derives a type account; see
+  // article-type-revenue-account.ts for the rule.
+  const lineTreatment = (item: (typeof items)[number]) =>
+    resolveLineVatTreatment(item.vat_rate !== undefined ? item.vat_rate : vatRules.rate, vatHeader.vat_treatment)
+  const lineArticle = (item: (typeof items)[number]) =>
+    item.article_id ? (articleDerivation.get(item.article_id) ?? null) : null
+  const typeAccountCandidates = new Set<string>()
+  for (const item of items) {
+    if (item.line_type === 'text') continue
+    const candidate = articleTypeCandidateAccount({
+      requested: item.revenue_account ?? null,
+      treatment: lineTreatment(item),
+      article: lineArticle(item),
+    })
+    if (candidate) typeAccountCandidates.add(candidate)
+  }
+  let usableTypeAccounts: Set<string> = new Set()
+  const historyWindow = articleTypeHistoryWindow(input.invoice_date, vatSettings?.fiscal_year_start_month)
+  if (typeAccountCandidates.size > 0 && historyWindow) {
+    const { data: typeAccountRows, error: typeAccountsError } = await supabase
+      .from('chart_of_accounts')
+      .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .in('account_number', [...typeAccountCandidates])
+
+    if (typeAccountsError) {
+      return { ok: false, dbError: typeAccountsError }
+    }
+    const inChart = [...usableArticleTypeAccounts(typeAccountRows ?? [])]
+    if (inChart.length > 0) {
+      // The posted ledger's per-day sums (ledger_account_days, complete for
+      // every company: a company not built yet reads as no history and keeps
+      // the default). A few rows per account and day, never journal lines.
+      let historyRows: Array<{ account_number: string; credit: number | string | null }>
+      try {
+        historyRows = await fetchAllRows<{ account_number: string; credit: number | string | null }>(({ from, to }) =>
+          supabase
+            .from('ledger_account_days')
+            .select('account_number, credit')
+            .eq('company_id', companyId)
+            .in('account_number', inChart)
+            .gte('entry_date', historyWindow.from)
+            .lte('entry_date', historyWindow.to)
+            .gt('credit', 0)
+            .order('account_number', { ascending: true })
+            .order('fiscal_period_id', { ascending: true })
+            .order('entry_date', { ascending: true })
+            .order('slot', { ascending: true })
+            .range(from, to),
+        )
+      } catch (historyError) {
+        return { ok: false, dbError: historyError }
+      }
+      usableTypeAccounts = accountsWithBookedSales(historyRows)
+    }
+  }
 
   let exchangeRate: number | null = null
   let exchangeRateDate: string | null = null
@@ -870,7 +952,14 @@ export async function buildInvoiceWriteData(params: {
       // Frozen like revenue_account: renumbering or deleting the article
       // later never changes what this line prints.
       article_number: item.article_id ? (articleNumbers.get(item.article_id) ?? null) : null,
-      revenue_account: item.revenue_account ?? null,
+      // An article that derives its account books the company's tjänst/vara
+      // account for this rate when it keeps and uses one (crm#1661), else null.
+      revenue_account: deriveArticleTypeRevenueAccount({
+        requested: item.revenue_account ?? null,
+        treatment: lineTreatment(item),
+        article: lineArticle(item),
+        usable: usableTypeAccounts,
+      }),
       // Only a faktura consumes kundorder quantity: a quote or proforma line
       // linked to an order item would mark the order invoiced without any
       // invoice existing (sales_order_invoiced_quantities counts by status).
