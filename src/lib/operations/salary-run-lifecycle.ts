@@ -52,22 +52,24 @@ export const salaryRunsSendPayslips = defineOperation({
   risk: 'medium',
   reversible: false,
   docs: {
-    summary: 'Email every employee on an approved salary run a secure link to their payslip.',
+    summary: 'Email the employees on an approved salary run a secure link to their payslip.',
     description:
-      'Sends each employee on the run an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee\'s link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.',
+      'Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee\'s link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.',
     useWhen:
-      'The run is approved (or paid/booked) and the employees should get their payslips, or a payslip should be re-sent after an employee\'s email address was corrected.',
+      'The run is approved (or paid/booked) and the employees should get their payslips, a group paid on its own day should get theirs (employee_ids), or a payslip should be re-sent after an employee\'s email address was corrected.',
     doNotUseFor:
       'Fetching the payslip document yourself (GET /salary-runs/{id}/payslips/{employeeId}/pdf) or reading payslip amounts (GET /salary-runs/{id}/employees/{employeeId}).',
     pitfalls: [
       'A draft or review run returns 400 SALARY_PAYSLIPS_SEND_INVALID_STATUS: approve it first.',
-      'Re-sending emails everyone on the run again and invalidates the links sent before.',
+      'Re-sending emails everyone on the run (or in employee_ids) again and invalidates their links sent before.',
+      'An employee_ids entry not on the run refuses the whole send with 400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN (details.employee_ids); nothing is sent.',
       'Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.',
       'Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).',
       'Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.',
       'The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.',
     ],
     example: {
+      request: { employee_ids: ['emp_1…'] },
       response: {
         data: {
           salary_run_id: RUN_EXAMPLE_ID,
@@ -84,12 +86,17 @@ export const salaryRunsSendPayslips = defineOperation({
       },
     },
   },
-  input: z.object({ salary_run_id: SALARY_RUN_ID }),
+  input: z.object({
+    salary_run_id: SALARY_RUN_ID,
+    // Named in the MCP description, so no describe() (catalog tokens).
+    employee_ids: z.array(z.string().uuid()).min(1).optional(),
+  }),
   output: PayslipsSent,
   errorCodes: [
     'SALARY_RUN_NOT_FOUND',
     'SALARY_PAYSLIPS_SEND_INVALID_STATUS',
     'SALARY_PAYSLIPS_NO_EMPLOYEES',
+    'SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN',
     'SALARY_PAYSLIPS_SEND_SANDBOX',
     'SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED',
   ],
@@ -102,12 +109,12 @@ export const salaryRunsSendPayslips = defineOperation({
     name: 'gnubok_send_payslips',
     title: 'Send Payslips',
     description:
-      'Stage emailing every employee on an approved (or paid/booked) salary run a secure link to their payslip; each send replaces the earlier link. The preview lists recipients and who lacks an email address. Nothing is sent until approved.',
+      'Stage emailing payslip links (everyone or employee_ids) on an approved, paid or booked run; replaces old links.',
     keywords: ['skicka lönebesked', 'lönespecifikation', 'lönebesked e-post', 'maila lönebesked', 'payslip email'],
     stage: { pendingType: 'send_payslips', title: () => 'Skicka lönebesked' },
   },
-  run: async (ctx, { salary_run_id }, { dryRun }) => {
-    const outcome = await sendPayslips(ctx, salary_run_id, { dryRun })
+  run: async (ctx, { salary_run_id, employee_ids }, { dryRun }) => {
+    const outcome = await sendPayslips(ctx, salary_run_id, { dryRun, employeeIds: employee_ids })
     if (!outcome.ok || outcome.dryRun) return outcome
     const { sent, skipped, failed, total, deliveries } = outcome.data
     return { ok: true, data: { salary_run_id, sent, skipped, failed, total, deliveries } }

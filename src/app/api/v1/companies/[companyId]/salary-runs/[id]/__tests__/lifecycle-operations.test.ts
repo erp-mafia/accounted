@@ -320,6 +320,45 @@ describe('POST /salary-runs/:id/send-payslips', () => {
     ])
   })
 
+  // crm#1658: each payout group gets its payslips on its own day.
+  const postBody = (payload: unknown) =>
+    sendPayslipsRoute(
+      new Request(`${BASE}/send-payslips`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-fixture-not-a-real-key',
+          'Idempotency-Key': crypto.randomUUID(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      }),
+      runParams(RUN_ID),
+    )
+
+  it('employee_ids: emails and logs only the named employees', async () => {
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const res = await postBody({ employee_ids: [EMP_ID] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ sent: 1, skipped: 0, failed: 0, total: 1 })
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
+    const logged = writesTo(c, 'salary_payslip_deliveries', 'insert').map((call) => call.args[0])
+    expect(logged).toEqual([expect.objectContaining({ employee_id: EMP_ID, status: 'sent' })])
+  })
+
+  it('400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN for an id not on the run, sending and logging nothing', async () => {
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const stranger = '99999999-9999-4999-8999-999999999999'
+    const res = await postBody({ employee_ids: [EMP_ID, stranger] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN')
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    expect(wrote(c)).toBe(false)
+  })
+
   it('a provider failure is logged and reported without stopping the batch', async () => {
     mocks.sendEmail.mockResolvedValue({ success: false, error: 'rate limited' })
     const c = client()
