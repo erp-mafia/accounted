@@ -1,0 +1,1 @@
+[2026-11-04] An SIE file that uses a series and number twice is imported, not refused: the repeat goes last in its series without a source key, its text naming the source number, so no other number moves. Refusing strands an export the user cannot change. 1 of 3 809 jobs had one.

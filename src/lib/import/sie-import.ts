@@ -979,9 +979,9 @@ export function prepareSIEVouchers(
       : defaultSeries
     // A skipped voucher the source numbered holds its number for the next
     // booked voucher of the series. Without a source number (SIE4I) there is
-    // no numbering to follow.
+    // no numbering to follow, nor for a repeated number (it holds none).
     const holdNumber = (why: string) => {
-      if (voucher.numberOmitted || !Number.isFinite(voucher.number)) return
+      if (voucher.numberOmitted || voucher.numberRepeated || !Number.isFinite(voucher.number)) return
       const pending = (pendingGaps[resolvedSeries] ??= { count: 0, refs: [] })
       pending.count++
       if (pending.refs.length < GAP_REFS_NAMED) pending.refs.push(`${voucherId} (${why})`)
@@ -1062,7 +1062,10 @@ export function prepareSIEVouchers(
     }
 
     const rawSourceSeries = voucher.series && voucher.series.trim() ? voucher.series.trim() : null
-    const rawSourceNumber = !voucher.numberOmitted && Number.isFinite(voucher.number) ? voucher.number : null
+    // A repeated number (moveRepeatedVoucherNumbersLast) is no source key:
+    // the earlier voucher holds it in journal_import_source_owned_idx.
+    const rawSourceNumber = !voucher.numberOmitted && !voucher.numberRepeated && Number.isFinite(voucher.number)
+      ? voucher.number : null
 
     const voucherDateStr = formatDate(voucher.date)
     const isLikelyOpeningBalance =
@@ -1098,7 +1101,10 @@ export function prepareSIEVouchers(
       series: resolvedSeries,
       ...(held ? { numberGap: { count: held.count, explanation: numberGapExplanation(held) } } : {}),
       date: voucherDateStr,
-      description: voucher.description || `Import: ${voucherId}`,
+      // A repeat carries no source number, so its text names the source voucher.
+      description: voucher.numberRepeated
+        ? `${voucher.description || 'Import'} (${rawSourceSeries ?? ''}${voucher.number} i filen, numret upprepas)`
+        : voucher.description || `Import: ${voucherId}`,
       sourceSeries: rawSourceSeries,
       sourceNumber: rawSourceNumber,
       sourceType: isLikelyOpeningBalance ? 'opening_balance' : 'import',

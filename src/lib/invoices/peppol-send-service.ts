@@ -264,15 +264,19 @@ function isSendableInvoice(invoice: PeppolInvoiceRecord): boolean {
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /**
- * Options for the door. The dashboard's ctx.supabase runs as the user (RLS,
- * auth.uid()), so it passes a service-role client for the rows the user's
- * JWT cannot reach (peppol_deliveries, the lifecycle event RPC). The v1 and
- * MCP doors already run on service role and pass nothing; their delivery is
- * then staged through stage_peppol_delivery_as_actor for ctx.userId, since
- * stage_peppol_delivery reads auth.uid().
+ * Options for the door. `service` is a service-role client for the rows no
+ * user JWT reaches (peppol_deliveries, the lifecycle event RPC); without it
+ * ctx.supabase must be one. A send stages its delivery for ctx.userId through
+ * that client (stage_peppol_delivery_as_actor), unless the door says its
+ * ctx.supabase is the signed-in user's session (`stageAsSession`, the
+ * dashboard send route: stage_peppol_delivery reads auth.uid()). Which client
+ * ctx.supabase is was once guessed from whether `service` was passed: the
+ * operation, approved under Att göra, runs as the person, so its sends
+ * counted peppol_deliveries with the user's JWT and failed (crm#1641).
  */
 export interface PeppolDoorOptions {
   service?: SupabaseClient
+  stageAsSession?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -468,13 +472,13 @@ export async function sendInvoiceViaPeppol(
     }
   }
 
-  return submitStagedDocument({ ctx, service, stageAsActor: !options.service, transport, invoice, company, document, wasDraft, refuse })
+  return submitStagedDocument({ ctx, service, stageAsSession: options.stageAsSession === true, transport, invoice, company, document, wasDraft, refuse })
 }
 
 async function submitStagedDocument(args: {
   ctx: OperationContext
   service: SupabaseClient
-  stageAsActor: boolean
+  stageAsSession: boolean
   transport: PeppolTransport
   invoice: PeppolInvoiceRecord
   company: CompanySettings
@@ -508,9 +512,9 @@ async function submitStagedDocument(args: {
   try {
     let delivery: PeppolDeliverySummary
     try {
-      delivery = args.stageAsActor
-        ? await stagePeppolDeliveryAsActor({ supabase, companyId, invoiceId, actorId: userId, document })
-        : await stagePeppolDelivery({ supabase, companyId, invoiceId, document })
+      delivery = args.stageAsSession
+        ? await stagePeppolDelivery({ supabase, companyId, invoiceId, document })
+        : await stagePeppolDeliveryAsActor({ supabase: service, companyId, invoiceId, actorId: userId, document })
     } catch (err) {
       if (isFiscalPeriodMissingError(err)) {
         return refuse('PEPPOL_FISCAL_PERIOD_MISSING', { details: { invoice_date: invoice.invoice_date } })

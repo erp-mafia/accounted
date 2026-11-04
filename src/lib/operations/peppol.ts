@@ -32,6 +32,7 @@ import {
   type PeppolRegistrationRow,
 } from '@/lib/invoices/peppol-registration'
 import type { PeppolAccessSummary } from '@/lib/invoices/peppol-access'
+import { createServiceClient } from '@/lib/supabase/server'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -313,7 +314,10 @@ export const invoicesSendPeppol = defineOperation({
     },
   },
   run: async (ctx, { invoice_id }, { dryRun }) => {
-    const outcome = await sendInvoiceViaPeppol(ctx, invoice_id, { dryRun })
+    // Approved under Att göra, this runs as the person, whose JWT reaches no
+    // peppol_deliveries row: the send counts, reads and stages through a
+    // service-role client on every door (crm#1641).
+    const outcome = await sendInvoiceViaPeppol(ctx, invoice_id, { dryRun, service: createServiceClient() })
     if (!outcome.ok || outcome.dryRun) return outcome
     const r = outcome.data
     return {

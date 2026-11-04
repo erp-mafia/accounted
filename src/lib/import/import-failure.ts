@@ -1,4 +1,4 @@
-import { getErrorMessage, looksLikeUserFacingSwedish } from '@/lib/errors/get-error-message'
+import { getErrorMessage, looksLikeTechnicalLeak, looksLikeUserFacingSwedish } from '@/lib/errors/get-error-message'
 import type { SIEJob } from './sie-job-contract'
 
 /**
@@ -133,7 +133,14 @@ export function describeImportResponseFailure(input: { status?: number; body: un
 export function describeSIEJobFailure(
   job: Pick<SIEJob, 'id' | 'job_state' | 'error_message' | 'job_result'>,
 ): ImportFailure {
-  const own = asString(job.error_message)
+  // A database error the worker recorded verbatim ("duplicate key value
+  // violates unique constraint ...", crm#1653) is no sentence for the user:
+  // it is replaced by what happened, and the import reference below lets
+  // support read the recorded reason. Any other reason is shown as is.
+  const recorded = asString(job.error_message)
+  const own = recorded && looksLikeTechnicalLeak(recorded)
+    ? (job.job_state === 'paused' ? 'Importen stannade på ett tekniskt fel och behöver granskas.' : 'Importen stannade på ett tekniskt fel.')
+    : recorded
   const message = own
     ?? (job.job_state === 'paused'
       ? 'Importen behöver granskas.'

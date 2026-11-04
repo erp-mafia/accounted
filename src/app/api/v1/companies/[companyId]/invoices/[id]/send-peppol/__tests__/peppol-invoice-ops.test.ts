@@ -34,11 +34,16 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
-// The v1 door must never reach for a cookie-bound or separate service client.
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(() => { throw new Error('no session client on the v1 door') }),
-  createServiceClient: vi.fn(() => { throw new Error('the v1 door already runs on service role') }),
-}))
+// The v1 door never reaches for a cookie-bound client. The send operation
+// takes its own service-role client on every door (it also runs as the
+// person when approved under Att göra, crm#1641): here the same mock.
+vi.mock('@/lib/supabase/server', async () => {
+  const keys = await import('@/lib/auth/api-keys')
+  return {
+    createClient: vi.fn(() => { throw new Error('no session client on the v1 door') }),
+    createServiceClient: vi.fn(() => keys.createServiceClientNoCookies()),
+  }
+})
 const markSentMock = vi.fn()
 const restoreDraftMock = vi.fn()
 const finishIssuedMock = vi.fn()
@@ -52,6 +57,8 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { GET as readinessRoute } from '../../peppol/route'
 import { GET as deliveriesRoute } from '../../peppol/deliveries/route'
 import { POST as sendRoute } from '../route'
+import { invoicesSendPeppol } from '@/lib/operations/peppol'
+import { createLogger } from '@/lib/logger'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -477,6 +484,32 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
     // Every event carries the transport's own tenant label.
     expect(eventArgs(client).map((a) => a.p_provider_tenant_id)).toEqual(['test-ap-account', 'test-ap-account', 'test-ap-account'])
     expect(markSentMock).not.toHaveBeenCalled()
+  })
+
+  it('approved under Att göra (the operation run as the person) counts, stages and records through service role (crm#1641)', async () => {
+    // The person's JWT reads peppol_access but reaches no peppol_deliveries
+    // row and may not call the service-role staging RPC: a count there is a
+    // HEAD refusal with an empty message, the old "Failed to count Peppol sends: ".
+    const refused = { data: null, error: { message: '', code: '42501' } }
+    const session = sendClient({
+      peppol_deliveries: refused,
+      'rpc:stage_peppol_delivery_as_actor': refused,
+      'rpc:record_peppol_delivery_event': refused,
+    })
+    const service = sendClient()
+    mockServiceClient.mockReturnValue(service)
+    const outcome = await invoicesSendPeppol.run(
+      { supabase: session as never, companyId: COMPANY_ID, userId: 'user-1', log: createLogger('test'), pendingOperationId: 'op-1' },
+      { invoice_id: INV_ID },
+      { dryRun: false },
+    )
+    expect(outcome).toMatchObject({ ok: true, data: { network_submitted: true, delivery: { provider_submission_id: 'int-1' } } })
+    expect(session.calls.filter((c) => c.table === 'peppol_deliveries' || c.table === 'rpc')).toEqual([])
+    // This month's two send counts (HEAD), then the resend check.
+    expect(service.calls.filter((c) => c.table === 'peppol_deliveries' && c.method === 'select' && (c.args[1] as { head?: boolean } | undefined)?.head)).toHaveLength(2)
+    const stage = service.calls.find((c) => c.method === 'stage_peppol_delivery_as_actor')
+    expect(stage?.args[0]).toMatchObject({ p_actor_id: 'user-1', p_company_id: COMPANY_ID, p_invoice_id: INV_ID })
+    expect(rpcNames(service).filter((n) => n === 'record_peppol_delivery_event')).toHaveLength(3)
   })
 
   it('records a send through the connector under the connector label', async () => {

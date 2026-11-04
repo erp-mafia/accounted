@@ -367,3 +367,45 @@ describe('preview field formatting', () => {
     expect(formatPreviewNumber('total_amount', 192264, {})).toBe(formatCurrency(192264, 'SEK'))
   })
 })
+
+describe('Peppol send approval card (crm#1640)', () => {
+  // invoices.send-peppol's dry run as staged: the invoice, the sender and the
+  // recipient as groups. It once read "ingen detaljerad förhandsvisning".
+  const PEPPOL_SEND = {
+    invoice: {
+      invoice_id: '3fc55f5f-0000-4000-8000-000000000001',
+      invoice_number: '(allocated atomically on commit)',
+      status: 'draft',
+      invoice_date: '2026-10-28',
+      due_date: '2026-11-27',
+      currency: 'SEK',
+      total: 12500,
+      customer_name: 'Kund AB',
+    },
+    sender: { scheme: '0007', identifier: '5560160680' },
+    recipient: { scheme: '0007', identifier: '5566778899' },
+    transport_provider: 'connector',
+    remaining_sends: 10,
+    will_issue_invoice: true,
+    attachments: [],
+    network_submitted: false,
+    recipient_lookup: 'on_commit',
+  }
+
+  it('shows the customer, the amount, the recipient Peppol id and that the draft is issued', () => {
+    const html = render('send_invoice_peppol', PEPPOL_SEND)
+    expect(html).not.toContain('Förslaget har ingen detaljerad förhandsvisning')
+    expect(html).toContain('Kund AB')
+    expect(html).toContain(formatCurrency(12500, 'SEK'))
+    expect(html).toContain('Mottagare (Peppol)')
+    expect(html).toContain('5566778899')
+    expect(html).toContain('Utkastet får nummer, skickas och bokförs')
+    // The number a draft gets on approval, in the approver's words.
+    expect(html).toContain('Tilldelas när du godkänner')
+    expect(html).not.toContain('allocated atomically')
+    // Agent plumbing stays off the card; a send count is no amount.
+    expect(html).not.toContain('connector')
+    expect(html).not.toContain('on_commit')
+    expect(html).not.toContain(formatCurrency(10, 'SEK'))
+  })
+})

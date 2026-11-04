@@ -66,9 +66,20 @@ export function peppolSendPeriodStart(now: Date = new Date()): string {
 }
 
 /**
+ * Why a count failed. A count is a HEAD request, so a refusal (a JWT that
+ * reaches no row, crm#1641) arrives without a body and its message is empty:
+ * the code and the HTTP status still say what happened.
+ */
+function countFailure(result: { error: { message?: string; code?: string }; status?: number }): string {
+  return result.error.message || result.error.code || `HTTP ${result.status ?? 'unknown'}`
+}
+
+/**
  * Transmissions actually handed to the access point (a provider submission id
  * exists) this calendar month. `submitted_at` is set when the access point
  * accepts the document; a row without it falls back to when it was created.
+ * Read with a service-role client: peppol_deliveries is not granted to
+ * authenticated.
  */
 export async function countPeppolSends(
   service: SupabaseClient,
@@ -82,7 +93,7 @@ export async function countPeppolSends(
     .eq('company_id', companyId)
     .not('provider_submission_id', 'is', null)
     .gte('submitted_at', since)
-  if (submitted.error) throw new Error(`Failed to count Peppol sends: ${submitted.error.message}`)
+  if (submitted.error) throw new Error(`Failed to count Peppol sends: ${countFailure(submitted)}`)
   const unstamped = await service
     .from('peppol_deliveries')
     .select('id', { count: 'exact', head: true })
@@ -90,7 +101,7 @@ export async function countPeppolSends(
     .not('provider_submission_id', 'is', null)
     .is('submitted_at', null)
     .gte('created_at', since)
-  if (unstamped.error) throw new Error(`Failed to count Peppol sends: ${unstamped.error.message}`)
+  if (unstamped.error) throw new Error(`Failed to count Peppol sends: ${countFailure(unstamped)}`)
   return (submitted.count ?? 0) + (unstamped.count ?? 0)
 }
 

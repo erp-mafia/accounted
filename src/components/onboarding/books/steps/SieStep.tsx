@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
-import { waitForSIEJob } from '@/lib/import/sie-job-client'
+import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { formatImportFailure } from '@/lib/import/import-failure'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -345,7 +346,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       dispatch({ type: 'SET_WORKING', working: false })
       setReg(sieFirst ? 'card' : 'skipped')
     } catch (err) {
-      setImportError(err instanceof ImportStoppedError ? t('progress_failed') : getErrorMessage(err, { locale }))
+      // A job that ended failed or paused carries its own reason and import
+      // reference (SIEJobFailedError): shown as formatted, like ProviderStep does.
+      // Through getErrorMessage any reason not phrased in Swedish became
+      // "Något gick fel. Försök igen.", which hid why the year stopped and
+      // that a paused job is continued or undone under Importhistorik (crm#1653).
+      setImportError(err instanceof ImportStoppedError ? t('progress_failed')
+        : err instanceof SIEJobFailedError ? formatImportFailure(err.failure) : getErrorMessage(err, { locale }))
       setJobPhase(null)
       setShown(5)
       apiRef.current?.settle()

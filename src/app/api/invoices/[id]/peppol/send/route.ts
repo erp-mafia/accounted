@@ -50,7 +50,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const outcome = await sendInvoiceViaPeppol(
       { supabase, companyId, userId: user.id, log },
       parsedParams.data.id,
-      { service: createServiceClient() },
+      { service: createServiceClient(), stageAsSession: true },
     )
     if (!outcome.ok) {
       if (outcome.error) return privateNoStore(errorResponse(outcome.error, log, { requestId }))
