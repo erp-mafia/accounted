@@ -6951,6 +6951,10 @@
     "col_payroll_late_fees": "Förseningsavgifter"
   },
   "extensions": {
+    "ext_arcim_reopen_retry": "Öppna året och försök igen",
+    "ext_arcim_reopen_title": "Öppna {name} igen?",
+    "ext_arcim_reopen_blocked": "Räkenskapsåret {name} är markerat som avslutat i ett tidigare program. Ingen import har startats i den här körningen. Öppna året igen för att fortsätta.",
+    "ext_arcim_reopen_description": "Året {name} ({start} till {end}) öppnas och låses upp genom Accounteds vanliga funktion för år som avslutats i ett tidigare program. Därefter försöker guiden importera igen. Året lämnas öppet: stäm av importen och klarmarkera det igen efteråt. År med ett bokslut skapat i Accounted kan inte öppnas här.",
     "ext_arcim_sie_manual_required": "Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Fortnox, Bokio, Briox, Björn Lundén och WINT hämtar bokföringen direkt via API:et.",
     "ext_arcim_completion_reconnect_needed": "Hämtningen av fakturarader väntar på att du återansluter Fortnox.",
     "ext_arcim_completion_license_needed": "Hämtningen av fakturarader är pausad. Kontrollera integrations- eller applicensen i Fortnox och försök igen.",

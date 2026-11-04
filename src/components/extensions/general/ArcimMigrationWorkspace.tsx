@@ -1,10 +1,12 @@
 'use client'
 
+import { findReopenableImportPeriod, type ImportFiscalPeriod } from '@/lib/import/reopen-import-period'
+
 import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
-import { useAccounts } from '@/lib/reference-data/hooks'
+import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -365,6 +367,8 @@ interface PreviewData {
 
 interface SIEFileStatus {
   fiscalYear: number
+  fiscalYearStart?: string | null
+  fiscalYearEnd?: string | null
   // Legacy field for older builds: read previousImport instead.
   alreadyImported: boolean
   importedAt: string | null
@@ -2084,6 +2088,9 @@ function ResultStep({
   theaterModel,
   onDone,
   onRetry,
+  blockedPeriod,
+  isReopening,
+  onReopenAndRetry,
   onDiscoverDocuments,
   onImportDocuments,
   onDismissDocuments,
@@ -2102,6 +2109,9 @@ function ResultStep({
   theaterModel: TheaterModel | null
   onDone: () => void
   onRetry: () => void
+  blockedPeriod: ImportFiscalPeriod | null
+  isReopening: boolean
+  onReopenAndRetry: () => void
   onDiscoverDocuments: () => void
   onImportDocuments: () => void
   onDismissDocuments: () => void
@@ -2109,6 +2119,7 @@ function ResultStep({
 }) {
   const t = useTranslations('extensions')
   const fiscalYearSpanLabel = useFiscalYearSpanLabel()
+  const [confirmReopen, setConfirmReopen] = useState(false)
   if (error) {
     // Steps run one request each (#2469), so a failure in a later request
     // leaves earlier steps' rows in place. Name them: the user must not
@@ -2140,11 +2151,30 @@ function ResultStep({
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>Klar</Button>
-          <Button onClick={onRetry}>
+          <Button variant={blockedPeriod ? 'outline' : 'default'} onClick={onRetry} disabled={isReopening}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
+          {blockedPeriod && (
+            <Button onClick={() => setConfirmReopen(true)} loading={isReopening}>
+              {t('ext_arcim_reopen_retry')}
+            </Button>
+          )}
         </div>
+        {blockedPeriod && (
+          <ConfirmationDialog
+            open={confirmReopen}
+            onOpenChange={setConfirmReopen}
+            title={t('ext_arcim_reopen_title', { name: blockedPeriod.name })}
+            confirmLabel={t('ext_arcim_reopen_retry')}
+            isSubmitting={isReopening}
+            onConfirm={() => { setConfirmReopen(false); onReopenAndRetry() }}
+          >
+            <p>{t('ext_arcim_reopen_description', {
+              name: blockedPeriod.name, start: blockedPeriod.period_start, end: blockedPeriod.period_end,
+            })}</p>
+          </ConfirmationDialog>
+        )}
       </div>
     )
   }
@@ -2654,6 +2684,9 @@ export default function ArcimMigrationWorkspace({
   // submit and the confirm button.
   const migrationInFlightRef = useRef(false)
   const [isStartingMigration, setIsStartingMigration] = useState(false)
+  const [blockedPeriod, setBlockedPeriod] = useState<ImportFiscalPeriod | null>(null)
+  const [isReopening, setIsReopening] = useState(false)
+  const reopenInFlightRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   // Per-item details behind `error`: e.g. the SIE validation errors from
   // /sie-data, which would otherwise be swallowed (the envelope's `error`
@@ -2693,6 +2726,7 @@ export default function ArcimMigrationWorkspace({
   // (lib/reference-data). Re-read when the mapping step opens because the
   // preview may have created accounts; the SIE import invalidates it too.
   const { refresh: refreshCompanyAccounts } = useAccounts(false)
+  const { refresh: refreshFiscalPeriods } = useFiscalPeriods()
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -3502,6 +3536,7 @@ export default function ArcimMigrationWorkspace({
 
     setStep('migrating')
     setDocumentsOnly(false)
+    setBlockedPeriod(null)
     setMigrationStep('Startar migrering...')
     setMigrationProgress(5)
     setError(null)
@@ -3523,6 +3558,15 @@ export default function ArcimMigrationWorkspace({
     try {
       // ── Phase 1: SIE import ──────────────────────────────────
       if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
+        // Check every selected year before uploading files or admitting jobs.
+        // A confirmed reopen can then retry without replaying earlier years.
+        const periods = await refreshFiscalPeriods()
+        if (!Array.isArray(periods)) throw new Error('Fiscal period response is incomplete')
+        const blocked = findReopenableImportPeriod(periods, sieData.fileStatuses)
+        if (blocked) {
+          setBlockedPeriod(blocked)
+          throw new UserFacingError(t('ext_arcim_reopen_blocked', { name: blocked.name }))
+        }
         setMigrationStep('Importerar bokföringsdata (SIE)...')
         setMigrationProgress(10)
         setSieImportResults([])
@@ -3700,10 +3744,29 @@ export default function ArcimMigrationWorkspace({
       migrationInFlightRef.current = false
       setIsStartingMigration(false)
     }
-  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast, t, refreshFiscalPeriods])
+
+  const handleReopenAndRetry = useCallback(async () => {
+    if (!blockedPeriod || reopenInFlightRef.current || migrationInFlightRef.current) return
+    reopenInFlightRef.current = true
+    setIsReopening(true)
+    try {
+      const response = await fetch(`/api/bookkeeping/fiscal-periods/${encodeURIComponent(blockedPeriod.id)}/reopen-external`, { method: 'POST' })
+      const body = await response.json()
+      if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
+      void invalidateReferenceData('ref:fiscal-periods')
+      await handleStartMigration()
+    } catch (err) {
+      setError(displayError(err))
+    } finally {
+      reopenInFlightRef.current = false
+      setIsReopening(false)
+    }
+  }, [blockedPeriod, handleStartMigration])
 
   const handleDone = useCallback(() => {
     // Reset wizard
+    setBlockedPeriod(null)
     setStep('provider')
     setSelectedProvider(null)
     setConsentId(null)
@@ -3865,7 +3928,11 @@ export default function ArcimMigrationWorkspace({
           documentsOnly={documentsOnly}
           theaterModel={theaterModel}
           onDone={handleDone}
+          blockedPeriod={blockedPeriod}
+          isReopening={isReopening}
+          onReopenAndRetry={() => { void handleReopenAndRetry() }}
           onRetry={() => {
+            setBlockedPeriod(null)
             setError(null)
             setStep('options')
           }}

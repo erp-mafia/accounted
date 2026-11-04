@@ -1365,6 +1365,8 @@ export const arcimMigrationExtension: Extension = {
           // stable. A re-sync replaces the prior import for the same period.
           const fileStatuses: {
             fiscalYear: number
+            fiscalYearStart: string | null
+            fiscalYearEnd: string | null
             rawContent: string
             previousImport: {
               id: string
@@ -1400,6 +1402,8 @@ export const arcimMigrationExtension: Extension = {
 
             fileStatuses.push({
               fiscalYear: file.fiscalYear,
+              fiscalYearStart: fyStart,
+              fiscalYearEnd: fyEnd,
               rawContent: file.rawContent,
               previousImport: priorImport
                 ? {
@@ -1426,6 +1430,8 @@ export const arcimMigrationExtension: Extension = {
             rawContent: fileStatuses.map(f => f.rawContent),
             fileStatuses: fileStatuses.map(f => ({
               fiscalYear: f.fiscalYear,
+              fiscalYearStart: f.fiscalYearStart,
+              fiscalYearEnd: f.fiscalYearEnd,
               previousImport: f.previousImport,
               // Back-compat for older wizard builds: an `alreadyImported`
               // boolean. The new wizard reads `previousImport` directly.
