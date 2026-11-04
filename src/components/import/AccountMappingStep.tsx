@@ -200,13 +200,20 @@ export default function AccountMappingStep({
     return filteredMappings.slice(start, start + PAGE_SIZE)
   }, [filteredMappings, currentPage])
 
+  const resetPickerState = () => {
+    setOpenTargetAccount(null)
+    setFocusedTargetAccount(null)
+  }
+
   // Reset page when filter or search changes
   const handleFilterChange = (newFilter: FilterType) => {
+    resetPickerState()
     setFilter(newFilter)
     setCurrentPage(1)
   }
 
   const handleSearchChange = (term: string) => {
+    resetPickerState()
     setSearchTerm(term)
     setCurrentPage(1)
   }
@@ -712,7 +719,7 @@ export default function AccountMappingStep({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  onClick={() => { resetPickerState(); setCurrentPage((p) => Math.max(1, p - 1)) }}
                   disabled={currentPage === 1}
                 >
                   Föregående
@@ -723,7 +730,7 @@ export default function AccountMappingStep({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  onClick={() => { resetPickerState(); setCurrentPage((p) => Math.min(totalPages, p + 1)) }}
                   disabled={currentPage === totalPages}
                 >
                   Nästa
