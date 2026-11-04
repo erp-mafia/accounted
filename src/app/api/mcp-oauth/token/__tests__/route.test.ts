@@ -245,7 +245,8 @@ describe('POST /api/mcp-oauth/token', () => {
       const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       const results = exchangeResults()
-      results.splice(3, 0, { data: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, error: null })
+      // The user's own registration of the URI: several users may each hold one (crm#1654).
+      results.splice(3, 0, { data: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', user_id: 'user-1', client_name: 'Agent' }], error: null })
       enqueueMany(results)
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
       expect(res.status).toBe(200)

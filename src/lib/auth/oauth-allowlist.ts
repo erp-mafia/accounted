@@ -94,6 +94,8 @@ export type RedirectUriResolution =
   | {
       allowed: true
       kind: 'registered'
+      /** The registration the URI resolved to (the token route records it as the client). */
+      registrationId: string
       /** Display name the registering user gave the client (settings UI). */
       clientName: string
       /** True when the consenting user registered the URI themselves. */
@@ -119,11 +121,24 @@ export interface RedirectUriOptions {
 
 type RegistrationRow = { id: string; user_id: string; client_name: string }
 
+/** Registrants checked per company_members read; keeps the `.in()` URL short. */
+const REGISTRANT_CHUNK = 100
+
+function registered(row: RegistrationRow, byConsentingUser: boolean): RedirectUriResolution {
+  return {
+    allowed: true, kind: 'registered', registrationId: row.id,
+    clientName: row.client_name, registeredByConsentingUser: byConsentingUser,
+  }
+}
+
 /**
  * Resolve a redirect URI to the client behind it. Built-in patterns
  * short-circuit; otherwise we look for a non-revoked registration in
- * oauth_client_registrations and, when a consenting user is given, check
- * that the registration is theirs or a colleague's.
+ * oauth_client_registrations and, when a consenting user is given, take
+ * the one they made themselves, else one a colleague made. Several users may
+ * each register the same URI (crm#1654): a tool with one fixed callback for
+ * all its customers is registered once per customer, and one customer's
+ * registration never opens the URI for another customer.
  *
  * The lookup runs with the service role. The table's SELECT policy is
  * user_id = auth.uid(), so a user-scoped client cannot see a colleague's
@@ -133,7 +148,7 @@ type RegistrationRow = { id: string; user_id: string; client_name: string }
  *
  * Fails closed on any error (client construction, DB query): for an
  * allowlist, "unknown → deny" is the safe default. The lookup is by exact
- * URI; the unique partial index on the table ensures at most one active row.
+ * URI, oldest registration first.
  */
 export async function resolveRedirectUri(
   uri: string,
@@ -154,29 +169,32 @@ export async function resolveRedirectUri(
     return { allowed: false }
   }
 
-  const { data, error } = await client
-    .from('oauth_client_registrations')
-    .select('id, user_id, client_name')
-    .eq('redirect_uri', uri)
-    .is('revoked_at', null)
-    .limit(1)
-    .maybeSingle()
-
-  if (error || !data) return { allowed: false }
-  const registration = data as RegistrationRow
+  let registrations: RegistrationRow[]
+  try {
+    registrations = await fetchAllRows<RegistrationRow>(({ from, to }) =>
+      client
+        .from('oauth_client_registrations')
+        .select('id, user_id, client_name')
+        .eq('redirect_uri', uri)
+        .is('revoked_at', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch {
+    // Fail closed: an allowlist that cannot be read denies the URI.
+    return { allowed: false }
+  }
+  if (registrations.length === 0) return { allowed: false }
 
   const { consentingUserId } = options
-  if (consentingUserId === undefined) {
-    return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: false }
-  }
+  if (consentingUserId === undefined) return registered(registrations[0], false)
 
-  if (registration.user_id === consentingUserId) {
-    return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: true }
-  }
+  const own = registrations.find((r) => r.user_id === consentingUserId)
+  if (own) return registered(own, true)
 
-  const shared = await usersShareCompany(client, consentingUserId, registration.user_id)
-  if (!shared) return { allowed: false }
-  return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: false }
+  const colleague = await firstColleagueRegistration(client, consentingUserId, registrations)
+  return colleague ? registered(colleague, false) : { allowed: false }
 }
 
 /**
@@ -193,32 +211,48 @@ export async function isAllowedRedirectUri(
 }
 
 /**
- * True when the two users are both members of at least one common company.
- * Both membership lists are paginated (a byrå consultant can sit in hundreds
- * of companies) and intersected here rather than via an `.in()` filter, whose
- * URL length would grow with the membership count. Any query failure counts
- * as "not shared" (fail closed).
+ * The oldest of `registrations` made by someone who shares at least one
+ * company with `userId`, or null. The user's own memberships are paginated
+ * (a byrå consultant can sit in hundreds of companies) and intersected here;
+ * the registrants' memberships are read in chunks so the `.in()` filter stays
+ * short however many customers registered the URI. Any query failure counts
+ * as "no colleague" (fail closed).
  */
-async function usersShareCompany(
+async function firstColleagueRegistration(
   client: SupabaseClient,
-  userA: string,
-  userB: string,
-): Promise<boolean> {
+  userId: string,
+  registrations: RegistrationRow[],
+): Promise<RegistrationRow | null> {
   try {
-    const companyIdsOf = (userId: string) =>
-      fetchAllRows<{ company_id: string }>(({ from, to }) =>
+    const ownRows = await fetchAllRows<{ company_id: string }>(({ from, to }) =>
+      client
+        .from('company_members')
+        .select('company_id')
+        .eq('user_id', userId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    const companies = new Set(ownRows.map((r) => r.company_id))
+    if (companies.size === 0) return null
+    const registrants = [...new Set(registrations.map((r) => r.user_id))]
+    for (let i = 0; i < registrants.length; i += REGISTRANT_CHUNK) {
+      const chunk = registrants.slice(i, i + REGISTRANT_CHUNK)
+      const rows = await fetchAllRows<{ user_id: string; company_id: string }>(({ from, to }) =>
         client
           .from('company_members')
-          .select('company_id')
-          .eq('user_id', userId)
+          .select('user_id, company_id')
+          .in('user_id', chunk)
           .order('id', { ascending: true })
           .range(from, to),
       )
-    const [rowsA, rowsB] = await Promise.all([companyIdsOf(userA), companyIdsOf(userB)])
-    const companiesA = new Set(rowsA.map((r) => r.company_id))
-    return rowsB.some((r) => companiesA.has(r.company_id))
+      const colleagues = new Set(rows.filter((r) => companies.has(r.company_id)).map((r) => r.user_id))
+      const hit = registrations.find((r) => colleagues.has(r.user_id))
+      if (hit) return hit
+    }
+    return null
   } catch {
-    return false
+    // Fail closed: a membership read that errors counts as no colleague.
+    return null
   }
 }
 
