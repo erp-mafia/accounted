@@ -81,6 +81,7 @@ const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provide
 const REGISTERED: RedirectUriResolution = {
   allowed: true,
   kind: 'registered',
+  registrationId: 'reg-1',
   clientName: 'Byråns bokföringsbot',
   registeredByConsentingUser: false,
 }

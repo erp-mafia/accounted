@@ -82,4 +82,18 @@ describe('POST /api/settings/oauth-clients', () => {
     expect(status).toBe(200)
     expect(body.data.id).toBe('reg-1')
   })
+
+  it('returns 409 when this user already registered the uri (other users may register it too, crm#1654)', async () => {
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } })
+
+    const request = createMockRequest('/api/settings/oauth-clients', {
+      method: 'POST',
+      body: { client_name: 'My App', redirect_uri: 'https://app.example.com/cb' },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error).toBe('Du har redan registrerat den här redirect URI:n.')
+  })
 })

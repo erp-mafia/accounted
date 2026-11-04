@@ -87,7 +87,7 @@ describe('builtInRedirectProvider', () => {
 type Row = Record<string, unknown>
 
 /**
- * Minimal PostgREST-shaped fake over in-memory tables: eq/is filters are
+ * Minimal PostgREST-shaped fake over in-memory tables: eq/is/in filters are
  * applied, everything else is a no-op, and the chain resolves to the filtered
  * rows (all rows when awaited, first row via maybeSingle). `failTable` makes
  * every query against that table return a DB error.
@@ -95,9 +95,12 @@ type Row = Record<string, unknown>
 function fakeClient(tables: Record<string, Row[]>, failTable?: string) {
   const from = vi.fn((table: string) => {
     const filters: [string, unknown][] = []
+    const inFilters: [string, unknown[]][] = []
     const run = () =>
-      (tables[table] ?? []).filter((row) =>
-        filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)),
+      (tables[table] ?? []).filter(
+        (row) =>
+          filters.every(([col, val]) => (val === null ? row[col] == null : row[col] === val)) &&
+          inFilters.every(([col, vals]) => vals.includes(row[col])),
       )
     const result = () =>
       table === failTable
@@ -111,6 +114,10 @@ function fakeClient(tables: Record<string, Row[]>, failTable?: string) {
     }
     chain.is = (col: string, val: unknown) => {
       filters.push([col, val])
+      return chain
+    }
+    chain.in = (col: string, vals: unknown[]) => {
+      inFilters.push([col, vals])
       return chain
     }
     chain.maybeSingle = async () => {
@@ -128,6 +135,11 @@ const REGISTRATIONS: Row[] = [
   { id: 'reg-2', user_id: 'user-9', client_name: 'Evil', redirect_uri: 'https://evil.example/cb', revoked_at: null },
   { id: 'reg-3', user_id: 'user-1', client_name: 'Min egen app', redirect_uri: 'https://mine.example/cb', revoked_at: null },
   { id: 'reg-4', user_id: 'user-1', client_name: 'Gammal app', redirect_uri: 'https://old.example/cb', revoked_at: '2026-01-01T00:00:00Z' },
+  // One fixed callback shared by a third-party tool, registered by two
+  // unrelated customers (crm#1654), oldest first.
+  { id: 'reg-5', user_id: 'user-9', client_name: 'Verktyg (kund 9)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
+  { id: 'reg-6', user_id: 'user-2', client_name: 'Verktyg (byrån)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
+  { id: 'reg-7', user_id: 'user-1', client_name: 'Verktyg (mitt)', redirect_uri: 'https://tool.example/cb', revoked_at: null },
 ]
 
 const MEMBERSHIPS: Row[] = [
@@ -169,6 +181,7 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-3',
       clientName: 'Min egen app',
       registeredByConsentingUser: true,
     })
@@ -181,6 +194,7 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-1',
       clientName: 'Byråns bot',
       registeredByConsentingUser: false,
     })
@@ -200,8 +214,45 @@ describe('resolveRedirectUri', () => {
     expect(result).toEqual({
       allowed: true,
       kind: 'registered',
+      registrationId: 'reg-2',
       clientName: 'Evil',
       registeredByConsentingUser: false,
+    })
+  })
+
+  describe('one URI registered by several users (crm#1654)', () => {
+    const URI = 'https://tool.example/cb'
+
+    it("takes the consenting user's own registration over older ones by others", async () => {
+      expect(await resolveRedirectUri(URI, fakeClient(DB), { consentingUserId: 'user-1' })).toMatchObject({
+        allowed: true, registrationId: 'reg-7', registeredByConsentingUser: true,
+      })
+      expect(await resolveRedirectUri(URI, fakeClient(DB), { consentingUserId: 'user-9' })).toMatchObject({
+        allowed: true, registrationId: 'reg-5', registeredByConsentingUser: true,
+      })
+    })
+
+    it("falls back to a colleague's registration, never an unrelated user's", async () => {
+      // user-3 shares company-2 with user-2 only: user-9's older row must not count.
+      const db = {
+        oauth_client_registrations: REGISTRATIONS.filter((r) => r.id !== 'reg-7'),
+        company_members: [...MEMBERSHIPS, { id: 'm5', user_id: 'user-3', company_id: 'company-2', role: 'member' }],
+      }
+      expect(await resolveRedirectUri(URI, fakeClient(db), { consentingUserId: 'user-3' })).toMatchObject({
+        allowed: true, registrationId: 'reg-6', registeredByConsentingUser: false,
+      })
+    })
+
+    it('rejects a user with no registration and no colleague among the registrants', async () => {
+      const db = {
+        oauth_client_registrations: REGISTRATIONS,
+        company_members: [...MEMBERSHIPS, { id: 'm6', user_id: 'user-4', company_id: 'company-4', role: 'owner' }],
+      }
+      expect(await resolveRedirectUri(URI, fakeClient(db), { consentingUserId: 'user-4' })).toEqual({ allowed: false })
+    })
+
+    it('accepts the oldest registration for the anonymous /register lookup', async () => {
+      expect(await resolveRedirectUri(URI, fakeClient(DB))).toMatchObject({ allowed: true, registrationId: 'reg-5' })
     })
   })
 

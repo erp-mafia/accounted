@@ -12,7 +12,7 @@ import {
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
-import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
+import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole, resolveRedirectUri } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
@@ -240,9 +240,10 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
   let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)
   if (!storedClient) {
-    const { data: registration } = await supabase.from('oauth_client_registrations')
-      .select('id').eq('redirect_uri', payload.redirectUri).is('revoked_at', null).maybeSingle()
-    if (registration) storedClient = `registered:${registration.id}`
+    // The registration /authorize resolved for this user: several users may
+    // each have registered the same URI (crm#1654).
+    const resolution = await resolveRedirectUri(payload.redirectUri, supabase, { consentingUserId: payload.userId })
+    if (resolution.allowed && resolution.kind === 'registered') storedClient = `registered:${resolution.registrationId}`
   }
 
   // A reconnect lands on the same connector identity as the connection it
