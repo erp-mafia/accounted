@@ -53,6 +53,12 @@ $$;
 ALTER TABLE auth.users
   ADD COLUMN IF NOT EXISTS is_anonymous boolean NOT NULL DEFAULT false;
 
+-- The image's auth.users predates GoTrue's email_confirmed_at (a later GoTrue
+-- migration renamed confirmed_at to it; production has it). The allowlist
+-- join (20261103231023) fires on this column.
+ALTER TABLE auth.users
+  ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
+
 -- auth.identities is created by GoTrue at startup, not by the Postgres
 -- image, and GoTrue does not run in CI. Triggers on auth.users that touch
 -- identities (20260903110000 unlink_old_address_identities) need the table

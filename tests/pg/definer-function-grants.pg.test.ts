@@ -80,6 +80,9 @@ const SERVICE_ROLE_ONLY = [
   'event_outbox_shadow_counts(timestamp with time zone,timestamp with time zone)',
   // The async reconciliation (20261018110300): the operator's switch-on check.
   'event_outbox_async_counts(timestamp with time zone,timestamp with time zone)',
+  // Allowlist team roles (20261103231023): called by the auth.users and
+  // allowlist triggers; a session never joins itself to a byrå team.
+  'join_byra_teams_for_user(uuid)',
 ]
 
 // Called on the user's session client by the app, so authenticated keeps
