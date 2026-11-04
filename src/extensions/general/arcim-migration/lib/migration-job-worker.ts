@@ -1,3 +1,4 @@
+import { applyMigrationInvoiceCorrection } from '@/lib/providers/migration-corrections'
 import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -32,6 +33,9 @@ export interface MigrationChunk {
   payload: string
   target_id: string | null
   receipt: {
+    userCorrection?: string
+    correctedBy?: string
+    correctedAt?: string
     link?: Omit<MigratedInvoiceLinkInput, 'invoiceId'> & {
       /** The credited invoice as the provider named it; pairMigratedCreditNotes resolves it. */
       creditedInvoiceRef?: CreditedInvoiceRefDto | null
@@ -118,7 +122,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // detail failures so healthy records continue; the user can retry them.
     throw new Error(hydrated.hydration.abortedBy === 'auth' ? 'PROVIDER_AUTH_EXPIRED' : 'MIGRATION_DETAIL_RETRY')
   }
-  const invoice = hydrated.invoices[0]
+  const invoice = c.resource === 'supplierInvoices'
+    ? applyMigrationInvoiceCorrection(hydrated.invoices[0] as SupplierInvoiceDto,
+      c.receipt?.userCorrection ? openMigrationPayload(c.receipt.userCorrection) : undefined)
+    : hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
   if (invoice.lines.length > MAX_INVOICE_LINES) return { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
   const fx = await withinMigrationDeadline(buildFxRateIndex(supabase, [invoice]), deadline)
@@ -155,10 +162,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
       return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
     }
   }
+  if (c.resource === 'supplierInvoices' && !invoice.invoiceNumber?.trim()) {
+    return { id: c.id, error: 'MIGRATION_INVOICE_NUMBER_REQUIRED' }
+  }
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
-    link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
+    link: { ...(c.receipt?.userCorrection ? { userCorrection: c.receipt.userCorrection, correctedBy: c.receipt.correctedBy, correctedAt: c.receipt.correctedAt } : {}), ...(provider === 'bokio' && c.resource === 'supplierInvoices'
       ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
         ? { settlement: { sourcePaid: invoice.paymentStatus.paid, userId: job.user_id } } : {}),

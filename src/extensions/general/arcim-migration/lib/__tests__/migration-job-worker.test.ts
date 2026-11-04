@@ -655,3 +655,24 @@ describe('supplier credit notes in the import phase', () => {
     }))
   })
 })
+
+it.each([false, true])('requires a number or applies the saved correction after hydration: corrected=%s', async corrected => {
+  const db = database({ phase: 'import', resources: ['supplierInvoices'] })
+  const dto = mapBokioToSupplierInvoice({ id: 'missing-number', supplierRef: { id: 'supplier', name: 'Fixture' }, totalAmount: 125 })
+  dto.invoiceNumber = ''
+  const correction = sealMigrationPayload({ invoiceNumber: 'SUP-42' }).payload
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto),
+    receipt: corrected ? { userCorrection: correction, correctedBy: 'user', correctedAt: '2026-11-04T00:00:00Z' } : {} })
+  mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+  await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+  const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+  const record = (commit[1].p_records as Record<string, unknown>[])[0]
+  if (corrected) {
+    expect(vi.mocked(mapSupplierInvoice).mock.lastCall?.[0].invoiceNumber).toBe('SUP-42')
+    expect(record).not.toHaveProperty('error')
+    expect(record.link).toEqual(expect.objectContaining({ userCorrection: correction, correctedBy: 'user' }))
+    expect(dto.invoiceNumber).toBe('')
+  } else {
+    expect(record).toEqual({ id: dto.id, error: 'MIGRATION_INVOICE_NUMBER_REQUIRED' })
+  }
+})

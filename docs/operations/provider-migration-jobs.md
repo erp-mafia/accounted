@@ -125,3 +125,9 @@ not deployed by this worktree. Browser testing with a real provider account is
 still the joint local verification step. Production rollout requires merging and
 deploying the application and explicitly approving the production migrations.
 The affected production company’s repair is separate and has not been executed.
+
+## Missing supplier invoice numbers
+
+A missing supplier invoice number is reported as MIGRATION_INVOICE_NUMBER_REQUIRED before invoice admission. Historical 23502 outcomes with an empty source invoice number are also eligible for the wizard's missing-fields form. The form pages 20 records and shows source identity, supplier, date and amount so the user can consult the original document.
+
+Corrections are limited to a missing invoice number on an unimported supplier invoice. They require company write permission and a paused job. The API stores an encrypted correction and server-derived actor/time in the staged receipt, preserving the original encrypted provider payload and its hash. Conditional state/version updates reject concurrent correction or retry. The worker applies the validated correction after provider hydration and retains its audit metadata in the invoice-link receipt when import succeeds. It never overwrites a nonempty source number. Saving does not resume the job; the user completes records and resumes explicitly. No posted journal entries are changed by this form.

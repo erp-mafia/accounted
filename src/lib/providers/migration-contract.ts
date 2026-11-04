@@ -69,7 +69,8 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'retry' {
+  if (code === '23502' || code === 'MIGRATION_INVOICE_NUMBER_REQUIRED') return 'missing'
   if (code === 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED') return 'configuration'
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
   // A record with the same number already exists and differs. Resuming
