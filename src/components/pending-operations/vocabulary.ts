@@ -116,6 +116,7 @@ export const singleActionWarnings: Record<string, string> = {
   update_cash_account: 'Genom att klicka godkänn så ändras bankkontot. Ändrade betaluppgifter skrivs ut på nya fakturor.',
   set_primary_cash_account: 'Genom att klicka godkänn så blir kontot företagets primära bankkonto. Endast bokningar efter ändringen följer det nya kontot.',
   set_invoice_payee_default: 'Genom att klicka godkänn så betalar kunder nya fakturor i valutan till det valda bankkontot.',
+  change_bank_ledgers: 'Genom att klicka godkänn så bokförs bankkontot på det nya bokföringskontot. Obokförda bankrader följer med; redan bokförda verifikationer ligger kvar på det gamla kontot.',
   create_fiscal_period: 'Genom att klicka godkänn så skapas räkenskapsåret och kopplas in i kedjan av räkenskapsår. Det kan inte tas bort, och datumen kan bara ändras så länge inget bokfört hamnar utanför dem.',
   update_fiscal_period: 'Genom att klicka godkänn så ändras räkenskapsårets namn eller datum. Datumen går bara att ändra så länge alla verifikationer ligger kvar inom de nya datumen och inget lås, bokslut eller inlämnad deklaration gäller året.',
   close_fiscal_period_external: 'Genom att klicka godkänn så stängs och låses räkenskapsåret som avslutat i tidigare program, utan bokslutsverifikat i Accounted. Använd bara för importerade år vars bokslut gjordes i det gamla programmet.',

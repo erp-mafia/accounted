@@ -455,6 +455,7 @@ import '@/app/api/v1/companies/[companyId]/transactions/[id]/match-expense-payou
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/route'
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/set-primary/route'
 import '@/app/api/v1/companies/[companyId]/cash-accounts/payee-defaults/route'
+import '@/app/api/v1/companies/[companyId]/cash-accounts/change-ledgers/route'
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/route'
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/unlock/route'
 import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/close-external/route'

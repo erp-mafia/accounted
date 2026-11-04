@@ -38,8 +38,11 @@ export async function readBankConfiguration(
     p_company_id: companyId, p_connection_id: connectionId,
   })
   if (error) throw Object.assign(new Error(error.message), { code: error.code })
-  if (!data?.token || !data?.connection) throw new Error('Bank configuration snapshot missing')
-  return data as BankConfigurationSnapshot
+  // The jsonb answer is one object; a one-row array reads the same (as the
+  // other jsonb RPC readers do, e.g. lib/customers/merge-customers.ts).
+  const snapshot = Array.isArray(data) ? data[0] : data
+  if (!snapshot?.token || !snapshot?.connection) throw new Error('Bank configuration snapshot missing')
+  return snapshot as BankConfigurationSnapshot
 }
 
 /** An unused row of an unchecked account that gave its ledger up and was deleted (crm#224). */

@@ -645,7 +645,7 @@ Example response `200`:
 **Edit a bank account: verifikationsserie, payee details, name, or turn it on/off.**
 `scope:companies:write · risk:medium · idempotent · dry-run · reversible`
 
-Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account and the primary flag are not editable here. Idempotent. Dry-runnable.
+Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account (POST /cash-accounts/change-ledgers) and the primary flag are not editable here. Idempotent. Dry-runnable.
 
 **Use when:** The company changes bank details customers pay to, wants its own voucher series per bank account, or stops using a manually added account.
 **Do not use for:** Making an account the primary (POST /cash-accounts/{id}/set-primary), choosing the default payee per currency (PUT /cash-accounts/payee-defaults) or moving a transaction to another account.
@@ -850,6 +850,91 @@ Example response `200`:
       "bank_code": null,
       "foreign_account_number": null
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/cash-accounts/change-ledgers`
+
+**Change which 19xx ledger account bank-connected accounts book on from now on.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Moves one or more accounts that one bank connection syncs (Enable Banking or Open Payments) to other 19xx ledger accounts, as the dashboard does under Inställningar > Kopplingar. Unbooked bank rows follow the account; posted verifikat stay on the old ledger account (move a balance with a voucher if needed). Another account of the connection on a requested ledger account swaps to the mover's old one. Owner/admin only. Dry-run first: the preview lists each move with booked and unbooked row counts.
+
+**Use when:** A company migrated from another system books its bank on other 19xx accounts than the bank connection chose.
+**Do not use for:** Accounts typed in by hand or from SIE (no bank connection), or rebooking posted verifikat (gnubok_correct_entry).
+
+**Pitfalls:**
+- All accounts must be synced by one active bank connection: 400 VALIDATION_ERROR with details.reason several_connections or not_bank_connected; a connection not active answers BANK_LEDGER_CHANGE_NOT_ACTIVE.
+- A ledger account another bank account holds is refused with a sentence naming it; two moves to the same ledger account return BANK_SELECTION_LEDGER_CONFLICT.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ accounts: { cash_account_id: string, ledger_account: string }[] }
+```
+
+Example request:
+```json
+{
+  "accounts": [
+    {
+      "cash_account_id": "7f3a…",
+      "ledger_account": "1933"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    connection_id: string,
+    moves: { cash_account_id: string | null, name: string | null, iban_last4: string | null, currency: string, from_ledger: string | null, to_ledger: string, booked_rows: number, unbooked_rows: number, swapped: boolean }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0c1d…",
+    "moves": [
+      {
+        "cash_account_id": "7f3a…",
+        "name": "Valutakonto",
+        "iban_last4": null,
+        "currency": "USD",
+        "from_ledger": "1930",
+        "to_ledger": "1933",
+        "booked_rows": 4,
+        "unbooked_rows": 20,
+        "swapped": false
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

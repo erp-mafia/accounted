@@ -979,6 +979,7 @@
     "type_update_cash_account": "Ändra bankkonto",
     "type_set_primary_cash_account": "Byt primärt bankkonto",
     "type_set_invoice_payee_default": "Betalkonto på fakturor",
+    "type_change_bank_ledgers": "Byt bokföringskonto på bankkonto",
     "type_create_fiscal_period": "Nytt räkenskapsår",
     "type_update_fiscal_period": "Ändra räkenskapsår",
     "type_close_fiscal_period_external": "Klarmarkera räkenskapsår",

@@ -25,6 +25,9 @@ import {
   setPrimaryCashAccount,
   updateCashAccount,
 } from '@/lib/cash-accounts/manage'
+import { changeCashAccountLedgers } from '@/lib/cash-accounts/ledger-change'
+import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
+import { accountNumberSchema } from '@/lib/invariants/zod'
 import type { OperationOutcome } from './types'
 import { defineOperation } from './types'
 
@@ -201,7 +204,7 @@ export const cashAccountsUpdate = defineOperation({
   docs: {
     summary: 'Edit a bank account: verifikationsserie, payee details, name, or turn it on/off.',
     description:
-      'Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account and the primary flag are not editable here. Idempotent. Dry-runnable.',
+      'Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account (POST /cash-accounts/change-ledgers) and the primary flag are not editable here. Idempotent. Dry-runnable.',
     useWhen:
       'The company changes bank details customers pay to, wants its own voucher series per bank account, or stops using a manually added account.',
     doNotUseFor:
@@ -241,7 +244,7 @@ export const cashAccountsUpdate = defineOperation({
     name: 'gnubok_update_cash_account',
     title: 'Update Cash Account',
     description:
-      'Stage an edit of a bank account: voucher_series, the payee details invoices print (bankgiro, IBAN, ...), name, invoice_payee, or enabled. Payee and enabled changes are owner/admin only. Not the ledger account or the primary.',
+      'Stage an edit of a bank account: voucher_series, the payee details invoices print (bankgiro, IBAN, ...), name, invoice_payee, or enabled. Payee and enabled are owner/admin only. Ledger account: gnubok_change_bank_ledgers.',
     keywords: ['ändra bankkonto', 'bankgiro', 'betaluppgifter', 'verifikationsserie bankkonto', 'stäng av bankkonto'],
     stage: { pendingType: 'update_cash_account', title: () => 'Ändra bankkonto' },
   },
@@ -342,6 +345,111 @@ export const cashAccountsSetPayeeDefault = defineOperation({
       ok: true,
       data: {
         defaults: outcome.data.defaults.map((d) => ({ currency: d.currency, cash_account_id: d.cash_account_id })),
+      },
+    }
+  },
+})
+
+const LedgerMove = z.object({
+  cash_account_id: z.string().uuid().nullable(),
+  name: z.string().nullable(),
+  iban_last4: z.string().nullable(),
+  currency: z.string(),
+  from_ledger: z.string().nullable().describe('The ledger account the account books on now.'),
+  to_ledger: z.string(),
+  booked_rows: z.number().int().describe('Bank rows already booked: their verifikat stay on from_ledger.'),
+  unbooked_rows: z.number().int().describe('Bank rows not booked yet: they book on to_ledger.'),
+  swapped: z.boolean().describe('Moved because another account asked for its ledger account.'),
+})
+
+export const cashAccountsChangeLedgers = defineOperation({
+  id: 'cash-accounts.change-ledgers',
+  kind: 'write',
+  scope: 'companies:write',
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Change which 19xx ledger account bank-connected accounts book on from now on.',
+    description:
+      'Moves one or more accounts that one bank connection syncs (Enable Banking or Open Payments) to other 19xx ledger accounts, as the dashboard does under Inställningar > Kopplingar. Unbooked bank rows follow the account; posted verifikat stay on the old ledger account (move a balance with a voucher if needed). Another account of the connection on a requested ledger account swaps to the mover\'s old one. Owner/admin only. Dry-run first: the preview lists each move with booked and unbooked row counts.',
+    useWhen: 'A company migrated from another system books its bank on other 19xx accounts than the bank connection chose.',
+    doNotUseFor: 'Accounts typed in by hand or from SIE (no bank connection), or rebooking posted verifikat (gnubok_correct_entry).',
+    pitfalls: [
+      'All accounts must be synced by one active bank connection: 400 VALIDATION_ERROR with details.reason several_connections or not_bank_connected; a connection not active answers BANK_LEDGER_CHANGE_NOT_ACTIVE.',
+      'A ledger account another bank account holds is refused with a sentence naming it; two moves to the same ledger account return BANK_SELECTION_LEDGER_CONFLICT.',
+      'Owner or admin only: a member key gets 403 FORBIDDEN.',
+    ],
+    // A USD account the connection put on the SEK default, moved to the USD one.
+    example: {
+      request: { accounts: [{ cash_account_id: '7f3a…', ledger_account: CURRENCY_LEDGER_DEFAULTS.USD }] },
+      response: {
+        data: {
+          connection_id: '0c1d…',
+          moves: [
+            {
+              cash_account_id: '7f3a…',
+              name: 'Valutakonto',
+              iban_last4: null,
+              currency: 'USD',
+              from_ledger: CURRENCY_LEDGER_DEFAULTS.SEK,
+              to_ledger: CURRENCY_LEDGER_DEFAULTS.USD,
+              booked_rows: 4,
+              unbooked_rows: 20,
+              swapped: false,
+            },
+          ],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      accounts: z
+        .array(
+          z
+            .object({
+              cash_account_id: CASH_ACCOUNT_ID,
+              // That it is a bank account (19xx) is the service's rule (isCashLedger).
+              ledger_account: accountNumberSchema.describe('The 19xx account to book on, as a string.'),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(50),
+    })
+    .strict(),
+  output: z.object({ connection_id: z.string().uuid(), moves: z.array(LedgerMove) }),
+  errorCodes: [
+    'CASH_ACCOUNT_NOT_FOUND',
+    'FORBIDDEN',
+    'VALIDATION_ERROR',
+    'BANK_LEDGER_CHANGE_NOT_ACTIVE',
+    'BANK_SELECTION_LEDGER_CONFLICT',
+  ],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/cash-accounts/change-ledgers' },
+  mcp: {
+    name: 'gnubok_change_bank_ledgers',
+    title: 'Change Bank Ledger Accounts',
+    description:
+      'Stage moving bank-connected accounts to other 19xx ledger accounts (e.g. back to the accounts used before a migration). Unbooked rows follow; posted verifikat stay. The preview counts both. Owner/admin only.',
+    keywords: ['byt bokföringskonto bank', 'ändra 19xx', 'bankkonto fel konto', 'bokföringskonto bankkoppling'],
+    stage: {
+      pendingType: 'change_bank_ledgers',
+      title: (input) => {
+        const n = Array.isArray(input.accounts) ? input.accounts.length : 0
+        return n === 1 ? 'Byt bokföringskonto på bankkonto' : `Byt bokföringskonto på ${n} bankkonton`
+      },
+    },
+  },
+  run: async (ctx, input, { dryRun }) => {
+    const outcome = await changeCashAccountLedgers(ctx, input, { dryRun })
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return {
+      ok: true,
+      data: {
+        connection_id: outcome.data.connection_id,
+        moves: outcome.data.moves.map(({ uid: _uid, ...move }) => move),
       },
     }
   },

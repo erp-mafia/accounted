@@ -34,6 +34,7 @@ import {
 } from './company-settings'
 import { settingsGetSkattekontoAccount, settingsUpdateSkattekontoAccount } from './skattekonto-account'
 import {
+  cashAccountsChangeLedgers,
   cashAccountsCreate,
   cashAccountsSetPayeeDefault,
   cashAccountsSetPrimary,
@@ -305,6 +306,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   cashAccountsUpdate,
   cashAccountsSetPrimary,
   cashAccountsSetPayeeDefault,
+  cashAccountsChangeLedgers,
   // fiscal-periods
   fiscalPeriodsCreate,
   fiscalPeriodsUpdate,

@@ -612,6 +612,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_cash_account: 'companies:write',
   gnubok_set_primary_cash_account: 'companies:write',
   gnubok_set_invoice_payee_default: 'companies:write',
+  gnubok_change_bank_ledgers: 'companies:write',
   gnubok_create_fiscal_period: 'bookkeeping:write',
   gnubok_update_fiscal_period: 'bookkeeping:write',
   gnubok_close_fiscal_period_external: 'bookkeeping:write',
