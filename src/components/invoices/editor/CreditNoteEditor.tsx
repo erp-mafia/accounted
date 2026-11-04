@@ -25,13 +25,13 @@ import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limi
 import { useInvoicePdfPreview } from './use-editor-previews'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
+  CHANNEL_BLOCK_KEYS,
   emailPreviewBlock,
   NO_MAILBOX_READY,
   resolveChannelOptions,
   resolveEffectiveChannel,
   type ChannelContext,
   type EditorChannel,
-  type EmailBlockReason,
 } from '@/lib/invoices/editor/channel'
 import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
@@ -51,14 +51,6 @@ import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isInvoiceOverdue } from '@/lib/invoices/overdue'
-
-// Why email is not possible, as keys of the invoice_editor_shell namespace.
-const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
-  not_emailable: 'email_block_not_emailable',
-  sandbox: 'email_block_sandbox',
-  no_email_plan: 'email_block_no_email_plan',
-  no_customer_email: 'email_block_no_customer_email',
-}
 
 type CreditIntent = { kind: 'send'; channel: EditorChannel } | { kind: 'create' }
 
@@ -167,8 +159,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     isSandbox,
     customerSelected: Boolean(customer),
     customerEmail: customer?.email ?? null,
-    peppolReady: false,
-    // A kreditfaktura never goes to a digital mailbox (the send refuses it).
+    // A kreditfaktura never goes as an e-faktura or to a digital mailbox
+    // (both sends refuse it).
+    peppol: null,
     mailboxReady: NO_MAILBOX_READY,
   }
   const channelOptions = resolveChannelOptions(channelContext)
@@ -184,7 +177,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
           ? tShell('email_unavailable_peppol')
           : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
             ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
-            : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+            : tShell(CHANNEL_BLOCK_KEYS[emailTabBlock])
   const primaryLabel = tShell(resolveSendLabel({ documentType: 'invoice', channel, booksOnIssue: books }))
 
   const extraCc = parseInvoiceRecipientText(extraCcText)
@@ -443,7 +436,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       label: tShell(`channel_${option.channel}`),
       selected: option.channel === channel,
       disabled: !option.available || !canWrite,
-      reason: option.reason ? tShell(EMAIL_BLOCK_KEYS[option.reason]) : null,
+      reason: option.reason ? tShell(CHANNEL_BLOCK_KEYS[option.reason]) : null,
       onSelect: () => requestIntent({ kind: 'send', channel: option.channel }),
     })),
     actions: [

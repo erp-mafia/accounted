@@ -110,7 +110,7 @@ describe('resolveEditorMenu', () => {
     isSandbox: false,
     customerSelected: true,
     customerEmail: 'ekonomi@example.se',
-    peppolReady: false,
+    peppol: null,
     mailboxReady: NO_MAILBOX_READY,
   })
 
@@ -150,7 +150,7 @@ describe('resolveEditorMenu', () => {
       isSandbox: false,
       customerSelected: true,
       customerEmail: 'ekonomi@example.se',
-      peppolReady: false,
+      peppol: null,
       mailboxReady: { kivra: true, billo: true },
     })
     const menu = resolveEditorMenu({ ...primary({ channel: 'billo' }), channelOptions: withMailboxes })
@@ -177,7 +177,7 @@ describe('resolveEditorMenu', () => {
       isSandbox: false,
       customerSelected: true,
       customerEmail: 'ekonomi@example.se',
-      peppolReady: false,
+      peppol: null,
       mailboxReady: NO_MAILBOX_READY,
     })
     const menu = resolveEditorMenu({ ...primary({ channel: 'manual' }), channelOptions: blocked })

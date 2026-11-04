@@ -247,9 +247,21 @@ export async function persistAndSend(
     ok: true,
     invoiceId,
     invoiceNumber,
-    partial: sent.json?.partial === true,
+    partial: sent.json?.partial === true || peppolIssuancePartial(sent.json),
     message: typeof sent.json?.message === 'string' ? sent.json.message : null,
   }
+}
+
+/**
+ * The Peppol send answers a follow-up failure after the verifikat (PDF
+ * archive, periodisering, delivery history) inside its issuance
+ * (data.issuance.partial_failures), not as the top-level partial the email
+ * and mark-sent routes use.
+ */
+function peppolIssuancePartial(json: Record<string, unknown> | null): boolean {
+  const data = json?.data as { issuance?: { partial_failures?: unknown } | null } | undefined
+  const failures = data?.issuance?.partial_failures
+  return Array.isArray(failures) && failures.length > 0
 }
 
 /** Steps 3 and 4 of a kontantfaktura: issue it paid, then mail the receipt when the channel is email. */
