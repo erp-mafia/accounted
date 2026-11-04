@@ -119,7 +119,7 @@ describe('POST /api/signing-requests', () => {
       { ...validBody, expires_in_days: 91 },
       { ...validBody, expires_in_days: 1.5 },
       { ...validBody, signers: [] },
-      { ...validBody, signers: Array.from({ length: 21 }, (_, i) => ({ name: `Person ${i}` })) },
+      { ...validBody, signers: Array.from({ length: 6 }, (_, i) => ({ name: `Person ${i}` })) },
       { ...validBody, signers: [{ name: '' }] },
       { ...validBody, signers: [{ name: 'Anna', email: 'not-an-email' }] },
       { ...validBody, signers: [{ name: 'Anna', user_id: 'not-a-uuid' }] },

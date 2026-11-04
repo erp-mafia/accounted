@@ -50,7 +50,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: capability 
 const usageGate = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal: usageGate }))
 
-import { cancelSigningRequest, createSigningRequest, describeRequester, remindSigner, signingAvailability, type CreateSigningRequestInput } from '../requests'
+import { cancelSigningRequest, checkSigners, createSigningRequest, describeRequester, remindSigner, signingAvailability, type CreateSigningRequestInput } from '../requests'
 
 const NOW = Date.parse('2026-10-25T10:00:00.000Z')
 const STORAGE_PATH = `documents/${COMPANY}/${DOC}.pdf`
@@ -237,12 +237,20 @@ describe('createSigningRequest refuses', () => {
     expect(insertedRequests()).toEqual([])
   })
 
-  it('no signer or more than 20, and a signer without a name', async () => {
+  it('no signer or more than 5 on a document, and a signer without a name', async () => {
     expect(await createSigningRequest(ctx, input({ signers: [] }))).toMatchObject({ ok: false, code: 'SIGNING_SIGNERS_INVALID', details: { reason: 'count' } })
-    const many = Array.from({ length: 21 }, (_, i) => ({ name: `Person ${i}` }))
-    expect(await createSigningRequest(ctx, input({ signers: many }))).toMatchObject({ details: { reason: 'count' } })
+    const six = Array.from({ length: 6 }, (_, i) => ({ name: `Person ${i}` }))
+    expect(await createSigningRequest(ctx, input({ signers: six }))).toMatchObject({ details: { reason: 'count' } })
     expect(await createSigningRequest(ctx, input({ signers: [{ name: '  ' }] }))).toMatchObject({ details: { reason: 'name' } })
     expect(insertedRequests()).toEqual([])
+  })
+
+  it('lets an årsredovisning have more than 5 signer slots, up to 20', async () => {
+    const people = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `Ledamot ${i}` }))
+    const service = createTableMockSupabase({}).supabase as unknown as Parameters<typeof checkSigners>[0]
+    expect(await checkSigners(service, COMPANY, people(6))).toMatchObject({ ok: false, details: { reason: 'count' } })
+    expect(await checkSigners(service, COMPANY, people(20), { samePersonMaySignTwice: true })).toMatchObject({ ok: true })
+    expect(await checkSigners(service, COMPANY, people(21), { samePersonMaySignTwice: true })).toMatchObject({ ok: false, details: { reason: 'count' } })
   })
 
   it('the same address twice, whatever its case and spaces', async () => {
