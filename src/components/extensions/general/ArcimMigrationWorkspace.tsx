@@ -3556,6 +3556,20 @@ export default function ArcimMigrationWorkspace({
     }
 
     try {
+      // Validate every selected register before the first SIE upload/job.
+      // A later register configuration error must not leave a partial migration.
+      const selected = {
+        customers: migrationOptions.importCustomers, suppliers: migrationOptions.importSuppliers,
+        salesInvoices: migrationOptions.importSalesInvoices, supplierInvoices: migrationOptions.importSupplierInvoices,
+      }
+      const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
+      const preflight = await fetch('/api/extensions/ext/arcim-migration/migration-jobs/preflight', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resources }),
+      })
+      const readiness = await preflight.json()
+      if (!preflight.ok) throw apiError(readiness, `HTTP ${preflight.status}`)
+
       // ── Phase 1: SIE import ──────────────────────────────────
       if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
         // Check every selected year before uploading files or admitting jobs.
@@ -3687,11 +3701,6 @@ export default function ArcimMigrationWorkspace({
           merged = mergeMigrationResults(merged, results)
           setMigrationResults(merged)
         }
-        const selected = {
-          customers: migrationOptions.importCustomers, suppliers: migrationOptions.importSuppliers,
-          salesInvoices: migrationOptions.importSalesInvoices, supplierInvoices: migrationOptions.importSupplierInvoices,
-        }
-        const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
         if (resources.length) {
           const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

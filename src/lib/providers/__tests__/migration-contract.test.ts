@@ -24,3 +24,8 @@ describe('migrationIssueKind', () => {
     expect(migrationIssueKind(null)).toBe('retry')
   })
 })
+
+
+it('distinguishes missing encryption configuration from a retryable error', () => {
+  expect(migrationIssueKind('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')).toBe('configuration')
+})

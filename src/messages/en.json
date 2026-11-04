@@ -6967,6 +6967,7 @@
     "ext_arcim_job_error_lines": "The invoice lines are missing or do not match the invoice total.",
     "ext_arcim_job_error_size": "This invoice exceeds the automatic import limit and needs a separate review.",
     "ext_arcim_job_error_exists": "A record with the same number already exists in Accounted and could not be matched safely. It was not overwritten and needs review.",
+    "ext_arcim_job_error_configuration": "The import is paused because the server is missing PERSONNUMMER_ENCRYPTION_KEY. An administrator must configure it before the import can continue.",
     "ext_arcim_job_error_retry": "This record could not be completed. Resume to try it again.",
     "ext_arcim_job_reconnect": "Reconnect",
     "ext_arcim_job_latest": "View latest import",
