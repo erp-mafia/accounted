@@ -3457,6 +3457,7 @@
     "usage_unit_price": "{price} st",
     "usage_included": "Ingår",
     "usage_all_included": "Alla",
+    "usage_included_left": "{left} kvar av {total}",
     "usage_billed_note": "Det som går över det som ingår läggs på abonnemangets faktura i efterskott.",
     "usage_empty": "Inget använt i {month} ännu.",
     "usage_load_failed": "Användningen kunde inte läsas just nu.",

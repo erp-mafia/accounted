@@ -3457,6 +3457,7 @@
     "usage_unit_price": "{price} each",
     "usage_included": "Included",
     "usage_all_included": "All",
+    "usage_included_left": "{left} of {total} left",
     "usage_billed_note": "Anything above what is included goes on the subscription's invoice, in arrears.",
     "usage_empty": "Nothing used in {month} yet.",
     "usage_load_failed": "Usage could not be loaded right now.",

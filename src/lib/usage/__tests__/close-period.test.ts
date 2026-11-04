@@ -60,8 +60,11 @@ function fakeStripe() {
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as unknown as Logger
 
-function counts(byKind: Partial<Record<UsageKind, Record<string, number>>>) {
-  countMock.mockImplementation(async (_service: unknown, kind: UsageKind) => new Map(Object.entries(byKind[kind] ?? {})))
+/** The month's counts by kind, and `before` what earlier months counted (for an amount included once). */
+function counts(byKind: Partial<Record<UsageKind, Record<string, number>>>, before: Partial<Record<UsageKind, Record<string, number>>> = {}) {
+  countMock.mockImplementation(async (_service: unknown, kind: UsageKind, _period: string, options?: { before?: boolean }) =>
+    new Map(Object.entries((options?.before ? before : byKind)[kind] ?? {})),
+  )
 }
 
 const PERIOD = '2026-09'
@@ -185,6 +188,19 @@ describe('closeUsagePeriod', () => {
     await closeUsagePeriod(service, PERIOD, { stripe: fakeStripe().stripe, billed: BILLED, log })
 
     expect(upserts).toEqual([expect.objectContaining({ included: 110, billable: 0, status: 'preview', reason: 'nothing_billable' })])
+  })
+
+  it('counts signed documents against the company\'s first three in all: earlier months leave the rest', async () => {
+    counts({ signing: { c1: 2, c2: 2 } }, { signing: { c1: 2 } })
+    const { service, upserts } = fakeService({ company_subscriptions: [monthly, { ...monthly, company_id: 'c2' }] })
+
+    await closeUsagePeriod(service, PERIOD, { stripe: fakeStripe().stripe, billed: new Set<UsageKind>(['signing']), log })
+
+    expect(countMock).toHaveBeenCalledWith(service, 'signing', PERIOD, { before: true })
+    expect(upserts).toEqual([
+      expect.objectContaining({ company_id: 'c1', kind: 'signing', used: 2, included: 1, billable: 1, amount_ore: 1000, reason: 'no_consent' }),
+      expect.objectContaining({ company_id: 'c2', kind: 'signing', used: 2, included: 3, billable: 0, reason: 'nothing_billable' }),
+    ])
   })
 
   it.each([

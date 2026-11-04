@@ -10,10 +10,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { currentUsagePeriod, includedBankPayments } from '@/lib/payments/usage'
 import { consentCovers, readOpenConsents } from './consent'
 import { countCompanyUsage } from './counters'
-import { billedUsageKinds, USAGE_GATED_KINDS, USAGE_KINDS, usageLine, type UsageKind, type UsageLine } from './kinds'
+import { billedUsageKinds, includedThisMonth, USAGE_GATED_KINDS, USAGE_KINDS, USAGE_PRICES, usageLine, type UsageKind, type UsageLine } from './kinds'
 import { readCompanyPays } from './paying'
 
 export interface CompanyUsageLine extends UsageLine {
+  /** For a kind included once (signed documents), what the company's first units include in all; else null. */
+  included_once: number | null
   /** Whether the kind stops at the included amount and more can be asked for: it is billed, priced and gated. */
   offered: boolean
   /** Whether a founder opened the charge for the company at today's price (consent.ts). */
@@ -31,9 +33,17 @@ export interface CompanyUsage {
   lines: CompanyUsageLine[]
 }
 
-/** The included amount for one company where it differs from the registry: the bank payments allowance. */
-export async function includedOverrideFor(service: SupabaseClient, companyId: string, kind: UsageKind): Promise<number | null> {
-  return kind === 'bank_payment' ? includedBankPayments(service, companyId) : null
+/**
+ * The month's included amount for one company where it differs from the
+ * registry: the bank payments allowance, or what earlier months left of an
+ * amount included once.
+ */
+export async function includedOverrideFor(service: SupabaseClient, companyId: string, kind: UsageKind, period: string): Promise<number | null> {
+  if (kind === 'bank_payment') return includedBankPayments(service, companyId)
+  if (USAGE_PRICES[kind].includedOnce !== undefined) {
+    return includedThisMonth(kind, await countCompanyUsage(service, companyId, kind, period, { before: true }))
+  }
+  return null
 }
 
 export async function getCompanyUsage(
@@ -48,13 +58,14 @@ export async function getCompanyUsage(
     USAGE_KINDS.map(async (kind): Promise<CompanyUsageLine> => {
       const [used, included] = await Promise.all([
         countCompanyUsage(service, companyId, kind, period),
-        includedOverrideFor(service, companyId, kind),
+        includedOverrideFor(service, companyId, kind, period),
       ])
       const offered = billedKinds.has(kind) && USAGE_GATED_KINDS.has(kind)
       const consent = consents.get(kind)
       const accepted = consentCovers(consent, kind)
       return {
         ...usageLine(kind, used, included),
+        included_once: USAGE_PRICES[kind].includedOnce ?? null,
         offered,
         accepted,
         accepted_at: accepted ? consent!.accepted_at : null,

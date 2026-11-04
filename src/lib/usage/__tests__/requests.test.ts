@@ -33,7 +33,11 @@ beforeEach(() => {
 })
 
 describe('requestMoreUsage', () => {
-  it('stores the request and mails support with the company, the month, the price, who pays and how to open it', async () => {
+  it('stores the request and mails support with the company, the use so far, the price, who pays and how to open it', async () => {
+    // Signed documents are included once: two in earlier months and one this month make 3 in all.
+    countMock.mockImplementation(async (_db: unknown, _company: string, _kind: string, _period: string, options?: { before?: boolean }) =>
+      options?.before ? 2 : 1,
+    )
     const db = createTableMockSupabase({
       usage_requests: [{ data: [] }, { data: { id: 'r-1', created_at: NOW.toISOString() } }],
       companies: { data: { name: 'Bygg AB', org_number: '556677-8899' } },
@@ -48,7 +52,7 @@ describe('requestMoreUsage', () => {
     const sent = mail.sendEmail.mock.calls[0]![0] as { subject: string; text: string; html: string; replyTo?: string }
     expect(sent.replyTo).toBe('anna@bygg.se')
     expect(sent.subject).toContain('Bygg AB')
-    for (const part of ['Bygg AB', '556677-8899', 'anna@bygg.se', 'Signerade dokument med BankID', '3 av 3 som ingår', '10,00 kr', 'eget abonnemang']) {
+    for (const part of ['Bygg AB', '556677-8899', 'anna@bygg.se', 'Signerade dokument med BankID', 'Använt totalt: 3 av 3 som ingår', '10,00 kr', 'eget abonnemang']) {
       expect(sent.text).toContain(part)
     }
     expect(sent.text).toContain(`('${COMPANY}', 'signing', 1000, 3,`)

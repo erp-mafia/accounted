@@ -67,8 +67,12 @@ export async function requestMoreUsage(
 
   const period = currentUsagePeriod()
   const price = USAGE_PRICES[input.kind]
-  const [used, payer, companyRead] = await Promise.all([
+  // A kind included once (signed documents) counts every unit so far against what is included in all.
+  const once = price.includedOnce !== undefined
+  const included = (once ? price.includedOnce : price.includedPerMonth) ?? 0
+  const [used, usedBefore, payer, companyRead] = await Promise.all([
     countCompanyUsage(service, actor.companyId, input.kind, period),
+    once ? countCompanyUsage(service, actor.companyId, input.kind, period, { before: true }) : Promise.resolve(0),
     readCompanyPayer(service, actor.companyId),
     service.from('companies').select('name, org_number').eq('id', actor.companyId).maybeSingle(),
   ])
@@ -89,14 +93,14 @@ export async function requestMoreUsage(
     ['Företags-id', actor.companyId],
     ['Begärt av', actor.email ?? actor.userId],
     ['Tjänst', USAGE_INVOICE_LABELS[input.kind]],
-    [`Använt ${period}`, `${used} av ${price.includedPerMonth ?? 0} som ingår`],
+    once ? ['Använt totalt', `${usedBefore + used} av ${included} som ingår`] : [`Använt ${period}`, `${used} av ${included} som ingår`],
     ['Pris därutöver', formatOre(price.unitPriceOre ?? 0)],
     ['Betalas av', payerText],
     ['Förfrågan', row.id],
   ]
   const openSql =
     `insert into usage_consents (company_id, kind, unit_price_ore, included, accepted_by) values ` +
-    `('${actor.companyId}', '${input.kind}', ${price.unitPriceOre ?? 0}, ${price.includedPerMonth ?? 0}, '<din user id>');`
+    `('${actor.companyId}', '${input.kind}', ${price.unitPriceOre ?? 0}, ${included}, '<din user id>');`
   const footer = `Öppna avgiften för företaget och sätt handled_at på förfrågan:\n${openSql}`
   const message = input.message ?? ''
   const text = `${lines.map(([label, value]) => `${label}: ${value}`).join('\n')}${message ? `\n\nMeddelande:\n${message}` : ''}\n\n${footer}`

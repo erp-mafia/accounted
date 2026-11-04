@@ -21,6 +21,13 @@ function db(consents: unknown[] = [], subscription: unknown = ACTIVE, extra: Rec
   }).supabase as unknown as SupabaseClient
 }
 
+/** Signed documents are included once: `before` earlier months' signings, `month` this month's. */
+function signings(before: number, month: number) {
+  countMock.mockImplementation(async (_db: unknown, _company: string, _kind: string, _period: string, options?: { before?: boolean }) =>
+    options?.before ? before : month,
+  )
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -61,7 +68,7 @@ describe('usageGateRefusal', () => {
   })
 
   it('treats a byrå client covered by its byrå\'s agreement as paid for: it can be opened', async () => {
-    countMock.mockResolvedValue(3)
+    signings(0, 3)
     const byra = {
       companies: { data: { team_id: 'team-1' } },
       teams: { data: { name: 'Byrån AB', kind: 'byra' } },
@@ -76,7 +83,7 @@ describe('usageGateRefusal', () => {
 
 describe('usageGateRefusal without a subscription of its own', () => {
   it('stops a trial at what is included, accepted or not, and says a subscription is needed', async () => {
-    countMock.mockResolvedValue(3)
+    signings(2, 1)
     const trial = { ...ACTIVE, status: 'trialing' }
     const accepted = [{ company_id: COMPANY, kind: 'signing', unit_price_ore: 1000, included: 3, accepted_by: 'u1', accepted_at: '2026-11-02T08:00:00Z' }]
     const refusal = await usageGateRefusal(db(accepted, trial), COMPANY, 'signing', { env: { USAGE_BILLING_KINDS: 'signing' }, period: '2026-11' })
@@ -85,16 +92,36 @@ describe('usageGateRefusal without a subscription of its own', () => {
       code: 'USAGE_SUBSCRIPTION_REQUIRED',
       details: { kind: 'signing', period: '2026-11', used: 3, included: 3, requested: 1, unit_price_ore: 1000 },
       messageSv:
-        'Månadens 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
+        'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
     })
   })
 
   it('stops a company with no subscription row, and lets it use what is included', async () => {
-    countMock.mockResolvedValue(2)
+    signings(0, 2)
     const env = { USAGE_BILLING_KINDS: 'signing' }
     expect(await usageGateRefusal(db([], null), COMPANY, 'signing', { env })).toBeNull()
-    countMock.mockResolvedValue(3)
+    signings(1, 2)
     expect(await usageGateRefusal(db([], null), COMPANY, 'signing', { env })).toMatchObject({ code: 'USAGE_SUBSCRIPTION_REQUIRED' })
+  })
+})
+
+describe('usageGateRefusal for signed documents, included once', () => {
+  const env = { USAGE_BILLING_KINDS: 'signing' }
+
+  it('counts the company\'s signings in all, so a new month gives no new ones', async () => {
+    signings(3, 0)
+    expect(await usageGateRefusal(db(), COMPANY, 'signing', { env, period: '2026-12' })).toEqual({
+      ok: false,
+      code: 'USAGE_LIMIT_REACHED',
+      details: { kind: 'signing', period: '2026-12', used: 3, included: 3, requested: 1, unit_price_ore: 1000 },
+      messageSv: 'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st. Begär fler under Inställningar, Abonnemang, Användning, så öppnar vi.',
+    })
+    expect(countMock).toHaveBeenCalledWith(expect.anything(), COMPANY, 'signing', '2026-12', { before: true })
+  })
+
+  it('lets the third in all through, whichever months the first two fell in', async () => {
+    signings(1, 1)
+    expect(await usageGateRefusal(db(), COMPANY, 'signing', { env, period: '2026-12' })).toBeNull()
   })
 })
 
