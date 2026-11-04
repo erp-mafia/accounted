@@ -134,6 +134,7 @@ export default function AccountMappingStep({
   })
   const [currentPage, setCurrentPage] = useState(1)
   const [openTargetAccount, setOpenTargetAccount] = useState<string | null>(null)
+  const [focusedTargetAccount, setFocusedTargetAccount] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Targets the dropdown can name: the caller's list (the company chart, or
@@ -487,7 +488,13 @@ export default function AccountMappingStep({
                           )
                         }}
                       >
-                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
+                        <SelectTrigger
+                          className={!mapping.targetAccount ? 'border-destructive' : ''}
+                          onFocus={() => setFocusedTargetAccount(mapping.sourceAccount)}
+                          onBlur={() => setFocusedTargetAccount((current) =>
+                            current === mapping.sourceAccount ? null : current
+                          )}
+                        >
                           <SelectValue placeholder="Välj konto..." />
                         </SelectTrigger>
                         <SelectContent className="max-h-80">
@@ -503,8 +510,8 @@ export default function AccountMappingStep({
                           ))}
                           {/* Radix mounts closed content in a DocumentFragment.
                               Keep its selected item for the label, but only
-                              mount the full chart for the open row. */}
-                          {openTargetAccount === mapping.sourceAccount ? Object.entries(accountsByClass).map(([className, accounts]) => (
+                              mount the full chart for the open or focused row. */}
+                          {openTargetAccount === mapping.sourceAccount || focusedTargetAccount === mapping.sourceAccount ? Object.entries(accountsByClass).map(([className, accounts]) => (
                             <div key={className}>
                               <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
                                 {className}
