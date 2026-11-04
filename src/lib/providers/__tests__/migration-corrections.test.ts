@@ -15,3 +15,14 @@ it('rejects empty or additional fields', () => {
   expect(() => applyMigrationInvoiceCorrection(dto, { invoiceNumber: ' ' })).toThrow()
   expect(() => applyMigrationInvoiceCorrection(dto, { invoiceNumber: 'A', total: 1 })).toThrow()
 })
+
+
+it('uses OCR without requiring a manual correction and keeps leading zeros', () => {
+  const dto = { invoiceNumber: ' ', ocrNumber: ' 001234 ' } as SupplierInvoiceDto
+  expect(applyMigrationInvoiceCorrection(dto).invoiceNumber).toBe('001234')
+  expect(dto.invoiceNumber).toBe(' ')
+})
+it('retains an explicit saved correction before using an OCR fallback', () => {
+  const dto = { invoiceNumber: '', ocrNumber: '001234' } as SupplierInvoiceDto
+  expect(applyMigrationInvoiceCorrection(dto, { invoiceNumber: 'MANUAL-1' }).invoiceNumber).toBe('MANUAL-1')
+})

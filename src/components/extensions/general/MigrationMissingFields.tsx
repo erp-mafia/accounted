@@ -20,10 +20,17 @@ export default function MigrationMissingFields({ jobId }: { jobId: string }) {
   const load = useCallback(async (after?: string) => {
     setBusy(true); setError(false)
     try {
-      const response = await fetch(`${ROOT}?jobId=${encodeURIComponent(jobId)}${after ? `&after=${encodeURIComponent(after)}` : ''}`, { cache: 'no-store' })
-      if (!response.ok) throw new Error('Read failed')
-      const body = await response.json()
-      setRecords(body.data.records); setNext(body.data.next)
+      let cursor = after
+      // Skip pages whose old failures now resolve automatically through OCR.
+      // Each response stays bounded and the user can page further if necessary.
+      for (let page = 0; page < 20; page++) {
+        const response = await fetch(`${ROOT}?jobId=${encodeURIComponent(jobId)}${cursor ? `&after=${encodeURIComponent(cursor)}` : ''}`, { cache: 'no-store' })
+        if (!response.ok) throw new Error('Read failed')
+        const body = await response.json()
+        setRecords(body.data.records); setNext(body.data.next)
+        if (body.data.records.length || !body.data.next) break
+        cursor = body.data.next
+      }
     } catch { setError(true) }
     finally { setBusy(false) }
   }, [jobId])

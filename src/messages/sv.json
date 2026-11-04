@@ -6970,7 +6970,7 @@
     "ext_arcim_job_error_configuration": "Importen är pausad eftersom serverns krypteringsnyckel PERSONNUMMER_ENCRYPTION_KEY saknas. Administratören behöver konfigurera den innan importen kan fortsätta.",
     "ext_arcim_job_error_missing": "Obligatoriska uppgifter saknas. Komplettera fakturan nedan innan du återupptar importen.",
     "ext_arcim_missing_title": "Komplettera saknade fakturanummer",
-    "ext_arcim_missing_description": "Ange faktura- eller kvittonumret från respektive underlag. Bokios originaldata bevaras. Sparade kompletteringar används när du återupptar importen; redan importerade fakturor ändras inte.",
+    "ext_arcim_missing_description": "När fakturanumret saknas används OCR-numret automatiskt. Saknas båda, ange faktura- eller kvittonumret från respektive underlag. Bokios originaldata bevaras. Sparade kompletteringar används när du återupptar importen; redan importerade fakturor ändras inte.",
     "ext_arcim_missing_saved": "Kompletteringen är sparad. Fyll i fler poster eller återuppta importen.",
     "ext_arcim_missing_error": "Uppgifterna kunde inte hämtas eller sparas. Läs in listan igen; posten kan ha ändrats.",
     "ext_arcim_missing_number": "Faktura- eller kvittonummer",

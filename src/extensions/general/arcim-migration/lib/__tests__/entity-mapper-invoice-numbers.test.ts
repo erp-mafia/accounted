@@ -97,3 +97,20 @@ describe('sales invoice remaining_amount', () => {
     expect(inv.remaining_amount).toBe(0)
   })
 })
+
+
+describe('supplier invoice OCR fallback', () => {
+  it('uses OCR for an empty or whitespace-only invoice number and preserves the payment reference', () => {
+    for (const invoiceNumber of ['', '   ']) {
+      const dto = { ...makeSupplierDto(invoiceNumber), ocrNumber: ' 001234567890 ' }
+      const mapped = mapSupplierInvoice(dto, 'u', 'c', 'sup').invoice
+      expect(mapped.supplier_invoice_number).toBe('001234567890')
+      expect(mapped.payment_reference).toBe(dto.ocrNumber)
+      expect(dto.invoiceNumber).toBe(invoiceNumber)
+    }
+  })
+  it('prefers the real invoice number and does not manufacture one if both are missing', () => {
+    expect(mapSupplierInvoice({ ...makeSupplierDto('F-42'), ocrNumber: '00123' }, 'u', 'c', 'sup').invoice.supplier_invoice_number).toBe('F-42')
+    expect(mapSupplierInvoice({ ...makeSupplierDto(' '), ocrNumber: ' ' }, 'u', 'c', 'sup').invoice.supplier_invoice_number).toBeNull()
+  })
+})

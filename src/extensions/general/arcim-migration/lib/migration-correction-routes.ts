@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
 import type { SupplierInvoiceDto } from '@/lib/providers/dto'
-import { MigrationInvoiceCorrectionSchema } from '@/lib/providers/migration-corrections'
+import { MigrationInvoiceCorrectionSchema, resolveMigrationSupplierInvoiceNumber } from '@/lib/providers/migration-corrections'
 import { openMigrationPayload, sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { requireWritePermission } from '@/lib/auth/require-write'
@@ -42,7 +42,7 @@ export const migrationCorrectionRoutes: ApiRouteDefinition[] = [
       const page = (data ?? []).slice(0, 20)
       const records = page.flatMap(row => {
         const dto = openMigrationPayload<SupplierInvoiceDto>(row.payload)
-        if (dto.invoiceNumber?.trim()) return []
+        if (resolveMigrationSupplierInvoiceNumber(dto)) return []
         return [{ id: row.id, sourceId: row.source_id, supplier: dto.supplier.name, date: dto.issueDate,
           total: dto.legalMonetaryTotal.payableAmount.value, currency: dto.currencyCode }]
       })
@@ -70,7 +70,7 @@ export const migrationCorrectionRoutes: ApiRouteDefinition[] = [
       if (readError) return refusal(500)
       if (!chunk) return refusal(409)
       const dto = openMigrationPayload<SupplierInvoiceDto>(chunk.payload)
-      if (dto.invoiceNumber?.trim()) return refusal(409)
+      if (resolveMigrationSupplierInvoiceNumber(dto)) return refusal(409)
       const receipt = { ...chunk.receipt, userCorrection: sealMigrationPayload(body.data.correction).payload,
         correctedBy: ctx.userId, correctedAt: new Date().toISOString() }
       // State/version checks reject a concurrent retry or correction. Source payload stays untouched.

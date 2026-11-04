@@ -676,3 +676,18 @@ it.each([false, true])('requires a number or applies the saved correction after 
     expect(record).toEqual({ id: dto.id, error: 'MIGRATION_INVOICE_NUMBER_REQUIRED' })
   }
 })
+
+it('uses OCR after hydration for invoice admission and voucher-link identity', async () => {
+  const db = database({ phase: 'import', resources: ['supplierInvoices'] })
+  const dto = mapBokioToSupplierInvoice({ id: 'ocr-fallback', supplierRef: { id: 'supplier', name: 'Fixture' }, totalAmount: 125 })
+  dto.invoiceNumber = ''; dto.ocrNumber = '001234567890'
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto), receipt: {} })
+  mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+  await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+  expect(vi.mocked(mapSupplierInvoice).mock.lastCall?.[0].invoiceNumber).toBe('001234567890')
+  const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+  const record = (commit[1].p_records as Record<string, unknown>[])[0]
+  expect(record).not.toHaveProperty('error')
+  expect(record.link).toEqual(expect.objectContaining({ invoiceNumber: '001234567890' }))
+  expect(dto.invoiceNumber).toBe('')
+})

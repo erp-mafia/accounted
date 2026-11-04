@@ -63,6 +63,13 @@ describe('staged invoice corrections', () => {
     expect((await route('POST')(request(), ctx)).status).toBe(409)
     expect(mocks.service).not.toHaveBeenCalled()
   })
+  it('does not ask for manual input when an OCR fallback is available', async () => {
+    const { ctx, db } = setup()
+    db.enqueueMany([{ data: { id: jobId, state: 'needs_attention' } }, { data: [{ id: chunkId, source_id: 'source',
+      payload: sealMigrationPayload({ invoiceNumber: '', ocrNumber: '001234' }).payload }] }])
+    const response = await route('GET')(new Request(`http://localhost/missing-fields?jobId=${jobId}`), ctx)
+    expect((await response.json()).data.records).toEqual([])
+  })
   it('pages actionable records and exposes no encrypted payload', async () => {
     const { ctx, db } = setup()
     db.enqueueMany([{ data: { id: jobId, state: 'needs_attention' } }, { data: [{ id: chunkId, source_id: 'source',
