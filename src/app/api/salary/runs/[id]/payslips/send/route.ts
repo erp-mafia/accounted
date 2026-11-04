@@ -9,7 +9,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { sandboxBlockedResponse } from '@/lib/sandbox/guard'
 
 /**
- * Send payslips to all employees with email addresses: as secure LINKS,
+ * Send payslips to the employees with email addresses: as secure LINKS,
  * never PDF attachments (salary data + personnummer must not sit in
  * inboxes). Each send rotates the employee's link: previously emailed links
  * stop resolving.
@@ -26,8 +26,14 @@ import { sandboxBlockedResponse } from '@/lib/sandbox/guard'
  * channel sends each payslip's PDF to the employee's Kivra or Billo mailbox
  * where it reaches them and the email link to the rest
  * (lib/salary/payslips/send-digital-mailbox.ts). No body is the email link.
+ * Optional employee_ids (employees.id, all on the run): only those employees
+ * get their payslip, for a company that pays groups on different days
+ * (crm#1658). Omitted is everyone on the run.
  */
-const SendPayslipsBody = z.object({ channel: z.enum(['email', 'kivra', 'billo']).optional() })
+const SendPayslipsBody = z.object({
+  channel: z.enum(['email', 'kivra', 'billo']).optional(),
+  employee_ids: z.array(z.string().uuid()).min(1).optional(),
+})
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary_run.payslips_send',
   async (request, { supabase, companyId, user, log, requestId }, { params }) => {
@@ -44,10 +50,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     const body = SendPayslipsBody.safeParse(raw)
     if (!body.success) {
-      return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: { field: 'channel' } })
+      const field = body.error.issues[0]?.path[0] === 'employee_ids' ? 'employee_ids' : 'channel'
+      return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: { field } })
     }
 
-    const outcome = await sendPayslips({ supabase, companyId, userId: user.id, log }, id, { channel: body.data.channel })
+    const outcome = await sendPayslips({ supabase, companyId, userId: user.id, log }, id, {
+      channel: body.data.channel,
+      employeeIds: body.data.employee_ids,
+    })
     if (!outcome.ok) {
       if (outcome.code === 'SALARY_PAYSLIPS_SEND_SANDBOX') return sandboxBlockedResponse()
       if (outcome.code === 'SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED') {

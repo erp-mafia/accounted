@@ -1786,17 +1786,18 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/salary-runs/{id}/send-payslips`
 
-**Email every employee on an approved salary run a secure link to their payslip.**
+**Email the employees on an approved salary run a secure link to their payslip.**
 `scope:payroll:write · risk:medium · idempotent · dry-run`
 
-Sends each employee on the run an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
+Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
 
-**Use when:** The run is approved (or paid/booked) and the employees should get their payslips, or a payslip should be re-sent after an employee's email address was corrected.
+**Use when:** The run is approved (or paid/booked) and the employees should get their payslips, a group paid on its own day should get theirs (employee_ids), or a payslip should be re-sent after an employee's email address was corrected.
 **Do not use for:** Fetching the payslip document yourself (GET /salary-runs/{id}/payslips/{employeeId}/pdf) or reading payslip amounts (GET /salary-runs/{id}/employees/{employeeId}).
 
 **Pitfalls:**
 - A draft or review run returns 400 SALARY_PAYSLIPS_SEND_INVALID_STATUS: approve it first.
-- Re-sending emails everyone on the run again and invalidates the links sent before.
+- Re-sending emails everyone on the run (or in employee_ids) again and invalidates their links sent before.
+- An employee_ids entry not on the run refuses the whole send with 400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN (details.employee_ids); nothing is sent.
 - Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.
 - Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).
 - Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.
@@ -1808,6 +1809,20 @@ Sends each employee on the run an email with a secure link to their lönebesked 
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 | `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ employee_ids?: string[] }
+```
+
+Example request:
+```json
+{
+  "employee_ids": [
+    "emp_1…"
+  ]
+}
+```
 
 Response `200`:
 ```ts

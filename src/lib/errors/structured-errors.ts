@@ -7515,6 +7515,13 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inga anställda i lönekörningen.',
     message_en: 'No employees in the salary run.',
   },
+  // lib/salary/payslips/send.ts (crm#1658): a send to named employees names
+  // one who is not on the run, so nothing was sent to anyone.
+  SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN: {
+    httpStatus: 400,
+    message_sv: 'En eller flera av de valda anställda finns inte i lönekörningen. Inga lönebesked skickades.',
+    message_en: 'One or more of the chosen employees are not on the salary run. No payslips were sent.',
+  },
   // Salary-run lifecycle operations (lib/salary/payslips/send.ts,
   // lib/salary/run-status-recall.ts), shared by the dashboard, v1 and MCP.
   SALARY_PAYSLIPS_SEND_SANDBOX: {

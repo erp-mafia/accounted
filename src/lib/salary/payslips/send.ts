@@ -1,5 +1,6 @@
 /**
- * Send lönebesked to every employee on a salary run, as secure LINKS, never
+ * Send lönebesked to every employee on a salary run (or to the employees the
+ * caller names, all of them on the run), as secure LINKS, never
  * PDF attachments (salary data and personnummer must not sit in inboxes).
  * Each send rotates the employee's link, so a previously emailed link stops
  * resolving.
@@ -97,7 +98,18 @@ function nameOf(row: RunEmployeeRow): string {
 export async function sendPayslips(
   ctx: OperationContext,
   salaryRunId: string,
-  options: { dryRun?: boolean; channel?: PayslipChannel } = {},
+  options: {
+    dryRun?: boolean
+    channel?: PayslipChannel
+    /**
+     * Only these employees (employees.id) get their payslip: a company that
+     * pays groups on different days sends each group on its own payout day
+     * (crm#1658). Omitted means everyone on the run, as before. An id that
+     * is not on the run refuses the whole send, so a typo never silently
+     * drops someone.
+     */
+    employeeIds?: readonly string[]
+  } = {},
 ): Promise<OperationOutcome<SendPayslipsResult>> {
   const { supabase, companyId, userId, log } = ctx
   const mailbox = options.channel && options.channel !== 'email' ? options.channel : null
@@ -161,9 +173,22 @@ export async function sendPayslips(
         .eq('salary_run_id', salaryRunId)
         .eq('company_id', companyId)
 
-  const runEmployees = (runEmployeesData ?? []) as unknown as RunEmployeeRow[]
-  if (runEmployees.length === 0) {
+  const roster = (runEmployeesData ?? []) as unknown as RunEmployeeRow[]
+  if (roster.length === 0) {
     return { ok: false, code: 'SALARY_PAYSLIPS_NO_EMPLOYEES' }
+  }
+  let runEmployees = roster
+  if (options.employeeIds) {
+    const wanted = new Set(options.employeeIds)
+    const onRun = new Set(roster.map((row) => row.employee_id))
+    const notOnRun = [...wanted].filter((id) => !onRun.has(id))
+    if (notOnRun.length > 0) {
+      return { ok: false, code: 'SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN', details: { employee_ids: notOnRun } }
+    }
+    runEmployees = roster.filter((row) => wanted.has(row.employee_id))
+    if (runEmployees.length === 0) {
+      return { ok: false, code: 'SALARY_PAYSLIPS_NO_EMPLOYEES' }
+    }
   }
 
   // Each payslip the mailbox takes is a unit it prices: past what the month
