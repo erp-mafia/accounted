@@ -277,8 +277,8 @@ function bokioSiePermissionResponse(error: unknown): NextResponse | null {
   if (!(error instanceof BokioApiError) || error.statusCode !== 403) return null
   return errorResponseFromCode('PROVIDER_RESOURCE_FORBIDDEN', moduleLog, {
     status: 403,
-    messageSv: 'Bokio nekade SIE-exporten. Kontrollera att integrationstoken har behörigheten sie:read och att abonnemanget tillåter API-export. Uppdatera token i anslutningen om du skapar en ny.',
-    messageEn: 'Bokio denied the SIE export. Check that the integration token has the sie:read scope and that your plan allows API export. Update the connection token if you create a new one.',
+    messageSv: 'Bokio nekade SIE-exporten. Kontrollera att integrationstoken har behörigheterna fiscal-years:read och sie:read och att abonnemanget tillåter API-export. Uppdatera token i anslutningen om du skapar en ny.',
+    messageEn: 'Bokio denied the SIE export. Check that the integration token has the fiscal-years:read and sie:read scopes and that your plan allows API export. Update the connection token if you create a new one.',
   })
 }
 

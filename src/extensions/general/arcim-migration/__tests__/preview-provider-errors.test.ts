@@ -143,7 +143,9 @@ describe('GET /preview: Bokio SIE permissions', () => {
     expect(status).toBe(403)
     expect(body.error.code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
     expect(body.error.message).toContain('sie:read')
+    expect(body.error.message).toContain('fiscal-years:read')
     expect(body.error.message_en).toContain('sie:read')
+    expect(body.error.message_en).toContain('fiscal-years:read')
   })
 
   it('keeps transient export failures soft', async () => {
@@ -173,7 +175,9 @@ describe('GET /sie-data: Bokio SIE permissions', () => {
     expect(status).toBe(403)
     expect(body.error.code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
     expect(body.error.message).toContain('sie:read')
+    expect(body.error.message).toContain('fiscal-years:read')
     expect(body.error.message_en).toContain('sie:read')
+    expect(body.error.message_en).toContain('fiscal-years:read')
   })
 
   it('still treats an invalid token as expired authentication', async () => {
