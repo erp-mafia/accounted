@@ -14,7 +14,9 @@
  *     history_window), or the gap since the last successful sync plus a day
  *     of overlap, at least a week, at most the bank's transactionHistoryMaxDays
  *     (88 when the bank does not say). The bank's limits come from the
- *     adapter's cached `bank` details.
+ *     adapter's cached `bank` details. A first import never asks past the
+ *     company's books' start (lib/bank-sync/books-start.ts), short of the
+ *     ordinary window.
  *   - A consent the bank reports over flips the row to 'expired' through
  *     persist_bank_sync_failure, which is what the bank notices read to ask
  *     for a renewal. So does a refusal the bank repeats until a person acts
@@ -28,6 +30,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AisParty } from '@accounted/connect-contract'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { isBankRoutingConflict, isBankRouteUnresolved, resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
+import { clampToBooksStart, resolveBooksStart } from '@/lib/bank-sync/books-start'
 import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import {
   BankSyncResultObsoleteError,
@@ -342,6 +345,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
 
   let window: SyncWindow
   let historyWindow: 'extended' | 'ordinary' | undefined
+  let booksStart: string | null = null
   if (input.window) {
     window = input.window
   } else if (initial) {
@@ -364,12 +368,18 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     const extended = personPresent && extendedHistoryWindowOpen(connection, limits.extendedWindowMinutes, now)
     historyWindow = extended ? 'extended' : 'ordinary'
     const listedExtended = connection.consent_attempt?.selection?.extended_history_days ?? connection.consent_attempt?.extended_history_days ?? null
-    window = initialWindow({
+    const asked = initialWindow({
       extendedHistoryDays: extended
         ? listedExtended && listedExtended > EXTENDED_HISTORY_MARGIN_DAYS ? listedExtended - EXTENDED_HISTORY_MARGIN_DAYS : null
         : limits.maxDays,
       lastBookedDate: (latest as { date?: string } | null)?.date ?? null,
     }, now)
+    // Bank history starts where the books start (lib/bank-sync/books-start.ts):
+    // rows from before it have no verifikat to land in here. Only the extended
+    // history is cut; the ordinary window always comes, and a company without
+    // a fiscal period (or an unanswered read) gets the whole range as before.
+    booksStart = await resolveBooksStart(supabase, companyId, { now, log })
+    window = { fromDate: clampToBooksStart(asked.fromDate, booksStart, isoDay(now - limits.maxDays * DAY_MS)), toDate: asked.toDate }
   } else {
     const limits = await bankHistoryLimits(connect, companyId, connection.bic)
     window = incrementalWindow(connection, now, limits.maxDays)
@@ -485,7 +495,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     }
     log.info('open payments sync completed', {
       connectionId, trigger, imported, duplicates, enrichedUpdated, windowEnriched, lastEnrichedAt,
-      from: window.fromDate, to: window.toDate, ...(historyWindow ? { historyWindow } : {}),
+      from: window.fromDate, to: window.toDate, ...(historyWindow ? { historyWindow } : {}), ...(booksStart ? { booksStart } : {}),
     })
     return {
       ok: true,

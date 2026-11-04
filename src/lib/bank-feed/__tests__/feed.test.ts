@@ -403,6 +403,30 @@ describe('runOpenPaymentsSync', () => {
     expect(await run(person.supabase, { trigger: 'manual', signer: PRESENT, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-15', history_window: 'extended' })
   })
 
+  // crm#1647: a company whose books in Accounted start 2026-01-01 got two
+  // years of earlier bank rows into the to-book list from the first import.
+  it('starts a first import at the books\' start, never short of the ordinary window, and unchanged without a fiscal period', async () => {
+    const firstImport = (period: string | null, imported: Array<{ entry_date: string; created_at: string }> = []) => stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      transactions: [{ data: null, error: null }],
+      fiscal_periods: [{ data: period ? { period_start: period } : null, error: null }],
+      journal_entries: [{ data: imported, error: null }, { data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    const opened = firstImport('2026-01-01')
+    expect(await run(opened.supabase, { trigger: 'initial', signer: PRESENT })).toMatchObject({ ok: true, from_date: '2026-01-01', history_window: 'extended' })
+    expect(mocks.syncAccount).toHaveBeenLastCalledWith(opened.supabase, expect.objectContaining({ fromDate: '2026-01-01' }))
+    expect(mocks.persistResult).toHaveBeenLastCalledWith(opened.supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-01-01' }) }))
+
+    // A migration through 2026-09-14: the start is inside the ordinary window, which still comes whole.
+    const migrated = firstImport('2025-01-01', [{ entry_date: '2026-09-14', created_at: '2026-10-01T08:00:00Z' }])
+    expect(await run(migrated.supabase, { trigger: 'initial', signer: PRESENT })).toMatchObject({ ok: true, from_date: '2026-07-16' })
+
+    // Onboarding, no fiscal period yet: the whole extended range, as before.
+    expect(await run(firstImport(null).supabase, { trigger: 'initial', signer: PRESENT })).toMatchObject({ ok: true, from_date: '2024-09-15' })
+  })
+
   it('clamps the incremental window to the bank\'s transactionHistoryMaxDays', async () => {
     const bank = connectWithBank({ transactionHistoryMaxDays: 30, extendedTransactionHistoryAvailableWindowMinutes: 60 })
     const { supabase } = stub({
