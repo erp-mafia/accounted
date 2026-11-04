@@ -158,7 +158,10 @@ describe('postDocumentForm', () => {
       size_bytes: file.size,
     })
     expect(calls[1].init?.method).toBe('PUT')
-    expect(calls[1].init?.body).toBe(file)
+    const put = calls[1].init?.body as File
+    expect(put).toBeInstanceOf(File)
+    expect(put.name).toBe('årsredovisning.pdf')
+    expect(put.size).toBe(file.size)
     const sent = calls[2].init?.body as FormData
     expect(sent.get('file')).toBeNull()
     expect(sent.get('upload_id')).toBe(UPLOAD_ID)
@@ -186,6 +189,40 @@ describe('postDocumentForm', () => {
 
     expect(res.status).toBe(413)
     expect(calls).toHaveLength(2)
+  })
+
+  it('sends the bytes it read up front, not the reference to the picked file (crm#1664)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const { fetchImpl, calls } = fetchSequence([jsonResponse({ data: { id: 'doc-1' } })])
+    const picked = new File([new TextEncoder().encode('%PDF-1.7 underlag')], 'kvitto.pdf', {
+      type: 'application/pdf',
+      lastModified: 1_700_000_000_000,
+    })
+
+    await postDocumentForm(ROUTE, new FormData(), picked, { fetchImpl })
+
+    const sent = (calls[0].init?.body as FormData).get('file') as File
+    expect(sent).not.toBe(picked)
+    expect(sent.name).toBe('kvitto.pdf')
+    expect(sent.type).toBe('application/pdf')
+    expect(sent.lastModified).toBe(1_700_000_000_000)
+    expect(new TextDecoder().decode(await sent.arrayBuffer())).toBe('%PDF-1.7 underlag')
+  })
+
+  it('names a file the browser cannot read and sends nothing, instead of failing as a network error (crm#1664)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const { fetchImpl, calls } = fetchSequence([])
+    const picked = fakeFile()
+    vi.spyOn(picked, 'arrayBuffer').mockRejectedValue(new DOMException('unreadable', 'NotReadableError'))
+
+    const res = await postDocumentForm(ROUTE, new FormData(), picked, { fetchImpl })
+
+    expect(calls).toHaveLength(0)
+    expect(res.ok).toBe(false)
+    const body = await res.json()
+    expect(body.error.code).toBe('DOC_UPLOAD_FILE_UNREADABLE')
+    expect(body.error.message).toMatch(/kunde inte läsa filen/)
+    expect(body.error.message_en).toMatch(/could not read the file/)
   })
 
   it('sends a large file inline on self-hosted, where no proxy caps the body', async () => {

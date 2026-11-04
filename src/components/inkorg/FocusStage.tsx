@@ -316,6 +316,9 @@ export function FocusStage({
             )}
           </header>
 
+          {/* What the sender wrote with the document (a partner's delivery note), read before deciding. */}
+          <InboxArrivalProvenance documentId={item.document_id} variant="note" />
+
           {companion && (
             <CompanionReceipt
               receipt={companion}
@@ -359,6 +362,7 @@ export function FocusStage({
                   <InboxArrivalProvenance
                     documentId={item.document_id}
                     mailProvider={item.channel_context?.mail_provider ?? null}
+                    withNote={false}
                     formatDate={(iso) => shortDate(iso, locale)}
                     fallback={
                       item.email_from || item.email_subject ? (

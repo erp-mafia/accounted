@@ -324,6 +324,25 @@ export function showableArrivals(arrivals: readonly ArrivalSummary[], documentId
   )
 }
 
+// ── What the delivery said ──────────────────────────────────
+
+/**
+ * What the deliveries said in their own words: the short message a partner
+ * or an API caller sends with a document (`message` on the delivery, kept as
+ * the arrival's message_text, never on the item). A mail's text is its body,
+ * shown with the mail under "Visa originalet", so mail doors are left out.
+ * Each text once, first delivery first.
+ */
+export function deliveryNotes(arrivals: readonly ArrivalSummary[]): string[] {
+  const notes: string[] = []
+  for (const arrival of sortArrivals(arrivals)) {
+    if (MAIL_SOURCES.has(arrival.source)) continue
+    const text = str(arrival.message_text)
+    if (text && !notes.includes(text)) notes.push(text)
+  }
+  return notes
+}
+
 // ── The whole provenance block ───────────────────────────────
 
 export interface ProvenanceDisplay {
@@ -334,6 +353,8 @@ export interface ProvenanceDisplay {
   subject: string | null
   /** Label ids (`source.<id>`) for "Kom även via ..."; empty for one arrival. */
   alsoVia: Array<ArrivalSource | 'unknown'>
+  /** The messages that came with the deliveries (deliveryNotes); empty for most. */
+  notes: string[]
   /** Whether "Visa originalet" has anything to open besides the previewed file. */
   canShowOriginal: boolean
 }
@@ -351,6 +372,7 @@ export function provenanceFor(arrivals: readonly ArrivalSummary[], opts: Provena
     line: provenanceLine(primary, opts),
     subject: str(primary.subject),
     alsoVia: otherDoors(arrivals),
+    notes: deliveryNotes(arrivals),
     canShowOriginal: showableArrivals(arrivals, opts.documentId).length > 0,
   }
 }

@@ -42,6 +42,22 @@ async function fetchDocumentArrivals(documentId: string): Promise<ArrivalSummary
   return Array.isArray(json?.data) ? (json.data as ArrivalSummary[]) : []
 }
 
+/**
+ * One read per document at a time: the instances a page mounts together for
+ * the same document (the "Visa originalet" link and the sender's note beside
+ * the decision) share it instead of each asking the route.
+ */
+const arrivalsInFlight = new Map<string, Promise<ArrivalSummary[]>>()
+
+function readDocumentArrivals(documentId: string, key: string): Promise<ArrivalSummary[]> {
+  let read = arrivalsInFlight.get(key)
+  if (!read) {
+    read = fetchDocumentArrivals(documentId).finally(() => arrivalsInFlight.delete(key))
+    arrivalsInFlight.set(key, read)
+  }
+  return read
+}
+
 type ArrivalsState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -64,7 +80,7 @@ function useDocumentArrivals(documentId: string | null, generation = 0): Arrival
   useEffect(() => {
     if (!documentId || !key) return
     let cancelled = false
-    fetchDocumentArrivals(documentId).then(
+    readDocumentArrivals(documentId, key).then(
       (arrivals) => {
         if (!cancelled) setAnswer({ key, arrivals })
       },
@@ -84,11 +100,13 @@ function useDocumentArrivals(documentId: string | null, generation = 0): Arrival
 
 /**
  * The signed-in user's id, asked of the server (the browser holds no
- * session): only to say "Uppladdad av dig" for the user's own uploads.
+ * session): only to say "Uppladdad av dig" for the user's own uploads, so a
+ * block without a provenance line does not ask.
  */
-function useCurrentUserId(): string | null {
+function useCurrentUserId(enabled: boolean): string | null {
   const [userId, setUserId] = useState<string | null>(null)
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     fetchSessionUser().then(
       (user) => {
@@ -99,14 +117,14 @@ function useCurrentUserId(): string | null {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [enabled])
   return userId
 }
 
 /**
  * Where the selected Inkorg item came from, read off its arrivals: one
- * provenance line, the mail subject, "Kom även via ..." when it came in more
- * than once, and "Visa originalet".
+ * provenance line, the mail subject, the message the sender wrote with it,
+ * "Kom även via ..." when it came in more than once, and "Visa originalet".
  *
  * Until the arrivals answer, and for items with none recorded (from before
  * arrivals existed) or a failed read, it renders `fallback`: the provenance
@@ -117,6 +135,7 @@ export function InboxArrivalProvenance({
   mailProvider,
   fallback,
   variant = 'full',
+  withNote = true,
   formatDate: formatDateOverride,
 }: {
   /** The item's document; null for a placeholder or a mail-body item without one. */
@@ -124,14 +143,21 @@ export function InboxArrivalProvenance({
   /** The item's channel_context.mail_provider, for the connected-mailbox line. */
   mailProvider?: string | null
   fallback?: ReactNode
-  /** full: the provenance lines and "Visa originalet". original_link: only "Visa originalet", where it can be shown. */
-  variant?: 'full' | 'original_link'
+  /**
+   * full: the provenance lines, the sender's note and "Visa originalet".
+   * original_link: only "Visa originalet", where it can be shown. note: only
+   * the sender's note, where there is one (a page that shows it beside the
+   * decision passes withNote={false} to its full block).
+   */
+  variant?: 'full' | 'original_link' | 'note'
+  /** Whether the full block shows the sender's note. */
+  withNote?: boolean
   /** How a date reads in the provenance line; the long form unless the page has its own. */
   formatDate?: (iso: string) => string
 }) {
   const t = useTranslations('inbox_arrivals')
   const locale = useLocale()
-  const currentUserId = useCurrentUserId()
+  const currentUserId = useCurrentUserId(variant !== 'note')
   const state = useDocumentArrivals(documentId)
   const [open, setOpen] = useState(false)
   const [generation, setGeneration] = useState(0)
@@ -143,6 +169,10 @@ export function InboxArrivalProvenance({
     documentId,
   }
   const display = state.status === 'ready' ? provenanceFor(state.arrivals, options) : null
+  if (variant === 'note') {
+    if (!display || display.notes.length === 0) return null
+    return <SenderNotes notes={display.notes} className="space-y-1 text-[13px]" />
+  }
   if (!display || !documentId) return <>{fallback ?? null}</>
 
   const originals = (
@@ -201,9 +231,28 @@ export function InboxArrivalProvenance({
           {t('subject', { subject: display.subject })}
         </p>
       )}
+      {withNote && display.notes.length > 0 && <SenderNotes notes={display.notes} className="space-y-1 pt-1" />}
       {doors && <p className="text-muted-foreground">{t('also_via', { doors })}</p>}
       {display.canShowOriginal && <div className="pt-1">{showOriginal}</div>}
       {originals}
+    </div>
+  )
+}
+
+/**
+ * What the sender wrote with the document (a partner's or an API caller's
+ * message): user-supplied text, rendered as text with its line breaks.
+ */
+function SenderNotes({ notes, className }: { notes: string[]; className?: string }) {
+  const t = useTranslations('inbox_arrivals')
+  return (
+    <div className={className}>
+      <p className="text-muted-foreground">{t('note_label')}</p>
+      {notes.map((note) => (
+        <p key={note} data-ph-mask="" className="whitespace-pre-wrap break-words">
+          {note}
+        </p>
+      ))}
     </div>
   )
 }

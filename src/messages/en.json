@@ -5357,6 +5357,7 @@
     },
     "subject": "Subject: {subject}",
     "also_via": "Also came via {doors}",
+    "note_label": "Message from the sender",
     "show_original": "Show the original",
     "dialog_title": "The original",
     "dialog_description": "The underlag as it came in, before anything was read from it.",
