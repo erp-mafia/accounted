@@ -6,7 +6,7 @@ import {
 } from '@/lib/vat/account-vat-treatment'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
-import { reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
+import { bookingVatRole, reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
 import { grossVat, netVat } from '@/lib/bookkeeping/gross-split'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { getOutputVatAccount } from '@/lib/bookkeeping/invoice-accounts'
@@ -534,6 +534,28 @@ function fiktivMomsLines(
 
 /** What a bank row's business line is: a purchase or a sale. */
 export type BankRowNature = 'expense' | 'income'
+
+/**
+ * The treatment of an utgående moms account (2611 is 25 %, 2621 12 %, 2631
+ * 6 %, and their siblings), read off bookingVatRole, the declaration's own
+ * classification. Null for any other account, reverse-charge legs included.
+ */
+export function outputVatTreatmentOfAccount(account: string): 'standard_25' | 'reduced_12' | 'reduced_6' | null {
+  const role = bookingVatRole(account)
+  return role === 'standard_25' || role === 'reduced_12' || role === 'reduced_6' ? role : null
+}
+
+/**
+ * Which kind of booking a moms account belongs to: utgående moms is a sale's,
+ * ingående moms (264x) and the reverse-charge legs a purchase's. Null for no
+ * account or any other account.
+ */
+export function vatAccountNature(account: string | null | undefined): BankRowNature | null {
+  if (!account) return null
+  if (outputVatTreatmentOfAccount(account)) return 'income'
+  const role = bookingVatRole(account)
+  return role === 'input' || role === 'reverse_charge' ? 'expense' : null
+}
 
 /**
  * The moms lines of a bank row booked by a category or a catalog template, so

@@ -4,14 +4,15 @@ import {
   levenshteinDistance,
 } from '@/lib/documents/core-receipt-matcher'
 import {
-  generateInputVatLine,
+  bankRowVatLines,
   generateReverseChargePurchaseLines,
   DEFAULT_REVERSE_CHARGE_KIND,
-  getVatRate,
   isReverseChargeBasisAccount,
   isReverseChargeVatAccount,
+  outputVatTreatmentOfAccount,
   RC_BASIS_OFFSET_ACCOUNT,
   reverseChargeKindForBasisAccount,
+  vatAccountNature,
   type ReverseChargeKind,
   type ReverseChargePurchase,
 } from './vat-entries'
@@ -882,14 +883,15 @@ export function bindTemplateToSettlementAccount(
 }
 
 /**
- * The reverse-charge lines a legacy (single-pair) template replays: the
- * complete set from generateReverseChargePurchaseLines, so a learned
- * reverse-charge counterparty books the basis pair (ruta 20-24) too. The
- * template stores no supplier country, so the basis lands on EU services
- * (the mapping-rule default). A template whose business account reports the
- * basis itself (a basis account, or an account with a reverse-charge momskod)
- * loses the pair, and takes that account's momssats, when the booking door
- * settles it with the chart (reconcileRcBasisWithChart).
+ * The reverse-charge lines a legacy (single-pair) template replays
+ * (learnedPairVatLines, through bankRowVatLines with no kind): the complete
+ * set from generateReverseChargePurchaseLines, so a learned reverse-charge
+ * counterparty books the basis pair (ruta 20-24) too. The template stores no
+ * supplier country, so the basis lands on EU services (the mapping-rule
+ * default). A template whose business account reports the basis itself (a
+ * basis account, or an account with a reverse-charge momskod) loses the pair,
+ * and takes that account's momssats, when the booking door settles it with
+ * the chart (reconcileRcBasisWithChart).
  */
 function learnedReverseChargeLines(absAmount: number) {
   return generateReverseChargePurchaseLines({
@@ -964,35 +966,10 @@ export function buildMappingResultFromCounterpartyTemplate(
     tmpl.vat_treatment as VatTreatment | null, vatRegistered,
   )
 
-  if (mirror) {
-    return buildLegacyMismatchResult(tmpl, match, absAmount, isExpense, vatTreatment)
-  }
+  const vatLines = learnedPairVatLines(tmpl.vat_account, vatTreatment, absAmount, isExpense, mirror)
 
-  const vatLines: VatJournalLine[] = []
-  if (isExpense && vatTreatment) {
-    if (vatTreatment === 'reverse_charge') {
-      for (const rcl of learnedReverseChargeLines(absAmount)) {
-        vatLines.push({
-          account_number: rcl.account_number,
-          debit_amount: rcl.debit_amount,
-          credit_amount: rcl.credit_amount,
-          description: rcl.line_description || '',
-        })
-      }
-    } else {
-      const vatRate = getVatRate(vatTreatment)
-      if (vatRate > 0) {
-        const vatLine = generateInputVatLine(absAmount, vatRate)
-        if (vatLine) {
-          vatLines.push({
-            account_number: vatLine.account_number,
-            debit_amount: vatLine.debit_amount,
-            credit_amount: vatLine.credit_amount,
-            description: vatLine.line_description || '',
-          })
-        }
-      }
-    }
+  if (mirror) {
+    return buildLegacyMismatchResult(tmpl, match, vatLines)
   }
 
   const privateAccounts = ['2013', '2893']
@@ -1019,52 +996,63 @@ export function buildMappingResultFromCounterpartyTemplate(
 }
 
 /**
+ * The moms a learned single pair books on this row: the lines a category or
+ * a catalog template books for the same row (bankRowVatLines), so a bank row
+ * books the same moms whichever of the three decided it.
+ *
+ * What the moms is comes from the pair, not from the row's sign. The moms
+ * account the pair was learned with (vat_account) says whether its booking
+ * carried utgående moms (26x1: a sale) or ingående moms (2641: a purchase),
+ * and money running against that is the reversal of it, taken back on the
+ * same account. Before, only money out got a moms line, always 2641: a pair
+ * learned from Swish sales (D 1930 / K 3001 / K 2611) booked every later sale
+ * gross on 3001 with no 2611 (crm#1632), and a pair learned from refunds to
+ * customers (D 3001 / D 2611 / K 1930) booked their moms as ingående. A pair
+ * learned with no moms account takes the side of its learned direction.
+ *
+ * Reverse charge is the buyer's self-assessment of a purchase and replays as
+ * it always has: the whole set on money out in the learned direction, the set
+ * reversed on a mirrored refund, nothing otherwise.
+ */
+function learnedPairVatLines(
+  vatAccount: string | null,
+  /** tmpl.vat_treatment resolved for the company's VAT registration. */
+  vatTreatment: VatTreatment | null,
+  absAmount: number,
+  isExpense: boolean,
+  mirror: boolean,
+): VatJournalLine[] {
+  // Money out in the learned direction, or money in mirrored against it.
+  const learnedPurchase = isExpense !== mirror
+  if (vatTreatment === 'reverse_charge') {
+    return learnedPurchase
+      ? bankRowVatLines({ treatment: vatTreatment, absSek: absAmount, nature: 'expense', reversal: mirror })
+      : []
+  }
+  const nature = vatAccountNature(vatAccount) ?? (learnedPurchase ? 'expense' : 'income')
+  return bankRowVatLines({
+    treatment: vatTreatment,
+    absSek: absAmount,
+    nature,
+    reversal: (nature === 'expense') !== isExpense,
+  })
+}
+
+/**
  * Mirrored result for a sign-mismatched legacy template match (see
  * buildMappingResultFromCounterpartyTemplate). Settlement and business
- * accounts swap sides; a refund of an expense also mirrors the VAT legs so
- * the moms follows the correction: deductible input VAT flips to a 2641
- * credit, and a reverse-charge credit note flips both fiktiv legs (credit
- * 2645 / debit 2614) and the basis pair (credit 45xx / debit 4598) so Ruta
- * 20-24, 30 and 48 net back to zero. Income-learned
- * mismatches book gross; the entry is review-gated either way.
+ * accounts swap sides, and the moms follows the correction
+ * (learnedPairVatLines): a refund of a purchase credits 2641, a refund to a
+ * customer debits the 26x1 its sale credited, and a reverse-charge credit
+ * note flips both fiktiv legs (credit 2645 / debit 2614) and the basis pair
+ * (credit 45xx / debit 4598) so Ruta 20-24, 30 and 48 net back to zero. The
+ * entry is review-gated either way.
  */
 function buildLegacyMismatchResult(
   tmpl: CategorizationTemplate,
   match: CounterpartyTemplateMatch,
-  absAmount: number,
-  isExpense: boolean,
-  /** tmpl.vat_treatment resolved for the company's VAT registration. */
-  vatTreatment: VatTreatment | null
+  vatLines: VatJournalLine[],
 ): MappingResult {
-  const vatLines: VatJournalLine[] = []
-  if (!isExpense && vatTreatment) {
-    if (vatTreatment === 'reverse_charge') {
-      // Both pairs flip, so the refund also takes the basis back out of
-      // ruta 20-24, not only the moms out of ruta 30/48.
-      for (const rcl of learnedReverseChargeLines(absAmount)) {
-        vatLines.push({
-          account_number: rcl.account_number,
-          debit_amount: rcl.credit_amount,
-          credit_amount: rcl.debit_amount,
-          description: rcl.line_description || '',
-        })
-      }
-    } else {
-      const vatRate = getVatRate(vatTreatment)
-      if (vatRate > 0) {
-        const vatLine = generateInputVatLine(absAmount, vatRate)
-        if (vatLine) {
-          vatLines.push({
-            account_number: vatLine.account_number,
-            debit_amount: 0,
-            credit_amount: vatLine.debit_amount,
-            description: vatLine.line_description || '',
-          })
-        }
-      }
-    }
-  }
-
   return {
     rule: null,
     debit_account: tmpl.credit_account,
@@ -1707,13 +1695,21 @@ function detectVatTreatment(result: MappingResult): string | null {
   )
   if (hasReverseCharge) return 'reverse_charge'
 
+  // Utgående moms (26x1): the account names the rate. Missing here, every
+  // pair learned from a sale kept its 2611 as vat_account but no treatment,
+  // and replayed the next sale gross (crm#1632).
+  for (const line of result.vat_lines) {
+    const output = outputVatTreatmentOfAccount(line.account_number)
+    if (output) return output
+  }
+
   // Check for input VAT (2641 debit)
   const inputVat = result.vat_lines.find(
     (l) => l.account_number === '2641' && l.debit_amount > 0
   )
   if (!inputVat) return null
 
-  // Derive rate from the line description (generated by generateInputVatLine)
+  // Derive rate from the line description (as bankRowVatLines writes it)
   // Format: "Ingående moms 25%", "Ingående moms 12%", "Ingående moms 6%"
   const rateMatch = inputVat.description?.match(/(\d+)%/)
   if (rateMatch) {

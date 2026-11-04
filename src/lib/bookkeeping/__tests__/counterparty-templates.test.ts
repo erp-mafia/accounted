@@ -933,18 +933,21 @@ describe('counterparty-templates', () => {
       ])
     })
 
-    it('does not generate VAT lines for income transactions', () => {
+    it('books utgående moms for an income transaction on a pair learned from sales (crm#1632)', () => {
       const template = makeCategorizationTemplate({
         debit_account: '1930',
         credit_account: '3001',
         vat_treatment: 'standard_25',
+        vat_account: '2611',
       })
       const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
       const tx = makeTransaction({ amount: 10000 })
 
       const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
 
-      expect(result.vat_lines).toHaveLength(0)
+      expect(result.vat_lines).toEqual([
+        expect.objectContaining({ account_number: '2611', debit_amount: 0, credit_amount: 2000 }),
+      ])
     })
 
     it('detects private accounts', () => {
