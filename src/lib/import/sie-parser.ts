@@ -515,11 +515,57 @@ function parseTransactionLine(
  * otherwise share the single key "0".
  */
 export function formatVoucherRef(
-  voucher: { series: string; number: number; numberOmitted?: boolean },
+  voucher: { series: string; number: number; numberOmitted?: boolean; numberRepeated?: boolean },
   ordinal: number
 ): string {
   const series = voucher.series.trim()
-  return voucher.numberOmitted ? `${series}#${ordinal}` : `${series}${voucher.number}`
+  if (voucher.numberOmitted) return `${series}#${ordinal}`
+  // A repeated number names its source voucher and stays unique: "A762#909".
+  return voucher.numberRepeated ? `${series}${voucher.number}#${ordinal}` : `${series}${voucher.number}`
+}
+
+/** How many repeated voucher numbers the preview warning names. */
+const REPEATED_REFS_NAMED = 10
+
+/**
+ * Moves every #VER whose series and number an earlier #VER of the file
+ * already used to the end of the file order, marked `numberRepeated`, and
+ * returns their references ("A762").
+ *
+ * A Capego Bokslut export numbered two year-end vouchers with numbers the
+ * year's own vouchers already had (crm#1653). journal_import_source_owned_idx
+ * keeps (series, source number) unique per year, so the import wrote the file
+ * up to the repeat and then failed the same chunk on every retry. A repeat is
+ * therefore no source key (like numberOmitted: no source_voucher_number, no
+ * held number), and as the last voucher of its series it takes the next free
+ * number there, and no other voucher's number moves. Only vouchers
+ * with a series: without one there is no source key to collide. The order of
+ * a file without repeats is untouched.
+ */
+export function moveRepeatedVoucherNumbersLast(vouchers: SIEVoucher[]): string[] {
+  const seen = new Set<string>()
+  const kept: SIEVoucher[] = []
+  const repeated: SIEVoucher[] = []
+  for (const voucher of vouchers) {
+    const series = voucher.series.trim()
+    if (voucher.numberOmitted || !series) {
+      kept.push(voucher)
+      continue
+    }
+    const key = `${series}\u0000${voucher.number}`
+    if (seen.has(key)) {
+      repeated.push({ ...voucher, numberRepeated: true })
+    } else {
+      seen.add(key)
+      kept.push(voucher)
+    }
+  }
+  if (repeated.length === 0) return []
+  // In place, without spreading: a file can hold tens of thousands of vouchers.
+  vouchers.length = 0
+  for (const voucher of kept) vouchers.push(voucher)
+  for (const voucher of repeated) vouchers.push(voucher)
+  return repeated.map((voucher) => `${voucher.series.trim()}${voucher.number}`)
 }
 
 /**
@@ -1038,6 +1084,23 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         referencedAccounts.add(line.account)
       }
     }
+  }
+
+  // A #VER that repeats the series and number of an earlier #VER (crm#1653).
+  // SIE 4B wants verno unique per series, but both are bookkeeping the
+  // balances need, so neither is dropped: see moveRepeatedVoucherNumbersLast.
+  const repeatedRefs = moveRepeatedVoucherNumbersLast(vouchers)
+  if (repeatedRefs.length > 0) {
+    const named = repeatedRefs.slice(0, REPEATED_REFS_NAMED).join(', ')
+    const more = repeatedRefs.length > REPEATED_REFS_NAMED ? ` med flera (${repeatedRefs.length} totalt)` : ''
+    addIssue(
+      issues,
+      'warning',
+      0,
+      `Filen använder samma verifikationsnummer två gånger: ${named}${more}. Båda verifikationerna bokförs: ` +
+        'den senare får nästa lediga nummer sist i sin serie, och ingen annan verifikations nummer flyttas.',
+      'VER'
+    )
   }
 
   for (const accountNumber of referencedAccounts) {

@@ -125,6 +125,15 @@ describe('countPeppolSends', () => {
     enqueue({ data: null, error: { message: 'boom' } })
     await expect(countPeppolSends(service, 'company-1')).rejects.toThrow('boom')
   })
+
+  it('names the code or HTTP status when a refused count carries no message (crm#1641)', async () => {
+    // A count is a HEAD request: a refusal has no body, so PostgREST's message is empty.
+    enqueue({ data: null, error: { message: '', code: '42501' } })
+    await expect(countPeppolSends(service, 'company-1')).rejects.toThrow('Failed to count Peppol sends: 42501')
+    reset()
+    enqueue({ data: null, error: { message: '', code: '' } })
+    await expect(countPeppolSends(service, 'company-1')).rejects.toThrow(/^Failed to count Peppol sends: HTTP \S+$/)
+  })
 })
 
 describe('requestPeppolAccess / setPeppolAccess', () => {

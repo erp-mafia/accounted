@@ -86,6 +86,23 @@ describe('applyTemplate', () => {
     expect(sumDebit).toBeCloseTo(sumCredit, 2)
   })
 
+  it('applies a four-decimal share to öre and still balances (särskild löneskatt, crm#1657)', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '7412', label: 'Pensionsförsäkring', side: 'debit', type: 'business', ratio: 1 },
+      { account: '7533', label: 'Särskild löneskatt', side: 'debit', type: 'business', ratio: 0.2426 },
+      { account: '2514', label: 'Beräknad särskild löneskatt', side: 'credit', type: 'business', ratio: 0.2426 },
+      { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    const result = applyTemplate(lines, 12345.67)
+    const byAccount = Object.fromEntries(result.map((l) => [l.account_number, l]))
+    // 12 345.67 * 0.2426 = 2 995.0595... rounded to öre
+    expect(byAccount['7533'].debit_amount).toBe('2995.06')
+    expect(byAccount['2514'].credit_amount).toBe('2995.06')
+    const sumDebit = result.reduce((s, l) => s + (parseFloat(l.debit_amount || '0') || 0), 0)
+    const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
+    expect(Math.round(sumDebit * 100) / 100).toBe(Math.round(sumCredit * 100) / 100)
+  })
+
   it('applies reduced-rate reverse charge (2624/2645 at 12%) on top of the base', () => {
     const lines: BookingTemplateLibraryLine[] = [
       { account: '4010', label: 'Varuinköp', side: 'debit', type: 'business', ratio: 1.0 },

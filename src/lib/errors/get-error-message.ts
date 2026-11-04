@@ -411,6 +411,11 @@ const TECHNICAL_LEAK_PATTERNS: RegExp[] = [
   /https?:\/\//,
 ]
 
+/** Whether a string carries a technical leak (TECHNICAL_LEAK_PATTERNS): never show it raw. */
+export function looksLikeTechnicalLeak(message: string): boolean {
+  return TECHNICAL_LEAK_PATTERNS.some((pattern) => pattern.test(message))
+}
+
 /**
  * Whether a free-text string reads as a Swedish sentence written for the user
  * (issue #2086): it carries å/ä/ö or Swedish words, and shows no sign of

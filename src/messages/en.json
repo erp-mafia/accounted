@@ -1146,6 +1146,11 @@
     "preview_purchase_category_scope_every_time_named": "This document and new documents from {supplier}",
     "preview_purchase_category_books_nothing": "Nothing is booked. The category says what was bought; the account is chosen when the document is booked.",
     "preview_field": {
+      "invoice": "Invoice",
+      "recipient": "Recipient (Peppol)",
+      "scheme": "Identifier scheme",
+      "identifier": "Peppol id",
+      "will_issue_invoice": "The draft is numbered, sent and booked",
       "deficit_brought_forward_amount": "Deficit brought forward (4.14 a)",
       "deficit_amount_block_amount": "Amount block and similar (4.14 b)",
       "deficit_group_block_amount": "Group contribution block (4.14 c)",
@@ -1371,6 +1376,9 @@
       "archived_at": "Archived"
     },
     "preview_value": {
+      "invoice_number": {
+        "(allocated atomically on commit)": "Allocated when you approve"
+      },
       "customer_type": {
         "individual": "Individual",
         "swedish_business": "Swedish company or organization",

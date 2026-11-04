@@ -290,10 +290,14 @@ export function TemplateForm({
                 )}
                 {showRatioInput && (
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* step="any": a share is any decimal (särskild löneskatt
+                        0.2426, a third 0.3333). A stepped input made the
+                        browser refuse to submit the form (crm#1657); every
+                        amount is rounded to öre in applyTemplate anyway. */}
                     <Input
                       type="number"
                       inputMode="decimal"
-                      step="0.1"
+                      step="any"
                       min={0}
                       max={10}
                       value={String(line.ratio ?? 1)}
@@ -302,7 +306,7 @@ export function TemplateForm({
                         if (!Number.isNaN(n)) updateLine(i, 'ratio', n)
                       }}
                       aria-label={t('ratio_label')}
-                      className="w-16 font-mono tabular-nums text-right"
+                      className="w-20 font-mono tabular-nums text-right"
                     />
                     {i === firstRatioIndex && <InfoTooltip content={t('ratio_help')} />}
                   </div>

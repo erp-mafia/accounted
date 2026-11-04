@@ -1,0 +1,1 @@
+[2026-11-04] The Peppol send operation takes its own service-role client on every door and stages as the named actor; only the dashboard send route says it stages as the session. The client kind was guessed from whether a door passed one, and an Att göra approval runs as the person (crm#1641).
