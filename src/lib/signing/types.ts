@@ -7,7 +7,10 @@
 
 export const SIGNING_DEFAULT_TTL_DAYS = 14
 export const SIGNING_MAX_TTL_DAYS = 90
-export const SIGNING_MAX_SIGNERS = 20
+/** A document sent for signing has at most this many signers. */
+export const SIGNING_MAX_SIGNERS = 5
+/** An årsredovisning is signed by the board, the VD and the auditor: its signer slots have their own cap. */
+export const SIGNING_MAX_ANNUAL_REPORT_SIGNERS = 20
 export const SIGNING_TITLE_MAX = 200
 export const SIGNING_MESSAGE_MAX = 1000
 export const SIGNING_NAME_MAX = 200

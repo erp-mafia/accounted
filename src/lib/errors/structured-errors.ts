@@ -12394,8 +12394,8 @@ const SIGNING: Record<string, StructuredErrorEntry> = {
   },
   SIGNING_SIGNERS_INVALID: {
     httpStatus: 400,
-    message_sv: 'Kontrollera undertecknarna: varje person ska ha ett namn, ingen får finnas med två gånger, och ett personnummer måste vara giltigt.',
-    message_en: 'Check the signers: each needs a name, nobody may appear twice, and a personnummer must be valid.',
+    message_sv: 'Kontrollera undertecknarna: högst 5 på ett dokument, varje person ska ha ett namn, ingen får finnas med två gånger, och ett personnummer måste vara giltigt.',
+    message_en: 'Check the signers: at most 5 on a document, each needs a name, nobody may appear twice, and a personnummer must be valid.',
   },
   SIGNING_REQUEST_NOT_FOUND: {
     httpStatus: 404,

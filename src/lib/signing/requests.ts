@@ -35,6 +35,7 @@ import { loadSignableDocument, pdfPageCount } from './document'
 import { generateSigningToken, signingUrl } from './tokens'
 import {
   SIGNING_DEFAULT_TTL_DAYS,
+  SIGNING_MAX_ANNUAL_REPORT_SIGNERS,
   SIGNING_MAX_SIGNERS,
   SIGNING_MAX_TTL_DAYS,
   SIGNING_REMIND_INTERVAL_MS,
@@ -167,7 +168,8 @@ export async function checkSigners(
   // VD): each slot is its own signature, so the same address, member or
   // personnummer may appear twice there and nowhere else.
   const repeatable = options.samePersonMaySignTwice === true
-  if (signers.length < 1 || signers.length > SIGNING_MAX_SIGNERS) return invalidSigners('count')
+  const max = repeatable ? SIGNING_MAX_ANNUAL_REPORT_SIGNERS : SIGNING_MAX_SIGNERS
+  if (signers.length < 1 || signers.length > max) return invalidSigners('count')
   const emails = new Set<string>()
   const users = new Set<string>()
   const numbers = new Set<string>()
