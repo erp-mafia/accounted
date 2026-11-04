@@ -73,7 +73,7 @@ import {
 import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim-vat'
 import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
-import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { INVOICE_POSTING_ACCOUNT_REGEX, isInvoiceLinePostingAccount } from '@/lib/invoices/posting-account'
 import { netVat } from '@/lib/bookkeeping/gross-split'
 import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { INVOICE_VAT_TREATMENT_OVERRIDES } from '@/lib/invoices/invoice-vat-override'
@@ -288,10 +288,18 @@ const invoiceEmailAddressList = z
     `Högst ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} kopiemottagare är tillåtna`,
   )
 
-/** Invoice-line posting account: an asset, liability/equity, or revenue account. */
+/** Article posting account: an asset, liability/equity, or revenue account. */
 const invoicePostingAccount = z
   .string()
   .regex(INVOICE_POSTING_ACCOUNT_REGEX, 'Posting account must be a 4-digit BAS class 1-3 account')
+
+/** Invoice-line posting account: class 1-3 or an interest-income account (PH 246). */
+const invoiceLinePostingAccount = z
+  .string()
+  .refine(
+    isInvoiceLinePostingAccount,
+    'Posting account must be a 4-digit BAS class 1-3 account or an interest income account (825x, 826x, 831x, 836x)',
+  )
 
 /** Swedish VAT rate as an integer percent. */
 const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
@@ -622,11 +630,12 @@ export const CreateInvoiceItemSchema = z
     vat_rate: z.number().min(0).max(100).optional(),
     // Article linkage. `article_id` ties the line to a catalog article (text
     // rows omit it). `revenue_account` is the legacy wire name for the optional
-    // BAS class 1-3 posting-account override the engine books to; the API
-    // validates it against chart_of_accounts before use, and class 1-2
-    // accounts are only accepted on zero-VAT lines (build-invoice-write.ts).
+    // posting-account override the engine books to (class 1-3 or interest
+    // income, PH 246); the API validates it against chart_of_accounts before
+    // use, and class 1-2 and interest accounts are only accepted on zero-VAT
+    // lines (build-invoice-write.ts).
     article_id: uuid.nullable().optional(),
-    revenue_account: invoicePostingAccount.nullable().optional(),
+    revenue_account: invoiceLinePostingAccount.nullable().optional(),
     // Kundorder provenance: the order line this invoice line was created
     // from. Round-tripped on draft edits; the DB trigger refuses a quantity
     // that would over-invoice the order line.

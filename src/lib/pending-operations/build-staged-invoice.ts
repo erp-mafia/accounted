@@ -176,7 +176,7 @@ export function describeInvoiceBuildRefusal(code: string, details?: Record<strin
   }
   if (code === 'INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT' && details) {
     return (
-      `revenue_account ${String(details.account)} is a balance-sheet account (class 1-2) and cannot take a ` +
+      `revenue_account ${String(details.account)} is a balance-sheet (class 1-2) or interest account and cannot take a ` +
       `${String(details.vatRate)}% VAT line: the sale would be missing from ruta 05. ` +
       'Use a 3xxx revenue account, or vat_rate 0 for a refundable deposit or an outlay (utlägg).'
     )

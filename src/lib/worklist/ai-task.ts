@@ -44,7 +44,9 @@ export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
   book_transaction: '/transactions',
   book_skattekonto: '/transactions?source=skatteverket',
   inbox_document: '/e/general/invoice-inbox',
-  supplier_invoice_approval: '/supplier-invoices',
+  // The Registrerade tab: what attest still accepts, the very invoices the
+  // count holds (crm#1631).
+  supplier_invoice_approval: '/supplier-invoices?tab=registered',
   verifikat_missing_document: '/bookkeeping?missingUnderlag=true',
   overdue_invoice: '/invoices?status=overdue',
   deadline_action: '/deadlines',

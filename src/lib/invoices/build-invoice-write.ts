@@ -9,7 +9,7 @@ import {
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
 import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
-import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
+import { isInvoiceLinePostingAccount, isZeroVatOnlyPostingAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { normalizeDeliveryAddress, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
@@ -458,13 +458,14 @@ export async function buildInvoiceWriteData(params: {
           },
         }
       }
-      // A class 1-2 (balance-sheet) posting override is only valid on
-      // zero-VAT lines (deposits, advances, outlays). On a VAT-bearing line
-      // it would divert the tax base away from a 3xxx account and understate
+      // A class 1-2 (balance-sheet) or interest-income (PH 246) posting
+      // override is only valid on zero-VAT lines (deposits, advances,
+      // outlays, loan amortization, interest). On a VAT-bearing line it
+      // would divert the tax base away from a 3xxx account and understate
       // ruta 05 of the momsdeklaration (ML 17 kap 24§).
       if (
         item.revenue_account &&
-        isBalanceSheetAccount(item.revenue_account) &&
+        isZeroVatOnlyPostingAccount(item.revenue_account) &&
         itemRate > 0
       ) {
         return {
@@ -484,8 +485,8 @@ export async function buildInvoiceWriteData(params: {
   // Validate any per-line posting-account override against the company's chart
   // of accounts. The legacy field name is revenue_account, but balance-sheet
   // accounts are valid for deposits, customer advances, and genuine outlays.
-  // Zod already constrains the shape to classes 1-3; here we
-  // confirm each is a real, active account so a typo or unsuitable account
+  // Zod already constrains the shape to classes 1-3 plus interest income
+  // (PH 246); here we confirm each is a real, active account so a typo or unsuitable account
   // can never be booked. Never trust the client.
   const overrideAccounts = Array.from(
     new Set(
@@ -499,15 +500,19 @@ export async function buildInvoiceWriteData(params: {
       .from('chart_of_accounts')
       .select('account_number')
       .eq('company_id', companyId)
-      .gte('account_class', 1)
-      .lte('account_class', 3)
       .eq('is_active', true)
       .in('account_number', overrideAccounts)
 
     if (accountsError) {
       return { ok: false, dbError: accountsError }
     }
-    const validSet = new Set((validAccounts ?? []).map((a) => a.account_number))
+    // Class 1-3 or interest income (isInvoiceLinePostingAccount): the line
+    // rule, checked here too for the doors that skip the item Zod schema.
+    const validSet = new Set(
+      (validAccounts ?? [])
+        .map((a) => a.account_number as string)
+        .filter(isInvoiceLinePostingAccount),
+    )
     const invalid = overrideAccounts.filter((a) => !validSet.has(a))
     if (invalid.length > 0) {
       return { ok: false, code: 'INVOICE_CREATE_REVENUE_ACCOUNT_INVALID', details: { invalidAccounts: invalid } }

@@ -810,7 +810,7 @@ export default function AttGoraSection({
                     )}
                     {counts.supplier_invoice_approval > 0 && (
                       <WorklistRow
-                        href="/supplier-invoices"
+                        href="/supplier-invoices?tab=registered"
                         action={aiAction('supplier_invoice_approval', counts.supplier_invoice_approval)}
                         icon={CheckBadgeIcon}
                         label={t('row_supplier_approval')}

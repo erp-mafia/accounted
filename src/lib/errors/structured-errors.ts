@@ -1789,8 +1789,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_CREATE_REVENUE_ACCOUNT_INVALID: {
     httpStatus: 400,
-    message_sv: 'Ett angivet bokföringskonto finns inte eller är inte ett aktivt balans- eller intäktskonto (klass 1-3).',
-    message_en: 'A supplied posting account does not exist or is not an active balance-sheet or revenue account (class 1-3).',
+    message_sv: 'Ett angivet bokföringskonto finns inte eller är inte ett aktivt balans- eller intäktskonto (klass 1-3) eller ränteintäktskonto (825x, 826x, 831x, 836x).',
+    message_en: 'A supplied posting account does not exist or is not an active balance-sheet or revenue account (class 1-3) or interest income account (825x, 826x, 831x, 836x).',
   },
   INVOICE_CREATE_ARTICLE_INVALID: {
     httpStatus: 400,
@@ -1799,8 +1799,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT: {
     httpStatus: 400,
-    message_sv: 'Ett balanskonto (klass 1-2) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',
-    message_en: 'A balance-sheet account (class 1-2) can only be used on zero-VAT lines. Use a revenue account (3xxx) for VAT-bearing lines.',
+    message_sv: 'Ett balanskonto (klass 1-2) eller ränteintäktskonto (8xxx) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',
+    message_en: 'A balance-sheet account (class 1-2) or interest income account (8xxx) can only be used on zero-VAT lines. Use a revenue account (3xxx) for VAT-bearing lines.',
   },
   // Code name kept for wire stability; it covers every skattereduktion kind
   // (ROT, RUT, grön teknik), so the text names none of them.
@@ -4929,6 +4929,12 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     httpStatus: 404,
     message_sv: 'Bankfilsimporten kunde inte hittas.',
     message_en: 'Bank file import not found.',
+    // A live bank feed row has no file to undo (crm#1647).
+    remediation: {
+      description:
+        'Rows from the live bank feed (PSD2) came from no file and cannot be undone. To clear the unbooked ones before a date, stage gnubok_bulk_ignore_transactions (cash_account_id, before_date): nothing is deleted or posted.',
+      tool: 'gnubok_bulk_ignore_transactions',
+    },
   },
   BANK_FILE_UNDO_FAILED: {
     httpStatus: 400,

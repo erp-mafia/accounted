@@ -215,3 +215,73 @@ describe('commitPendingOperation: ignore_transaction on a skattekonto row (crm#1
     expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
   })
 })
+
+describe('commitPendingOperation: ignore_transaction over pinned ids (crm#1647)', () => {
+  const CASH = '00000000-0000-4000-8000-0000000000ca'
+  const A = '00000000-0000-4000-8000-0000000000a1'
+  const B = '00000000-0000-4000-8000-0000000000b2'
+  const bulkOp = (ignored = true) =>
+    makePendingOp({ params: { transaction_ids: [A, B], cash_account_id: CASH, before_date: '2026-01-01', ignored } })
+
+  it('ignores the pinned rows that are still open and counts the rest as skipped', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: [{ id: A }] }) // re-read: B was booked since staging
+    enqueue({ data: [{ id: A }] }) // update ... select
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', bulkOp())
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ is_ignored: true, changed_count: 1, skipped_count: 1 })
+    expect(findCalls('open_bank_rows', 'in')).toEqual([['id', [A, B]]])
+    expect(findCalls('transactions', 'update')[0]).toEqual([{ is_ignored: true }])
+  })
+
+  it('restores the pinned rows that are still ignored', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: [{ id: A }, { id: B }] }) // re-read
+    enqueue({ data: [{ id: A }, { id: B }] }) // update ... select
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', bulkOp(false))
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ is_ignored: false, changed_count: 2, skipped_count: 0 })
+    expect(findCalls('transactions', 'update')[0]).toEqual([{ is_ignored: false }])
+  })
+
+  it('refuses pinned ids staged without the selection they came from', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { transaction_ids: [A], ignored: true } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(findCalls('open_bank_rows', 'select')).toEqual([])
+  })
+
+  it('refuses a params bag naming both one row and pinned ids', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { transaction_id: TX_ID, transaction_ids: [A], cash_account_id: CASH, before_date: '2026-01-01' } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+})

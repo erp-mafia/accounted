@@ -909,3 +909,60 @@ describe('buildInvoiceWriteData: VAT-treatment warnings (#2749, #2558)', () => {
     expect(deliveryNoteResult.ok && deliveryNoteResult.warnings).toEqual([])
   })
 })
+
+describe('buildInvoiceWriteData: loan invoice rows on amortization and interest accounts (PH 246)', () => {
+  const customer = makeCustomer({ customer_type: 'swedish_business' })
+
+  it('accepts a 0 % amortization row on 1385 and a 0 % interest row on 8251', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: [{ account_number: '1385' }, { account_number: '8251' }], error: null }) // active chart rows
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Amortering', quantity: 1, unit: 'st', unit_price: 10000, vat_rate: 0, revenue_account: '1385' },
+        { description: 'Ränta', quantity: 1, unit: 'st', unit_price: 500, vat_rate: 0, revenue_account: '8251' },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items.map((i) => i.revenue_account)).toEqual(['1385', '8251'])
+    expect(result.invoiceFields.vat_amount).toBe(0)
+    expect(findCall('chart_of_accounts', 'in')).toEqual(['account_number', ['1385', '8251']])
+  })
+
+  it('refuses an interest row that carries VAT', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Ränta', quantity: 1, unit: 'st', unit_price: 500, vat_rate: 25, revenue_account: '8251' }],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT')
+  })
+
+  it('refuses an active cost or other class 8 account even when the shape check was skipped', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: [{ account_number: '8410' }, { account_number: '4010' }], error: null }) // active chart rows
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Fel', quantity: 1, unit: 'st', unit_price: 500, vat_rate: 0, revenue_account: '8410' },
+        { description: 'Fel', quantity: 1, unit: 'st', unit_price: 500, vat_rate: 0, revenue_account: '4010' },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CREATE_REVENUE_ACCOUNT_INVALID')
+    expect(result.details).toEqual({ invalidAccounts: ['8410', '4010'] })
+  })
+})

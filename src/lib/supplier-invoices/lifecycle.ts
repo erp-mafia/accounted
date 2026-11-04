@@ -103,16 +103,25 @@ export function companyAttestsSupplierInvoices(
 }
 
 /**
- * True when the invoice can still be attested. 'overdue' is included because
- * the cron puts unbooked invoices there just by aging; approved_at (not the
- * status) is what makes approval idempotent.
+ * The statuses an invoice can still be attested in, while approved_at is
+ * null. 'overdue' is included because the cron puts unattested invoices there
+ * just by aging. Read by canApproveSupplierInvoice and by the Att göra count
+ * (lib/worklist countSupplierInvoicesAwaitingApproval), so the count holds
+ * exactly the invoices the pages offer Attestera on (crm#1631).
+ */
+export const ATTESTABLE_SUPPLIER_INVOICE_STATUSES = ['registered', 'overdue'] as const
+
+/**
+ * True when the invoice can still be attested
+ * (ATTESTABLE_SUPPLIER_INVOICE_STATUSES); approved_at (not the status) is
+ * what makes approval idempotent.
  */
 export function canApproveSupplierInvoice(invoice: {
   status: string
   approved_at?: string | null
 }): boolean {
   if (invoice.approved_at) return false
-  return invoice.status === 'registered' || invoice.status === 'overdue'
+  return (ATTESTABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(invoice.status)
 }
 
 /**

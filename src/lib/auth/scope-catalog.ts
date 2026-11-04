@@ -290,6 +290,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_transactions:                 'transactions:write',
   gnubok_categorize_transaction:              'transactions:write',
   gnubok_ignore_transaction:                  'transactions:write',
+  gnubok_bulk_ignore_transactions:            'transactions:write',
   gnubok_receipt_matcher:                     'transactions:write',
   gnubok_get_counterparty_templates:          'transactions:read',
   gnubok_suggest_categories:                  'transactions:read',
