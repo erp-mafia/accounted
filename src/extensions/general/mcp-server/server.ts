@@ -179,6 +179,7 @@ import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-des
 import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import { BULK_IGNORE_MAX_ROWS, findBulkIgnoreCandidates } from '@/lib/transactions/bulk-ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
 import {
@@ -22149,6 +22150,106 @@ export const tools: McpTool[] = [
             },
         ...stagingOptions(args),
         dateForPeriodCheck: tx.date,
+      })
+    },
+  },
+
+  {
+    name: 'gnubok_bulk_ignore_transactions',
+    keywords: ['ignorera', 'rensa', 'bankhistorik', 'gamla banktransaktioner', 'brytdatum', 'psd2', 'open payments'],
+    title: 'Bulk-Ignore Transactions (Ignorera före datum)',
+    description: `Stage ignoring the unbooked bank rows of one cash account dated before before_date (at most ${BULK_IGNORE_MAX_ROWS}): bank history predating the books. Booked, matched or invoice-linked rows are never touched; nothing is deleted or posted. restore: true un-ignores.`,
+    // Search-only (crm#1647): reached through gnubok_stage_tool, so the
+    // default catalog pays nothing for it. The same staged ignore_transaction
+    // operation as gnubok_ignore_transaction, over pinned ids
+    // (lib/transactions/bulk-ignore.ts).
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cash_account_id: { type: 'string', description: 'From gnubok_list_cash_accounts' },
+        before_date: { type: 'string', description: 'YYYY-MM-DD, exclusive: rows dated earlier' },
+        restore: { type: 'boolean', description: 'true = clear the ignore flag on the ignored rows before the date instead' },
+        ...STAGING_ARGS_PROPERTIES,
+      },
+      required: ['cash_account_id', 'before_date'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const cashAccountId = String(args.cash_account_id ?? '').trim()
+      if (!UUID_RE.test(cashAccountId)) throw badArgument('cash_account_id', 'cash_account_id must be a cash account UUID (gnubok_list_cash_accounts)')
+      const beforeDate = String(args.before_date ?? '').trim()
+      if (!ISO_DATE_RE.test(beforeDate) || Number.isNaN(Date.parse(`${beforeDate}T00:00:00Z`))) {
+        throw badArgument('before_date', 'before_date must be a YYYY-MM-DD date')
+      }
+      const restore = args.restore === true
+
+      const { data: account, error: accountError } = await supabase
+        .from('cash_accounts')
+        .select('id, name, ledger_account')
+        .eq('id', cashAccountId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (accountError) throw dbError(accountError)
+      if (!account) {
+        throw codedRefusal('CASH_ACCOUNT_NOT_FOUND', `Cash account ${cashAccountId} is not one of this company's: gnubok_list_cash_accounts lists them.`)
+      }
+
+      const selection = { cashAccountId, beforeDate, ignored: !restore }
+      const found = await findBulkIgnoreCandidates(supabase, companyId, selection)
+      if (found.ids.length === 0) {
+        throw codedRefusal(
+          'NOT_FOUND',
+          restore
+            ? `No ignored bank rows on this account dated before ${beforeDate}: nothing to restore.`
+            : `No unbooked bank rows on this account dated before ${beforeDate}: nothing to ignore. Booked, matched and invoice-linked rows are never ignored in bulk.`,
+        )
+      }
+      if (found.total > BULK_IGNORE_MAX_ROWS) {
+        throw codedRefusal(
+          'VALIDATION_ERROR',
+          `${found.total} rows match, more than ${BULK_IGNORE_MAX_ROWS} per operation. ` +
+            (found.split_before
+              ? `Stage before_date ${found.split_before} first (the oldest rows), approve it, then stage ${beforeDate} again.`
+              : 'Stage an earlier before_date first, approve it, then stage this one again.'),
+        )
+      }
+
+      const bankAccount = [account.ledger_account, account.name].filter(Boolean).join(' ')
+      const range = `${found.first_date} t.o.m. ${found.last_date}`
+      return stage({
+        supabase,
+        companyId,
+        userId,
+        type: 'ignore_transaction',
+        title: restore
+          ? `Återställ ${found.ids.length} ignorerade bankrader före ${beforeDate} (${range})`
+          : `Ignorera ${found.ids.length} obokförda bankrader före ${beforeDate} (${range})`,
+        params: { transaction_ids: found.ids, cash_account_id: cashAccountId, before_date: beforeDate, ignored: !restore },
+        preview: {
+          row_count: found.ids.length,
+          bank_account: bankAccount || cashAccountId,
+          before_date: beforeDate,
+          first_date: found.first_date,
+          last_date: found.last_date,
+          will_be_ignored: !restore,
+          // No verifikat is written, so a locked or closed period does not block it.
+          writes_verifikat: false,
+          period_lock_applies: false,
+        },
+        actor,
+        next: restore
+          ? {
+              description: 'After approval the rows are back in the "to book" list.',
+              tool: 'gnubok_list_uncategorized_transactions',
+            }
+          : {
+              description: 'After approval the rows leave the "to book" list. restore: true with the same arguments brings them back.',
+              tool: 'gnubok_list_uncategorized_transactions',
+            },
+        ...stagingOptions(args),
       })
     },
   },

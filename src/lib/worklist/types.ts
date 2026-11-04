@@ -62,11 +62,15 @@ export const WORKLIST_CATEGORIES = [
   'suggested_match',
   /**
    * Supplier invoices awaiting approval ("attestera").
-   * Pending:  supplier_invoices.status = 'registered' and not a credit note
-   *           (a credit note is a reversal, never a payable), in a company
-   *           that attests at all: never under kontantmetoden, which has no
-   *           attest step (companyAttestsSupplierInvoices).
-   * Done:     status moves to approved/paid/credited/….
+   * Pending:  supplier_invoices.status 'registered' or 'overdue' with
+   *           approved_at null (ATTESTABLE_SUPPLIER_INVOICE_STATUSES: an
+   *           unattested invoice past its due date still waits, crm#1631),
+   *           not a credit note (a credit note is a reversal, never a
+   *           payable), in a company that attests at all: never under
+   *           kontantmetoden, which has no attest step
+   *           (companyAttestsSupplierInvoices).
+   * Done:     attested (approved_at set), or the status moves to
+   *           paid/partially_paid/credited/….
    */
   'supplier_invoice_approval',
   /**

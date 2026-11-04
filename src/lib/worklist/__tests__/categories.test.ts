@@ -36,6 +36,10 @@ import {
   listSuggestedMatches,
 } from '../categories'
 import {
+  ATTESTABLE_SUPPLIER_INVOICE_STATUSES,
+  canApproveSupplierInvoice,
+} from '@/lib/supplier-invoices/lifecycle'
+import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
@@ -113,15 +117,38 @@ describe('countUnbookedTransactions', () => {
 })
 
 describe('countSupplierInvoicesAwaitingApproval', () => {
-  it('counts registered invoices but never credit notes', async () => {
+  it('counts unattested registered invoices but never credit notes', async () => {
     // A credit note is a reversal with nothing to attest; the detail page
     // offers no attest button for it, so counting one here made an item
     // nobody could clear (support case 2026-09-04).
     enqueue({ count: 1 })
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(1)
     const eqCalls = findCalls('supplier_invoices', 'eq')
-    expect(eqCalls).toContainEqual(['status', 'registered'])
     expect(eqCalls).toContainEqual(['is_credit_note', false])
+    expect(findCalls('supplier_invoices', 'is')).toContainEqual(['approved_at', null])
+  })
+
+  it('keeps an unattested invoice that fell due: the statuses attest accepts, overdue included (crm#1631)', async () => {
+    // The cron stores an unattested invoice past its due date as 'overdue';
+    // the detail page and the Registrerade tab still offer Attestera on it,
+    // so a 'registered'-only count dropped it from Att göra the day it fell
+    // due. The count reads the same statuses as canApproveSupplierInvoice.
+    enqueue({ count: 3 })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(3)
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', [...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]])
+    expect([...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]).toEqual(['registered', 'overdue'])
+    // Attested invoices age into 'overdue' too: approved_at says the attest is done.
+    expect(findCalls('supplier_invoices', 'is')).toContainEqual(['approved_at', null])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'registered'])
+  })
+
+  it('counts exactly what the pages offer Attestera on', () => {
+    // One rule: what the count's predicate selects is what canApproveSupplierInvoice accepts.
+    for (const status of ['registered', 'overdue', 'approved', 'partially_paid', 'paid', 'credited']) {
+      const selected = (ATTESTABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(status)
+      expect(canApproveSupplierInvoice({ status, approved_at: null })).toBe(selected)
+      expect(canApproveSupplierInvoice({ status, approved_at: '2026-11-01T10:00:00Z' })).toBe(false)
+    }
   })
 
   it('counts nothing for a company on kontantmetoden: it has no attest step (crm#1156)', async () => {

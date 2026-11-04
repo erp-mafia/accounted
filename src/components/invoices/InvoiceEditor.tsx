@@ -131,7 +131,7 @@ import {
 } from '@/lib/cash-accounts/invoice-payee-rules'
 import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
-import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { isInvoiceLinePostingAccount } from '@/lib/invoices/posting-account'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import {
   buildInvoiceWritePayload,
@@ -469,7 +469,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       sales_order_item_id: z.string().nullable().optional(),
       revenue_account: z
         .string()
-        .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
+        .refine(isInvoiceLinePostingAccount, t('posting_account_invalid'))
         .nullable()
         .optional(),
       // Skattereduktion per line (ROT, RUT, grön teknik). Optional: null means
@@ -754,12 +754,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     articlesRef.current = articles
   }, [articles])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
-  // Active balance-sheet and revenue accounts for the optional per-line
-  // posting override, plus which rows currently show that picker.
+  // Active balance-sheet, revenue and interest-income accounts (PH 246) for
+  // the optional per-line posting override, plus which rows show that picker.
   const { accounts: activeAccounts } = useAccounts()
   const paymentLedger = usePaymentBankLedger()
   const postingAccounts = useMemo(
-    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    () => activeAccounts.filter((account) => isInvoiceLinePostingAccount(account.account_number)),
     [activeAccounts],
   )
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())

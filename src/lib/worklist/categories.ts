@@ -50,7 +50,7 @@ import { readVerificationRecord } from '@/lib/payments/orders/verification-recor
 import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orders/verification-state'
 import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
 import { paymentsReadiness } from '@/lib/payments/orders/readiness'
-import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
+import { ATTESTABLE_SUPPLIER_INVOICE_STATUSES, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
 import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
@@ -239,11 +239,16 @@ export async function countSuggestedMatches(
 }
 
 /**
- * Supplier invoices awaiting approval ("attestera"). Zero for a company on
- * kontantmetoden: it has no attest step (companyAttestsSupplierInvoices, the
- * rule the detail page and the list read), so every invoice counted here was
- * an item nobody could clear (crm#1156). Every surface reads this count: the
- * Att göra row and total, the AI task list and the MCP attention resource.
+ * Supplier invoices awaiting approval ("attestera"): not attested yet, in a
+ * status attest still accepts (ATTESTABLE_SUPPLIER_INVOICE_STATUSES, the rule
+ * of canApproveSupplierInvoice and the list's Registrerade tab). An invoice
+ * that passes its due date unattested is stored as 'overdue' and still waits
+ * for its attest: counting 'registered' alone dropped it from Att göra the
+ * day it fell due (crm#1631). Zero for a company on kontantmetoden: it has no
+ * attest step (companyAttestsSupplierInvoices, the rule the detail page and
+ * the list read), so every invoice counted here was an item nobody could
+ * clear (crm#1156). Every surface reads this count: the Att göra row and
+ * total, the AI task list and the MCP attention resource.
  */
 export async function countSupplierInvoicesAwaitingApproval(
   supabase: SupabaseClient,
@@ -254,7 +259,10 @@ export async function countSupplierInvoicesAwaitingApproval(
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
-      .eq('status', 'registered')
+      .in('status', [...ATTESTABLE_SUPPLIER_INVOICE_STATUSES])
+      // The cron moves an attested invoice to 'overdue' too: approved_at,
+      // not the status, says the attest is done.
+      .is('approved_at', null)
       // A credit note is a reversal, never a payable: there is nothing to
       // attest on it and the detail page offers no attest button, so counting
       // one here made an item nobody could clear. The CHECK

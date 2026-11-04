@@ -210,6 +210,7 @@ import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schema
 import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import { applyBulkIgnore } from '@/lib/transactions/bulk-ignore'
 import {
   CreateInvoiceFromSalesOrderParamsSchema,
   CreateSalesOrderParamsSchema,
@@ -1284,6 +1285,30 @@ async function commitIgnoreTransaction(
         return { error: err.message, errorCode: 'TX_IGNORE_ALREADY_BOOKED', status: 409 }
       }
       throw err
+    }
+  }
+
+  // A bulk ignore (crm#1647): the pinned ids, re-read under the selection
+  // they were staged from, so a row booked or linked since staging is
+  // skipped. Writes no verifikat; a retry after a partial failure skips the
+  // rows already changed.
+  if (validated.transaction_ids) {
+    const outcome = await applyBulkIgnore(
+      supabase,
+      companyId,
+      {
+        cashAccountId: validated.cash_account_id as string,
+        beforeDate: validated.before_date as string,
+        ignored: validated.ignored,
+      },
+      validated.transaction_ids,
+    )
+    return {
+      data: {
+        is_ignored: validated.ignored,
+        changed_count: outcome.changed,
+        skipped_count: outcome.skipped,
+      },
     }
   }
 
