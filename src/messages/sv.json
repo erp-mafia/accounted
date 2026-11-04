@@ -8905,7 +8905,7 @@
     "ext_arcim_review_reason_too_large": "Fakturan är för stor för automatisk import (fler än 2 000 rader). Lägg in den för hand.",
     "ext_arcim_review_reason_temporary": "Uppgifterna kunde inte hämtas från {provider} just nu. Försök igen om en stund.",
     "ext_arcim_review_reason_connection": "Anslutningen till {provider} har gått ut. Återanslut och försök igen.",
-    "ext_arcim_review_reason_registration_amount": "Verifikationen som {provider} anger bokför ett annat belopp än fakturans belopp i kronor, så de kopplades inte ihop. För en faktura i utländsk valuta beror det oftast på att verifikationen bokfördes med en annan kurs.",
+    "ext_arcim_review_reason_registration_amount": "Verifikationen som {provider} anger bokför ett annat belopp än fakturans belopp i kronor, så de kopplades inte ihop. För en faktura i utländsk valuta är fakturans belopp i kronor omräknat med Riksbankens kurs på fakturadagen. Har {provider} bokfört fakturan med en egen kurs som skiljer sig mer än 10 % från den, kopplas de inte automatiskt.",
     "ext_arcim_review_reason_registration_ambiguous": "Flera verifikationer kan vara den som {provider} anger, eller så är den redan kopplad till en annan faktura. Ingen koppling gjordes.",
     "ext_arcim_review_reason_registration_review": "Verifikationen som {provider} anger kunde inte bekräftas mot fakturans belopp, så de kopplades inte ihop.",
     "ext_arcim_review_reason_voucher_unavailable": "Verifikationen som {provider} anger finns inte som bokförd verifikation i Accounted.",
