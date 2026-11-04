@@ -1,6 +1,5 @@
 'use client'
 
-import MigrationMissingFields from './MigrationMissingFields'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
@@ -87,7 +86,6 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
       </>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {needsAttention && <div className="space-y-3">
-        <MigrationMissingFields jobId={jobId} />
         <p className="text-sm text-muted-foreground">{t('ext_arcim_job_attention_detail')}</p>
         {status?.job.error_code && <p className="text-sm">{t(`ext_arcim_job_error_${migrationIssueKind(status.job.error_code)}`)}</p>}
         {status?.issues.length ? <ul className="space-y-1 text-sm text-muted-foreground">

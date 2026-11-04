@@ -162,9 +162,6 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
       return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
     }
   }
-  if (c.resource === 'supplierInvoices' && !invoice.invoiceNumber?.trim()) {
-    return { id: c.id, error: 'MIGRATION_INVOICE_NUMBER_REQUIRED' }
-  }
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),

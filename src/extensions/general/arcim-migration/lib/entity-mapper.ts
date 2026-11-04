@@ -1229,7 +1229,7 @@ export function mapSupplierInvoice(
     company_id: companyId,
     supplier_id: supplierId,
     // Preserve the provider number; use its OCR reference when that is absent.
-    // The worker requests user input only when neither identifier is available.
+    // A dash means unknown; provider source receipts preserve import identity.
     supplier_invoice_number: resolveMigrationSupplierInvoiceNumber(dto),
     invoice_date: dto.issueDate,
     due_date: dto.dueDate || dto.issueDate,

@@ -26,3 +26,10 @@ it('retains an explicit saved correction before using an OCR fallback', () => {
   const dto = { invoiceNumber: '', ocrNumber: '001234' } as SupplierInvoiceDto
   expect(applyMigrationInvoiceCorrection(dto, { invoiceNumber: 'MANUAL-1' }).invoiceNumber).toBe('MANUAL-1')
 })
+
+
+it('uses a dash when neither source number nor OCR is available', () => {
+  const source = { invoiceNumber: ' ', ocrNumber: ' ' } as SupplierInvoiceDto
+  expect(applyMigrationInvoiceCorrection(source).invoiceNumber).toBe('-')
+  expect(source.invoiceNumber).toBe(' ')
+})

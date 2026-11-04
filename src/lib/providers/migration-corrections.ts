@@ -7,9 +7,9 @@ export const MigrationInvoiceCorrectionSchema = z.object({
 
 export type MigrationInvoiceCorrection = z.infer<typeof MigrationInvoiceCorrectionSchema>
 
-/** Use the provider's invoice number first, then its OCR payment reference. */
-export function resolveMigrationSupplierInvoiceNumber(invoice: Pick<SupplierInvoiceDto, 'invoiceNumber' | 'ocrNumber'>): string | null {
-  return invoice.invoiceNumber?.trim() || invoice.ocrNumber?.trim() || null
+/** Use the provider's invoice number first, then OCR, then a dash for unknown. */
+export function resolveMigrationSupplierInvoiceNumber(invoice: Pick<SupplierInvoiceDto, 'invoiceNumber' | 'ocrNumber'>): string {
+  return invoice.invoiceNumber?.trim() || invoice.ocrNumber?.trim() || '-'
 }
 
 /** Only fill a missing number; never replace an upstream identity. */
