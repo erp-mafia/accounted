@@ -6,7 +6,10 @@ import type { Logger } from '@/lib/logger'
 const emit = vi.fn()
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...a: unknown[]) => emit(...a) } }))
 
-import { changeBankAccountLedgers } from '../ledger-change'
+const requireCompanyAdmin = vi.fn()
+vi.mock('@/lib/operations/access', () => ({ requireCompanyAdmin: (...a: unknown[]) => requireCompanyAdmin(...a) }))
+
+import { changeBankAccountLedgers, changeCashAccountLedgers } from '../ledger-change'
 
 const COMPANY = 'company-1'
 const CONNECTION = 'conn-1'
@@ -69,6 +72,7 @@ function setup(options: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  requireCompanyAdmin.mockResolvedValue(null)
 })
 
 describe('changeBankAccountLedgers', () => {
@@ -267,3 +271,80 @@ describe('changeBankAccountLedgers', () => {
     expect(emit).not.toHaveBeenCalled()
   })
 })
+
+describe('changeCashAccountLedgers', () => {
+  // crm#1663: an agent names the accounts by cash_account_id (what
+  // gnubok_list_cash_accounts answers), not by the connection's account uid.
+  it('resolves the cash accounts to their connection and moves them like the dashboard does', async () => {
+    const { ctx, saved, findCall } = setup({
+      accounts: [account('1111'), account('2222')],
+      cash: [cashRow('cash-a', '1111', '1947'), cashRow('cash-b', '2222', '1933')],
+      aggregator: 'enable_banking',
+      booked: 4,
+      unbooked: 20,
+    })
+    const outcome = await changeCashAccountLedgers(ctx, { accounts: [{ cash_account_id: 'cash-a', ledger_account: '1945' }] }, { dryRun: true })
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: { connection_id: CONNECTION, moves: [{ cash_account_id: 'cash-a', from_ledger: '1947', to_ledger: '1945', booked_rows: 4, unbooked_rows: 20 }] },
+    })
+    expect(saved()).toBeUndefined()
+    expect(findCall('rpc:read_bank_configuration', 'rpc')?.[0]).toMatchObject({ p_connection_id: CONNECTION })
+    // The admin gate runs on a dry run too, so a stage is refused up front.
+    expect(requireCompanyAdmin).toHaveBeenCalledTimes(1)
+  })
+
+  it('commits through the same save as the dashboard', async () => {
+    const { ctx, saved } = setup({
+      accounts: [account('1111'), account('2222')],
+      cash: [cashRow('cash-a', '1111', '1947'), cashRow('cash-b', '2222', '1933')],
+    })
+    const outcome = await changeCashAccountLedgers(ctx, { accounts: [{ cash_account_id: 'cash-a', ledger_account: '1945' }] })
+    expect(outcome.ok && !outcome.dryRun && outcome.data.moves.map((m) => m.to_ledger)).toEqual(['1945'])
+    expect(saved()?.p_selections).toContainEqual(expect.objectContaining({ uid: '1111', ledger_account: '1945' }))
+  })
+
+  it('is owner/admin only', async () => {
+    requireCompanyAdmin.mockResolvedValue({ ok: false, code: 'FORBIDDEN', details: { required_roles: ['owner', 'admin'] } })
+    const { ctx, saved } = setup({ accounts: [account('1111')], cash: [cashRow('cash-a', '1111', '1947')] })
+    await expect(
+      changeCashAccountLedgers(ctx, { accounts: [{ cash_account_id: 'cash-a', ledger_account: '1945' }] }, { dryRun: true }),
+    ).resolves.toMatchObject({ ok: false, code: 'FORBIDDEN' })
+    expect(saved()).toBeUndefined()
+  })
+
+  it('refuses an unknown account, one no bank connection syncs, and accounts of two connections', async () => {
+    const { ctx } = setup({
+      accounts: [account('1111')],
+      cash: [
+        cashRow('cash-a', '1111', '1947'),
+        cashRow('cash-manual', null, '1940'),
+        cashRow('cash-other', '9999', '1932', { bank_connection_id: 'conn-2' }),
+      ],
+    })
+    await expect(
+      changeCashAccountLedgers(ctx, { accounts: [{ cash_account_id: 'nope', ledger_account: '1945' }] }),
+    ).resolves.toMatchObject({ ok: false, code: 'CASH_ACCOUNT_NOT_FOUND' })
+    await expect(
+      changeCashAccountLedgers(ctx, { accounts: [{ cash_account_id: 'cash-manual', ledger_account: '1945' }] }),
+    ).resolves.toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'not_bank_connected' } })
+    await expect(
+      changeCashAccountLedgers(ctx, {
+        accounts: [
+          { cash_account_id: 'cash-a', ledger_account: '1945' },
+          { cash_account_id: 'cash-other', ledger_account: '1941' },
+        ],
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'several_connections' } })
+    await expect(
+      changeCashAccountLedgers(ctx, {
+        accounts: [
+          { cash_account_id: 'cash-a', ledger_account: '1945' },
+          { cash_account_id: 'cash-a', ledger_account: '1941' },
+        ],
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'duplicate_account' } })
+  })
+})
+

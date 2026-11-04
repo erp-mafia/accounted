@@ -672,7 +672,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'map connected bank accounts to ledger accounts, as for Enable Banking (Svea: also signs the second consent, which stays a person\'s act)'),
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
-  'PATCH /api/bank/connections/:id/ledgers': gap('P3', 'change the ledger account of a connected bank account on any connection (crm#1395); dashboard first, like the pickers it complements'),
+  'PATCH /api/bank/connections/:id/ledgers': covered([`POST ${V}/cash-accounts/change-ledgers`, 'gnubok_change_bank_ledgers'], 'named by cash_account_id instead of the connection account uid (crm#1663)'),
   'POST /api/clients/bank-switch/remind': uiOnly('a byrå mails its own clients about the one-off Enable Banking to Open Payments switch; the campaign ends with the deadline'),
   'POST /api/bank/open-payments/invites': covered([`POST ${V}/bank-feed/invites`, 'gnubok_bank_feed_connect_link'], 'the signatory link (operation bank-feed.invite): the firmatecknare still signs the consent in person'),
 
@@ -1119,5 +1119,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * draft stock count, dashboard only; a signed count is kept.
  * 169 -> 167 (2026-10-30, crm#1506): editing and deleting an own skill,
  * through gnubok_create_skill (company_skill_id, delete: true).
+ * 167 -> 166 (2026-11-04, crm#1663): the ledger account of a connected bank
+ * account, through gnubok_change_bank_ledgers.
  */
-export const GAP_CEILING = 167
+export const GAP_CEILING = 166

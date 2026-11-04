@@ -979,6 +979,7 @@
     "type_update_cash_account": "Update bank account",
     "type_set_primary_cash_account": "Change primary bank account",
     "type_set_invoice_payee_default": "Invoice payee account",
+    "type_change_bank_ledgers": "Change ledger account of bank account",
     "type_create_fiscal_period": "New fiscal year",
     "type_update_fiscal_period": "Edit fiscal year",
     "type_close_fiscal_period_external": "Mark fiscal year closed in previous system",

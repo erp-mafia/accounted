@@ -30,6 +30,7 @@
  */
 
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { requireCompanyAdmin } from '@/lib/operations/access'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { eventBus } from '@/lib/events/bus'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
@@ -279,4 +280,60 @@ export async function changeBankAccountLedgers(
   }
   ctx.log.info('bank account ledger changed', { connectionId: connection.id, moves: moves.length })
   return { ok: true, data: view }
+}
+
+export interface CashAccountLedgerRequest {
+  cash_account_id: string
+  ledger_account: string
+}
+
+const LEDGER_ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan byta bokföringskonto på ett bankkonto.'
+
+/**
+ * The same change, named by the cash accounts an agent lists
+ * (gnubok_list_cash_accounts) instead of the connection's account uids: the
+ * door of operation cash-accounts.change-ledgers (crm#1663). Every named
+ * account must be synced by one bank connection; the rest is
+ * changeBankAccountLedgers. Owner/admin only, on a dry run too, so a stage is
+ * refused up front and the approval checks the approving user.
+ */
+export async function changeCashAccountLedgers(
+  ctx: OperationContext,
+  input: { accounts: CashAccountLedgerRequest[] },
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<LedgerChangeView>> {
+  const denied = await requireCompanyAdmin(ctx, LEDGER_ADMIN_MESSAGE)
+  if (denied) return denied
+  const requests = input.accounts
+  if (requests.length === 0) return invalid('none_given')
+  if (requests.length > MAX_ACCOUNTS) return invalid('too_many')
+  const ids = [...new Set(requests.map((r) => r.cash_account_id))]
+  if (ids.length !== requests.length) return invalid('duplicate_account')
+
+  const { data, error } = await ctx.supabase
+    .from('cash_accounts')
+    .select('id, bank_connection_id, external_uid')
+    .eq('company_id', ctx.companyId)
+    .in('id', ids)
+  if (error) return saveFailure(error)
+  const rows = new Map(
+    ((data ?? []) as Array<{ id: string; bank_connection_id: string | null; external_uid: string | null }>).map((r) => [r.id, r]),
+  )
+  const missing = ids.find((id) => !rows.has(id))
+  if (missing) return { ok: false, code: 'CASH_ACCOUNT_NOT_FOUND', details: { cash_account_id: missing } }
+  // An account no bank connection syncs has no bank feed to follow it: its
+  // ledger account is not this door's to change.
+  const unsynced = ids.find((id) => !rows.get(id)!.bank_connection_id || !rows.get(id)!.external_uid)
+  if (unsynced) return invalid('not_bank_connected', { cash_account_id: unsynced })
+  const connections = new Set(ids.map((id) => rows.get(id)!.bank_connection_id!))
+  if (connections.size > 1) return invalid('several_connections')
+
+  return changeBankAccountLedgers(
+    ctx,
+    {
+      connectionId: [...connections][0],
+      accounts: requests.map((r) => ({ uid: rows.get(r.cash_account_id)!.external_uid!, ledger_account: r.ledger_account })),
+    },
+    options,
+  )
 }

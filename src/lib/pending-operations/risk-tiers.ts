@@ -205,6 +205,7 @@ const RISK_TIERS = {
   update_cash_account: 'medium',
   set_primary_cash_account: 'medium',
   set_invoice_payee_default: 'medium',
+  change_bank_ledgers: 'medium',
   create_fiscal_period: 'medium',
   update_fiscal_period: 'medium',
   close_fiscal_period_external: 'high',

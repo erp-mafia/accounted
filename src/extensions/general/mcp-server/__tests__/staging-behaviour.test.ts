@@ -258,6 +258,12 @@ const READ_ONLY_RPCS = new Set([
   // Booked result per resultatkonto and month: STABLE, read by the
   // copy-actuals and spread previews.
   'get_account_month_actuals',
+  // A bank connection's account selection with its concurrency token, and
+  // the booked bank rows of one cash account: both STABLE, read by the
+  // ledger change preview (gnubok_change_bank_ledgers, crm#1663);
+  // save_bank_account_selection runs at approval.
+  'read_bank_configuration',
+  'cash_account_booked_rows',
 ])
 
 /**
@@ -1099,6 +1105,18 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_create_cash_account: { rows: { company_members: { role: 'owner' } } },
   gnubok_update_cash_account: { args: { voucher_series: 'B' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
   gnubok_set_primary_cash_account: { rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  // crm#1663: an Enable Banking account on 1947 asked back onto 1945.
+  gnubok_change_bank_ledgers: {
+    args: { accounts: [{ cash_account_id: SOME_UUID, ledger_account: '1945' }] },
+    rows: {
+      company_members: { role: 'owner' },
+      cash_accounts: { ledger_account: '1947', bank_connection_id: SOME_UUID, external_uid: 'uid-1', iban: null, currency: 'SEK' },
+      'rpc:read_bank_configuration': {
+        token: 'token-1',
+        connection: { id: SOME_UUID, status: 'active', bank_name: 'Testbanken', accounts_data: [{ uid: 'uid-1', enabled: true, currency: 'SEK', ledger_account: '1947' }] },
+      },
+    },
+  },
   gnubok_set_invoice_payee_default: { args: { currency: 'SEK' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
   // The company's first year: no neighbours, nothing to overlap.
   gnubok_create_fiscal_period: {

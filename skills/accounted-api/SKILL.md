@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 461 endpoints.
+  pagination, scopes), and all 462 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 461 operations. Paths are shown without
+API version `2026-05-12`, 462 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -550,7 +550,7 @@ PATCH /companies/{companyId}/owner-loans/{id} : Update an owner loan: outstandin
 POST /companies/{companyId}/owner-loans/{id}/interest : Record the interest on an owner loan for an inkomstår and the tax withheld: the figures KU20 reports [scope:companies:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (65)
+### Banking (66)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -566,6 +566,7 @@ GET /companies/{companyId}/cash-accounts : List bank/cash accounts with the bank
 POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no bank connection), with the payee details invoices print, or a company card [scope:companies:write risk:low idempotent dry-run]
 PATCH /companies/{companyId}/cash-accounts/{id} : Edit a bank account: verifikationsserie, payee details, name, or turn it on/off [scope:companies:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/cash-accounts/{id}/set-primary : Make a bank account the company's primary [scope:companies:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/cash-accounts/change-ledgers : Change which 19xx ledger account bank-connected accounts book on from now on [scope:companies:write risk:medium idempotent dry-run reversible]
 PUT /companies/{companyId}/cash-accounts/payee-defaults : Choose which bank account invoices in a currency tell the customer to pay to [scope:companies:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / Excel / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
 POST /companies/{companyId}/imports/bank/{id}/undo : Undo a bank file import: delete the rows it created that are still unbooked [scope:transactions:write risk:high idempotent dry-run]
