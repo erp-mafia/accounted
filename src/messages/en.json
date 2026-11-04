@@ -8904,7 +8904,7 @@
     "ext_arcim_review_reason_too_large": "The invoice is too large for automatic import (more than 2,000 rows). Enter it by hand.",
     "ext_arcim_review_reason_temporary": "The details could not be fetched from {provider} right now. Try again in a while.",
     "ext_arcim_review_reason_connection": "The connection to {provider} has expired. Reconnect and try again.",
-    "ext_arcim_review_reason_registration_amount": "The voucher {provider} names books a different amount than the invoice's amount in SEK, so they were not linked. For an invoice in a foreign currency this is usually because the voucher was booked at a different rate.",
+    "ext_arcim_review_reason_registration_amount": "The voucher {provider} names books a different amount than the invoice's amount in SEK, so they were not linked. For an invoice in a foreign currency, the invoice's amount in SEK is converted at Riksbanken's rate on the invoice date. When {provider} booked the invoice at its own rate, more than 10% away from that one, they are not linked automatically.",
     "ext_arcim_review_reason_registration_ambiguous": "Several vouchers could be the one {provider} names, or it is already linked to another invoice. No link was made.",
     "ext_arcim_review_reason_registration_review": "The voucher {provider} names could not be confirmed against the invoice amount, so they were not linked.",
     "ext_arcim_review_reason_voucher_unavailable": "The voucher {provider} names is not a posted voucher in Accounted.",
