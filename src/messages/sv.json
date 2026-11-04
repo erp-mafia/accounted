@@ -5357,6 +5357,7 @@
     },
     "subject": "Ämne: {subject}",
     "also_via": "Kom även via {doors}",
+    "note_label": "Meddelande från avsändaren",
     "show_original": "Visa originalet",
     "dialog_title": "Originalet",
     "dialog_description": "Så som underlaget kom in, innan något tolkades.",

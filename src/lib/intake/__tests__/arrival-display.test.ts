@@ -3,6 +3,7 @@ import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import type { ArrivalSummary } from '@/lib/intake/arrivals'
 import {
+  deliveryNotes,
   formatOriginalSize,
   mailboxLabel,
   normaliseMime,
@@ -431,7 +432,41 @@ describe('provenanceFor', () => {
   })
 })
 
+describe('deliveryNotes', () => {
+  it('keeps the message a partner sent with the document, so the Inkorg can show it (crm#1665)', () => {
+    const partner = arrival({ source: 'partner_api', message_text: '  Faktura 4711.\nAttesterad av Anna.  ' })
+    expect(deliveryNotes([partner])).toEqual(['Faktura 4711.\nAttesterad av Anna.'])
+    expect(provenanceFor([partner], { formatDate })?.notes).toEqual(['Faktura 4711.\nAttesterad av Anna.'])
+  })
+
+  it('leaves out a mail body, which "Visa originalet" already shows with its mail', () => {
+    const mailed = arrival({ source: 'intake_email', message_text: 'Hej, här är fakturan.', has_original: true, original_mime: 'message/rfc822' })
+    const fetched = arrival({ id: 'box', source: 'mailbox', message_text: 'Kvitto bifogat.' })
+    expect(deliveryNotes([mailed, fetched])).toEqual([])
+    expect(provenanceFor([mailed], { formatDate })?.notes).toEqual([])
+  })
+
+  it('shows each text once, first delivery first, and skips empty ones', () => {
+    const notes = deliveryNotes([
+      arrival({ id: 'b', source: 'partner_api', received_at: '2026-10-16T08:00:00Z', message_text: 'Andra' }),
+      arrival({ id: 'a', source: 'partner_api', received_at: '2026-10-15T08:00:00Z', message_text: 'Första' }),
+      arrival({ id: 'c', source: 'partner_api', received_at: '2026-10-17T08:00:00Z', message_text: 'Första' }),
+      arrival({ id: 'd', source: 'upload', received_at: '2026-10-18T08:00:00Z', message_text: '   ' }),
+    ])
+    expect(notes).toEqual(['Första', 'Andra'])
+  })
+
+  it('is empty for deliveries without a message', () => {
+    expect(deliveryNotes([arrival({ source: 'partner_api' }), arrival({ source: 'upload' })])).toEqual([])
+  })
+})
+
 describe('messages', () => {
+  it('has the label for the sender\'s note in both languages', () => {
+    expect(message(svCatalog, 'note_label')).toBeTruthy()
+    expect(message(enCatalog, 'note_label')).toBeTruthy()
+  })
+
   it('has every line the helper can produce, with its placeholders, in both languages', () => {
     const refs: MessageRef[] = []
     for (const source of [...SOURCES, 'unknown_door']) {

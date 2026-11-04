@@ -1,0 +1,1 @@
+[2026-11-04] The Inkorg shows a delivery's own message (message_text of non-mail arrivals) beside the decision; it stays on the arrival and is not fed to categorization: the person booking must see the sender's instructions (crm#1665)

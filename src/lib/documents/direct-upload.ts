@@ -65,6 +65,51 @@ function storageRejectedResponse(status: number): Response {
 }
 
 /**
+ * The browser could not read the picked file, so nothing was sent. Same
+ * envelope as a route refusal, so every caller shows the reason instead of
+ * the "network error" a failed send would otherwise surface as.
+ */
+function fileUnreadableResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: 'DOC_UPLOAD_FILE_UNREADABLE',
+        message:
+          'Webbläsaren kunde inte läsa filen från datorn, så den skickades aldrig. ' +
+          'Spara en ny kopia av filen, till exempel på skrivbordet, och välj den igen.',
+        message_en:
+          'The browser could not read the file from your computer, so it was never sent. ' +
+          'Save a new copy of the file, for example on the desktop, and choose it again.',
+      },
+    }),
+    { status: 400, headers: { 'content-type': 'application/json' } },
+  )
+}
+
+/**
+ * The file's bytes held in memory, or null when the browser cannot read them.
+ *
+ * A picked File is a reference to a file on disk that fetch reads only while
+ * it sends. When the browser cannot read it then (the file changed or moved
+ * after it was picked, or sits in cloud storage not downloaded to the
+ * computer), the request fails before it leaves the browser: nothing reaches
+ * the server and the screen can only say "network error" (crm#1664). Read
+ * here, the request carries bytes the browser already holds, and a file it
+ * cannot read is named as such.
+ */
+async function readIntoMemory(file: File): Promise<File | null> {
+  try {
+    const bytes = await file.arrayBuffer()
+    return new File([bytes], file.name, { type: file.type, lastModified: file.lastModified })
+  } catch {
+    // Not swallowed: null becomes the DOC_UPLOAD_FILE_UNREADABLE answer the
+    // screen shows. The browser's own reason (NotReadableError and the like)
+    // carries nothing the person can act on beyond picking the file again.
+    return null
+  }
+}
+
+/**
  * Steps 1 and 2: reserve at `createUrl` and PUT the bytes to the signed URL.
  * Resolves to the upload id, or to the Response that ended the sequence.
  */
@@ -138,14 +183,18 @@ export const DOCUMENT_UPLOAD_CREATE_URL = '/api/documents/uploads'
  *
  * Same contract as uploadViaSignedUrl: resolves to the route's Response, or
  * to the first failing step's, so callers keep their `if (!res.ok)` handling.
+ * A file the browser cannot read resolves to a DOC_UPLOAD_FILE_UNREADABLE
+ * envelope and sends nothing (readIntoMemory).
  */
 export async function postDocumentForm(
   url: string,
   form: FormData,
-  file: File,
+  picked: File,
   options: DirectUploadOptions = {},
 ): Promise<Response> {
   const fetchImpl = resolveFetch(options)
+  const file = await readIntoMemory(picked)
+  if (!file) return fileUnreadableResponse()
   if (!exceedsHostedUploadLimit(file.size)) {
     form.append('file', file)
     return fetchImpl(url, { method: 'POST', body: form })
