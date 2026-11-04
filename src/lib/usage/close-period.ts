@@ -35,7 +35,7 @@ import { allowanceOf, currentUsagePeriod, isUsagePeriod, usagePeriodBounds } fro
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { consentCovers, readOpenConsentsByCompany, type UsageConsent } from './consent'
 import { countUsageByCompany } from './counters'
-import { formatOre, USAGE_INVOICE_LABELS, USAGE_KINDS, usageLine, type UsageKind, type UsageLine } from './kinds'
+import { formatOre, includedThisMonth, USAGE_INVOICE_LABELS, USAGE_KINDS, USAGE_PRICES, usageLine, type UsageKind, type UsageLine } from './kinds'
 import { readByraAgreements, subscriptionPays } from './paying'
 
 export type StatementStatus = 'preview' | 'billing' | 'billed' | 'failed' | 'manual'
@@ -299,6 +299,11 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
 
   const counts = new Map<UsageKind, Map<string, number>>()
   for (const kind of USAGE_KINDS) counts.set(kind, await countUsageByCompany(service, kind, period))
+  // What earlier months used of an amount included once (signed documents).
+  const before = new Map<UsageKind, Map<string, number>>()
+  for (const kind of USAGE_KINDS) {
+    if (USAGE_PRICES[kind].includedOnce !== undefined) before.set(kind, await countUsageByCompany(service, kind, period, { before: true }))
+  }
   const companyIds = [...new Set([...counts.values()].flatMap((byCompany) => [...byCompany.keys()]))].sort()
   if (companyIds.length === 0) return result
 
@@ -307,9 +312,14 @@ export async function closeUsagePeriod(service: SupabaseClient, period: string, 
 
   for (const companyId of companyIds) {
     const context = contexts.get(companyId)!
-    const lines = USAGE_KINDS.map((kind) =>
-      usageLine(kind, counts.get(kind)?.get(companyId) ?? 0, kind === 'bank_payment' ? context.bankPaymentsIncluded : null),
-    ).filter((line) => line.used > 0)
+    const lines = USAGE_KINDS.map((kind) => {
+      const included = kind === 'bank_payment'
+        ? context.bankPaymentsIncluded
+        : before.has(kind)
+          ? includedThisMonth(kind, before.get(kind)?.get(companyId) ?? 0)
+          : null
+      return usageLine(kind, counts.get(kind)?.get(companyId) ?? 0, included)
+    }).filter((line) => line.used > 0)
     result.companies += 1
 
     const stuck = lines.filter((line) => {

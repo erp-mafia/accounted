@@ -133,15 +133,17 @@ function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: bool
   const [requesting, setRequesting] = useState(false)
   const price = formatCurrency((line.unit_price_ore ?? 0) / 100)
   const canRequest = paying && !line.accepted && role !== null
+  // A kind included once stops at its amount in all, not at what this month has left of it.
+  const included = line.included_once ?? line.included ?? 0
 
   return (
     <SettingsRow label={t(`usage_kind_${line.kind}`)}>
       <SettingsRowNote className="tabular-nums">
         {!paying
-          ? t('usage_charge_needs_subscription', { included: line.included ?? 0, price })
+          ? t('usage_charge_needs_subscription', { included, price })
           : line.accepted && line.accepted_at
-            ? t('usage_charge_on', { price, included: line.included ?? 0, date: formatDateLong(line.accepted_at) })
-            : t('usage_charge_off', { included: line.included ?? 0, price })}
+            ? t('usage_charge_on', { price, included, date: formatDateLong(line.accepted_at) })
+            : t('usage_charge_off', { included, price })}
       </SettingsRowNote>
       {canRequest && (
         <SettingsRowEnd>
@@ -156,7 +158,7 @@ function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: bool
         ) : (
           <UsageLimitDialog
             kind={line.kind}
-            included={line.included ?? 0}
+            included={included}
             unitPriceOre={line.unit_price_ore ?? 0}
             open={requesting}
             onOpenChange={setRequesting}
@@ -169,6 +171,7 @@ function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: bool
 type Translate = ReturnType<typeof useTranslations<'settings_billing'>>
 
 function includedCell(line: CompanyUsageLine, t: Translate): string {
+  if (line.included_once !== null) return t('usage_included_left', { left: Math.max(0, (line.included ?? 0) - line.used), total: line.included_once })
   if (line.included !== null) return String(line.included)
   return line.unit_price_ore === 0 ? t('usage_all_included') : '–'
 }

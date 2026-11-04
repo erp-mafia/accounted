@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BANK_PAYMENTS_INCLUDED_PER_MONTH } from '@/lib/payments/usage'
-import { billedUsageKinds, formatOre, isPricedKind, usageLine, USAGE_GATED_KINDS, USAGE_KINDS, USAGE_PRICES } from '../kinds'
+import { billedUsageKinds, formatOre, includedThisMonth, isPricedKind, usageLine, USAGE_GATED_KINDS, USAGE_KINDS, USAGE_PRICES } from '../kinds'
 
 describe('usageLine', () => {
   it('includes as many bank payments as the payments cap does', () => {
@@ -37,9 +37,18 @@ describe('usageLine', () => {
     })
   })
 
-  it('bills the signed documents above the three a month includes', () => {
+  it('bills the signed documents above the company\'s first three in all, not three a month', () => {
+    expect(USAGE_PRICES.signing).toMatchObject({ includedPerMonth: null, includedOnce: 3 })
     expect(usageLine('signing', 3)).toMatchObject({ included: 3, billable: 0, amount_ore: 0 })
     expect(usageLine('signing', 5)).toMatchObject({ included: 3, billable: 2, unit_price_ore: 1000, amount_ore: 2000 })
+    // Two in earlier months leave one for this month; three or more leave none.
+    expect(usageLine('signing', 3, includedThisMonth('signing', 2))).toMatchObject({ included: 1, billable: 2, amount_ore: 2000 })
+    expect(usageLine('signing', 1, includedThisMonth('signing', 7))).toMatchObject({ included: 0, billable: 1, amount_ore: 1000 })
+  })
+
+  it('gives every other kind its month\'s amount whatever earlier months used', () => {
+    expect(includedThisMonth('peppol_send', 50)).toBe(10)
+    expect(includedThisMonth('billo_send', 50)).toBeNull()
   })
 
   it('never bills an included kind', () => {

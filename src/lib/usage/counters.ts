@@ -65,41 +65,57 @@ interface UsageQuery<Row> extends PromiseLike<{ data: Row[] | null; count?: numb
   range(from: number, to: number): UsageQuery<Row>
 }
 
-function applySource<Row>(query: UsageQuery<Row>, source: UsageSource, period: string): UsageQuery<Row> {
+/** Within `period`, or with `before` everything before it began. */
+function applySource<Row>(query: UsageQuery<Row>, source: UsageSource, period: string, before = false): UsageQuery<Row> {
   const { start, end } = usagePeriodBounds(period)
-  let q = query.gte(source.at, start).lt(source.at, end)
+  let q = before ? query.lt(source.at, start) : query.gte(source.at, start).lt(source.at, end)
   for (const [column, value] of Object.entries(source.eq ?? {})) q = q.eq(column, value)
   for (const column of source.notNull ?? []) q = q.not(column, 'is', null)
   for (const column of source.isNull ?? []) q = q.is(column, null)
   return q
 }
 
-/** One company's units of a kind in a month (live bank accounts: now). Throws on a failed read. */
+/**
+ * One company's units of a kind in a month (live bank accounts: now), or
+ * with `before` every unit before the month began: what earlier months used
+ * of an amount included once (USAGE_PRICES includedOnce). Throws on a failed
+ * read.
+ */
 export async function countCompanyUsage(
   supabase: SupabaseClient,
   companyId: string,
   kind: UsageKind,
   period: string,
+  options: { before?: boolean } = {},
 ): Promise<number> {
-  if (kind === 'bank_account') return (await readLiveBankAccounts(supabase, companyId)).size
+  if (kind === 'bank_account') return options.before ? 0 : (await readLiveBankAccounts(supabase, companyId)).size
   let total = 0
   for (const source of USAGE_SOURCES[kind]) {
     const query = supabase.from(source.table).select('id', { count: 'exact', head: true }) as unknown as UsageQuery<never>
-    const { count, error } = await applySource(query.eq('company_id', companyId), source, period)
+    const { count, error } = await applySource(query.eq('company_id', companyId), source, period, options.before)
     if (error) throw new Error(`usage count ${kind} (${source.table}) failed: ${error.message}`)
     total += count ?? 0
   }
   return total
 }
 
-/** Every company's units of a kind in a month (live bank accounts: now), for the monthly statements. Companies with none are absent. */
-export async function countUsageByCompany(service: SupabaseClient, kind: UsageKind, period: string): Promise<Map<string, number>> {
-  if (kind === 'bank_account') return countLiveBankAccountsByCompany(service)
+/**
+ * Every company's units of a kind in a month (live bank accounts: now), or
+ * with `before` every unit before the month began, for the monthly
+ * statements. Companies with none are absent.
+ */
+export async function countUsageByCompany(
+  service: SupabaseClient,
+  kind: UsageKind,
+  period: string,
+  options: { before?: boolean } = {},
+): Promise<Map<string, number>> {
+  if (kind === 'bank_account') return options.before ? new Map() : countLiveBankAccountsByCompany(service)
   const counts = new Map<string, number>()
   for (const source of USAGE_SOURCES[kind]) {
     const rows = await fetchAllRows<{ id: string; company_id: string }>(({ from, to }) => {
       const query = service.from(source.table).select('id, company_id') as unknown as UsageQuery<{ id: string; company_id: string }>
-      return applySource(query, source, period).order('id').range(from, to)
+      return applySource(query, source, period, options.before).order('id').range(from, to)
     })
     for (const row of rows) counts.set(row.company_id, (counts.get(row.company_id) ?? 0) + 1)
   }

@@ -48,6 +48,15 @@ describe('countCompanyUsage', () => {
     expect(findCalls('signing_requests', 'gte')[0]?.[0]).toBe('completed_at')
   })
 
+  it('counts every signing before the month began, for an amount included once', async () => {
+    enqueue({ count: 4 })
+
+    expect(await countCompanyUsage(db, 'c1', 'signing', '2026-11', { before: true })).toBe(4)
+    expect(findCalls('signing_requests', 'gte')).toEqual([])
+    expect(findCalls('signing_requests', 'lt')).toEqual([['completed_at', usagePeriodBounds('2026-11').start]])
+    expect(findCalls('signing_requests', 'eq')).toContainEqual(['status', 'completed'])
+  })
+
   it('counts inbox documents our AI read, never those a customer\'s own agent read', async () => {
     enqueue({ count: 31 })
 

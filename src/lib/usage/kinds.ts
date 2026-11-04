@@ -1,6 +1,7 @@
 /**
- * The priced services: each one a month includes some of, and charges a
- * unit price for above that, billed in arrears (accounted.se/priser).
+ * The priced services: each one a month includes some of (signed documents:
+ * the company's first few in all), and charges a unit price for above that,
+ * billed in arrears (accounted.se/priser).
  *
  * This file is the one place a price lives. The usage view, the monthly
  * statements and the invoice lines all read it, so a price change is one
@@ -20,8 +21,10 @@ export const USAGE_KINDS = ['bank_payment', 'peppol_send', 'kivra_send', 'billo_
 export type UsageKind = (typeof USAGE_KINDS)[number]
 
 export interface UsagePrice {
-  /** What a month includes; null when the kind has no included amount (not priced yet, or always included). */
+  /** What a month includes; null when the kind has no included amount (not priced yet, or always included), or is included once. */
   includedPerMonth: number | null
+  /** What a company's first units include in all, never renewed by a new month (signed documents). */
+  includedOnce?: number
   /** Öre exkl. moms per unit above the included amount; null when not priced yet, 0 when always included. */
   unitPriceOre: number | null
 }
@@ -29,7 +32,9 @@ export interface UsagePrice {
 /**
  * Bank payments, Peppol sends and live bank accounts carry the prices
  * published on accounted.se/priser (2026-10-30); Kivra sends and signed
- * documents the prices set 2026-11-02. Billo is included. An annual report's
+ * documents the prices set 2026-11-02, with a company's first 3 signed
+ * documents included in all, not 3 a month (founder decision 2026-11-04).
+ * Billo is included. An annual report's
  * signing is not counted (counters.ts), so it is always included. Documents
  * our AI read are counted against the published 25 a month but not billed
  * (founder decision 2026-11-02): no price here until that changes.
@@ -43,7 +48,7 @@ export const USAGE_PRICES: Readonly<Record<UsageKind, UsagePrice>> = Object.free
   peppol_send: { includedPerMonth: 10, unitPriceOre: 100 },
   kivra_send: { includedPerMonth: 0, unitPriceOre: 300 },
   billo_send: { includedPerMonth: null, unitPriceOre: 0 },
-  signing: { includedPerMonth: 3, unitPriceOre: 1000 },
+  signing: { includedPerMonth: null, includedOnce: 3, unitPriceOre: 1000 },
   bank_account: { includedPerMonth: 2, unitPriceOre: 2000 },
   ai_document: { includedPerMonth: 25, unitPriceOre: null },
 })
@@ -107,7 +112,7 @@ export function billedUsageKinds(env: Record<string, string | undefined> = proce
 export interface UsageLine {
   kind: UsageKind
   used: number
-  /** Null when the kind has no included amount. */
+  /** What the month includes (for a kind included once, what earlier months left); null when the kind has no included amount. */
   included: number | null
   /** Units above the included amount that carry a price; 0 for an unpriced or included kind. */
   billable: number
@@ -118,14 +123,27 @@ export interface UsageLine {
 }
 
 /**
- * The line for `used` units of a kind. `includedOverride` replaces the
- * registry's included amount for one company (a bank payments allowance a
- * founder set, plus bought packs). Integer arithmetic only: öre never pass
- * through a float.
+ * What a month of `kind` includes for a company that used `usedBefore` units
+ * in earlier months: the month's amount, or for a kind included once what
+ * the earlier months left of it.
+ */
+export function includedThisMonth(kind: UsageKind, usedBefore: number): number | null {
+  const price = USAGE_PRICES[kind]
+  if (price.includedOnce !== undefined) return Math.max(0, price.includedOnce - usedBefore)
+  return price.includedPerMonth
+}
+
+/**
+ * The line for `used` units of a kind in a month. `includedOverride`
+ * replaces the registry's included amount for one company: a bank payments
+ * allowance a founder set plus bought packs, or what is left of an amount
+ * included once (includedThisMonth). Without it a kind included once counts
+ * the whole amount as left. Integer arithmetic only: öre never pass through
+ * a float.
  */
 export function usageLine(kind: UsageKind, used: number, includedOverride?: number | null): UsageLine {
   const price = USAGE_PRICES[kind]
-  const included = includedOverride ?? price.includedPerMonth
+  const included = includedOverride ?? includedThisMonth(kind, 0)
   const unit = price.unitPriceOre
   const billable = unit ? Math.max(0, used - (included ?? 0)) : 0
   return { kind, used, included, billable, unit_price_ore: unit, amount_ore: billable * (unit ?? 0) }
