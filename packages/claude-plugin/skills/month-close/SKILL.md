@@ -10,7 +10,7 @@ Run the monthly close as a checklist against live data. The authoritative checkl
 
 ## Flow
 
-1. If not already done this session, call `accounted_get_agent_briefing` and read `Accounted://period/active` to confirm which period is being closed.
+1. If not already done this session, call `accounted_get_agent_briefing` and read `Accounted://period/active` (for a company other than the default: `Accounted://company/{company_id}/period/active`) to confirm which period is being closed.
 2. Load the checklist: `accounted_load_skill("month-end-close")`. Follow it step by step with the company's real numbers.
 3. Bank first: if unreconciled transactions exist in the period, load `accounted_load_skill("bank-reconciliation")` and clear them before anything else. Unbooked items route through the `/accounted:bookkeep` flow.
 4. Work the remaining checklist items (accruals, recurring vouchers, control balances). Every correction is staged and individually approved by the user; use storno-style corrections through the product's tools, never edit posted entries.

@@ -6,7 +6,8 @@
  * The booking itself is one SQL transaction, book_counterparty_setoff
  * (migration 20261022130100), reached through its engine door
  * (commitCounterpartySetoff) by the posting port's commitSqlPosting: the
- * verifikat (Dr 244x / Cr 151x), both invoices' remaining amounts, a payment
+ * verifikat (Dr 244x / Cr 151x, and 3740 for an öresavrundning the set-off
+ * absorbs), both invoices' remaining amounts, a payment
  * row on each side and the set-off row. This module plans and previews,
  * refuses what it can before the database is asked, records the posting
  * port's event, and after the commit does the best-effort rest: the
@@ -15,6 +16,7 @@
  */
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { oreRoundingLine } from '@/lib/bookkeeping/ore-rounding'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -106,6 +108,7 @@ export function setoffPreview(plan: SetoffPlan, state: Pick<SetoffPairState, 'cu
       remaining_before: plan.invoice.remainingBefore,
       remaining_after: plan.invoice.remainingAfter,
       status_after: plan.invoice.statusAfter,
+      ore_rounding: plan.invoice.oreRounding,
     },
     supplier_invoice: {
       supplier_invoice_id: plan.supplierInvoice.id,
@@ -120,9 +123,15 @@ export function setoffPreview(plan: SetoffPlan, state: Pick<SetoffPairState, 'cu
     // vouchers booked, which are these unless the company booked others.
     lines: [
       { account_number: payable, debit_amount: plan.amount, credit_amount: 0 },
-      { account_number: receivable, debit_amount: 0, credit_amount: plan.amount },
+      { account_number: receivable, debit_amount: 0, credit_amount: plan.invoice.applied },
+      ...(plan.invoice.oreRounding !== 0 ? [oreLine(plan.invoice.oreRounding)] : []),
     ],
   }
+}
+
+function oreLine(residual: number) {
+  const { account_number, debit_amount, credit_amount } = oreRoundingLine(residual, 'customer')
+  return { account_number, debit_amount, credit_amount }
 }
 
 function isUniqueViolation(error: { code?: string } | null | undefined): boolean {
@@ -282,6 +291,7 @@ async function archiveSetoffNote(
       setoffDate: plan.setoffDate,
       voucherLabel,
       amount: plan.amount,
+      oreRounding: plan.invoice.oreRounding,
       invoice: {
         number: plan.invoice.number,
         invoiceDate: state.invoice.invoiceDate,

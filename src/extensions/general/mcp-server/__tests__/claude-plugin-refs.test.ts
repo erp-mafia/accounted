@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { workflowSkills } from '../skills'
-import { dataResources } from '../resources'
+import { dataResources, findCompanyScopedResource } from '../resources'
 import { toCanonicalToolName } from '../tool-namespace'
 import { discoverAtoms } from '@/scripts/lib/atom-discovery'
+
+const COMPANY_PREFIX = 'Accounted://company/{company_id}/'
 
 /**
  * The Claude Code plugin (packages/claude-plugin/) ships thin wrapper skills whose value
@@ -66,8 +68,13 @@ describe('claude-plugin wrapper references', () => {
   it('every Accounted:// resource URI exists on the server', () => {
     const uris = new Set(dataResources.map((r) => r.uri))
     for (const { file, body } of pluginSkills) {
-      for (const [uri] of body.matchAll(/Accounted:\/\/[a-z/-]+/g)) {
-        expect(uris.has(uri), `${file} references unknown resource "${uri}"`).toBe(true)
+      for (const [uri] of body.matchAll(/Accounted:\/\/[a-z{}_/-]+/g)) {
+        // The company-scoped form (crm#1637): a data resource under one company.
+        const known = uri.startsWith(COMPANY_PREFIX)
+          ? uri === COMPANY_PREFIX ||
+            findCompanyScopedResource(uri.replace('{company_id}', '00000000-0000-4000-8000-000000000000')) !== null
+          : uris.has(uri)
+        expect(known, `${file} references unknown resource "${uri}"`).toBe(true)
       }
     }
   })

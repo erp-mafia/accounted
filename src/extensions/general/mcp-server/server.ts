@@ -260,7 +260,7 @@ import {
 } from '@/lib/reports/invoice-register-coverage'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
-import { dataResources, findResource, parseResourceQuery } from './resources'
+import { dataResources, findCompanyScopedResource, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { lastSessionSync, loadRememberedFacts } from '@/lib/agent-context/remembered-facts'
 import {
@@ -430,7 +430,6 @@ import {
 import { runAcrossCompanies, summarizeCompanyResult } from '@/lib/portfolio/runner'
 import { fetchPortfolioOverview, portfolioRowToWire, type DeadlineKindFilter } from '@/lib/portfolio/overview'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
-import { companyCurrentResource } from './resources/company-current'
 import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFor } from './arg-guard'
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
@@ -28785,10 +28784,9 @@ const CACHE_STATIC = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
 
-/** Resource template for any company the key reaches (resources/templates/list). */
+/** Resource templates for any company the key reaches (resources/templates/list, findCompanyScopedResource). */
 const COMPANY_CONTEXT_TEMPLATE = 'Accounted://company/{company_id}/context'
-const COMPANY_CONTEXT_TEMPLATE_RE =
-  /^Accounted:\/\/company\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/context$/i
+const COMPANY_RESOURCE_TEMPLATE = 'Accounted://company/{company_id}/{resource}'
 
 const SERVER_CAPABILITIES = {
   tools: { listChanged: false },
@@ -29713,7 +29711,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               : [
                 `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
                 '• Many companies at once: gnubok_client_overview (unbooked, inbox, next deadline per company; filter by deadline kind and window), gnubok_run_across_companies (any read tool once per company, one summarised answer) and gnubok_stage_across_companies (one write staged per company under a batch_id; approve the batch or each operation). scope = { companies: "all" | "team" | [ids] }; "team" is the byrå team\'s clients.',
-                '• MCP resources use the default company. For another company read Accounted://company/{company_id}/context (resource template) or call gnubok_get_agent_briefing with company_id.',
+                '• MCP resources read the default company. Another company: Accounted://company/{company_id}/{resource} (e.g. attention, context) or gnubok_get_agent_briefing with company_id.',
                 ]),
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
@@ -30699,6 +30697,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               description: 'Working memory for one company this key reaches (same shape as Accounted://company/current): identity, active fiscal period, lock dates, entity counts, voucher series, recent activity, deadlines. company_id from gnubok_list_companies.',
               mimeType: 'application/json',
             },
+            {
+              uriTemplate: COMPANY_RESOURCE_TEMPLATE,
+              name: 'Company resource',
+              description: 'Any Accounted:// data resource for one company this key reaches: resource is its URI after Accounted:// (attention, period/active, recent-activity, ...). The payload opens with company.',
+              mimeType: 'application/json',
+            },
           ],
         }, toolNamespace), CACHE_STATIC))
       )
@@ -30707,26 +30711,27 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const uri = (params as Record<string, unknown>)?.uri as string
       const readStartedAt = Date.now()
 
-      // Accounted://company/{company_id}/context: the company-current
-      // resource for an explicit company, membership-checked like a tool
-      // call with company_id.
-      const templateMatch = typeof uri === 'string' ? COMPANY_CONTEXT_TEMPLATE_RE.exec(uri) : null
-      if (templateMatch) {
+      // Accounted://company/{company_id}/{resource} (context = company/current):
+      // a data resource for an explicit company, membership-checked like a
+      // tool call with company_id (crm#1637).
+      const scoped = typeof uri === 'string' ? findCompanyScopedResource(uri) : null
+      if (scoped) {
         try {
           if (isAnonymous) return unauthorized()
           const context = await resolveMcpCompanyContext({
             supabase,
             userId,
             defaultCompanyId: companyId,
-            requestedCompanyId: templateMatch[1].toLowerCase(),
-            // Under a pin only the pinned company's context is readable.
+            requestedCompanyId: scoped.companyId,
+            // Under a pin only the pinned company's resources are readable.
             allowedCompanyIds: pinnedCompanyId ? [pinnedCompanyId] : allowedCompanyIds,
           })
-          const result = await companyCurrentResource.read({
+          const result = await scoped.resource.read({
             supabase,
             companyId: context.companyId,
             userId,
             scopes: keyScopes,
+            query: parseResourceQuery(scoped.uri),
           })
           emitResourceReadTelemetry({
             uri,
@@ -30744,7 +30749,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               contents: [
                 {
                   uri,
-                  mimeType: companyCurrentResource.mimeType,
+                  mimeType: scoped.resource.mimeType,
                   text: JSON.stringify(
                     projectMcpPayload(
                       companyEchoPayload(result, companyEchoFromContext(context)),
@@ -30848,13 +30853,23 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // Data resources are company-scoped; an unbound key (no company yet,
           // issue #1814) gets the same NO_COMPANY_YET answer as tools/call.
           if (!companyId) throw noCompanyYetError()
+          // The default (or pinned) company, resolved like a tool call without
+          // company_id, and named in the payload as a tool result is
+          // (crm#1637: a multi-company agent took these for its own company).
+          const context = await resolveMcpCompanyContext({
+            supabase,
+            userId,
+            defaultCompanyId: companyId,
+            allowedCompanyIds: pinnedCompanyId ? [pinnedCompanyId] : allowedCompanyIds,
+          })
           const result = await dataResource.read({
             supabase,
-            companyId,
+            companyId: context.companyId,
             userId,
             scopes: keyScopes,
             query: parseResourceQuery(uri),
           })
+          const echo = (await resolveSimpleCompanyMode()) ? null : companyEchoFromContext(context)
           emitResourceReadTelemetry({
             uri,
             kind: 'data',
@@ -30872,7 +30887,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 {
                   uri,
                   mimeType: dataResource.mimeType,
-                  text: JSON.stringify(projectMcpPayload(result, toolNamespace), null, 2),
+                  text: JSON.stringify(projectMcpPayload(echo ? companyEchoPayload(result, echo) : result, toolNamespace), null, 2),
                 },
               ],
             }, CACHE_LIVE))

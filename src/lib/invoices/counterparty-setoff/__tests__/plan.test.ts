@@ -63,7 +63,7 @@ describe('planSetoff', () => {
         amount: 1388,
         setoffDate: '2026-09-30',
         partyId: PARTY,
-        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid' },
+        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid', applied: 1388, oreRounding: 0 },
         supplierInvoice: {
           id: 'si-1',
           number: 'SF-CE-202607',
@@ -102,7 +102,47 @@ describe('planSetoff', () => {
     expect(planSetoff({ ...base, amount: 0 })).toMatchObject({ ok: false, code: 'SETOFF_INVALID_AMOUNT' })
     expect(planSetoff({ ...base, amount: -1 })).toMatchObject({ ok: false, code: 'SETOFF_INVALID_AMOUNT' })
     expect(planSetoff({ ...base, amount: 10.005 })).toMatchObject({ ok: false, code: 'SETOFF_INVALID_AMOUNT' })
-    expect(planSetoff({ ...base, amount: 1388.01 })).toMatchObject({ ok: false, code: 'SETOFF_AMOUNT_EXCEEDS_REMAINING' })
+    expect(planSetoff({ ...base, amount: 1389 })).toMatchObject({ ok: false, code: 'SETOFF_AMOUNT_EXCEEDS_REMAINING' })
+    expect(planSetoff({ ...base, amount: 4504.01, invoice: invoice({ remaining: 5000 }) })).toMatchObject({
+      ok: false,
+      code: 'SETOFF_AMOUNT_EXCEEDS_REMAINING',
+    })
+  })
+
+  // crm#1644: the set-off books öresavrundning by the rule every payment of a
+  // SEK invoice books by (oreSettlementResidual).
+  it('settles an invoice rounded down when its rounded Att betala is set off: the öre on 3740 and the right net', () => {
+    const plan = planSetoff({
+      invoice: invoice({ total: 3136.18, remaining: 3136.18 }),
+      supplierInvoice: supplierInvoice({ total: 4012.13, remaining: 4012.13 }),
+      amount: 3136,
+      setoffDate: TODAY,
+      today: TODAY,
+    })
+    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 3136.18, oreRounding: 0.18 })
+    expect(plan.ok && plan.plan.supplierInvoice.remainingAfter).toBe(876.13)
+    expect(plan.ok && plan.plan.net).toEqual({ direction: 'we_pay', amount: 876.13 })
+  })
+
+  it('settles an invoice rounded up when its rounded Att betala is set off, though it is above the remaining amount', () => {
+    const plan = planSetoff({
+      invoice: invoice({ total: 3135.82, remaining: 3135.82 }),
+      supplierInvoice: supplierInvoice({ total: 4012.13, remaining: 4012.13 }),
+      amount: 3136,
+      setoffDate: TODAY,
+      today: TODAY,
+    })
+    expect(plan.ok && plan.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 3135.82, oreRounding: -0.18 })
+    expect(plan.ok && plan.plan.net).toEqual({ direction: 'we_pay', amount: 876.13 })
+  })
+
+  it('leaves a gap of a krona or more open, and sets off the exact remaining amount without rounding', () => {
+    const base = { supplierInvoice: supplierInvoice(), setoffDate: TODAY, today: TODAY }
+    const partial = planSetoff({ ...base, invoice: invoice(), amount: 1387 })
+    expect(partial.ok && partial.plan.invoice).toMatchObject({ remainingAfter: 1, statusAfter: 'partially_paid', applied: 1387, oreRounding: 0 })
+    const exact = planSetoff({ ...base, invoice: invoice({ total: 3136.18, remaining: 3136.18 }) })
+    expect(exact.ok && exact.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 3136.18, oreRounding: 0 })
+    expect(exact.ok && exact.plan.amount).toBe(3136.18)
   })
 
   it('refuses a date in the future or before either invoice', () => {

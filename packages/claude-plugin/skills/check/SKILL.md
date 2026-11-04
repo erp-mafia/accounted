@@ -10,7 +10,7 @@ A read-only pass over the books that ends in a short prioritized list. This flow
 ## Flow
 
 1. If not already done this session, call `accounted_get_agent_briefing`.
-2. Read `Accounted://attention`, `Accounted://period/active`, and `Accounted://recent-activity`.
+2. Read `Accounted://attention`, `Accounted://period/active`, and `Accounted://recent-activity`. They read the default company: for another, read the same paths under `Accounted://company/{company_id}/` (for example `Accounted://company/{company_id}/attention`).
 3. Assess, in this order:
    - Unbooked backlog: how many items, how old is the oldest?
    - Unreconciled bank transactions in the active period.

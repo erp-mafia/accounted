@@ -9,6 +9,7 @@
  */
 import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { roundOre } from '@/lib/money'
 import type { SetoffErrorCode } from './errors'
@@ -125,7 +126,24 @@ export interface SetoffPlan {
   amount: number
   setoffDate: string
   partyId: string
-  invoice: { id: string; number: string | null; remainingBefore: number; remainingAfter: number; statusAfter: 'paid' | 'partially_paid' }
+  invoice: {
+    id: string
+    number: string | null
+    remainingBefore: number
+    remainingAfter: number
+    statusAfter: 'paid' | 'partially_paid'
+    /**
+     * What the set-off clears off the customer invoice (and 151x): `amount`,
+     * or the whole remaining amount when the gap is öresavrundning.
+     */
+    applied: number
+    /**
+     * The öresavrundning the set-off absorbs on 3740 (oreSettlementResidual of
+     * the remaining amount and `amount`): > 0 set off less than owed (Dr
+     * 3740), < 0 more (Cr 3740), 0 none.
+     */
+    oreRounding: number
+  }
   supplierInvoice: {
     id: string
     number: string | null
@@ -180,7 +198,13 @@ export function planSetoff(input: {
   if (!Number.isFinite(amount) || amount <= 0 || roundOre(amount) !== amount) {
     return { ok: false, code: 'SETOFF_INVALID_AMOUNT', details: { amount } }
   }
-  if (amount > invoiceRemaining || amount > supplierRemaining) {
+  // A set-off within a krona of what the customer invoice still owes settles
+  // it in full, the gap on 3740: the rule every payment of a SEK invoice books
+  // by (oreSettlementResidual), so setting off the rounded "Att betala" of an
+  // invoice with öresavrundning leaves no öre open. Only the customer side:
+  // a supplier invoice's rounding is an item inside its total.
+  const oreRounding = oreSettlementResidual(invoiceRemaining, amount)
+  if ((amount > invoiceRemaining && oreRounding === 0) || amount > supplierRemaining) {
     return {
       ok: false,
       code: 'SETOFF_AMOUNT_EXCEEDS_REMAINING',
@@ -195,7 +219,8 @@ export function planSetoff(input: {
     return { ok: false, code: 'SETOFF_DATE_INVALID', details: { reason: 'before_invoice', setoff_date: setoffDate } }
   }
 
-  const invoiceAfter = roundOre(invoiceRemaining - amount)
+  const applied = oreRounding !== 0 ? invoiceRemaining : amount
+  const invoiceAfter = roundOre(invoiceRemaining - applied)
   const supplierAfter = roundOre(supplierRemaining - amount)
   const netValue = roundOre(invoiceAfter - supplierAfter)
   return {
@@ -210,6 +235,8 @@ export function planSetoff(input: {
         remainingBefore: invoiceRemaining,
         remainingAfter: invoiceAfter,
         statusAfter: statusAfter(invoiceAfter),
+        applied,
+        oreRounding,
       },
       supplierInvoice: {
         id: supplierInvoice.id,
