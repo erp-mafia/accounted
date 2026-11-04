@@ -232,8 +232,24 @@ describe('learned counterparty pairs', () => {
     expectBalanced(refund)
   })
 
-  it('books an income-learned pair gross, both ways', () => {
-    const income = learned({ debit_account: '1930', credit_account: '3001', vat_treatment: 'standard_25' })
+  it('takes utgående moms from the learned treatment on an income pair, and takes it back on a refund (crm#1632)', () => {
+    const income = learned({ debit_account: '1930', credit_account: '3001', vat_treatment: 'standard_25', vat_account: '2611' })
+    const sale = sek(1250)
+    const booked = shown(sale, buildMappingResultFromCounterpartyTemplate(income, sale, 'enskild_firma'))
+    expect(shape(booked)).toEqual(rows([
+      ['debet', '1930', 1250, 's'], ['kredit', '3001', 1000], ['kredit', '2611', 250],
+    ]))
+    expectBalanced(booked)
+    const repayment = sek(-500)
+    const refunded = shown(repayment, buildMappingResultFromCounterpartyTemplate(income, repayment, 'enskild_firma'))
+    expect(shape(refunded)).toEqual(rows([
+      ['debet', '3001', 400], ['debet', '2611', 100], ['kredit', '1930', 500, 's'],
+    ]))
+    expectBalanced(refunded)
+  })
+
+  it('books an income-learned pair with no moms gross, both ways', () => {
+    const income = learned({ debit_account: '1930', credit_account: '3001', vat_treatment: null, vat_account: null })
     const sale = sek(1250)
     expect(shape(shown(sale, buildMappingResultFromCounterpartyTemplate(income, sale, 'enskild_firma')))).toEqual(rows([
       ['debet', '1930', 1250, 's'], ['kredit', '3001', 1250],

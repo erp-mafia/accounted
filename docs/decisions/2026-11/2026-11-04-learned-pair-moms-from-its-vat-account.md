@@ -1,0 +1,1 @@
+[2026-11-04] A learned counterpart pair books its moms by bankRowVatLines, its side read off the learned vat_account (26x1 a sale, 2641 a purchase), so a sale pair splits net and utgående moms and a refund takes the same account back; it used to book every sale gross (crm#1632).
