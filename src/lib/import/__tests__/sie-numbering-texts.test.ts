@@ -62,4 +62,22 @@ describe('the texts that describe SIE voucher numbering (crm#1599)', () => {
     expect(tSv('underlag_renumbered_hint')).toContain('senast 2 november 2026')
     expect(tEn('underlag_renumbered_hint')).toContain('on or before 2 November 2026')
   })
+
+  it('the selected series fills only a missing source series, and the review text says so', () => {
+    const parsed = parseSIEFile([
+      FILE,
+      '#VER "" 4 20260307 "Utan serie"',
+      '{',
+      '#TRANS 1930 {} 400.00',
+      '#TRANS 3001 {} -400.00',
+      '}',
+    ].join('\n'))
+    const result = prepareSIEVouchers(parsed, ACCOUNTS, 'B', 'import-1', { startOrdinal: 0, accountIds: new Map() })
+
+    expect(result.preparedEntries.map((entry) => entry.series)).toEqual(['A', 'A', 'B'])
+    expect(tSv('sie_review.voucher_series_hint')).toContain('bara för verifikationer som saknar serie i filen')
+    expect(tSv('sie_review.voucher_series_hint')).toContain('behåller den')
+    expect(tEn('sie_review.voucher_series_hint')).toContain('only to vouchers without a series in the file')
+    expect(tEn('sie_review.voucher_series_hint')).toContain('keep it')
+  })
 })

@@ -432,3 +432,11 @@ describe('gnubok_import_sie: the file\'s #ORGNR against the company', () => {
     expect(result.preview.org_number_mismatch).toBe(false)
   })
 })
+
+describe('gnubok_import_sie: voucher series guidance', () => {
+  it('says the override applies only when the source voucher has no series', () => {
+    const schema = importSie.inputSchema as { properties: { voucher_series: { description: string } } }
+    expect(schema.properties.voucher_series.description).toContain('without one in the file')
+    expect(schema.properties.voucher_series.description).toContain('with a series keep it')
+  })
+})

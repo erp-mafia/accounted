@@ -12926,7 +12926,7 @@
       "custom_names": "{count, plural, one {# konto} other {# konton}} har egna namn i filen som skiljer sig från BAS-standard",
       "names_follow_bas": "Kontonamnen i filen följer BAS-standard",
       "voucher_series_label": "Verifikationsserie för importerade transaktioner",
-      "voucher_series_hint": "Använd en separat serie för att enkelt kunna skilja importerade från manuella verifikationer",
+      "voucher_series_hint": "Serien används bara för verifikationer som saknar serie i filen. Verifikationer som redan har en serie behåller den.",
       "no_doc_required": "Markera som \"Inget underlag krävs\"",
       "recommended_migration": "Rekommenderas vid migrering",
       "no_doc_required_hint": "Märker alla importerade verifikationer som att de inte behöver något separat underlag: underlagen finns kvar i ditt tidigare system. Annars hamnar de under \"Att hantera: saknade underlag\". Kan ändras per verifikation efteråt.",

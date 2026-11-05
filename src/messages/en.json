@@ -12926,7 +12926,7 @@
       "custom_names": "{count, plural, one {# account has its own name} other {# accounts have their own names}} in the file, different from the BAS standard",
       "names_follow_bas": "The account names in the file follow the BAS standard",
       "voucher_series_label": "Voucher series for imported transactions",
-      "voucher_series_hint": "Use a separate series to tell imported vouchers apart from manual ones",
+      "voucher_series_hint": "The selected series applies only to vouchers without a series in the file. Vouchers that already have one keep it.",
       "no_doc_required": "Mark as \"No supporting document required\"",
       "recommended_migration": "Recommended when migrating",
       "no_doc_required_hint": "Marks every imported voucher as not needing a separate supporting document: the documents stay in your previous system. Otherwise they end up under \"Needs attention: missing documents\". Can be changed per voucher afterwards.",
