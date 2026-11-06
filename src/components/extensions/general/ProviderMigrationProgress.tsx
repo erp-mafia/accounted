@@ -1,5 +1,7 @@
 'use client'
 
+import HistoricalReceivableFindings from './HistoricalReceivableFindings'
+
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
@@ -35,7 +37,6 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         setStatus(data.data)
         setDisconnected(false)
         if (data.data.job.state === 'completed') {
-          onResultRef.current(data.data)
           return
         }
         if (data.data.job.state === 'needs_attention') return
@@ -69,8 +70,8 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
-        <p className="text-sm">{t(needsAttention ? 'ext_arcim_job_attention' : 'ext_arcim_job_running')}</p>
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_job_background')}</p>
+        <p className="text-sm">{t(needsAttention ? 'ext_arcim_job_attention' : status?.job.state === 'completed' ? 'ext_arcim_historical_finished' : 'ext_arcim_job_running')}</p>
+        <p className="text-sm text-muted-foreground">{t(status?.job.state === 'completed' ? 'ext_arcim_historical_finished_detail' : 'ext_arcim_job_background')}</p>
       </div>
       {status && <>
         <p className="text-sm">{t(`ext_arcim_job_phase_${status.job.phase}`)}</p>
@@ -84,6 +85,9 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
           </li>)}
         </ul>
       </>}
+      {status && ['needs_attention', 'completed'].includes(status.job.state) &&
+        <HistoricalReceivableFindings jobId={jobId} onApproved={() => setRefresh(n => n + 1)} />}
+      {status?.job.state === 'completed' && <Button onClick={() => onResultRef.current(status)}>{t('ext_arcim_historical_results')}</Button>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {needsAttention && <div className="space-y-3">
         <p className="text-sm text-muted-foreground">{t('ext_arcim_job_attention_detail')}</p>

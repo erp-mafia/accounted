@@ -692,3 +692,18 @@ it('uses OCR after hydration for invoice admission and voucher-link identity', a
   expect(record.link).toEqual(expect.objectContaining({ invoiceNumber: '001234567890' }))
   expect(dto.invoiceNumber).toBe('')
 })
+
+it('does not recreate an invoice whose provider source was already approved as historical', async () => {
+  const db = database({ phase: 'import', resources: ['salesInvoices'] })
+  const dto = mapBokioToSalesInvoice({ id: 'historical-source', invoiceNumber: '216', totalAmount: 125, paidAmount: 125,
+    status: 'paid', lineItems: [{ description: 'Provider later added details', quantity: 1, unitPrice: 100, taxRate: 25 }] })
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+  const from = db.supabase.from.bind(db.supabase)
+  const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { id: 'approved-reference' }, error: null }) }
+  const supabase = { ...db.supabase, from: (table: string) => table === 'historical_receivable_references' ? chain : from(table) } as unknown as SupabaseClient
+  await runProviderMigrationWorker({ supabase, jobId: db.job.id })
+  expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+    p_records: [{ id: dto.id, skip: 'historical_receivable' }],
+  }))
+  expect(mocks.hydrate).not.toHaveBeenCalled()
+})

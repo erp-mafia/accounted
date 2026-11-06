@@ -1012,3 +1012,32 @@ describe('importProviderDocuments', () => {
     })
   })
 })
+
+describe('manually approved historical payment targets', () => {
+  it.each([false, true])('uses the active dated target only after approval: approved=%s', async approved => {
+    wireBokio()
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS,
+      journal_entries: [{ ...GNUBOK_VOUCHERS[0], status: 'reversed', reversed_by_id: 'storno' },
+        { ...GNUBOK_VOUCHERS[0], id: 'active', status: 'posted', reversed_by_id: null }],
+      document_attachments: [],
+      historical_receivable_references: approved ? [{ payment_journal_entry_id: 'active' }] : [],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result.linked).toBe(approved ? 1 : 0)
+    if (approved) expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'active' })
+    else expect(mockDownload).not.toHaveBeenCalled()
+  })
+  it('does not bypass a locked year even after explicit historical review', async () => {
+    wireBokio()
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS.map(row => ({ ...row, is_closed: true })),
+      journal_entries: [{ ...GNUBOK_VOUCHERS[0], status: 'reversed', reversed_by_id: 'storno' },
+        { ...GNUBOK_VOUCHERS[0], id: 'active', status: 'posted', reversed_by_id: null }],
+      document_attachments: [], historical_receivable_references: [{ payment_journal_entry_id: 'active' }],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result).toMatchObject({ linked: 0, locked: 1 })
+    expect(mockDownload).not.toHaveBeenCalled()
+  })
+})

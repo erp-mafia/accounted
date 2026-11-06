@@ -97,6 +97,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   connection: ResolvedConsent, deadline: number): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
+  if (c.resource === 'salesInvoices') {
+    const { data: historical, error } = await withinMigrationDeadline(supabase.from('historical_receivable_references')
+      .select('id').eq('company_id', job.company_id).eq('provider', job.provider).eq('account_key', job.account_key)
+      .eq('source_id', c.source_id).eq('decision', 'approved').maybeSingle(), deadline)
+    if (error) throw new Error('Historical source lookup failed')
+    if (historical?.id) return { id: c.id, skip: 'historical_receivable' }
+  }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }

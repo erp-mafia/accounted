@@ -424,6 +424,16 @@ export async function importProviderDocuments(
 
   let refreshedAfterUnauthorized = false
 
+  let historicalTargets: Set<string> | null = null
+  const approvedHistoricalTargets = async () => {
+    if (historicalTargets) return historicalTargets
+    const rows = await fetchAllRows<{ payment_journal_entry_id: string }>(({ from, to }) => supabase
+      .from('historical_receivable_references').select('payment_journal_entry_id')
+      .eq('company_id', companyId).eq('decision', 'approved').order('id').range(from, to))
+    historicalTargets = new Set(rows.map(row => row.payment_journal_entry_id))
+    return historicalTargets
+  }
+
   for (let index = startIndex; index < attachments.length; index++) {
     // Always make progress: at least one attachment per call, then stop at
     // the budget so the route answers well inside the function limit and the
@@ -442,7 +452,16 @@ export async function importProviderDocuments(
       continue
     }
 
-    const journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
+    let journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
+    if (!journalEntryId && provider === 'bokio' && !ref.dateTo) {
+      // An explicit historical review can identify the active replacement
+      // even when the generic document index also retains a reversed original.
+      const approved = await approvedHistoricalTargets()
+      const matches = vouchers.filter(row => approved.has(row.id) && row.status === 'posted' && !row.reversed_by_id
+        && row.source_voucher_series?.toUpperCase() === ref.series.toUpperCase()
+        && row.source_voucher_number === ref.number && row.entry_date.slice(0, 10) === ref.date.slice(0, 10))
+      if (matches.length === 1) journalEntryId = matches[0].id
+    }
 
     // A source that dates the entry itself (Bokio) must agree with the
     // verifikat on that date: the number alone is unique only within a

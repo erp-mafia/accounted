@@ -131,3 +131,17 @@ The affected production company’s repair is separate and has not been executed
 Supplier import uses the provider invoice number, then the OCR reference, then the literal string `-`. Existing saved explicit corrections are still honored. No historical manual completion is required when both source fields are absent. Original source payloads and hashes remain unchanged.
 
 A dash is an unknown-number marker, not invoice identity. The unique supplier-number index excludes it, and the import RPC does not adopt an existing invoice by this placeholder. Each distinct provider source ID remains its own invoice even with equal supplier/date/amount. Replaying an existing source uses the durable source mapping rather than creating duplicates. Real invoice numbers and OCR references retain the normal collision checks.
+
+## Review historical receivable references
+
+Once the register job is paused for review or complete, the wizard automatically searches existing, active payment vouchers for historical invoice references. It recognizes explicit Bokio paid-invoice descriptions and Fortnox-style customer-payment references. Supplier entries, reversals, wrong bank/receivable direction and inconsistent amounts are excluded. An incomplete invoice source must be paid in SEK, have no rows or registration reference, match customer/number/amount and not already have been imported as a normal invoice.
+
+The review distinguishes an incomplete source invoice from a voucher-only text reference. Voucher-only references do not establish an original invoice number, date, full invoice amount, rows or VAT; the UI says so. The provider API is not an inventory of all pre-migration invoices. A record absent from both API and ledger cannot be reconstructed by this search.
+
+GET discovery performs no writes. Approval is a separate authenticated company-writer POST that accepts only job/payment IDs, re-derives the proposal, and calls the service-only review RPC. The RPC locks/rechecks the job, source chunk and active payment evidence, then records the decision, actor and time in historical_receivable_references. It creates no invoice, payment or journal entry and changes no posted entry. For an approved incomplete source the chunk is preserved as historically handled; later imports of the same provider source cannot recreate it as a normal invoice. Source snapshots remain unchanged.
+
+Reviewed history remains accessible through the latest import. A completed job stays on the review screen until the user chooses the results. Approval does not silently continue the job: the user may resume remaining review work explicitly. Unreviewed text candidates remain proposals.
+
+During the existing document import, an approved historical target may resolve a Bokio voucher reference that also names a reversed original. The target must still be the unique active entry on the exact source date, series and number. File hashing/idempotency, other-underlag rules and period locks still apply; approval does not unlock a year or bypass document-admission rules. Documents are imported through that underlag step, not by the metadata approval itself.
+
+Deployment requires the historical_receivable_review migration before serving the review endpoints or the updated worker. The table is company-readable but client write-protected; the service RPC independently checks membership and current evidence.

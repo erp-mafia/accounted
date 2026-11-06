@@ -1,3 +1,4 @@
+import { historicalReceivableRoutes } from './lib/historical-receivable-routes'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
@@ -335,6 +336,7 @@ export const arcimMigrationExtension: Extension = {
 
   apiRoutes: [
     ...migrationJobRoutes,
+    ...historicalReceivableRoutes,
     ...invoiceCompletionRoutes,
     // ── List available providers ───────────────────────────────────
     {
