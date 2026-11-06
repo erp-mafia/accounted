@@ -203,7 +203,7 @@ describe('targeted fk indexes.pg', () => {
     // journal_entry_lines, so guard against it here.
     const covered: Array<[string, string, string]> = [
       ['transactions', 'document_id', 'idx_transactions_document_id'],
-      ['invoices', 'journal_entry_id', 'idx_invoices_journal_entry_id'],
+      ['invoices', 'journal_entry_id', 'idx_invoices_journal_entry_id_unique'],
       ['invoice_payments', 'journal_entry_id', 'idx_invoice_payments_je_inv_unique'],
     ]
 

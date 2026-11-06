@@ -929,7 +929,12 @@ export async function registerBookedInvoice(
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .select('id')
-    if (linkError) throw dbError(linkError)
+    if (linkError) {
+      if ((linkError as { code?: string }).code === '23505') {
+        return refuse('INVOICE_REGISTER_VOUCHER_TAKEN', `Verifikat ${plan.voucher.label} already books another invoice.`)
+      }
+      throw dbError(linkError)
+    }
     if (!linked || linked.length === 0) {
       return refuse(
         'INVOICE_REGISTER_NUMBER_TAKEN',
@@ -973,9 +978,10 @@ export async function registerBookedInvoice(
     .single()
 
   if (error) {
-    // The unique (company_id, invoice_number) index: the number was taken
-    // between the plan's read and this insert.
     if ((error as { code?: string }).code === '23505') {
+      if (error.message.includes('idx_invoices_journal_entry_id_unique')) {
+        return refuse('INVOICE_REGISTER_VOUCHER_TAKEN', `Verifikat ${plan.voucher.label} already books another invoice.`)
+      }
       return refuse('INVOICE_REGISTER_NUMBER_TAKEN', `Invoice number ${input.invoice_number} is already in the register.`)
     }
     throw dbError(error)
