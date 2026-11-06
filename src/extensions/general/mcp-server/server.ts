@@ -304,10 +304,17 @@ import {
   STALE_BRIDGE_NOTE,
   STALE_TOOLS_LIST_NOTE,
   isDefaultCatalogTool,
+  isViewOnlyTool,
   staleToolsListAdvice,
   toolCallableVia,
   type ToolCallableVia,
 } from './tool-reach'
+import {
+  VIEW_APPROVAL_TOOL,
+  approvalViewFor,
+  approvalViewMeta,
+  checkViewApprovalToken,
+} from './view-approval'
 import {
   canonicalizeToolReferencesInText,
   projectToolReferences,
@@ -766,6 +773,8 @@ import {
 import { toEntryPreview, type EntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { agiReportingPeriod, formatAgiPeriodCompact, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { resolveUserEmail } from '@/lib/pending-operations/api-approval'
+import type { ApprovalDoor } from '@/lib/suggestion-log/approval-door'
 import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
@@ -994,6 +1003,18 @@ export interface ActorContext {
   clientName?: string | null
   /** Which fallback produced `client`; null when it came from the marker. Telemetry-only. */
   clientSource?: ClientSource | null
+  /**
+   * The provider the OAuth sign-in minted this key for (api_keys.client),
+   * decided server-side from the validated redirect URI; null for any other
+   * key. Unlike `client` an authorization input, recorded on approvals.
+   */
+  oauthProvider?: string | null
+  /**
+   * This request comes through a connection with Accounted's approval view
+   * (approvalViewFor in view-approval.ts): an authorization input for the
+   * view's own approve door and its tokens.
+   */
+  approvalView?: boolean
   /**
    * Per-key company allowlist (validateApiKey().allowedCompanyIds): null
    * when the key reaches every membership. An authorization input, not
@@ -1572,11 +1593,16 @@ export interface McpTool {
   // preview_token on the generated staging writes (operation-tools.ts), which
   // the dry-run answer that hands the token out announces. Never serialized.
   undeclaredArgs?: readonly string[]
-  _meta?: { ui: { resourceUri: string } }
+  // visibility ['app']: a tool only an MCP Apps view calls (isViewOnlyTool).
+  _meta?: { ui: { resourceUri?: string; visibility?: Array<'model' | 'app'> } }
   // Result-level UI hint: when set, a call passing render_ui=true gets a
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
   // asked. (Contrast _meta above, on the definition, which renders on every call.)
   uiResourceUri?: string
+  // With uiResourceUri: extra result `_meta` for the rendered view only (never
+  // in content or structuredContent), added when render_ui=true. Today the
+  // approval view's tokens (view-approval.ts). Not serialized into tools/list.
+  viewResultMeta?: (result: unknown, ctx: { actor?: ActorContext; keyScopes: ApiKeyScope[] }) => Record<string, unknown> | null
   // Tasks extension: when this predicate returns true for a call from a
   // task-capable client, the dispatcher returns a CreateTaskResult and runs
   // execute() after the response instead of blocking on it. Not serialized
@@ -4923,8 +4949,14 @@ async function commitStagedOperation(params: {
   actor: ActorContext | undefined
   userEmail: string | undefined
   confirmed: boolean
+  /**
+   * Which door the approval came through: the AI's own approve call
+   * (mcp_chat) or a person's click in the approval view (mcp_view,
+   * view-approval.ts). Recorded, never a gate.
+   */
+  door: ApprovalDoor
 }): Promise<Awaited<ReturnType<typeof commitPendingOperation>>> {
-  const { supabase, userId, companyId, operation, actor, userEmail, confirmed } = params
+  const { supabase, userId, companyId, operation, actor, userEmail, confirmed, door } = params
   // commit_method provenance (agent_first_vision.md §8 P0-1): MCP approvals
   // are relayed through an agent credential: record that in the immutable
   // layer instead of claiming 'user_accept'. ALL MCP traffic authenticates
@@ -4954,6 +4986,8 @@ async function commitStagedOperation(params: {
         ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
         : {}),
     },
+    // Only a key credential's approval has a door: the receipt names it.
+    ...(actor?.type === 'api_key' ? { approvalDoor: door } : {}),
     ...(userEmail ? { userEmail } : {}),
   })
 
@@ -4974,6 +5008,14 @@ async function commitStagedOperation(params: {
         commit_method: commitMethod,
         channel: 'mcp',
         confirmed,
+        // Who and what made the request: the door (the AI's own call, or a
+        // person's click in the approval view), the client as it named
+        // itself (telemetry grade), the provider the connection was minted
+        // for (server-decided) and the key's ceiling at the time.
+        door,
+        ...clientTelemetryFields(actor ?? {}),
+        oauth_provider: actor?.oauthProvider ?? null,
+        unattended_limit: actor?.unattendedCommitLimit ?? null,
         ...(operation.batch_id ? { batch_id: operation.batch_id } : {}),
       },
       actor: {
@@ -4988,6 +5030,126 @@ async function commitStagedOperation(params: {
   }
 
   return result
+}
+
+/**
+ * Approve one staged operation over MCP, the same way through either door:
+ * gnubok_approve_pending_operation (the AI's own call, door mcp_chat) and
+ * gnubok_approve_from_view (a person's click in the approval view, door
+ * mcp_view). Every gate is shared, so the two can never drift: web-only
+ * operations are refused, high risk needs confirmed, a settled approval
+ * answers its stored outcome, and the key's ceiling applies inside the
+ * commit. Only the recorded door differs.
+ */
+async function approveOneOperation(params: {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  actor: ActorContext | undefined
+  /** The approver's email for the commit, asked for only once every gate has passed. */
+  approverEmail: () => Promise<string | undefined>
+  operationId: string
+  confirmed: boolean
+  door: ApprovalDoor
+}): Promise<Record<string, unknown>> {
+  const { supabase, companyId, userId, actor, approverEmail, operationId, confirmed, door } = params
+  const { data: op, error: fetchError } = await supabase
+    .from('pending_operations')
+    .select('*')
+    .eq('id', operationId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (!isLookupMiss(fetchError)) throw dbError(fetchError)
+  if (!op) throw pendingOperationNotFound(operationId)
+
+  // High-risk operations require explicit confirmation in addition to the
+  // standard pending_operations:approve scope. Mirrors the web-UI gate
+  // (BFL 5 kap 5§: irreversible postings require positive acknowledgment).
+  const operation = op as PendingOperation
+  // Handing an invoice over to collection and escalating a case rest on
+  // a person's own word, and accepting a rule for automatic booking hands
+  // agents posting authority: only a person approves them, in Accounted.
+  if (requiresWebApproval(operation.operation_type, operation.params)) {
+    const code = webOnlyRefusalCode(operation.operation_type)
+    throw Object.assign(
+      new Error(
+        code === 'GRANT_NEEDS_PERSON'
+          ? 'A rule for automatic booking (create_grant) is accepted only by an owner or admin in Accounted, under Att göra (Förslag). No key can approve it: tell the user it is waiting for them there.'
+          : `Operation "${operation.operation_type}" can only be approved by a person in the Accounted web UI (Granskning). Ask the user to approve it there.`,
+      ),
+      { code },
+    )
+  }
+  if (operation.risk_level === 'high' && !confirmed) {
+    throw new Error(
+      `Operation "${operation.operation_type}" is risk_level=high: pass confirmed=true to approve. The web UI requires the same positive acknowledgment per BFL 5 kap 5§ (irreversible postings).`
+    )
+  }
+
+  // A repeat of an approval that already settled (the call that committed
+  // it broke before its answer arrived, and the client sent it again):
+  // answer the stored outcome. Nothing runs, so no second commit and no
+  // second PendingOperationApproved row. The operation_id is the key.
+  const settled = settledApprovalOutcome(operation)
+  if (settled) return settled
+
+  // commit_method provenance (agent_first_vision.md §8 P0-1): MCP
+  // approvals are relayed through an agent credential: record that in
+  // the immutable layer instead of claiming 'user_accept'. The positive
+  // acknowledgment (confirmed=true for high risk) is agent-attested, not
+  // a first-party human session; an auditor reading the GL can now tell
+  // the difference (BFNAR 2013:2 kap 8 behandlingshistorik).
+  //
+  // ALL MCP traffic authenticates as an api_key actor: the claude.ai
+  // OAuth connector's access_token is itself a minted gnubok_sk_ key
+  // (app/api/mcp-oauth/token/route.ts), indistinguishable from the
+  // bridge at this layer: so 'api_key' is the truthful value for every
+  // path through this handler. 'agent' (also in the CHECK) is reserved
+  // for first-party agent surfaces (e.g. in-app agent chat) once they
+  // commit through this layer with a distinguishable actor type.
+  //
+  // commitMethod reaches the journal only for create_voucher ops
+  // (pre-existing); the actor option below covers EVERY journal commit
+  // this operation makes via the runWithActor() scope inside
+  // commitPendingOperation, stamping journal_entries.committed_actor_*
+  // and the audit_log COMMIT row (migration 20260619120000).
+  const result = await commitStagedOperation({
+    supabase,
+    userId,
+    companyId,
+    operation,
+    actor,
+    userEmail: await approverEmail(),
+    confirmed,
+    door,
+  })
+
+  // Lost the pending -> committing claim to a concurrent approval of the
+  // same operation (the only failure that carries a 409 and no
+  // operation_status). When that approval has settled meanwhile, answer
+  // its outcome rather than a bare conflict an agent could read as "try
+  // staging it again".
+  if (result.status === 'failed' && result.http_status === 409 && !result.operation_status) {
+    const { data: current } = await supabase
+      .from('pending_operations')
+      .select('*')
+      .eq('id', operationId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const settledMeanwhile = current ? settledApprovalOutcome(current as PendingOperation) : null
+    if (settledMeanwhile) return settledMeanwhile
+  }
+
+  return {
+    status: result.status,
+    operation_id: operationId,
+    ...(result.data ? { data: result.data } : {}),
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.code ? { error_code: result.code } : {}),
+    ...(result.auto_rejected ? { auto_rejected: true } : {}),
+    ...(result.operation_status ? { operation_status: result.operation_status } : {}),
+  }
 }
 
 /**
@@ -5264,6 +5426,8 @@ export const tools: McpTool[] = [
       }
 
       let candidates = tools.filter((t) => {
+        // Only the approval view calls its door: never a search hit.
+        if (isViewOnlyTool(t)) return false
         if (simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
         const required = TOOL_SCOPE_MAP[t.name]
         if (required) {
@@ -5821,7 +5985,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, _companyId, userId, supabase, actor) {
       const innerName = toCanonicalToolName(typeof args.tool === 'string' ? args.tool : '')
-      const inner = tools.find((t) => t.name === innerName)
+      const inner = findModelTool(innerName)
       if (!inner) {
         throw codedError('NOT_FOUND', `Unknown tool "${String(args.tool ?? '')}". Find the name with gnubok_search_tools.`)
       }
@@ -5936,7 +6100,7 @@ export const tools: McpTool[] = [
     // the keys that can use it pay for it.
     async execute(args, _companyId, userId, supabase, actor) {
       const innerName = toCanonicalToolName(typeof args.tool === 'string' ? args.tool : '')
-      const inner = tools.find((t) => t.name === innerName)
+      const inner = findModelTool(innerName)
       if (!inner) {
         throw codedError('NOT_FOUND', `Unknown tool "${String(args.tool ?? '')}". Find the name with gnubok_search_tools.`)
       }
@@ -27311,6 +27475,18 @@ export const tools: McpTool[] = [
     // render_ui=true (the dispatcher emits result-level _meta in that case),
     // keeping the tool data-only by default.
     uiResourceUri: 'ui://pending-operations/app.html',
+    // The view's tokens for its own approve door, in the rendered result's
+    // _meta only: a click there is recorded as the person's approval
+    // (view-approval.ts). None for a connection without the view.
+    viewResultMeta(result, { actor, keyScopes }) {
+      const operations = (result as { operations?: unknown } | null)?.operations
+      return approvalViewMeta({
+        approvalView: actor?.approvalView === true,
+        apiKeyId: actor?.id,
+        canApprove: hasScope(keyScopes, 'pending_operations:approve'),
+        operations: Array.isArray(operations) ? (operations as Array<{ id?: unknown; status?: unknown }>) : [],
+      })
+    },
     async execute(args, companyId, userId, supabase, actor) {
       const status = (args.status as string) ?? 'pending'
       const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
@@ -27460,13 +27636,7 @@ export const tools: McpTool[] = [
       // journal_entries.committed_by_email and any user-facing email side
       // effects (send_invoice cc) to the actor: matches the web-UI commit
       // path attribution (V8.2.1, GDPR Art. 25(1)).
-      let userEmail: string | undefined
-      try {
-        const { data: userData } = await supabase.auth.admin.getUserById(userId)
-        userEmail = userData.user?.email ?? undefined
-      } catch (err) {
-        log.warn('Failed to resolve user email for MCP approval', { userId, err })
-      }
+      const userEmail = await resolveUserEmail(supabase, userId, log)
 
       // Batch approval: every still-pending member of the batch, each in its
       // own company, membership- and role-checked per row. High-risk members
@@ -27518,6 +27688,7 @@ export const tools: McpTool[] = [
               actor,
               userEmail,
               confirmed: false,
+              door: 'mcp_chat',
             })
             if (outcome.status === 'committed') committed += 1
             else failed += 1
@@ -27591,6 +27762,7 @@ export const tools: McpTool[] = [
               actor,
               userEmail,
               confirmed: false,
+              door: 'mcp_chat',
             })
             if (outcome.status === 'committed') committed += 1
             else failed += 1
@@ -27609,102 +27781,80 @@ export const tools: McpTool[] = [
         return { status: 'batch', results, committed, skipped, failed }
       }
 
-      const { data: op, error: fetchError } = await supabase
-        .from('pending_operations')
-        .select('*')
-        .eq('id', operationId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!isLookupMiss(fetchError)) throw dbError(fetchError)
-      if (!op) throw pendingOperationNotFound(operationId)
-
-      // High-risk operations require explicit confirmation in addition to the
-      // standard pending_operations:approve scope. Mirrors the web-UI gate
-      // (BFL 5 kap 5§: irreversible postings require positive acknowledgment).
-      const operation = op as PendingOperation
-      // Handing an invoice over to collection and escalating a case rest on
-      // a person's own word, and accepting a rule for automatic booking hands
-      // agents posting authority: only a person approves them, in Accounted.
-      if (requiresWebApproval(operation.operation_type, operation.params)) {
-        const code = webOnlyRefusalCode(operation.operation_type)
-        throw Object.assign(
-          new Error(
-            code === 'GRANT_NEEDS_PERSON'
-              ? 'A rule for automatic booking (create_grant) is accepted only by an owner or admin in Accounted, under Att göra (Förslag). No key can approve it: tell the user it is waiting for them there.'
-              : `Operation "${operation.operation_type}" can only be approved by a person in the Accounted web UI (Granskning). Ask the user to approve it there.`,
-          ),
-          { code },
-        )
-      }
-      if (operation.risk_level === 'high' && args.confirmed !== true) {
-        throw new Error(
-          `Operation "${operation.operation_type}" is risk_level=high: pass confirmed=true to approve. The web UI requires the same positive acknowledgment per BFL 5 kap 5§ (irreversible postings).`
-        )
-      }
-
-      // A repeat of an approval that already settled (the call that committed
-      // it broke before its answer arrived, and the client sent it again):
-      // answer the stored outcome. Nothing runs, so no second commit and no
-      // second PendingOperationApproved row. The operation_id is the key.
-      const settled = settledApprovalOutcome(operation)
-      if (settled) return settled
-
-      // commit_method provenance (agent_first_vision.md §8 P0-1): MCP
-      // approvals are relayed through an agent credential: record that in
-      // the immutable layer instead of claiming 'user_accept'. The positive
-      // acknowledgment (confirmed=true for high risk) is agent-attested, not
-      // a first-party human session; an auditor reading the GL can now tell
-      // the difference (BFNAR 2013:2 kap 8 behandlingshistorik).
-      //
-      // ALL MCP traffic authenticates as an api_key actor: the claude.ai
-      // OAuth connector's access_token is itself a minted gnubok_sk_ key
-      // (app/api/mcp-oauth/token/route.ts), indistinguishable from the
-      // bridge at this layer: so 'api_key' is the truthful value for every
-      // path through this handler. 'agent' (also in the CHECK) is reserved
-      // for first-party agent surfaces (e.g. in-app agent chat) once they
-      // commit through this layer with a distinguishable actor type.
-      //
-      // commitMethod reaches the journal only for create_voucher ops
-      // (pre-existing); the actor option below covers EVERY journal commit
-      // this operation makes via the runWithActor() scope inside
-      // commitPendingOperation, stamping journal_entries.committed_actor_*
-      // and the audit_log COMMIT row (migration 20260619120000).
-      const result = await commitStagedOperation({
+      return approveOneOperation({
         supabase,
-        userId,
         companyId,
-        operation,
+        userId,
         actor,
-        userEmail,
+        approverEmail: async () => userEmail,
+        operationId,
         confirmed: args.confirmed === true,
+        door: 'mcp_chat',
       })
+    },
+  },
 
-      // Lost the pending -> committing claim to a concurrent approval of the
-      // same operation (the only failure that carries a 409 and no
-      // operation_status). When that approval has settled meanwhile, answer
-      // its outcome rather than a bare conflict an agent could read as "try
-      // staging it again".
-      if (result.status === 'failed' && result.http_status === 409 && !result.operation_status) {
-        const { data: current } = await supabase
-          .from('pending_operations')
-          .select('*')
-          .eq('id', operationId)
-          .eq('company_id', companyId)
-          .maybeSingle()
-        const settledMeanwhile = current ? settledApprovalOutcome(current as PendingOperation) : null
-        if (settledMeanwhile) return settledMeanwhile
-      }
-
-      return {
-        status: result.status,
-        operation_id: operationId,
-        ...(result.data ? { data: result.data } : {}),
-        ...(result.error ? { error: result.error } : {}),
-        ...(result.code ? { error_code: result.code } : {}),
-        ...(result.auto_rejected ? { auto_rejected: true } : {}),
-        ...(result.operation_status ? { operation_status: result.operation_status } : {}),
-      }
+  // The approval view's own door (view-approval.ts): a person's click on
+  // Godkänn in the pending-operations widget, recorded as their approval
+  // (door mcp_view). App-only: a host that renders MCP Apps keeps it out of
+  // the model's list; only a connection minted for such a host gets it
+  // listed or may call it; each call carries the view token the rendered
+  // list handed the view in its result _meta. Anything else is refused and
+  // commits nothing; the view then approves through
+  // gnubok_approve_pending_operation, recorded as the AI's approval.
+  {
+    name: VIEW_APPROVAL_TOOL,
+    title: 'Approve From Approval View',
+    description: "Only Accounted's approval view calls this, when a person clicks Godkänn; an AI never calls it. To approve as the AI, use gnubok_approve_pending_operation.",
+    _meta: { ui: { visibility: ['app'] } },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'The pending_operations row the person approved.' },
+        view_token: { type: 'string', description: 'The token the approval view received for this operation.' },
+        confirmed: { type: 'boolean', description: 'The armed second click on a high-risk operation (BFL 5 kap 5§ acknowledgment).' },
+      },
+      required: ['operation_id', 'view_token'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['committed', 'rejected', 'failed'] },
+        operation_id: { type: 'string' },
+        data: { type: 'object' },
+        error: { type: 'string' },
+        error_code: { type: 'string' },
+        auto_rejected: { type: 'boolean' },
+        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'] },
+      },
+      required: ['status'],
+    },
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const operationId = typeof args.operation_id === 'string' ? args.operation_id : ''
+      if (!operationId) throw badArgument('operation_id', 'operation_id is required', 'Ange operation_id.')
+      // Fail closed: without every lock this is not a person's click, and
+      // nothing is committed. The view then uses the ordinary approve tool.
+      const unavailable = (reason: string) =>
+        codedRefusal(
+          'VIEW_APPROVAL_UNAVAILABLE',
+          `The approval view's door is not available here (${reason}). Approve with gnubok_approve_pending_operation.`,
+        )
+      if (actor?.type !== 'api_key' || !actor.id) throw unavailable('no key')
+      if (actor.approvalView !== true) throw unavailable('this connection has no approval view')
+      const token = checkViewApprovalToken(args.view_token, { apiKeyId: actor.id, operationId })
+      if (!token.ok) throw unavailable(`view token ${token.reason}`)
+      return approveOneOperation({
+        supabase,
+        companyId,
+        userId,
+        actor,
+        approverEmail: () => resolveUserEmail(supabase, userId, log),
+        operationId,
+        confirmed: args.confirmed === true,
+        door: 'mcp_view',
+      })
     },
   },
 
@@ -28778,6 +28928,11 @@ export interface CatalogViewer {
    * connection; empty for every company today.
    */
   hiddenModules?: ReadonlySet<ModuleId>
+  /**
+   * The connection was minted for a host that renders Accounted's approval
+   * view (view-approval.ts): only then is the view's own door listed, app-only.
+   */
+  approvalView?: boolean
 }
 
 /**
@@ -28791,7 +28946,10 @@ export interface CatalogViewer {
  * stage nothing was told gnubok_stage_tool was (agent feedback seq 995216).
  */
 export function isListedFor(t: McpTool, viewer: CatalogViewer): boolean {
-  if (!isDefaultCatalogTool(t)) return false
+  // A view-only tool (the approval view's door) is listed, app-only, only to
+  // a connection that has the view; the host keeps it from the model. Every
+  // other gate below applies to it as to any tool.
+  if (isViewOnlyTool(t) ? viewer.approvalView !== true : !isDefaultCatalogTool(t)) return false
   // One company (or none): the company switch and the cross-company tools
   // have nothing to work on.
   if (viewer.simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
@@ -28810,6 +28968,16 @@ export function isListedFor(t: McpTool, viewer: CatalogViewer): boolean {
   if (t.name === 'gnubok_stage_tool') return keyCanStageThroughBridge(viewer.keyScopes)
   const required = TOOL_SCOPE_MAP[t.name]
   return !required || hasScope(viewer.keyScopes, required)
+}
+
+/**
+ * The tool a name the model gave resolves to: any tool but a view-only one
+ * (view-approval.ts), which only an MCP Apps view calls by a direct
+ * tools/call. Bridges and the cross-company runners resolve through this, so
+ * none of them can carry the view's door or advise calling it.
+ */
+function findModelTool(name: string): McpTool | undefined {
+  return tools.find((t) => t.name === name && !isViewOnlyTool(t))
 }
 
 const BRIDGE_TOOL_BY_VIA: Readonly<Record<'call_tool' | 'stage_tool', McpTool>> = {
@@ -29597,6 +29765,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         client,
         clientName,
         clientSource,
+        oauthProvider,
+        approvalView: approvalViewFor({ oauthProvider, requestMeta: body.params?._meta }),
         allowedCompanyIds,
         readOnlyCompanyIds,
         pinnedCompanyId,
@@ -29674,6 +29844,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     simpleCompanyMode: await resolveSimpleCompanyMode(),
     keyScopes,
     hiddenModules: await resolveHiddenModules(),
+    approvalView: actor.approvalView === true,
   })
 
   // ── Stateless core (spec 2026-07-28) ──
@@ -29837,6 +30008,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   '',
                   'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
                   'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
+                  actor.approvalView === true
+                    ? 'WHO THE RECORD NAMES: an approval you make with gnubok_approve_pending_operation is recorded as yours (the AI), even when the user asked for it in chat; a click on Godkänn in the approval widget or in Accounted is recorded as the person\'s own. When the user wants it on record as theirs, open the widget instead of approving.'
+                    : 'WHO THE RECORD NAMES: an approval you make with gnubok_approve_pending_operation is recorded as yours (the AI), even when the user asked for it in chat; one the person makes in Accounted (Att göra › Agentförslag) is recorded as theirs.',
                 ]
               : [
                   '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
@@ -29971,7 +30145,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           ? { ...innerToolArgs, company_id: outerToolArgs.company_id }
           : innerToolArgs
 
-      const tool = tools.find((t) => t.name === toolName)
+      // A bridged name is the model's choice: it never resolves to a
+      // view-only tool. Only a direct tools/call (the view's) reaches one.
+      const tool = viaBridge ? findModelTool(toolName) : tools.find((t) => t.name === toolName)
 
       // The pre-auth gate already refused anonymous calls to anything outside
       // PUBLIC_TOOLS; re-checked here so the dispatcher never depends on it.
@@ -30048,6 +30224,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId,
         })
         const available = tools
+          .filter((t) => !isViewOnlyTool(t))
           .map((t) => toPublicToolName(t.name, toolNamespace))
           .join(', ')
         // Closest real tools first, each with how to reach it, so a guessed
@@ -30057,6 +30234,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const suggestions = suggestToolNames(
           requestedToolName,
           tools.filter((t) => {
+            if (isViewOnlyTool(t)) return false
             const required = TOOL_SCOPE_MAP[t.name]
             return !required || hasScope(keyScopes, required)
           }),
@@ -30688,7 +30866,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // via render_ui=true. This keeps the merged report+widget tool data-only
         // by default and never sends a render directive a plain-data call didn't ask for.
         if (tool.uiResourceUri && (toolArgs as Record<string, unknown>).render_ui === true) {
-          response._meta = { ui: { resourceUri: tool.uiResourceUri } }
+          // What only the rendered view reads rides beside the directive,
+          // never in content or structuredContent (the approval view's
+          // tokens, view-approval.ts). Never fails the call.
+          let viewMeta: Record<string, unknown> | null = null
+          try {
+            viewMeta = tool.viewResultMeta?.(canonicalResult, { actor, keyScopes }) ?? null
+          } catch (err) {
+            log.warn('view result meta failed: the view falls back to the ordinary tools', {
+              tool: toolName,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+          response._meta = { ui: { resourceUri: tool.uiResourceUri }, ...(viewMeta ?? {}) }
         }
         if (echoedCompany) {
           response._meta = { ...((response._meta as Record<string, unknown> | undefined) ?? {}), company: echoedCompany }

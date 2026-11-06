@@ -2356,6 +2356,59 @@ describe('decisionEvents', () => {
     expect(ev.details).toContain(`Policy: grant.1;grant_id=${grantId};grant_version=2, bedömning: kunde bokföras direkt`)
   })
 
+  // Customer request 2026-11-05: the history tells a person's approval in
+  // the chat client from one the AI made itself.
+  const mcpApprovalRow = (policy: string, band: 'direct' | 'review') =>
+    row({
+      id: 'sl-mcp',
+      kind: 'operation',
+      transaction_id: null,
+      pending_operation_id: 'op-9',
+      suggestions: [{ source: 'pending_operation', source_id: 'op-9', rank: 0, proposal: { operation_type: 'categorize_transaction', risk_level: 'low' }, confidence: null, model: null, prompt_sha256: null, matches_final: true }],
+      final: { journal_entry_id: 'entry-1', operation_type: 'categorize_transaction', journal_entry_ids: ['entry-1'] },
+      actor_type: 'mcp_oauth',
+      policy_version: policy,
+      confidence_band: band,
+    })
+  const mcpCtx = { ...ctx, operationsById: new Map([['op-9', { ...op, id: 'op-9' }]]) }
+
+  it("a click in the approval view: the person's approval, the client named and its word marked as such", () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([
+      mcpApprovalRow('staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view', 'review'),
+    ], mcpCtx))
+    expect(ev).toMatchObject({
+      event: 'Agentförslag godkänt i granskningsrutan',
+      actor: { type: 'user', user_id: 'user-1', actor_label: null },
+    })
+    expect(ev.details).toContain(
+      'Godkännande: en person klickade Godkänn i granskningsrutan i Claude (intygat av klienten, inte en inloggning i Accounted)',
+    )
+    expect(ev.details).toContain(
+      'Policy: staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view, bedömning: krävde granskning',
+    )
+  })
+
+  it('an approval the AI made itself: the AI named, and what the history cannot know said plainly', () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([
+      mcpApprovalRow('staged-approval.1;approver=credential;unattended_limit=none;door=mcp_chat', 'direct'),
+    ], mcpCtx))
+    expect(ev).toMatchObject({
+      event: 'Agentförslag godkänt av AI-assistenten',
+      actor: { type: 'mcp_oauth', user_id: 'user-1', actor_label: 'Claude' },
+    })
+    expect(ev.details).toContain(
+      'Godkännande: AI-assistenten (Claude) godkände förslaget själv; om en person bad om det i chatten syns inte i Accounted',
+    )
+  })
+
+  it('an MCP approval recorded before the door reads as before', () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([
+      mcpApprovalRow('staged-approval.1;approver=credential;unattended_limit=none', 'direct'),
+    ], mcpCtx))
+    expect(ev.event).toBe('Agentförslag godkänt')
+    expect(ev.details.some((d) => d.startsWith('Godkännande:'))).toBe(false)
+  })
+
   it('a samlingsverifikat names the rules version its decisions share', () => {
     const shared = { created_at: '2026-03-10T09:30:01.000Z', rule_version: 'bank-proposals.1+a38016f12abc' }
     const [ev] = decisionEvents(buildDecisionReceipts([row({ id: 'sl-a', ...shared }), row({ id: 'sl-b', ...shared })], ctx))

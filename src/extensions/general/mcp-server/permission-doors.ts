@@ -44,6 +44,7 @@ export const MCP_TOOL_DOORS: Readonly<Record<string, DoorSpec | OutsideDoor>> = 
   gnubok_stage_across_companies: OUTSIDE.bridge,
   // Approving and rejecting: decided per staged operation by its pending type.
   gnubok_approve_pending_operation: OUTSIDE.approval,
+  gnubok_approve_from_view: OUTSIDE.approval,
   gnubok_reject_pending_operation: OUTSIDE.approval,
   // A new company, which the person will own: no membership exists yet.
   gnubok_create_company: OUTSIDE.newCompany,

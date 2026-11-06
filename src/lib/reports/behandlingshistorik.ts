@@ -7,7 +7,8 @@ import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
 import { parseGrantPolicyVersion } from '@/lib/grants/types'
-import { formatActorAttribution } from '@/lib/attribution/format-actor'
+import { approvalDoorOf } from '@/lib/suggestion-log/approval-door'
+import { agentDisplayName, formatActorAttribution } from '@/lib/attribution/format-actor'
 import {
   buildDecisionReceipts,
   fetchPeriodDecisions,
@@ -2669,13 +2670,43 @@ function decisionObject(kind: DecisionReceipt['subject_kind']): string {
   return one.charAt(0).toUpperCase() + one.slice(1)
 }
 
+/**
+ * The door a key's approval of a staged operation came through (the AI's own
+ * call, or a person's click in the approval view inside the AI client), as
+ * the receipt recorded it; null for anything else.
+ */
+function receiptDoor(r: DecisionReceipt) {
+  return r.subject_kind === 'operation' ? approvalDoorOf(r.policy_version) : null
+}
+
 function decisionEventLabel(r: DecisionReceipt): string {
   if (r.outcome === 'dismissed') return r.subject_kind === 'bank_line' ? 'Banktransaktion ignorerad' : 'Underlag raderat'
   // An approval books exactly what was staged: no suggestion to follow or change.
   if (r.subject_kind === 'operation') {
-    return parseGrantPolicyVersion(r.policy_version) ? 'Bokfört automatiskt enligt regel' : 'Agentförslag godkänt'
+    if (parseGrantPolicyVersion(r.policy_version)) return 'Bokfört automatiskt enligt regel'
+    const door = receiptDoor(r)
+    if (door === 'mcp_view') return 'Agentförslag godkänt i granskningsrutan'
+    if (door === 'mcp_chat') return 'Agentförslag godkänt av AI-assistenten'
+    return 'Agentförslag godkänt'
   }
   return DECISION_OUTCOME_LABELS[r.outcome]
+}
+
+/**
+ * Who approved, by the door: what the server knows and what it does not. It
+ * never sees the chat, so an AI's approval cannot say whether a person asked
+ * for it there; a click in the approval view is the client's word for it.
+ */
+function approvalDoorDetails(r: DecisionReceipt): string[] {
+  const door = receiptDoor(r)
+  const client = r.decided_by.label ? agentDisplayName(r.decided_by.actor_type, r.decided_by.label) : 'AI-klienten'
+  if (door === 'mcp_view') {
+    return [`Godkännande: en person klickade Godkänn i granskningsrutan i ${client} (intygat av klienten, inte en inloggning i Accounted)`]
+  }
+  if (door === 'mcp_chat') {
+    return [`Godkännande: AI-assistenten (${client}) godkände förslaget själv; om en person bad om det i chatten syns inte i Accounted`]
+  }
+  return []
 }
 
 function percent(value: number): string {
@@ -2726,6 +2757,7 @@ export function decisionDetails(r: DecisionReceipt, userLabels: Map<string, stri
   if (grant) {
     details.push(`Bokfört utan godkännande av en person, enligt regel ${grant.grantId} version ${grant.grantVersion}`)
   }
+  details.push(...approvalDoorDetails(r))
   details.push(...decisionProvenanceDetails(r))
   return details
 }
@@ -2738,7 +2770,12 @@ function decisionEvent(r: DecisionReceipt, userLabels: Map<string, string>): Raw
     code: `decision.${r.outcome}`,
     event: decisionEventLabel(r),
     object: r.booked?.voucher ?? decisionObject(r.subject_kind),
-    actor: { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
+    // A click in the approval view is the person's decision; the key that
+    // carried it is named in the details and on the verifikat's own event.
+    actor:
+      receiptDoor(r) === 'mcp_view'
+        ? { type: 'user', user_id: r.decided_by.user_id, actor_label: null }
+        : { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
     details: decisionDetails(r, userLabels),
     source: 'suggestion_log',
     count: 1,

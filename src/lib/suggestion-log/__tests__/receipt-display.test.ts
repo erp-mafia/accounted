@@ -244,6 +244,67 @@ describe('bookingWhy summary', () => {
     expect(alone.summary?.text).toBe('Bokförd av AI-anslutning åt Anna Svensson')
   })
 
+  // Customer request 2026-11-05: the record tells "I approved in the chat"
+  // from "the AI approved". The door is read off the receipt's policy.
+  function mcpApproval(policy: string, band: 'direct' | 'review'): ReceiptLike {
+    return {
+      receipt_id: '33333333-3333-4333-8333-333333333333',
+      subject_kind: 'operation',
+      decided_at: '2026-11-06T10:00:00.000Z',
+      outcome: 'accepted',
+      decided_by: { actor_type: 'mcp_oauth', user_id: ANNA, label: 'Claude (Anthropic)', commit_method: 'api_key' },
+      proposed_by: {
+        pending_operation_id: OP,
+        operation_type: 'categorize_transaction',
+        actor_type: 'mcp_oauth',
+        actor_id: 'key-1',
+        label: 'Claude (Anthropic)',
+        user_id: ANNA,
+        risk_level: 'low',
+        model: null,
+        prompt_hash: null,
+        staged_at: '2026-11-06T09:59:00.000Z',
+        approved_at: '2026-11-06T10:00:00.000Z',
+      },
+      candidates: [],
+      chosen: null,
+      booked: null,
+      policy_version: policy,
+      confidence_band: band,
+    }
+  }
+  const mcpEntry = () => entry({ committed_actor_type: 'mcp_oauth', committed_actor_label: 'Claude (Anthropic)', commit_method: 'api_key' })
+
+  it("names the person for a click in the approval view, and the client it was made in", () => {
+    const r = mcpApproval('staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view', 'review')
+    const d = data({ receipts: [r], entry: mcpEntry() })
+    expect(bookingWhyUserIds(d.entry, d.decisions)).toEqual([ANNA])
+    const view = bookingWhy(d, opts())
+    expect(view.summary?.text).toBe('Anna Svensson godkände förslaget med ett klick i Claude')
+    expect(rowMap(view).decision).toBe('Anna Svensson · klick i granskningsrutan i Claude · @2026-11-06')
+    expect(rowMap(view).policy).toBe('Krävde granskning · staged-approval.1')
+    const en = bookingWhy(d, opts('en'))
+    expect(en.summary?.text).toBe('Anna Svensson approved the proposal with a click in Claude')
+    expect(rowMap(en).decision).toBe('Anna Svensson · click in the approval view in Claude · @2026-11-06')
+  })
+
+  it("names the AI for an approval it made itself in the chat, never the person", () => {
+    const r = mcpApproval('staged-approval.1;approver=credential;unattended_limit=none;door=mcp_chat', 'direct')
+    const view = bookingWhy(data({ receipts: [r], entry: mcpEntry() }), opts())
+    expect(view.summary?.text).toBe('Claude åt Anna Svensson godkände förslaget i chatten')
+    expect(rowMap(view).decision).toBe('Claude åt Anna Svensson · godkänt av AI:n i chatten · @2026-11-06')
+    expect(bookingWhy(data({ receipts: [r], entry: mcpEntry() }), opts('en')).summary?.text).toBe(
+      'Claude for Anna Svensson approved the proposal in the chat',
+    )
+  })
+
+  it('reads an MCP approval recorded before the door the way it always did', () => {
+    const r = mcpApproval('staged-approval.1;approver=credential;unattended_limit=none', 'direct')
+    const view = bookingWhy(data({ receipts: [r], entry: mcpEntry() }), opts())
+    expect(view.summary?.text).toBe('Claude åt Anna Svensson bokförde enligt förslaget')
+    expect(rowMap(view).decision).toBe('Claude åt Anna Svensson · via MCP-anslutning · @2026-11-06')
+  })
+
   it("names a service account's booking as the account, and the sponsor it answers to", () => {
     const saEntry = { ...userEntryRow, committed_actor_type: 'service_account', committed_actor_label: 'Billo', commit_method: 'api_key' }
     const r = buildDecisionReceipt(bankRow({ actor_type: 'service_account', resolved_by: null }), ctx(saEntry))

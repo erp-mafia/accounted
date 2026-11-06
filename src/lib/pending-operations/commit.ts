@@ -64,6 +64,7 @@ import { CreateGrantParamsSchema, GRANT_OPERATION_TYPES, RevokeGrantParamsSchema
 import { grantsEnabled } from '@/lib/grants/flag'
 import { runInOperationCommit } from './commit-scope'
 import { recordOperationDecision } from '@/lib/suggestion-log/operation'
+import type { ApprovalDoor } from '@/lib/suggestion-log/approval-door'
 import {
   correctionBusinessEvents,
   manualVoucherBusinessEvent,
@@ -369,6 +370,14 @@ export interface CommitOptions {
    * applies: the stricter of the two wins.
    */
   grant?: { grantId: string; grantVersion: number; useId: string }
+  /**
+   * Where a key credential's approval came from, when the door knows: the
+   * AI's own approve call (mcp_chat) or a person's click in the approval view
+   * inside the AI client (mcp_view). Record-only: it names the door in the
+   * decision receipt's policy and changes no gate; the key's ceiling and
+   * every check below apply the same either way.
+   */
+  approvalDoor?: ApprovalDoor
   /**
    * The attest answers of a bulk approval, told once: each staged attest
    * passes it to the attest service (AttestDecisionInput in
@@ -7219,6 +7228,7 @@ async function commitPendingOperationInner(
     claimedAt: typeof claimedAt === 'string' ? claimedAt : null,
     actor: opts.actor,
     ...(opts.grant ? { grant: { grantId: opts.grant.grantId, grantVersion: opts.grant.grantVersion } } : {}),
+    ...(opts.approvalDoor ? { door: opts.approvalDoor } : {}),
   })
 
   return {

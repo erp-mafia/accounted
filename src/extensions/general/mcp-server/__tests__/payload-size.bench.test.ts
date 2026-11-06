@@ -941,8 +941,11 @@ describe('tools/list payload size guard', () => {
    * makes the rule hold for every widget tool added later.
    */
   it('never lets a widget tool fall out of the default catalog', () => {
+    // A widget tool names its view (resourceUri). The approval view's own
+    // door carries _meta.ui only for its app-only visibility: it renders
+    // nothing and is listed to a connection with the view (view-approval.ts).
     const hiddenWidgets = tools
-      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui)
+      .filter((t) => (t as { _meta?: { ui?: { resourceUri?: string } } })._meta?.ui?.resourceUri)
       .filter((t) => !isDefaultCatalogTool(t))
       .map((t) => t.name)
 

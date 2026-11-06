@@ -7,6 +7,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { PendingOperation } from '@/types'
 import { grantPolicyVersion } from '@/lib/grants/types'
 import { operationInputHash } from './provenance'
+import type { ApprovalDoor } from './approval-door'
 
 /**
  * Decision receipts for approved staged operations.
@@ -24,9 +25,11 @@ import { operationInputHash } from './provenance'
  *   - what was approved (input_hash: the params the commit ran and the
  *     preview the approver was shown, ./provenance.ts);
  *   - the policy that let it through (policy_version, confidence_band):
- *     review when a person approved it, direct when a credential approved it
- *     under its unattended ceiling, and direct under the company grant that
- *     let it through without a person (grant.<revision>;grant_id=...;
+ *     review when a person approved it (in Accounted, or with a click in the
+ *     approval view inside the AI client: door=mcp_view), direct when a
+ *     credential approved it under its unattended ceiling (the AI's own call
+ *     over MCP: door=mcp_chat), and direct under the company grant that let
+ *     it through without a person (grant.<revision>;grant_id=...;
  *     grant_version=..., lib/grants). An approver of any other kind records
  *     neither, as a policy is never recorded without its band.
  * The stager's reason (pending_operations.agent_reason) is copied as the
@@ -108,11 +111,14 @@ export interface ApprovalPolicy {
 /**
  * The approval policy a commit ran under, read off who approved it. A person
  * reviewed the staged proposal; a key credential finished it unattended,
- * within its ceiling (none when the key has no positive limit).
+ * within its ceiling (none when the key has no positive limit), or carried a
+ * person's click from the approval view (door mcp_view: a review, with the
+ * key's ceiling still applied).
  */
 export function approvalPolicy(
   actor: CommitActor | undefined,
   grant?: { grantId: string; grantVersion: number } | null,
+  door?: ApprovalDoor | null,
 ): ApprovalPolicy {
   // A company grant decided it: the rule, not the credential, is the policy.
   if (grant && actor && CREDENTIAL_ACTORS.has(actor.type)) {
@@ -124,7 +130,11 @@ export function approvalPolicy(
       typeof actor.unattendedCommitLimit === 'number' && actor.unattendedCommitLimit > 0
         ? String(actor.unattendedCommitLimit)
         : 'none'
-    return { policyVersion: `${POLICY};approver=credential;unattended_limit=${limit}`, band: 'direct' }
+    if (door === 'mcp_view') {
+      return { policyVersion: `${POLICY};approver=person_in_client;unattended_limit=${limit};door=mcp_view`, band: 'review' }
+    }
+    const doorPart = door ? `;door=${door}` : ''
+    return { policyVersion: `${POLICY};approver=credential;unattended_limit=${limit}${doorPart}`, band: 'direct' }
   }
   return { policyVersion: null, band: null }
 }
@@ -146,6 +156,8 @@ export interface OperationDecision {
   actor: CommitActor | undefined
   /** The company grant that let the operation through without a person (commitPendingOperation's opts.grant). */
   grant?: { grantId: string; grantVersion: number } | null
+  /** Where a key credential's approval came from (commitPendingOperation's opts.approvalDoor). */
+  door?: ApprovalDoor | null
 }
 
 /**
@@ -159,7 +171,7 @@ export function buildOperationDecisionRows(
   agentReason: string | null = decision.operation.agent_reason ?? null,
 ) {
   const { operation, actor } = decision
-  const policy = approvalPolicy(actor, decision.grant)
+  const policy = approvalPolicy(actor, decision.grant, decision.door)
   const model = typeof operation.agent_metadata?.model === 'string' ? operation.agent_metadata.model : null
   const suggestion = {
     source: 'pending_operation',

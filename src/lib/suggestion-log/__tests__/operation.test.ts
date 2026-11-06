@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { approvalDoorOf } from '../approval-door'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type { PendingOperation } from '@/types'
 
@@ -184,6 +185,42 @@ describe('approvalPolicy', () => {
     expect(approvalPolicy(undefined)).toEqual({ policyVersion: null, band: null })
     expect(approvalPolicy({ type: 'cron' })).toEqual({ policyVersion: null, band: null })
   })
+
+  // Customer request 2026-11-05: tell "I approved" from "the AI approved".
+  it("names the door of a key's MCP approval: the AI's own call stays direct", () => {
+    expect(approvalPolicy({ type: 'mcp_oauth', label: 'Claude (Anthropic)', unattendedCommitLimit: null }, null, 'mcp_chat')).toEqual({
+      policyVersion: 'staged-approval.1;approver=credential;unattended_limit=none;door=mcp_chat',
+      band: 'direct',
+    })
+  })
+
+  it("records a person's click in the approval view as a review, with the key's ceiling still named", () => {
+    expect(approvalPolicy({ type: 'mcp_oauth', label: 'Claude (Anthropic)', unattendedCommitLimit: 2500 }, null, 'mcp_view')).toEqual({
+      policyVersion: 'staged-approval.1;approver=person_in_client;unattended_limit=2500;door=mcp_view',
+      band: 'review',
+    })
+  })
+
+  it('lets a grant and a person in Accounted outrank any door', () => {
+    const grant = { grantId: '44444444-4444-4444-8444-444444444444', grantVersion: 2 }
+    expect(approvalPolicy({ type: 'api_key', unattendedCommitLimit: null }, grant, 'mcp_view').policyVersion).toMatch(/^grant\.1;/)
+    expect(approvalPolicy(person, null, 'mcp_view')).toEqual({ policyVersion: 'staged-approval.1;approver=person', band: 'review' })
+  })
+})
+
+describe('approvalDoorOf', () => {
+  it('reads the door back off a staged-approval policy', () => {
+    expect(approvalDoorOf('staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view')).toBe('mcp_view')
+    expect(approvalDoorOf('staged-approval.1;approver=credential;unattended_limit=500;door=mcp_chat')).toBe('mcp_chat')
+  })
+
+  it('reads no door from a policy recorded before it, an unknown door, another policy or none', () => {
+    expect(approvalDoorOf('staged-approval.1;approver=credential;unattended_limit=none')).toBeNull()
+    expect(approvalDoorOf('staged-approval.1;approver=person')).toBeNull()
+    expect(approvalDoorOf('staged-approval.1;approver=credential;door=fax')).toBeNull()
+    expect(approvalDoorOf('grant.1;grant_id=x;grant_version=1;door=mcp_view')).toBeNull()
+    expect(approvalDoorOf(null)).toBeNull()
+  })
 })
 
 describe('recordOperationDecision', () => {
@@ -226,6 +263,18 @@ describe('recordOperationDecision', () => {
     ])
     expect(db.rows[0]!.input_hash).toMatch(/^[0-9a-f]{64}$/)
     expect(logSpy.error).not.toHaveBeenCalled()
+  })
+
+  it("records the door a connected AI's approval came through on the receipt", async () => {
+    const db = fakeDb()
+    const claude = { type: 'mcp_oauth', label: 'Claude (Anthropic)', unattendedCommitLimit: null } as CommitActor
+    await recordOperationDecision(db.client, decision({ actor: claude, door: 'mcp_view' }))
+    expect(db.rows[0]).toMatchObject({
+      actor_type: 'mcp_oauth',
+      resolved_by: USER,
+      policy_version: 'staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view',
+      confidence_band: 'review',
+    })
   })
 
   it('records an approval by a service account key as direct, with the key as the deciding actor', async () => {

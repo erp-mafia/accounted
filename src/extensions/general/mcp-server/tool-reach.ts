@@ -23,8 +23,25 @@
 
 export type ToolCallableVia = 'tools_list' | 'call_tool' | 'stage_tool' | 'none'
 
-export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'search' }): boolean {
-  return tool.catalogVisibility !== 'search'
+/** The MCP Apps marker a host reads (`_meta.ui.visibility`); absent means model and app. */
+interface ToolUiVisibility {
+  _meta?: { ui?: { visibility?: ReadonlyArray<'model' | 'app'> } }
+}
+
+/**
+ * A tool only an MCP Apps view calls (`_meta.ui.visibility` without 'model';
+ * today the approval view's door, view-approval.ts): listed to a connection
+ * that has the view, where the host keeps it from the model, and otherwise
+ * unreachable. No search hit, bridge, suggestion or briefing ever names it.
+ */
+export function isViewOnlyTool(tool: ToolUiVisibility): boolean {
+  const visibility = tool._meta?.ui?.visibility
+  return Array.isArray(visibility) && !visibility.includes('model')
+}
+
+/** In the default catalog: neither search-only nor a view-only tool. */
+export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'search' } & ToolUiVisibility): boolean {
+  return tool.catalogVisibility !== 'search' && !isViewOnlyTool(tool)
 }
 
 /**
@@ -51,7 +68,7 @@ export function toolCallableVia(
   tool: {
     catalogVisibility?: 'default' | 'search'
     annotations: { readOnlyHint?: boolean }
-  },
+  } & ToolUiVisibility,
   reach: { listed: boolean; stages: boolean },
 ): ToolCallableVia {
   if (reach.listed) return 'tools_list'

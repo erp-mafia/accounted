@@ -97,6 +97,7 @@ import {
   type McpTool,
 } from '../server'
 import { RECOMMENDED_WORKFLOW_LOADOUTS } from '../recommended-tools'
+import { isViewOnlyTool } from '../tool-reach'
 import { workflowSkills } from '../skills'
 import { prompts } from '../prompts'
 
@@ -216,8 +217,10 @@ const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
 }
 
 describe('no search-only WRITE is out of reach (issue #2800)', () => {
+  // The approval view's own door is not search-only: it is listed, app-only,
+  // to a connection with the view, and only the view calls it (view-approval.ts).
   const searchOnlyWrites = tools.filter(
-    (t) => !isDefaultCatalogTool(t) && t.annotations.readOnlyHint !== true,
+    (t) => !isDefaultCatalogTool(t) && !isViewOnlyTool(t) && t.annotations.readOnlyHint !== true,
   )
 
   it('every search-only WRITE is carried by gnubok_stage_tool, or is on record as unreachable', () => {
@@ -309,7 +312,9 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
         }),
       )
       off()
-      const expected = carried.has(tool.name) ? 'scope_denied' : 'bridge_refused'
+      // A view-only tool does not exist to a bridge (view-approval.ts): the
+      // model learns nothing about it, not even advice to call it directly.
+      const expected = isViewOnlyTool(tool) ? 'unknown_tool' : carried.has(tool.name) ? 'scope_denied' : 'bridge_refused'
       if (kinds[0] !== expected) disagreements.push(`${tool.name}: expected ${expected}, got ${kinds[0]}`)
     }
     expect(disagreements).toEqual([])
