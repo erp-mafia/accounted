@@ -17,6 +17,7 @@ import { ALL_OPERATIONS } from '@/lib/operations/registry'
 export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readonly string[]>>> = {
   platform: [
     'gnubok_approve_pending_operation',
+    'gnubok_approve_from_view',
     'gnubok_reject_pending_operation',
     'gnubok_list_pending_operations',
     'gnubok_get_task',

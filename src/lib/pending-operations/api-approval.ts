@@ -70,12 +70,13 @@ async function loadOperation(
   return (data as PendingOperation | null) ?? null
 }
 
-async function resolveUserEmail(supabase: SupabaseClient, userId: string, log: Logger): Promise<string | undefined> {
+/** The approver's email, for commit attribution and the send_invoice cc; undefined when it cannot be read (logged). */
+export async function resolveUserEmail(supabase: SupabaseClient, userId: string, log: Logger): Promise<string | undefined> {
   try {
     const { data } = await supabase.auth.admin.getUserById(userId)
     return data.user?.email ?? undefined
   } catch (err) {
-    log.warn('failed to resolve user email for API approval', {
+    log.warn('failed to resolve the approver email', {
       error: err instanceof Error ? err.message : String(err),
     })
     return undefined

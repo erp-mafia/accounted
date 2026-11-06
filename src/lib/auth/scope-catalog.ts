@@ -766,6 +766,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Pending operations approval (mirrors the /pending web UI)
   gnubok_list_pending_operations:         'pending_operations:read',
   gnubok_approve_pending_operation:       'pending_operations:approve',
+  gnubok_approve_from_view:               'pending_operations:approve',
   gnubok_reject_pending_operation:        'pending_operations:approve',
   // Skatteverket filing (PR5). Reads are compliance:read (status of moms/AGI);
   // the two submit tools require the opt-in skatteverket:write staging scope.

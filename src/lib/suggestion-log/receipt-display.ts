@@ -1,4 +1,5 @@
-import { formatActorAttribution, type AttributionWords } from '@/lib/attribution/format-actor'
+import { agentDisplayName, formatActorAttribution, type AttributionWords } from '@/lib/attribution/format-actor'
+import { approvalDoorOf } from './approval-door'
 import type { DecisionReceipt } from './receipts'
 
 /**
@@ -197,6 +198,9 @@ function agentProposer(r: ReceiptLike): Who | null {
 }
 
 function decider(entry: BookingWhyEntry, r: ReceiptLike | null): Who {
+  // A click on Godkänn in the approval view is the person's decision, made
+  // in the AI client: the receipt's user is the person whose connection it is.
+  if (r && approvalDoorOf(r.policy_version) === 'mcp_view') return { kind: 'person', userId: r.decided_by.user_id }
   if (r) return whoFromActor(r.decided_by.actor_type, r.decided_by.label, r.decided_by.user_id)
   return whoFromActor(entry.committed_actor_type, entry.committed_actor_label, entry.user_id, entry.commit_method)
 }
@@ -235,11 +239,14 @@ function renderWho(who: Who, data: BookingWhyData, o: BookingWhyOptions): string
   }
 }
 
-type How = 'accepted' | 'changed' | 'manual' | 'approved' | 'imported' | 'booked'
+type How = 'accepted' | 'changed' | 'manual' | 'approved' | 'approved_in_view' | 'approved_by_ai' | 'imported' | 'booked'
 
 function howOf(entry: BookingWhyEntry, r: ReceiptLike | null): How {
   if (isImported(entry)) return 'imported'
   if (!r) return 'booked'
+  const door = approvalDoorOf(r.policy_version)
+  if (door === 'mcp_view') return 'approved_in_view'
+  if (door === 'mcp_chat') return 'approved_by_ai'
   if (personDecided(r) && agentProposer(r)) return 'approved'
   if (r.outcome === 'accepted') return 'accepted'
   if (r.outcome === 'changed') return 'changed'
@@ -259,6 +266,10 @@ function summaryText(how: How, who: Who, whoText: string, r: ReceiptLike | null,
       return o.t('summary_manual', { who: whoText })
     case 'approved':
       return o.t('summary_approved', { who: whoText, proposer: renderWho(agentProposer(r!)!, data, o) })
+    case 'approved_in_view':
+      return o.t('summary_approved_in_view', { who: whoText, client: clientName(r!, o) })
+    case 'approved_by_ai':
+      return o.t('summary_approved_by_ai', { who: whoText })
     case 'imported':
       // Who ran the import, when the entry names a person we could resolve.
       return who.kind === 'person' && who.userId && text(data.people[who.userId]?.name)
@@ -357,7 +368,16 @@ function shortVersion(v: string): string {
   return v.split(/[+;]/)[0]
 }
 
-function viaText(who: Who, commitMethod: string | null | undefined, o: BookingWhyOptions): string | null {
+/** The AI client a click in the approval view was made in, named as the connection is everywhere else ("Claude"). */
+function clientName(r: ReceiptLike, o: BookingWhyOptions): string {
+  if (!text(r.decided_by.label)) return o.t('client_unknown')
+  return agentDisplayName(r.decided_by.actor_type, r.decided_by.label, o.words, { inline: true })
+}
+
+function viaText(who: Who, commitMethod: string | null | undefined, o: BookingWhyOptions, how: How, r: ReceiptLike | null): string | null {
+  // Which door a connected AI's approval came through, when it was recorded.
+  if (how === 'approved_in_view') return o.t('via_mcp_view', { client: clientName(r!, o) })
+  if (how === 'approved_by_ai') return o.t('via_mcp_chat')
   if (!commitMethod) return null
   // A connected AI commits under its minted key: say which door it came through.
   if (commitMethod === 'api_key' && who.kind === 'agent' && who.actorType === 'mcp_oauth') return o.t('via_mcp')
@@ -461,7 +481,7 @@ export function bookingWhy(data: BookingWhyData, o: BookingWhyOptions): BookingW
     if (value) rows.push({ id, label: o.t(`row_${id}`), value })
   }
 
-  push('decision', upperFirst([whoText, viaText(who, r?.decided_by.commit_method ?? entry.commit_method, o), when].filter(Boolean).join(' · ')))
+  push('decision', upperFirst([whoText, viaText(who, r?.decided_by.commit_method ?? entry.commit_method, o, how, r), when].filter(Boolean).join(' · ')))
   if (r) {
     push('proposal', proposalRow(r, data, o))
     // The agent's own words, as recorded: shown as given, never paraphrased.

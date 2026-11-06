@@ -35,15 +35,26 @@ export interface McpTaskRow {
 }
 
 /**
+ * The extensions a 2026-07-28 client declares in this request's capabilities
+ * (`_meta`): an empty object when it lists capabilities without any, null
+ * when it lists no capabilities at all (a handshake-era client declared them
+ * once, at initialize).
+ */
+export function declaredClientExtensions(requestMeta: unknown): Record<string, unknown> | null {
+  if (!requestMeta || typeof requestMeta !== 'object') return null
+  const caps = (requestMeta as Record<string, unknown>)['io.modelcontextprotocol/clientCapabilities']
+  if (!caps || typeof caps !== 'object') return null
+  const extensions = (caps as Record<string, unknown>).extensions
+  return extensions && typeof extensions === 'object' ? (extensions as Record<string, unknown>) : {}
+}
+
+/**
  * Per the extension spec, a server must never return a task to a client that
  * did not declare the extension in this request's capabilities.
  */
 export function isTaskCapableClient(requestMeta: Record<string, unknown>): boolean {
-  const caps = requestMeta['io.modelcontextprotocol/clientCapabilities']
-  if (!caps || typeof caps !== 'object') return false
-  const extensions = (caps as Record<string, unknown>).extensions
-  if (!extensions || typeof extensions !== 'object') return false
-  return TASKS_EXTENSION_ID in (extensions as Record<string, unknown>)
+  const extensions = declaredClientExtensions(requestMeta)
+  return !!extensions && TASKS_EXTENSION_ID in extensions
 }
 
 export async function createMcpTask(

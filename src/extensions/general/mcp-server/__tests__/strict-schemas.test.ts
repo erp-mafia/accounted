@@ -72,8 +72,11 @@ describe('MCP tool inputSchema strictness', () => {
     // drop card flapped into the Interactive list and vanished). Widget
     // tools mint links/lists only; actual writes go through separate
     // approval-gated tools the widget calls.
+    // Interactive = renders a view (resourceUri). An app-only tool such as
+    // the approval view's own door (_meta.ui.visibility only) renders nothing:
+    // it is the "separate approval-gated tool the widget calls".
     const writers = tools
-      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui !== undefined)
+      .filter((t) => (t as { _meta?: { ui?: { resourceUri?: string } } })._meta?.ui?.resourceUri !== undefined)
       .filter((t) => t.annotations.readOnlyHint !== true)
       .map((t) => t.name)
     expect(writers).toEqual([])

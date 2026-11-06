@@ -122,6 +122,7 @@ export function isOptionalCompanyTool(toolName: string): boolean {
  */
 const OPERATION_SCOPED_TOOLS = new Set([
   'gnubok_approve_pending_operation',
+  'gnubok_approve_from_view',
   'gnubok_reject_pending_operation',
 ])
 

@@ -6,7 +6,10 @@ import type { UiWidget } from './types'
  * Approve/reject are human CLICKS inside the widget, so the positive
  * acknowledgment for high-risk operations (BFL 5 kap 5§) is first-party
  * instead of agent-asserted: the widget arms the approve button and the
- * second click sends confirmed=true.
+ * second click sends confirmed=true. A click goes through the view's own
+ * door (gnubok_approve_from_view, with the token the list result handed this
+ * view) so the record names the person, not the AI (../view-approval.ts);
+ * without a token it falls back to gnubok_approve_pending_operation.
  * Triggered by gnubok_list_pending_operations with render_ui=true.
  * A key without pending_operations:approve (the default one-click connection
  * since issue #3408) cannot approve or reject: the list result then carries
@@ -133,6 +136,12 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   let handled = 0;
   // false only when the list result says this key cannot approve or reject.
   let canApprove = true;
+  // One token per pending operation, handed to this view in the list
+  // result's _meta (never to the model): with it a click goes through the
+  // view's own door and is recorded as the person's approval. Empty when the
+  // connection has no approval view; every click then uses the ordinary
+  // approve tool, recorded as the AI's approval.
+  let viewTokens = {};
   // A host that never answers must not strand a row in "Arbetar..." with its
   // buttons gone: time the RPC out so the catch path restores the row and
   // the user can retry. 30s covers slow commits (journal posting, emails).
@@ -180,6 +189,8 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       if (sc && sc.operations) {
         operations = sc.operations;
         canApprove = sc.can_approve !== false;
+        const viewMeta = msg.params._meta && msg.params._meta['accounted/approval_view'];
+        viewTokens = (viewMeta && viewMeta.tokens) || {};
         handled = 0;
         render();
       }
@@ -328,7 +339,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     const args = { operation_id: op.id };
     if (op.risk_level === 'high') args.confirmed = true;
 
-    callTool('gnubok_approve_pending_operation', args).then(function(res) {
+    approveCall(op, args).then(function(res) {
       op._working = false;
       const result = parseResult(res);
       const err = errMsg(result, 'Kunde inte godk\\u00e4nna operationen.');
@@ -344,6 +355,31 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       op._working = false;
       op._error = (err && err.message) || 'Kunde inte godk\\u00e4nna operationen.';
       render();
+    });
+  }
+
+  // The person's click, through the view's own door when this view holds a
+  // token for the operation. Only when that door is unavailable (no token,
+  // a refused or expired token, a host that does not route it) does the
+  // click go through the ordinary approve tool, which the record names as
+  // the AI's approval: understated, never overstated.
+  function approveCall(op, args) {
+    const token = viewTokens[op.id];
+    if (!token) return callTool('gnubok_approve_pending_operation', args);
+    const viewArgs = Object.assign({ view_token: token }, args);
+    return callTool('gnubok_approve_from_view', viewArgs).then(function(res) {
+      const result = parseResult(res);
+      const code = result && result.error && typeof result.error === 'object' ? result.error.code : null;
+      if (code !== 'VIEW_APPROVAL_UNAVAILABLE') return res;
+      // Unavailable for this view (no view on the connection, tokens expired):
+      // later clicks go straight to the ordinary tool instead of trying twice.
+      viewTokens = {};
+      return callTool('gnubok_approve_pending_operation', args);
+    }, function(err) {
+      // A host that refused the call (a JSON-RPC error) will refuse the next
+      // one too; a timeout may be one slow commit, so the tokens stay.
+      if (err && typeof err.code === 'number') viewTokens = {};
+      return callTool('gnubok_approve_pending_operation', args);
     });
   }
 

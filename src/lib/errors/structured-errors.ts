@@ -7959,6 +7959,17 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
         'Inform the user of the segregation-of-duties risk, then re-POST the same scopes with acknowledge_sod: true to create the key anyway.',
     },
   },
+  // The approval view's own door (mcp-server/view-approval.ts): refused
+  // whenever the call cannot be shown to be a person's click in the view.
+  VIEW_APPROVAL_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv: 'Godkännandet kunde inte tas emot från granskningsrutan. Inget bokfördes.',
+    message_en: "The approval could not be taken from the approval view. Nothing was booked.",
+    retryable: false,
+    remediation: {
+      description: 'Only the approval view calls this tool. Approve with gnubok_approve_pending_operation, which records the approval as yours.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

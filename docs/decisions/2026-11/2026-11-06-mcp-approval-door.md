@@ -1,0 +1,1 @@
+[2026-11-06] An MCP approval records its door: the AI's own approve call reads as the AI's approval, a click in Claude's approval view (app-only tool plus a view token) as the person's; the server never sees the chat, so a yes typed there stays the AI's approval, never a person's.

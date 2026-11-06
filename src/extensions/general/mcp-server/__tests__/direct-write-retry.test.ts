@@ -34,6 +34,8 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
     'Stages one pending operation per company under a batch_id: nothing commits before an approval, and each approval claims its operation once.',
   gnubok_approve_pending_operation:
     'The operation_id is the key: the pending to committing claim admits one commit, and a repeat on a settled operation returns its stored outcome.',
+  gnubok_approve_from_view:
+    'The approval view\'s own door runs the same single approval: the operation_id is the key, and a repeat on a settled operation returns its stored outcome.',
   gnubok_reject_pending_operation:
     'Compare-and-set on status pending: a repeat answers CONFLICT (already rejected) and changes nothing.',
   gnubok_sync_bank:
