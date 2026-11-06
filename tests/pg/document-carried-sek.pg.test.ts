@@ -165,9 +165,13 @@ describe.each(['customer', 'supplier'] as const)('%s side', (side) => {
     expect(await carried(side, id)).toEqual({ ok: false, reason: 'registration_voucher_not_live' })
   })
 
-  it('a registration another document names is shared', async () => {
+  it('a registration another document names is refused or reported as shared', async () => {
     const registration = await voucher(side, 361.55, 'registration')
     const id = await document(side, { registration })
+    if (side === 'customer') {
+      await expect(document(side, { registration })).rejects.toMatchObject({ code: '23505' })
+      return
+    }
     await document(side, { registration })
     expect(await carried(side, id)).toEqual({ ok: false, reason: 'registration_voucher_shared' })
   })

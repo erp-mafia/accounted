@@ -305,6 +305,51 @@ describe('link_invoice_voucher pg-real guards', () => {
   })
 })
 
+describe('invoices sale verifikat uniqueness', () => {
+  it('lets only one invoice claim a sale verifikat, including under concurrent registration', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceAId = await seedInvoice({ userId, companyId, customerId })
+    const invoiceBId = await seedInvoice({ userId, companyId, customerId })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId })
+
+    const results = await Promise.allSettled([invoiceAId, invoiceBId].map((invoiceId) =>
+      getPool().query(
+        'UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2',
+        [voucherId, invoiceId],
+      ),
+    ))
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.find((result) => result.status === 'rejected')
+    expect(rejected).toMatchObject({ reason: { code: '23505' } })
+    const { rows } = await getPool().query<{ count: string }>(
+      'SELECT COUNT(*) AS count FROM public.invoices WHERE journal_entry_id = $1',
+      [voucherId],
+    )
+    expect(Number(rows[0].count)).toBe(1)
+  })
+
+  it('names the sale-verifikat index when an existing register row loses the race', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceAId = await seedInvoice({ userId, companyId, customerId })
+    const invoiceBId = await seedInvoice({ userId, companyId, customerId })
+    const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId })
+
+    await getPool().query('UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2', [voucherId, invoiceAId])
+    await expect(
+      getPool().query('UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2', [voucherId, invoiceBId]),
+    ).rejects.toMatchObject({ code: '23505', constraint: 'idx_invoices_journal_entry_id_unique' })
+  })
+})
+
 // ============================================================
 // link_invoice_to_voucher RPC: atomic customer link (audit C2)
 // Mirrors the supplier-side link_supplier_invoice_to_voucher tests: the RPC

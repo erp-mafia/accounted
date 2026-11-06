@@ -656,6 +656,12 @@ describe('registerBookedInvoice', () => {
     const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
     expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
   })
+
+  it('answers a sale verifikat claimed between the plan and the insert as taken', async () => {
+    const { supabase } = books({ laterInvoices: [{ error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_journal_entry_id_unique"' } }] })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
+    expect(!result.ok && result.code).toBe('INVOICE_REGISTER_VOUCHER_TAKEN')
+  })
 })
 
 /**
@@ -765,6 +771,15 @@ describe('an invoice in the register without its verifikat', () => {
     const { supabase } = books({ numberRows: [unlinked()], laterInvoices: [{ data: [] }] })
     const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
     expect(!result.ok && result.code).toBe('INVOICE_REGISTER_NUMBER_TAKEN')
+  })
+
+  it('answers another invoice claiming the sale verifikat during the link write as voucher taken', async () => {
+    const { supabase } = books({
+      numberRows: [unlinked()],
+      laterInvoices: [{ error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_journal_entry_id_unique"' } }],
+    })
+    const result = await registerBookedInvoice(supabase as never, COMPANY_ID, USER_ID, input(), { today: TODAY })
+    expect(!result.ok && result.code).toBe('INVOICE_REGISTER_VOUCHER_TAKEN')
   })
 
   it.each<[string, Record<string, unknown>]>([
