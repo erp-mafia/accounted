@@ -1337,9 +1337,13 @@ function OptionsStep({
   }
 
   const fileStatuses = sieData?.fileStatuses ?? []
-  const yearsToReplace = fileStatuses
-    .filter(fs => fs.previousImport)
-    .map(fs => fs.fiscalYear)
+  const sieComparison = fileStatuses.length > 0 && fileStatuses.every(file => file.delta)
+    ? fileStatuses.reduce((total, file) => ({
+        added: total.added + file.delta!.added,
+        unchanged: total.unchanged + file.delta!.unchanged,
+        review: total.review + file.delta!.reviewCount,
+      }), { added: 0, unchanged: 0, review: 0 })
+    : null
   const failedYears = sieData?.failedYears ?? []
 
   const selectedItems: string[] = []
@@ -1503,7 +1507,7 @@ function OptionsStep({
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm">
-              Det här hämtas från källsystemet och importeras till {branding.appName.toLowerCase()}:
+              {t('ext_arcim_confirm_sync_selection')}
             </p>
             <ul className="space-y-1">
               {selectedItems.map((item) => (
@@ -1512,15 +1516,17 @@ function OptionsStep({
             </ul>
           </div>
 
-          {options.importSIEData && yearsToReplace.length > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {yearsToReplace.length === 1
-                ? `Räkenskapsår ${yearsToReplace[0]} ersätts:`
-                : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts:`}{' '}
-              tidigare importerade verifikationer markeras som annullerade och ersätts av
-              uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}{' '}
-              (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
-            </p>
+          {sieAvailable && options.importSIEData && (
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>{sieComparison
+                ? t(sieComparison.added === 0 && sieComparison.review === 0
+                    ? 'ext_arcim_confirm_sie_unchanged' : 'ext_arcim_confirm_sie_delta', sieComparison)
+                : t(fileStatuses.some(file => file.previousImport)
+                    ? 'ext_arcim_resync_description' : 'ext_arcim_resync_first_import')}</p>
+              {fileStatuses.some(file => file.delta?.metadataChanged) && (
+                <p>{t('ext_arcim_confirm_sie_metadata')}</p>
+              )}
+            </div>
           )}
         </div>
       </ConfirmationDialog>
