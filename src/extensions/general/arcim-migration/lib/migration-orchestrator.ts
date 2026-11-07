@@ -1230,12 +1230,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
         await loadSupplierRegister()
 
-        // Load every existing supplier invoice's identity once: (supplier,
-        // number), or (supplier, date, amount) for a number-less one.
+        // Load full header fingerprints; repeated supplier references are valid.
         const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity>(({ from, to }) =>
           supabase
             .from('supplier_invoices')
-            .select('supplier_invoice_number, supplier_id, invoice_date, total')
+            .select('supplier_invoice_number, supplier_id, invoice_date, total, currency, is_credit_note')
             .eq('company_id', companyId)
             .range(from, to)
         )
@@ -1396,12 +1395,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        // After stubs, do a final dedupe pass against existing supplier invoices
-        // using the now-resolved supplierId. The in-run key set catches the
-        // same (supplier, number) pair appearing twice in the fetched data,
-        // which the UNIQUE (company_id, supplier_id, supplier_invoice_number)
-        // index would otherwise reject mid-insert. NULL/empty numbers are
-        // exempt: the index treats NULLs as distinct.
+        // After party resolution, match full stored headers and deduplicate
+        // repeated provider IDs within this response, never reference alone.
         const seenSuppInvKeys = new Set<string>()
         const ready = resolved.filter((r) => {
           if (r.supplierId === '__FAILED__' || !r.supplierId) {
@@ -1418,8 +1413,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             skipped++
             return false
           }
-          if (r.dto.invoiceNumber) {
-            const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
+          if (r.dto.id) {
+            const dupKey = `${r.supplierId}::source::${r.dto.id}`
             if (seenSuppInvKeys.has(dupKey)) {
               skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
               skipped++

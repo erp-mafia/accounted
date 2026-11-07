@@ -7,13 +7,9 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
 /**
  * GET /api/supplier-invoices/exists?supplier_id=<uuid>&number=<string>
  *
- * Index-only pre-submit duplicate lookup for the supplier-invoice editor's
- * advisory warning. Mirrors the partial unique index
- * idx_supplier_invoices_company_supplier_number:
- * (company_id, supplier_id, supplier_invoice_number)
- * WHERE supplier_invoice_number IS NOT NULL AND status NOT IN
- * ('credited','reversed'). The create route's structured 409 remains the
- * authoritative backstop; this endpoint only powers the early warning.
+ * Advisory reference lookup for the supplier-invoice editor. A hit may be a
+ * legitimate separate invoice: supplier references are not unique identities.
+ * Exclude credited/reversed records and leave the decision with the user.
  */
 export const GET = withRouteContext(
   'supplier_invoice.exists',

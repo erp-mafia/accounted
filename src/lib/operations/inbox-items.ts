@@ -381,7 +381,7 @@ export const inboxItemsConvertToSupplierInvoice = defineOperation({
     doNotUseFor:
       'A receipt the company already paid (book it against the bank transaction), a purchase paid privately (POST /expense-claims), a supplier credit note (credit the invoice it references: POST /supplier-invoices/{id}/credit with inbox_item_id), or registering an invoice without an inbox item (POST /supplier-invoices).',
     pitfalls: [
-      'An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.',
+      'An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED. Supplier references may recur on separate invoices. Older database schemas may return 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.',
       'A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.',
       'amount is per line EXCLUDING VAT; VAT is computed from vat_rate. Per-line vat_amount and private-payment fields are not accepted here.',
       'With dimensions enabled, an unknown or archived code in default_dimensions or items[].dimensions returns DIMENSION_VALIDATION_FAILED and registers nothing when the company books on registration; a company that defers booking meets it when the invoice is booked.',

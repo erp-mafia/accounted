@@ -317,11 +317,9 @@ export async function convertInboxItemToSupplierInvoice(
     .single()
 
   if (invoiceError || !invoice) {
-    // A unique-index hit on (company_id, supplier_id, supplier_invoice_number)
-    // is a recoverable conflict: the invoice is already registered (often by
-    // hand, then converted from the same inbox document). Answer the existing
-    // row, read under the company filter, and only server-authoritative
-    // fields (never the request body echoed back).
+    // Compatibility for deployments retaining the former number-only unique
+    // index. Return company-scoped server facts, never request-body echoes.
+    // The current schema allows repeated supplier references.
     const pgErr = invoiceError as { code?: string; message?: string } | null
     const isDuplicateNumber =
       pgErr?.code === '23505' && (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
