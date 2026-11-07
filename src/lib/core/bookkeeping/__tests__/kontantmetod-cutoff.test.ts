@@ -95,6 +95,7 @@ const payable = (over: Partial<CutoffPayable> = {}): CutoffPayable => ({
 
 /** The per-invoice lists of a collection with nothing in them. */
 const PER_INVOICE_EMPTY = {
+  rowlessSupplierInvoices: [],
   carries: [],
   rotPartialManual: [],
   rotPartialManualInvoices: [],
@@ -1788,6 +1789,38 @@ describe('collectKontantmetodCutoff: per-invoice årsomföring', () => {
     expect(legacy.carries).toEqual([])
   })
 
+  // A provider migration imports a supplier invoice as its header when the
+  // source has no rows (Bokio, crm#1712). Its carry would book 2440 against
+  // nothing ("balanserar inte" for the whole cut-off): name it instead.
+  it('names an open supplier invoice with no rows instead of carrying it', async () => {
+    const tables = cashTables()
+    tables.supplier_invoices![0] = {
+      ...tables.supplier_invoices![0], supplier_invoice_number: null, subtotal: 500, vat_amount: 0, items: [],
+    }
+    const result = await collectPerInvoice(tables)
+    expect(result.rowlessSupplierInvoices).toEqual(['ankomstnr 7'])
+    expect(result.carries.map((c) => `${c.side}:${c.invoice.id}`)).toEqual(['customer:inv-1'])
+    // Legacy mode reads the header total as before and lists nothing.
+    const legacy = await collectPerInvoice(tables, { mode: 'legacy' })
+    expect(legacy.rowlessSupplierInvoices).toEqual([])
+    expect(legacy.payables.map((p) => p.id)).toEqual(['si-1'])
+  })
+
+  it('does not list a supplier invoice with no rows that was paid by period end', async () => {
+    const tables = cashTables({
+      supplier_invoice_payments: [{
+        id: 'sp-1', company_id: 'co-1', supplier_invoice_id: 'si-1', amount: 500,
+        payment_date: '2026-12-01', journal_entry_id: 'je-scash',
+      }],
+    })
+    tables.supplier_invoices![0] = {
+      ...tables.supplier_invoices![0], status: 'paid', remaining_amount: 0, items: [],
+    }
+    const result = await collectPerInvoice(tables)
+    expect(result.rowlessSupplierInvoices).toEqual([])
+    expect(result.carries.filter((c) => c.side === 'supplier')).toEqual([])
+  })
+
   it('skips a credit note and its original that net to nothing, keeps a partial credit', async () => {
     const credit = (amount: number): TRow => ({
       id: 'cn-1', company_id: 'co-1', invoice_number: 'K-1', invoice_date: '2026-12-10',
@@ -2171,6 +2204,17 @@ describe('assessKontantmetodCutoff', () => {
     expect(result.collection.paidBeforePosting).toEqual([expect.objectContaining({ carryEntryId: 'je-carry' })])
     expect(result.complete).toBe(false)
     expect(result.postings.hasAny).toBe(true)
+  })
+
+  // crm#1712: the check used to throw "balanserar inte" on such an invoice,
+  // and readiness reduced that to "kunde inte genomföras: försök igen".
+  it('stays incomplete, without throwing, while a supplier invoice has no rows', async () => {
+    const tables = cashTables()
+    tables.supplier_invoices![0] = { ...tables.supplier_invoices![0], subtotal: 500, vat_amount: 0, items: [] }
+    const result = await assessKontantmetodCutoff(makeTableSupabase(tables) as never, 'co-1', period, null, 'aktiebolag')
+    expect(result.collection.rowlessSupplierInvoices).toEqual(['L-1'])
+    expect(result.plans.map((p) => p.invoiceId)).toEqual(['inv-1'])
+    expect(result.complete).toBe(false)
   })
 
   it('judges a period holding a posted legacy cut-off with the legacy inspector', async () => {

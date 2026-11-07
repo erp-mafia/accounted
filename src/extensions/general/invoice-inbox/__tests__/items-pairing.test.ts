@@ -203,3 +203,27 @@ describe('GET /items: the card number read off a receipt (crm#1534)', () => {
     expect(byId.known.payment_card_known).toBe(false)
   })
 })
+
+describe('GET /items: pages of one supplier invoice', () => {
+  // A paper invoice photographed a page at a time, uploaded separately: the
+  // total is read on one page only (agent feedback 2026-11-06).
+  const PAGE_READ = {
+    documentKind: 'supplier_invoice',
+    supplier: { name: 'Bygg AB' },
+    invoice: { invoiceNumber: 'F1001', invoiceDate: '2026-09-15', currency: 'SEK' },
+    totals: { total: null },
+  }
+  const page = (id: string, overrides: Record<string, unknown> = {}, total: number | null = null) =>
+    makeInvoiceInboxItem({ id, document_id: `doc-${id}`, kind_hint: 'receipt', extracted_data: { ...PAGE_READ, totals: { total } } as never, ...overrides })
+
+  it('names the other page on each open row, and the registered page once it is registered', async () => {
+    const open = await read(list([page('p1'), page('p2', {}, 1250), makeInvoiceInboxItem({ id: 'alone' })]).supabase) as unknown as Record<string, { same_invoice: unknown }>
+    expect(open.p1.same_invoice).toEqual({ item_ids: ['p2'], handled_item_id: null })
+    expect(open.p2.same_invoice).toEqual({ item_ids: ['p1'], handled_item_id: null })
+    expect(open.alone.same_invoice).toBeNull()
+
+    const registered = await read(list([page('p1'), page('p2', { created_supplier_invoice_id: 'si-1' }, 1250)]).supabase) as unknown as Record<string, { same_invoice: unknown }>
+    expect(registered.p1.same_invoice).toEqual({ item_ids: ['p2'], handled_item_id: 'p2' })
+    expect(registered.p2.same_invoice).toBeNull()
+  })
+})

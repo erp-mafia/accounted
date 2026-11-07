@@ -18,7 +18,8 @@ import {
 } from '@/components/import/register-review-fields'
 import type { AnnotatedCustomerRow } from '@/lib/import/customers/types'
 import type { AnnotatedSupplierRow } from '@/lib/import/suppliers/types'
-import type { AnnotatedArticleRow } from '@/lib/import/articles/types'
+import type { AnnotatedArticleRow, DetectedArticleColumns } from '@/lib/import/articles/types'
+import { parseArticleFileInBrowser, type ArticleBrowserParseOutcome } from '@/lib/import/articles/browser-parse'
 
 /**
  * What differs between the register imports (Kunder, Leverantörer,
@@ -62,6 +63,12 @@ export interface RegisterImportConfig<R extends ReviewRow = ReviewRow> {
   possibleDuplicate: { party: 'customer' | 'supplier'; existingId(row: R): string | null } | null
   /** Notices the review step derives from the rows, and the parser notices those replace. */
   rowNotices?(rows: R[], parserNotices: ImportNotice[]): ImportNotice[]
+  /**
+   * Registers whose file is read in the browser instead of posted to the
+   * parse route (articles: a supplier price list outgrows what the host
+   * carries, crm#1383). Answers the parse route's shape.
+   */
+  parseInBrowser?(file: File, overrides: Record<string, number | null> | undefined): Promise<ArticleBrowserParseOutcome>
 }
 
 const CUSTOMER_COLUMN_SPECS = (customerNumberLabel: string): RegisterColumnSpec<string>[] => [
@@ -273,6 +280,8 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
       executeReviewOnly: ['vat_rate_adjusted'],
       reviewFields: articleFields,
       possibleDuplicate: null,
+      parseInBrowser: (file, overrides) =>
+        parseArticleFileInBrowser(file, overrides as DetectedArticleColumns | undefined),
       columns: [
         {
           key: 'article_number',

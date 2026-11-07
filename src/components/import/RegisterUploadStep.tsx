@@ -10,6 +10,7 @@ import {
   TableCellsIcon,
 } from '@/components/icons'
 import { FileDropzone } from '@/components/ui/file-dropzone'
+import { ARTICLE_BROWSER_MAX_FILE_BYTES } from '@/lib/import/articles/browser-parse'
 
 export type RegisterEntity = 'customers' | 'suppliers' | 'articles'
 
@@ -86,7 +87,10 @@ export default function RegisterUploadStep({
               <Button variant="outline" size="sm" className="mt-2" asChild>
                 <span>Välj fil</span>
               </Button>
-              <p className="text-xs text-muted-foreground mt-3">XLSX, XLS, CSV, ODS: max 10 MB</p>
+              {/* Articles are read in the browser (crm#1383), not posted. */}
+              <p className="text-xs text-muted-foreground mt-3">
+                XLSX, XLS, CSV, ODS: max {entity === 'articles' ? ARTICLE_BROWSER_MAX_FILE_BYTES / 1024 / 1024 : 10} MB
+              </p>
             </>
           )}
         </FileDropzone>

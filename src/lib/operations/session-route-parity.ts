@@ -461,6 +461,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/suppliers/parse': uiOnly(PREVIEW),
   'POST /api/import/suppliers/execute': covered([`POST ${V}/suppliers/bulk-create`]),
   'POST /api/import/articles/parse': uiOnly(PREVIEW),
+  'POST /api/import/articles/match': uiOnly(PREVIEW),
   'POST /api/import/articles/execute': covered(['gnubok_create_article'], 'one article per call, no bulk'),
   'DELETE /api/import/registers/:id/undo': gap('P3', 'undo a dashboard customer/supplier/article import; v1 bulk-create records no run to undo'),
   'POST /api/import/documents/preview': uiOnly(PREVIEW),

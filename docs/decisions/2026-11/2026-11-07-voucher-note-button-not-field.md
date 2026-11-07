@@ -1,0 +1,1 @@
+[2026-11-07] The verifikat note opens from an outline button and a list-row icon, not an always-visible field: notes are on 39% of user-posted manual verifikat, so a field on every form would add weight the other 61% skip (accounted#183).

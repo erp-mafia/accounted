@@ -24,7 +24,7 @@ Webhooks are pinned to the API version active at creation time (the \`api_versio
 API requests pin per-request via the \`Gnubok-Version\` request header (planned for v1.x; today every request gets the current version):
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies \\
+curl https://app.accounted.se/api/v1/companies \\
   -H "Authorization: Bearer ..." \\
   -H "Gnubok-Version: ${API_V1_VERSION}"
 \`\`\`
@@ -83,7 +83,7 @@ Other endpoints **support** but don't require it. Sending one is always safe.
 ### Pattern
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies/{cid}/invoices \\
+curl https://app.accounted.se/api/v1/companies/{cid}/invoices \\
   -H "Authorization: Bearer ..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -183,8 +183,8 @@ Every successful write response carries an \`audit\` block in \`meta\`:
     "api_version": "${API_V1_VERSION}",
     "audit": {
       "voucher_number": "A-2026-042",
-      "voucher_url": "https://app.gnubok.se/bookkeeping/...",
-      "audit_trail_url": "https://app.gnubok.se/audit/req_...",
+      "voucher_url": "https://app.accounted.se/bookkeeping/...",
+      "audit_trail_url": "https://app.accounted.se/audit/req_...",
       "immutable_at": "2026-05-15T12:00:00Z"
     }
   }

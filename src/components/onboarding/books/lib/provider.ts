@@ -43,6 +43,8 @@ export interface ProviderPreview {
   sieStats: ProviderPreviewCounts | null
   sourceYears?: SourceFiscalYear[]
   maxSelectedYears?: number
+  /** Start years the company's completed SIE imports hold (crm#1686). */
+  importedFiscalYears?: number[]
   hasSieData: boolean
 }
 

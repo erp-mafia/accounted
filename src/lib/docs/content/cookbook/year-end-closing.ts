@@ -17,7 +17,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 Before you run year-end, verify the period's continuity. BFL 5 kap (with the SIE4 invariant) requires that a period's opening balance (IB) equals the previous period's closing balance (UB) on every BAS 1xxx, 2xxx account. The check takes the fiscal-period UUID and compares that period's IB against its predecessor's UB.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/continuity-check?period_id=$PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/continuity-check?period_id=$PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -54,7 +54,7 @@ When a mismatch exists \`valid\` is \`false\` and each offending account appears
 BFNAR 2013:2 kap 6-7 §§ requires explanations for missing voucher numbers. Run the check:
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -72,7 +72,7 @@ accounted_list_transactions_without_documents
 Attach an already-uploaded document to its verifikation via \`POST /documents/{id}/link\`, passing the target entry in the body:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/documents/$DOCUMENT_ID/link" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/documents/$DOCUMENT_ID/link" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -88,7 +88,7 @@ The year-end run in step 5 locks the fiscal year itself as part of its flow. **D
 The standalone \`POST /fiscal-periods/{id}/lock\` endpoint (synchronous, returns \`200\` with the updated period) is for *interim* locking, e.g. freezing a finished month you are not year-end-closing. It refuses if uncategorised affärstransaktioner remain in the period (\`PERIOD_HAS_UNBOOKED_TRANSACTIONS\`).
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -111,7 +111,7 @@ The engine does **not** compute or post income tax (bolagsskatt), periodiserings
 This is an async operation. It takes no body:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/year-end" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/year-end" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -158,7 +158,7 @@ Poll \`GET /operations/{id}\`; on \`succeeded\` the \`result\` block carries the
 After year-end runs, the new period (\`next_period_id\` from the operation result) has IB on every balance-sheet account matching the prior period's UB. Pass that period's UUID as \`period_id\`:
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/trial-balance?period_id=$NEXT_PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/trial-balance?period_id=$NEXT_PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -173,7 +173,7 @@ Step 5 already locked **and** closed the period — \`executeYearEndClosing\` ru
 \`POST /fiscal-periods/{id}/close\` exists only as a recovery path: it finalizes a year-end that posted its closing entry and locked the period but did not reach the close step (a rare mid-flow failure). It reads **no body** — only the mandatory \`Idempotency-Key\` header:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -186,11 +186,11 @@ For an AB, the annual report (årsredovisning) is filed with Bolagsverket within
 
 \`\`\`bash
 # Resultaträkning
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/income-statement?period_id=$PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/income-statement?period_id=$PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 
 # Balansräkning
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/balance-sheet?period_id=$PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/balance-sheet?period_id=$PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -202,11 +202,11 @@ The tax declaration (INK2 for AB, NE-bilaga for enskild firma) is due in March/M
 
 \`\`\`bash
 # Aktiebolag: INK2
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/ink2?year=2025" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ink2?year=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 
 # Enskild firma: NE-bilaga
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?year=2025" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?year=2025" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 

@@ -114,6 +114,7 @@ import {
   type JournalEntrySourceType,
 } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { ARTICLE_MATCH_MAX_ROWS } from '@/lib/import/articles/types'
 import {
   mentionsPeriodPlaceholder,
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
@@ -4767,6 +4768,15 @@ const ImportedArticleRowSchema = z.object({
 export const ArticleImportExecuteSchema = z.object({
   rows: z.array(ImportedArticleRowSchema).min(1, 'At least one row is required'),
   update_duplicates: z.boolean(),
+})
+
+// The keys a browser-parsed article file is matched on (POST
+// /api/import/articles/match). The client sends a larger file in batches.
+export const ArticleImportMatchSchema = z.object({
+  rows: z
+    .array(z.object({ article_number: z.string().nullable(), name: z.string() }))
+    .min(1, 'At least one row is required')
+    .max(ARTICLE_MATCH_MAX_ROWS),
 })
 
 // Validates the optional column-mapping override posted to the parse route, so

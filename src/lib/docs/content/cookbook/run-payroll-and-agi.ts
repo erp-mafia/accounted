@@ -15,7 +15,7 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 \`POST /salary-runs\` opens an **empty** run in \`draft\` status: it takes only the period + payment metadata (\`period_year\`, \`period_month\`, \`payment_date\`, optional \`voucher_series\` and \`notes\`). Attach each employee with \`POST /salary-runs/{id}/employees\` (body \`{ "employee_id": "..." }\`, plus \`hours_worked\` for hourly staff) before you \`:calculate\`. The attach snapshots the employee's pay config onto the run and seeds the base salary line; one-off components (bonus, deduction, reimbursement) go through \`POST /salary-runs/{id}/employees/{employeeId}/lines\` while the run is still a draft. Line edits never recompute tax: always \`:calculate\` afterwards.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -54,7 +54,7 @@ Totals are 0 until you calculate.
 \`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18-22 years old at the start of 2026**: i.e. employees **born 2003-2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -87,7 +87,7 @@ The \`review\` status is a soft hold: the math is done but no journal entries ar
 \`POST /salary-runs/{id}/approve\` validates and locks the run for payment. \`PATCH\` on a salary run is **draft-only** (\`SALARY_RUN_PATCH_NOT_DRAFT\`): once a run leaves \`draft\` it can no longer be edited, and there is no \`:unapprove\`. Correcting a booked run is done via the forthcoming \`:correct\` verb (storno-then-rebook).
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/approve" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -105,7 +105,7 @@ The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` wi
 After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -124,7 +124,7 @@ This step records the payment event but does NOT post the journal entry yet: tha
 The 2731 series is the **employer-contributions-payable** liability per BAS 2026: not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
@@ -163,7 +163,7 @@ If \`book\` fails partway (e.g. period locked while waiting for the bank-side co
 \`POST /salary-runs/{id}/generate-agi\` produces the arbetsgivardeklaration på individnivå XML for the period. Skatteverket requires AGI monthly; the XML is embedded in the JSON response: no separate file endpoint.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/generate-agi" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`

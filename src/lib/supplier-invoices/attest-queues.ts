@@ -21,6 +21,10 @@
  * open bank payment (isOpenPaymentOrder, the Att betala tab's rule,
  * crm#1243). A payment file keeps the invoice ready: a generated file may
  * never have reached the bank.
+ *
+ * A company without queues still has invoices to pay: loadToPayQueue counts
+ * them with the same ready rule (isToPayWithoutAttest), so the Att göra
+ * Betala row is one definition whether the company attests or not (crm#1631).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -65,6 +69,18 @@ const FULLY_PAID_EPSILON = 0.005
 const PAYABLE: ReadonlySet<string> = new Set(PAYABLE_SUPPLIER_INVOICE_STATUSES)
 
 /**
+ * Ready to pay once nothing waits on attest: the payment file would still pay
+ * it, money is left on it, the supplier does not debit it itself, and
+ * `leftOut` is false (no open bank payment covers it, isOpenPaymentOrder, and
+ * no other row shows it). The one tail of every to-pay count here.
+ */
+function isReadyToPay(invoice: AttestQueueInvoice, leftOut: boolean): boolean {
+  if (invoice.remaining_amount <= FULLY_PAID_EPSILON) return false
+  if (!PAYABLE.has(invoice.status)) return false
+  return !invoice.auto_debit && !leftOut
+}
+
+/**
  * The queue an invoice sits in, or null. `leftOut` = an open bank payment
  * covers it (isOpenPaymentOrder), or the caller leaves it to another row.
  */
@@ -77,9 +93,26 @@ export function attestQueueOf(
   if (!invoiceNeedsAttest(policy, accountingMethod, invoice)) return null
   if (invoice.remaining_amount <= FULLY_PAID_EPSILON) return null
   if (!invoice.approved_at) return canApproveSupplierInvoice(invoice) ? 'waiting' : null
-  if (!PAYABLE.has(invoice.status)) return null
-  if (invoice.auto_debit || leftOut) return null
-  return 'ready'
+  return isReadyToPay(invoice, leftOut) ? 'ready' : null
+}
+
+/**
+ * True when an invoice of a company the attest policy does not govern (no
+ * policy, the policy off, or kontantmetoden) waits to be paid: the ready
+ * rule above, over every invoice whose approval is done or not part of the
+ * method. Kontantmetoden has no approval step, so a registered invoice is
+ * ready as it stands; faktureringsmetoden approves with one click
+ * (approved_at), and an invoice not approved yet is the approval row's
+ * (lib/worklist supplier_invoice_approval), not this one's (crm#1631).
+ */
+export function isToPayWithoutAttest(
+  accountingMethod: string | null | undefined,
+  invoice: AttestQueueInvoice,
+  leftOut: boolean,
+): boolean {
+  if (invoice.is_credit_note) return false
+  if (companyAttestsSupplierInvoices(accountingMethod) && !invoice.approved_at) return false
+  return isReadyToPay(invoice, leftOut)
 }
 
 export const EMPTY_ATTEST_QUEUE: AttestQueue = Object.freeze({ count: 0, next_due: null, overdue: 0 })
@@ -187,8 +220,32 @@ export async function loadAttestQueues(
   const governed = [...policies.keys()].filter((id) => companyAttestsSupplierInvoices(methods.get(id) ?? null))
   if (governed.length === 0) return result
 
+  const invoices = await readOwedInvoices(supabase, governed)
+
+  // The attested ones may already be at the bank.
+  const attestedByCompany = new Map<string, string[]>()
+  for (const invoice of invoices) {
+    if (invoice.approved_at) attestedByCompany.set(invoice.company_id, [...(attestedByCompany.get(invoice.company_id) ?? []), invoice.id])
+  }
+  const inBankPayment = await readInBankPayment(supabase, attestedByCompany)
+  const shownElsewhere = attestedByCompany.size > 0 && options.leaveOut ? await options.leaveOut() : new Set<string>()
+  const leftOut = (invoiceId: string) => inBankPayment.has(invoiceId) || shownElsewhere.has(invoiceId)
+
+  for (const companyId of governed) result.set(companyId, { waiting: EMPTY_ATTEST_QUEUE, ready: EMPTY_ATTEST_QUEUE })
+  for (const invoice of invoices) {
+    const queues = result.get(invoice.company_id)
+    const policy = policies.get(invoice.company_id)
+    if (!queues || !policy) continue
+    const kind = attestQueueOf(policy, methods.get(invoice.company_id) ?? null, invoice, leftOut(invoice.id))
+    if (kind) result.set(invoice.company_id, { ...queues, [kind]: addToQueue(queues[kind], invoice, today) })
+  }
+  return result
+}
+
+/** The invoices still owed at `companyIds` that a payment could pay: payable status, not a credit note. */
+async function readOwedInvoices(supabase: SupabaseClient, companyIds: readonly string[]): Promise<AttestQueueInvoice[]> {
   const invoices: AttestQueueInvoice[] = []
-  for (const part of chunk(governed, IN_CLAUSE_CHUNK)) {
+  for (const part of chunk([...companyIds], IN_CLAUSE_CHUNK)) {
     const rows = await fetchAllRows<AttestQueueInvoice>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
@@ -201,16 +258,20 @@ export async function loadAttestQueues(
     )
     invoices.push(...rows.map((r) => ({ ...r, total: Number(r.total), remaining_amount: Number(r.remaining_amount) })))
   }
+  return invoices
+}
 
-  // The attested ones may already be at the bank: their open payment
-  // orders, read across the companies in as few reads as the URL allows,
-  // each paged (fetchAllRows: PostgREST caps a read at 1000 rows).
-  const attestedByCompany = new Map<string, string[]>()
-  for (const invoice of invoices) {
-    if (invoice.approved_at) attestedByCompany.set(invoice.company_id, [...(attestedByCompany.get(invoice.company_id) ?? []), invoice.id])
-  }
+/**
+ * Which of the invoices have an open bank payment: their open payment
+ * orders, read across the companies in as few reads as the URL allows, each
+ * paged (fetchAllRows: PostgREST caps a read at 1000 rows).
+ */
+async function readInBankPayment(
+  supabase: SupabaseClient,
+  invoiceIdsByCompany: ReadonlyMap<string, readonly string[]>,
+): Promise<Set<string>> {
   const inBankPayment = new Set<string>()
-  for (const read of paymentOrderReadChunks(attestedByCompany)) {
+  for (const read of paymentOrderReadChunks(invoiceIdsByCompany)) {
     const orders = await fetchAllRows<OrderRow>(({ from, to }) =>
       supabase
         .from('payment_orders')
@@ -225,16 +286,55 @@ export async function loadAttestQueues(
       if (isOpenPaymentOrder(order)) inBankPayment.add(order.supplier_invoice_id)
     }
   }
-  const shownElsewhere = attestedByCompany.size > 0 && options.leaveOut ? await options.leaveOut() : new Set<string>()
-  const leftOut = (invoiceId: string) => inBankPayment.has(invoiceId) || shownElsewhere.has(invoiceId)
+  return inBankPayment
+}
 
-  for (const companyId of governed) result.set(companyId, { waiting: EMPTY_ATTEST_QUEUE, ready: EMPTY_ATTEST_QUEUE })
-  for (const invoice of invoices) {
-    const queues = result.get(invoice.company_id)
-    const policy = policies.get(invoice.company_id)
-    if (!queues || !policy) continue
-    const kind = attestQueueOf(policy, methods.get(invoice.company_id) ?? null, invoice, leftOut(invoice.id))
-    if (kind) result.set(invoice.company_id, { ...queues, [kind]: addToQueue(queues[kind], invoice, today) })
+/** What one company's payer has to pay, and whether the attest policy put it there. */
+export interface ToPayQueue {
+  /** True when the attest policy governs the company: the queue is its attested invoices. */
+  attested: boolean
+  queue: AttestQueue
+}
+
+/**
+ * The supplier invoices one company has to pay, as the Att göra Betala row
+ * counts them. Where the attest policy governs the company it is the ready
+ * queue above (attested: true, "Betala N attesterade fakturor"). Everywhere
+ * else, kontantmetoden included, it is every invoice isToPayWithoutAttest
+ * admits (attested: false, "Betala N leverantörsfakturor"): before this, a
+ * company without an attest queue had no row for an unpaid invoice, even
+ * past its due date (crm#1631). Throws on a failed read, like
+ * loadAttestQueues.
+ */
+export async function loadToPayQueue(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string,
+  options: LoadAttestQueuesOptions = {},
+): Promise<ToPayQueue> {
+  const governed = (await loadAttestQueues(supabase, [companyId], today, options)).get(companyId)
+  if (governed) return { attested: true, queue: governed.ready }
+
+  const { data: settings, error } = await supabase
+    .from('company_settings')
+    .select('accounting_method')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw error
+  const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method ?? null
+
+  // Approval done or not part of the method, before the bank and the other rows are asked.
+  const candidates = (await readOwedInvoices(supabase, [companyId])).filter(
+    (invoice) => invoice.company_id === companyId && isToPayWithoutAttest(accountingMethod, invoice, false),
+  )
+  if (candidates.length === 0) return { attested: false, queue: EMPTY_ATTEST_QUEUE }
+  const inBankPayment = await readInBankPayment(supabase, new Map([[companyId, candidates.map((c) => c.id)]]))
+  const shownElsewhere = options.leaveOut ? await options.leaveOut() : new Set<string>()
+
+  let queue = EMPTY_ATTEST_QUEUE
+  for (const invoice of candidates) {
+    const leftOut = inBankPayment.has(invoice.id) || shownElsewhere.has(invoice.id)
+    if (isToPayWithoutAttest(accountingMethod, invoice, leftOut)) queue = addToQueue(queue, invoice, today)
   }
-  return result
+  return { attested: false, queue }
 }

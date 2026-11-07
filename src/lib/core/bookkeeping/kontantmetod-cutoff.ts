@@ -862,6 +862,15 @@ export interface CutoffCollection {
    * was a fordran or skuld on the day and is missing from the cut-off.
    */
   undatedSettlements: string[]
+  /**
+   * Supplier invoices still owed on period end that hold no rows, only a
+   * header: the shape a provider migration imports when the source has no
+   * rows or moms split (Bokio, crm#1712). Their carry would book the whole
+   * 2440 against nothing, so none is built: no cost account or moms is
+   * guessed. Refused by name until the rows are added or the invoice is
+   * linked to the verifikat that booked it. Per invoice only.
+   */
+  rowlessSupplierInvoices: string[]
   /** Per-invoice årsomföring: every unlinked invoice to carry, one verifikat each. */
   carries: KontantmetodCarryDoc[]
   /**
@@ -927,6 +936,23 @@ export function undatedSettlementsNote(count: number, periodEnd: string): string
   return (
     `${subject} betalningsdatum: kontantmetodens bokslutsavgränsning antar ${assumption} ` +
     `samma betalstatus per ${periodEnd} som i dag. Kontrollera mot banken ${check} efter ${periodEnd}.`
+  )
+}
+
+/**
+ * Why `rowlessSupplierInvoices` cannot be carried and what clears them, one
+ * wording for the readiness blocker and the cut-off tool's refusal.
+ */
+export function rowlessSupplierInvoicesMessage(references: readonly string[]): string {
+  const shown = references.slice(0, 10).join(', ')
+  const rest = references.length > 10 ? ` och ${references.length - 10} till` : ''
+  const subject = references.length === 1
+    ? '1 leverantörsfaktura som var obetald vid periodens slut saknar'
+    : `${references.length} leverantörsfakturor som var obetalda vid periodens slut saknar`
+  return (
+    `${subject} fakturarader, så årsomföringen kan inte avgöra kostnadskonto och moms: ${shown}${rest}. ` +
+    'Lägg till raderna på fakturan, eller koppla den till den befintliga verifikation som redan bokförde den, ' +
+    'och kör avgränsningen igen.'
   )
 }
 
@@ -998,6 +1024,7 @@ export function sortedCutoffCollection(collection: CutoffCollection): CutoffColl
     unknownVatTreatment: [...collection.unknownVatTreatment].sort(),
     strayVatOnZeroRate: [...collection.strayVatOnZeroRate].sort(),
     undatedSettlements: [...collection.undatedSettlements].sort(),
+    rowlessSupplierInvoices: [...collection.rowlessSupplierInvoices].sort(),
     carries: [...collection.carries].sort((a, b) =>
       `${a.side}:${a.invoice.id}`.localeCompare(`${b.side}:${b.invoice.id}`),
     ),
@@ -2160,6 +2187,13 @@ export async function collectKontantmetodCutoff(
   const nettedIds = nettedCreditPairs(candidates)
   let carryCandidates = candidates.filter((c) => !nettedIds.has(`${c.side}:${c.id}`))
 
+  // A supplier invoice with no rows names no cost account and no moms, so
+  // its carry cannot be built (see CutoffCollection.rowlessSupplierInvoices).
+  const rowless = (c: CarryCandidate) =>
+    c.side === 'supplier' && ((c.row.items ?? []) as unknown[]).length === 0
+  const rowlessSupplierInvoices = carryCandidates.filter(rowless).map((c) => c.reference)
+  carryCandidates = carryCandidates.filter((c) => !rowless(c))
+
   // Legacy-covered: an earlier legacy cut-off already took these into a
   // momsdeklaration (with a vändning the VAT functions excluded). Withheld
   // unless acknowledged.
@@ -2236,6 +2270,7 @@ export async function collectKontantmetodCutoff(
     unknownVatTreatment,
     strayVatOnZeroRate,
     undatedSettlements,
+    rowlessSupplierInvoices,
     carries,
     rotPartialManual,
     rotPartialManualInvoices,
@@ -2939,6 +2974,7 @@ export async function assessKontantmetodCutoff(
     collection.paidBeforePostingManual.length === 0 &&
     collection.rotPartialManual.length === 0 &&
     collection.legacyCovered.length === 0 &&
+    collection.rowlessSupplierInvoices.length === 0 &&
     collection.unknownVatTreatment.length === 0 &&
     collection.strayVatOnZeroRate.length === 0
 

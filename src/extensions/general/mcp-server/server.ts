@@ -462,6 +462,7 @@ import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { bookingStateOfItem, type InboxItemBookingRow } from '@/lib/documents/inbox-item-claim'
 import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import { sameInvoiceItems, type SameInvoiceItem } from '@/lib/inkorg/same-invoice'
 import { inboxAddressCarriesName, resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
@@ -17389,6 +17390,11 @@ export const tools: McpTool[] = [
       ])
       if (error) throw dbError(error)
 
+      // Pages or copies of one supplier invoice, within this read window
+      // (lib/inkorg/same-invoice.ts): register it once, the rest is underlag.
+      const sameInvoice = sameInvoiceItems((data || []).map((row) =>
+        withDocumentHold(row as unknown as DocumentHoldRow) as unknown as SameInvoiceItem))
+
       const mapped = (data || []).map((item) => {
         const extracted = item.extracted_data as Record<string, unknown> | null
         let vendorName: string | null = null
@@ -17427,6 +17433,7 @@ export const tools: McpTool[] = [
           email_from: item.email_from,
           email_subject: item.email_subject,
           error_message: item.error_message,
+          ...(sameInvoice.has(item.id) ? { same_invoice_as: sameInvoice.get(item.id)!.item_ids } : {}),
         }
       })
 
@@ -23659,6 +23666,13 @@ export const tools: McpTool[] = [
         throw new Error(
           `${collection.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning: ` +
           `${collection.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta dem och försök igen.`,
+        )
+      }
+      if (collection.rowlessSupplierInvoices.length > 0) {
+        throw codedRefusal(
+          'KONTANTMETOD_CUTOFF_ROWLESS_SUPPLIER_INVOICE',
+          `${collection.rowlessSupplierInvoices.length} supplier invoice(s) unpaid at the year end have no rows, so no cost account or moms can be carried: ` +
+            `${collection.rowlessSupplierInvoices.slice(0, 10).join(', ')}. Add their rows, or link the verifikat that already booked them, then stage again.`,
         )
       }
       // Disclosed wherever the cut-off is shown, including when the

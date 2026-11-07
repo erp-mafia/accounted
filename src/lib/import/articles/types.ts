@@ -1,6 +1,13 @@
 import type { ArticleType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
 
+/**
+ * Keys per POST /api/import/articles/match. A key is about 50 bytes of JSON
+ * and a match about 120, so a full batch stays under the hosted 4.5 MB body
+ * limit both ways; the browser sends a larger file in batches of this size.
+ */
+export const ARTICLE_MATCH_MAX_ROWS = 20_000
+
 /** Result of auto-detecting columns in an article register file. */
 export interface DetectedArticleColumns {
   name_col: number

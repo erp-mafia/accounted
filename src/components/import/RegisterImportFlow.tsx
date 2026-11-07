@@ -6,11 +6,14 @@ import { useTranslations } from 'next-intl'
 import { SpinnerIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { ARTICLE_BROWSER_MAX_FILE_BYTES } from '@/lib/import/articles/browser-parse'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import type { RegisterImportEntity } from '@/lib/import/register-import-link'
 import {
   columnsToMapping,
+  executeBatches,
   mappingToOverrides,
+  mergeExecuteResults,
   needsColumnMapping,
   registerImportEndpoint,
   registerSteps,
@@ -72,12 +75,22 @@ export default function RegisterImportFlow({
   const [file, setFile] = useState<File | null>(null)
   const [parseResult, setParseResult] = useState<RegisterParseResult | null>(null)
   const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
+  /** Rows written so far, while a file too large for one request goes in batches. */
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
   const needsMapping = parseResult !== null && needsColumnMapping(parseResult.detected_columns)
   const steps = registerSteps(needsMapping)
 
   const parse = useCallback(
     async (selectedFile: File, overrides?: Record<string, number | null>): Promise<{ ok: true; result: RegisterParseResult } | { ok: false; message: string }> => {
+      if (config.parseInBrowser) {
+        const outcome = await config.parseInBrowser(selectedFile, overrides)
+        if (outcome.ok) return { ok: true, result: outcome.result as unknown as RegisterParseResult }
+        if (outcome.reason === 'too_large') {
+          return { ok: false, message: t('file_too_large', { max: `${ARTICLE_BROWSER_MAX_FILE_BYTES / 1024 / 1024} MB` }) }
+        }
+        return { ok: false, message: outcome.message || (overrides ? t('remap_failed') : t('parse_failed')) }
+      }
       const formData = new FormData()
       formData.append('file', selectedFile)
       if (overrides) formData.append('column_overrides', JSON.stringify(overrides))
@@ -94,7 +107,7 @@ export default function RegisterImportFlow({
       }
       return { ok: true, result: data.data as RegisterParseResult }
     },
-    [entity, t],
+    [config, entity, t],
   )
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
@@ -149,27 +162,63 @@ export default function RegisterImportFlow({
     }
   }, [file, parse, t])
 
+  /**
+   * One batch to the execute route. A dropped connection or a server error is
+   * tried once more: a batch is safe to send twice, since its rows then
+   * match the articles (customers, suppliers) the first attempt created and
+   * are skipped or updated with the same values, never created twice.
+   */
+  const postBatch = useCallback(
+    async (batch: Record<string, unknown>[], updateDuplicates: boolean): Promise<{ ok: true; result: RegisterResult } | { ok: false; message: string }> => {
+      for (let attempt = 0; ; attempt++) {
+        let res: Response
+        try {
+          res = await fetch(registerImportEndpoint(entity, 'execute'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: batch, update_duplicates: updateDuplicates }),
+          })
+        } catch (err) {
+          if (attempt === 0) continue
+          return { ok: false, message: err instanceof Error ? getErrorMessage(err) : t('execute_failed') }
+        }
+        // A platform error (413, 504) answers in plain text, not JSON.
+        const data = await res.json().catch(() => null)
+        if (res.ok && data?.data) return { ok: true, result: data.data as RegisterResult }
+        if (res.status >= 500 && attempt === 0) continue
+        return {
+          ok: false,
+          message: data?.error?.message_sv || (data?.error ? getErrorMessage(data.error) : '') || t('execute_failed'),
+        }
+      }
+    },
+    [entity, t],
+  )
+
   const handleExecute = useCallback(async (rows: ReviewRow[], updateDuplicates: boolean) => {
     setIsLoading(true)
     setError(null)
 
     try {
-      const res = await fetch(registerImportEndpoint(entity, 'execute'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: rowsForExecute(rows, config.executeReviewOnly),
-          update_duplicates: updateDuplicates,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || t('execute_failed'))
-        return
+      const payload = rowsForExecute(rows, config.executeReviewOnly)
+      const batches = executeBatches(payload)
+      const results: RegisterResult[] = []
+      let done = 0
+      if (batches.length > 1) setProgress({ done, total: payload.length })
+      for (const batch of batches) {
+        const outcome = await postBatch(batch, updateDuplicates)
+        if (!outcome.ok) {
+          // Earlier batches are in: say how far it got and that a new run
+          // picks up from there without creating anything twice.
+          setError(done > 0 ? `${outcome.message} ${t('execute_partial', { done, total: payload.length })}` : outcome.message)
+          return
+        }
+        results.push(outcome.result)
+        done += batch.length
+        if (batches.length > 1) setProgress({ done, total: payload.length })
       }
 
-      const r = data.data as RegisterResult
+      const r = mergeExecuteResults(results)
       setExecuteResult(r)
       setStep('result')
       toast({
@@ -186,8 +235,9 @@ export default function RegisterImportFlow({
       setError(err instanceof Error ? getErrorMessage(err) : t('execute_failed'))
     } finally {
       setIsLoading(false)
+      setProgress(null)
     }
-  }, [config.executeReviewOnly, entity, t, toast])
+  }, [config.executeReviewOnly, entity, postBatch, t, toast])
 
   const handleNewImport = () => {
     setStep('upload')
@@ -236,6 +286,7 @@ export default function RegisterImportFlow({
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
+          progress={progress}
           error={error}
         />
       )}

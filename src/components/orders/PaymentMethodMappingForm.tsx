@@ -12,8 +12,13 @@ import {
   SettingsInput,
 } from '@/components/settings/SettingsRows'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
-import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
-import type { WebshopPaymentMethodPolicy, WebshopPlatform, WebshopStoreSettings } from '@/types'
+import { DEFAULT_PAYMENT_ACCOUNT, paymentMethodsSeen } from '@/lib/webshop-orders/booking-lines'
+import type {
+  WebshopOrder,
+  WebshopPaymentMethodPolicy,
+  WebshopPlatform,
+  WebshopStoreSettings,
+} from '@/types'
 
 interface PaymentMethodMappingFormProps {
   platform: WebshopPlatform
@@ -55,22 +60,10 @@ export function PaymentMethodMappingForm({
       `/api/webshop-orders?platform=${platform}&store_scope=${encodeURIComponent(storeScope)}&limit=200`,
     )
       .then((r) => (r.ok ? r.json() : { data: [] }))
-      .then(
-        (json: {
-          data: Array<{ payment_method: string | null; payment_method_title: string | null }>
-        }) => {
-          if (cancelled) return
-          const seen = new Map<string, string | null>()
-          for (const row of json.data ?? []) {
-            if (row.payment_method && !seen.has(row.payment_method)) {
-              seen.set(row.payment_method, row.payment_method_title)
-            }
-          }
-          setDerivedMethods(
-            Array.from(seen.entries()).map(([method, title]) => ({ method, title })),
-          )
-        },
-      )
+      .then((json: { data: WebshopOrder[] }) => {
+        if (cancelled) return
+        setDerivedMethods(paymentMethodsSeen(json.data ?? []))
+      })
       .catch(() => undefined)
     return () => {
       cancelled = true

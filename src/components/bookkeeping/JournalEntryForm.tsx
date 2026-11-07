@@ -18,6 +18,7 @@ import {
   BackspaceIcon,
   BookmarkIcon,
   CalendarIcon,
+  ChatBubbleLeftIcon,
   ExclamationTriangleIcon,
   HashtagIcon,
   LockClosedIcon,
@@ -1614,14 +1615,13 @@ export default function JournalEntryForm({
               </SelectContent>
             </Select>
           </div>
+          {/* A real control, not muted text: users missed the quiet
+              "+ Intern anteckning" link (accounted#183). */}
           {!embedded && !showNotes && !notes && (
-            <button
-              type="button"
-              onClick={() => setShowNotes(true)}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-              + {t('internal_note')}
-            </button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowNotes(true)}>
+              <ChatBubbleLeftIcon className="mr-2 h-4 w-4" />
+              {t('add_internal_note')}
+            </Button>
           )}
           {dimensionsEnabled && !showDims && (
             <button
@@ -1690,6 +1690,7 @@ export default function JournalEntryForm({
               className="mt-1 resize-none"
               rows={2}
               maxLength={2000}
+              autoFocus={showNotes}
             />
           </div>
         )}

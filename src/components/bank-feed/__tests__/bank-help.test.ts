@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BANK_GUIDE_URLS, bankGuideUrl, bankHelpKey, bankPrerequisiteKey, bankSelectable, bankSigningApproach, isTwoStepBank, orderBanks, resolveBankByName } from '../bank-help'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 
 describe('bankPrerequisiteKey', () => {
   it('keeps the prerequisites that prevent a failed BankID visible and leaves Svea’s process note to the help', () => {
@@ -21,6 +23,15 @@ describe('bankGuideUrl', () => {
     expect(bankGuideUrl({ bic: 'SWEDSESS' }, films)).toBe('https://example.se/swedbank-1-min')
     expect(bankGuideUrl({ bic: 'swedsess' }, films)).toBe('https://example.se/swedbank-1-min')
     expect(bankGuideUrl({ bic: 'ESSESESS' }, films)).toBeNull()
+  })
+
+  it('names the link a guide and promises no films, which most of those pages lack (crm#1686)', () => {
+    for (const messages of [sv, en]) {
+      const label = messages.bank_connect.guide_link
+      expect(label).toContain('{bank}')
+      expect(label).toMatch(/guide/i)
+      expect(label).not.toMatch(/film|video/i)
+    }
   })
 })
 

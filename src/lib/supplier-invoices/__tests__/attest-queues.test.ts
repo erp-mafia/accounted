@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { NO_ATTEST_POLICY, type AttestPolicy } from '../attest-policy'
-import { attestQueueOf, loadAttestQueues, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
+import { attestQueueOf, isToPayWithoutAttest, loadAttestQueues, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
 
 const POLICY: AttestPolicy = { ...NO_ATTEST_POLICY, enabled: true, attesters: ['kim'] }
 
@@ -53,6 +53,24 @@ describe('attestQueueOf', () => {
     expect(attestQueueOf(POLICY, 'accrual', partPaid, false)).toBe('ready')
     // Unattested and part paid cannot be attested any more (canApproveSupplierInvoice): it waits on nobody.
     expect(attestQueueOf(POLICY, 'accrual', { ...partPaid, approved_at: null }, false)).toBeNull()
+  })
+})
+
+describe('isToPayWithoutAttest (crm#1631)', () => {
+  it('takes a registered invoice as it stands on kontantmetoden, and only an approved one on faktureringsmetoden', () => {
+    expect(isToPayWithoutAttest('cash', invoice(), false)).toBe(true)
+    expect(isToPayWithoutAttest('cash', invoice({ status: 'overdue' }), false)).toBe(true)
+    expect(isToPayWithoutAttest('accrual', invoice(), false)).toBe(false)
+    expect(isToPayWithoutAttest(null, invoice({ status: 'overdue' }), false)).toBe(false)
+    expect(isToPayWithoutAttest('accrual', invoice({ status: 'approved', approved_at: '2026-10-31T10:00:00Z' }), false)).toBe(true)
+  })
+
+  it('shares the ready rule with the attest queue: nothing left, not payable, debited by the supplier, at the bank, a credit note', () => {
+    expect(isToPayWithoutAttest('cash', invoice({ remaining_amount: 0.004 }), false)).toBe(false)
+    expect(isToPayWithoutAttest('cash', invoice({ status: 'paid' }), false)).toBe(false)
+    expect(isToPayWithoutAttest('cash', invoice({ auto_debit: true }), false)).toBe(false)
+    expect(isToPayWithoutAttest('cash', invoice(), true)).toBe(false)
+    expect(isToPayWithoutAttest('cash', invoice({ is_credit_note: true }), false)).toBe(false)
   })
 })
 

@@ -13,6 +13,7 @@ import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { readableName } from './names'
 import type { InboxPairing } from './pairs'
+import type { SameInvoice } from './same-invoice'
 
 /**
  * Whether the item's own underlag reached the verifikat that books its
@@ -61,6 +62,11 @@ export interface InkorgItem {
    * computed when the list was read; null for none.
    */
   pairing?: InboxPairing | null
+  /**
+   * The other items read as this same supplier invoice (./same-invoice.ts):
+   * its other pages or a copy. Computed when the list was read; null for none.
+   */
+  same_invoice?: SameInvoice | null
   /** The provider retry of an empty reading, derived when the list was read; null for none. */
   reading_retry?: ReadingRetry | null
   /**

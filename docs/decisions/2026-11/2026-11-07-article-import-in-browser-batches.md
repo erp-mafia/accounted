@@ -1,0 +1,1 @@
+[2026-11-07] The article import reads its file in the browser and writes it in request-sized batches, each its own undoable run, instead of a storage upload plus background job like SIE: a price list needs no job table or bucket, and every batch is safe to resend (crm#1383).

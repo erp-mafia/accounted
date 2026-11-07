@@ -124,7 +124,7 @@ describe('getWorklistCounts', () => {
     // One payment run, however many invoices: the total moves by one.
     expect(counted.total).toBe(base + 1)
     vi.mocked(countAttestedToPayDue).mockClear()
-    const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0 }) })
+    const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0, attested: true }) })
     expect(given.counts.attested_to_pay).toBe(2)
     expect(countAttestedToPayDue).not.toHaveBeenCalled()
   })

@@ -1174,11 +1174,18 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // Check if the company already has completed SIE imports (from manual upload)
-          const { count: sieImportCount } = await supabase
+          // and which fiscal years they hold: a history longer than one run
+          // continues from the oldest year not imported yet (crm#1686).
+          const { data: completedImports, count: sieImportCount } = await supabase
             .from('sie_imports')
-            .select('*', { count: 'exact', head: true })
+            .select('fiscal_year_start', { count: 'exact' })
             .eq('company_id', companyId)
             .eq('status', 'completed')
+          const importedFiscalYears = [...new Set(
+            ((completedImports ?? []) as { fiscal_year_start: string | null }[])
+              .map((row) => (row.fiscal_year_start ? Number(row.fiscal_year_start.slice(0, 4)) : NaN))
+              .filter((year) => Number.isInteger(year)),
+          )].sort((a, b) => a - b)
 
           return NextResponse.json({
             consent: {
@@ -1195,6 +1202,9 @@ export const arcimMigrationExtension: Extension = {
             // The picker enforces the same cap as /sie-data, read from here
             // rather than duplicated in the client.
             maxSelectedYears: MAX_SELECTED_FISCAL_YEARS,
+            // Start years of the completed imports, oldest first: the picker
+            // skips them when the source has more years than one run takes.
+            importedFiscalYears,
             assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
@@ -1251,8 +1261,8 @@ export const arcimMigrationExtension: Extension = {
           // constant). Rejected before any provider call.
           if (requestedYears.length > MAX_SELECTED_FISCAL_YEARS) {
             return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
-              messageSv: `Högst ${MAX_SELECTED_FISCAL_YEARS} räkenskapsår kan hämtas per körning. Välj färre år; äldre år kan hämtas i en ny körning.`,
-              messageEn: `At most ${MAX_SELECTED_FISCAL_YEARS} fiscal years can be fetched per run. Select fewer years; older years can be fetched in a second run.`,
+              messageSv: `Högst ${MAX_SELECTED_FISCAL_YEARS} räkenskapsår kan hämtas per körning. Välj färre år; resten kan hämtas i en ny körning, äldst först.`,
+              messageEn: `At most ${MAX_SELECTED_FISCAL_YEARS} fiscal years can be fetched per run. Select fewer years; fetch the rest in a second run, oldest first.`,
               details: { field: 'years', reason: 'too_many', max: MAX_SELECTED_FISCAL_YEARS, requested: requestedYears.length },
             })
           }
