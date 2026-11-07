@@ -1,3 +1,5 @@
+import { openMigrationPayload } from '@/lib/providers/migration-payload'
+import type { SalesInvoiceDto } from '@/lib/providers/dto'
 import { after, NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
@@ -67,11 +69,25 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
   if (!job) return null
   const [{ data: counts, error: countError }, { data: issues, error: issueError }] = await Promise.all([
     ctx.supabase.rpc('provider_migration_counts', { p_job_id: job.id }),
-    ctx.supabase.from('migration_job_chunks').select('id,resource,source_id,error_code')
+    ctx.supabase.from('migration_job_chunks').select('id,resource,source_id,error_code,payload,target_id,error_phase')
       .eq('company_id', ctx.companyId).eq('job_id', job.id).eq('state', 'needs_attention').order('id').limit(100),
   ])
   if (countError || issueError) throw new Error(countError?.message ?? issueError?.message)
-  return { job: job as ProviderMigrationJob, counts: counts ?? [], issues: issues ?? [] }
+  const described = (Array.isArray(issues) ? issues : []).map(row => {
+    let invoice: Partial<SalesInvoiceDto> | null = null
+    if (row.payload && ['salesInvoices', 'supplierInvoices'].includes(row.resource)) {
+      // Labels are best effort; a damaged snapshot must not hide the job's issue.
+      try { invoice = openMigrationPayload<Partial<SalesInvoiceDto>>(row.payload) } catch { /* Keep the source ID as fallback. */ }
+    }
+    const amount = invoice?.legalMonetaryTotal?.payableAmount?.value
+    return { id: row.id, resource: row.resource, source_id: row.source_id, error_code: row.error_code,
+      targetId: row.target_id ?? null, errorPhase: row.error_phase ?? null,
+      ...(typeof invoice?.invoiceNumber === 'string' && invoice.invoiceNumber ? { invoiceNumber: invoice.invoiceNumber } : {}),
+      ...(typeof invoice?.issueDate === 'string' && invoice.issueDate ? { invoiceDate: invoice.issueDate } : {}),
+      ...(typeof amount === 'number' && Number.isFinite(amount) ? { amount } : {}),
+      ...(typeof invoice?.currencyCode === 'string' ? { currency: invoice.currencyCode } : {}) }
+  })
+  return { job: job as ProviderMigrationJob, counts: counts ?? [], issues: described }
 }
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [

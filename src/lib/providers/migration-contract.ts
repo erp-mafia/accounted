@@ -51,7 +51,9 @@ export interface MigrationResourceCounts {
 export interface ProviderMigrationStatus {
   job: ProviderMigrationJob
   counts: MigrationResourceCounts[]
-  issues: { id: string; resource: MigrationResource; source_id: string; error_code: string }[]
+  issues: { id: string; resource: MigrationResource; source_id: string; error_code: string;
+    invoiceNumber?: string; invoiceDate?: string; amount?: number; currency?: string;
+    targetId?: string | null; errorPhase?: string | null }[]
 }
 
 export function migrationProgress(status: ProviderMigrationStatus): number {
@@ -69,7 +71,9 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'registration' | 'payment' | 'retry' {
+  if (code === 'MIGRATION_REGISTRATION_REVIEW') return 'registration'
+  if (code === 'MIGRATION_PAYMENT_REVIEW') return 'payment'
   if (code === '23502' || code === 'MIGRATION_INVOICE_NUMBER_REQUIRED') return 'missing'
   if (code === 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED') return 'configuration'
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'

@@ -1,5 +1,7 @@
 'use client'
 
+import Link from 'next/link'
+import { formatCurrency } from '@/lib/utils'
 import HistoricalReceivableFindings from './HistoricalReceivableFindings'
 
 
@@ -71,7 +73,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
         <p className="text-sm">{t(needsAttention ? 'ext_arcim_job_attention' : status?.job.state === 'completed' ? 'ext_arcim_historical_finished' : 'ext_arcim_job_running')}</p>
-        <p className="text-sm text-muted-foreground">{t(status?.job.state === 'completed' ? 'ext_arcim_historical_finished_detail' : 'ext_arcim_job_background')}</p>
+        <p className="text-sm text-muted-foreground">{t(needsAttention ? 'ext_arcim_job_paused' : status?.job.state === 'completed' ? 'ext_arcim_historical_finished_detail' : 'ext_arcim_job_background')}</p>
       </div>
       {status && <>
         <p className="text-sm">{t(`ext_arcim_job_phase_${status.job.phase}`)}</p>
@@ -80,7 +82,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
           {status.counts.map(row => <li key={row.resource} className="flex flex-wrap justify-between gap-2">
             <span>{t(`ext_arcim_job_resource_${row.resource}`)}</span>
             <span className="tabular-nums text-muted-foreground">{t('ext_arcim_job_counts', {
-              imported: row.imported, total: row.total, pending: row.pending, failed: row.needs_attention,
+              imported: row.imported, total: row.total, skipped: row.skipped ?? 0, pending: row.pending, failed: row.needs_attention,
             })}</span>
           </li>)}
         </ul>
@@ -92,12 +94,26 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
       {needsAttention && <div className="space-y-3">
         <p className="text-sm text-muted-foreground">{t('ext_arcim_job_attention_detail')}</p>
         {status?.job.error_code && <p className="text-sm">{t(`ext_arcim_job_error_${migrationIssueKind(status.job.error_code)}`)}</p>}
-        {status?.issues.length ? <ul className="space-y-1 text-sm text-muted-foreground">
-          {status.issues.slice(0, 10).map(issue => <li key={issue.id}>
-            {t(`ext_arcim_job_resource_${issue.resource}`)}: {issue.source_id}: {t(`ext_arcim_job_error_${migrationIssueKind(issue.error_code)}`)}
-            {issue.error_code && <span className="ml-2 font-mono text-xs">{issue.error_code}</span>}
-          </li>)}
-        </ul> : null}
+        {status?.issues.length ? <div className="space-y-3">
+          <h3 className="font-medium">{t('ext_arcim_job_issues_title')}</h3>
+          <ul className="space-y-4 text-sm">
+            {status.issues.slice(0, 10).map(issue => <li key={issue.id} className="space-y-2 border-b border-border pb-4">
+              <p className="font-medium" data-ph-mask="">{t(`ext_arcim_job_resource_${issue.resource}`)}: {issue.invoiceNumber || issue.source_id}
+                {issue.invoiceDate && ` · ${issue.invoiceDate}`}
+                {issue.amount !== undefined && ` · ${formatCurrency(issue.amount, issue.currency)}`}
+              </p>
+              <p>{t(`ext_arcim_job_error_${migrationIssueKind(issue.error_code)}`)}</p>
+              {issue.targetId && ['salesInvoices', 'supplierInvoices'].includes(issue.resource) &&
+                <Link className="underline" href={`/${issue.resource === 'salesInvoices' ? 'invoices' : 'supplier-invoices'}/${issue.targetId}`}>
+                  {t('ext_arcim_job_open_invoice')}
+                </Link>}
+              <details className="text-xs text-muted-foreground">
+                <summary>{t('ext_arcim_job_technical_reference')}</summary>
+                <p className="break-all font-mono">{issue.source_id} · {issue.error_code}</p>
+              </details>
+            </li>)}
+          </ul>
+        </div> : null}
         {status?.job.error_code === 'PROVIDER_AUTH_EXPIRED' && <Button variant="outline" onClick={() => onReconnect(status)}>{t('ext_arcim_job_reconnect')}</Button>}
         <Button onClick={retry} disabled={retrying}>{t('ext_arcim_job_retry')}</Button>
       </div>}

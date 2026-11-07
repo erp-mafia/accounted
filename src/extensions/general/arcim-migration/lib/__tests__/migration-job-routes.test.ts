@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtensionContext } from '@/lib/extensions/types'
-import { createMockSupabase } from '@/tests/helpers'
+import { sealMigrationPayload } from '@/lib/providers/migration-payload'
+import { createMockSupabase, createQueuedMockSupabase } from '@/tests/helpers'
 const { after, serviceRpc, worker, ensureIdentity, MismatchError } = vi.hoisted(() => ({
   after: vi.fn(), serviceRpc: vi.fn(), worker: vi.fn(), ensureIdentity: vi.fn(),
   MismatchError: class extends Error {
@@ -178,4 +179,25 @@ describe('migration readiness before SIE work', () => {
   it('rejects unknown resources instead of reporting readiness', async () => {
     expect((await route('POST', '/migration-jobs/preflight')(request({ resources: ['unknown'] }), context().ctx)).status).toBe(400)
   })
+})
+
+
+it('describes issue invoice identity without returning encrypted source snapshots', async () => {
+  const db = createQueuedMockSupabase()
+  const payload = sealMigrationPayload({ invoiceNumber: 'REF-1', issueDate: '2025-06-13', currencyCode: 'SEK',
+    legalMonetaryTotal: { payableAmount: { value: 1462 } } }).payload
+  db.enqueueMany([{ data: { id, company_id: 'company' } }, { data: [] }, { data: [
+    { id: 'issue-1', resource: 'supplierInvoices', source_id: 'source-1', error_code: 'MIGRATION_INVOICE_NUMBER_TAKEN',
+      payload, target_id: null, error_phase: 'import' },
+    { id: 'issue-2', resource: 'supplierInvoices', source_id: 'source-2', error_code: 'MIGRATION_PAYMENT_REVIEW',
+      payload: 'damaged-snapshot', target_id: 'existing-invoice', error_phase: 'reconcile' },
+  ] }])
+  const ctx = { supabase: db.supabase, companyId: 'company', userId: 'user' } as unknown as ExtensionContext
+  const response = await route('GET')(new Request(`http://localhost/jobs?jobId=${id}`), ctx)
+  const body = await response.json()
+  expect(body.data.issues[0]).toMatchObject({ invoiceNumber: 'REF-1', invoiceDate: '2025-06-13', amount: 1462, currency: 'SEK', errorPhase: 'import' })
+  expect(body.data.issues[0]).not.toHaveProperty('payload')
+  expect(body.data.issues[1]).toMatchObject({ source_id: 'source-2', targetId: 'existing-invoice', errorPhase: 'reconcile' })
+  expect(body.data.issues[1]).not.toHaveProperty('invoiceNumber')
+  expect(db.findCalls('migration_job_chunks', 'eq')).toContainEqual(['company_id', 'company'])
 })

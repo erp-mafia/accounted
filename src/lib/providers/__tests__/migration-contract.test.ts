@@ -29,3 +29,8 @@ describe('migrationIssueKind', () => {
 it('distinguishes missing encryption configuration from a retryable error', () => {
   expect(migrationIssueKind('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')).toBe('configuration')
 })
+
+it('distinguishes registration review from payment review on already imported invoices', () => {
+  expect(migrationIssueKind('MIGRATION_REGISTRATION_REVIEW')).toBe('registration')
+  expect(migrationIssueKind('MIGRATION_PAYMENT_REVIEW')).toBe('payment')
+})
