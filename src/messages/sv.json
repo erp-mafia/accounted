@@ -6972,7 +6972,7 @@
     "ext_arcim_historical_finished": "Registerimporten är klar",
     "ext_arcim_historical_finished_detail": "Granska eventuella fynd innan du går vidare till resultatet.",
     "ext_arcim_historical_title": "Fynd: historiska fakturareferenser",
-    "ext_arcim_historical_description": "Importen söker efter betalningar som kan höra till äldre fakturor. Granska varje fynd innan du godkänner en historisk referens. Fakturor som saknas i Bokios API kan bara hittas om det finns en tydlig referens i den importerade bokföringen.",
+    "ext_arcim_historical_description": "Importen söker efter betalningar för ofullständiga fakturor som finns i Bokios API. Granska varje fynd innan du godkänner en historisk referens. Äldre referenser som bara finns i verifikattexter tas inte med.",
     "ext_arcim_historical_loading": "Söker efter möjliga samband…",
     "ext_arcim_historical_error": "Fyndet kunde inte läsas eller godkännas. Läs in listan igen och kontrollera underlaget.",
     "ext_arcim_historical_none": "Inga fler säkra kandidater hittades. Det betyder inte att den äldre fakturahistoriken är komplett.",

@@ -14,9 +14,9 @@ describe('historical receivable discovery', () => {
     expect(find()[0]).toMatchObject({ invoiceNumber: '216', chunkId: 'chunk', paymentEntryId: 'payment', origin: 'incomplete_invoice' })
     expect(JSON.stringify(source)).toBe(before)
   })
-  it('also proposes a ledger-only reference without inventing an invoice date', () => {
-    expect(find(entry, [])[0]).toMatchObject({ origin: 'voucher_only', invoiceDate: null, sourceId: null })
-    expect(find({ ...entry, description: 'Kundbet Example AB (215)' }, [])[0].invoiceNumber).toBe('215')
+  it('ignores ledger-only references when Bokio supplied no matching invoice', () => {
+    expect(find(entry, [])).toEqual([])
+    expect(find({ ...entry, description: 'Kundbet Example AB (215)' }, [])).toEqual([])
   })
   it.each(['Levfakt Example AB (216)', 'Levbet Example AB (216)', 'Makulering: Faktura #216 betalad av Example AB',
     'Faktura #216 betalad av Wrong AB'])('does not conflate descriptions: %s', description => {
@@ -45,7 +45,7 @@ describe('historical receivable discovery', () => {
 })
 
 it('never attaches a similar invoice number to the incomplete source', () => {
-  expect(find({ ...entry, description: 'Faktura #2160 betalad av Example AB' })[0]).toMatchObject({ invoiceNumber: '2160', sourceId: null, origin: 'voucher_only' })
+  expect(find({ ...entry, description: 'Faktura #2160 betalad av Example AB' })).toEqual([])
 })
 
 it('does not claim a source match from non-finite totals or invalid dates', () => {
@@ -60,14 +60,14 @@ it('shows oldest payments first even when internal IDs have the opposite order',
     { ...entry, id: 'a', date: '2022-01-01' },
     { ...entry, id: 'z', date: '2018-10-03' },
     { ...entry, id: 'b', date: '2022-01-01' },
-  ], [], new Set())
+  ], [{ ...source, invoice: { ...source.invoice, issueDate: '2018-01-01' } }], new Set())
   expect(found.map(row => [row.paymentDate, row.paymentEntryId])).toEqual([
     ['2018-10-03', 'z'], ['2022-01-01', 'a'], ['2022-01-01', 'b'],
   ])
 })
 it('keeps chronological page boundaries when the last row of the prior page gets approved', () => {
   const entries = Array.from({ length: 25 }, (_, i) => ({ ...entry, id: String(100 - i), date: `2022-01-${String(i + 1).padStart(2, '0')}` }))
-  const found = findHistoricalReceivableCandidates(entries.reverse(), [], new Set())
+  const found = findHistoricalReceivableCandidates(entries.reverse(), [{ ...source, invoice: { ...source.invoice, issueDate: '2021-01-01' } }], new Set())
   const first = pageHistoricalReceivableFindings(found)
   expect(first.findings).toHaveLength(20)
   expect(first.findings[19].paymentDate).toBe('2022-01-20')

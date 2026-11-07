@@ -6972,7 +6972,7 @@
     "ext_arcim_historical_finished": "Register import is complete",
     "ext_arcim_historical_finished_detail": "Review any findings before proceeding to the results.",
     "ext_arcim_historical_title": "Findings: historical invoice references",
-    "ext_arcim_historical_description": "The import looks for payments that may relate to older invoices. Review each finding before approving a historical reference. Invoices absent from the Bokio API can only be found if the imported ledger contains a clear reference.",
+    "ext_arcim_historical_description": "The import looks for payments for incomplete invoices present in the Bokio API. Review each finding before approving a historical reference. Older references found only in voucher descriptions are excluded.",
     "ext_arcim_historical_loading": "Looking for possible links…",
     "ext_arcim_historical_error": "The finding could not be loaded or approved. Reload the list and check the evidence.",
     "ext_arcim_historical_none": "No more reliable candidates were found. This does not mean the older invoice history is complete.",

@@ -57,23 +57,22 @@ export function findHistoricalReceivableCandidates(
     const matching = sources.filter(source => source.invoice.invoiceNumber?.trim() === ref.number)
     if (matching.length > 1) continue
     const source = matching[0]
-    if (source) {
-      const dto = source.invoice
-      // A normal invoice, credit, unsettled claim or explicit booking reference
-      // must never be silently downgraded to historical payment-only metadata.
-      if (source.imported || !source.reviewable || dto.lines.length || !dto.paymentStatus.paid || dto.status !== 'paid'
-        || dto.invoiceTypeCode || dto.currencyCode !== 'SEK' || dto._raw?.journalEntryRef
-        || normalize(dto.customer.name) !== normalize(ref.customer) || !ISO_DATE_RE.test(dto.issueDate) || dto.issueDate > entry.date
-        || !Number.isFinite(dto.paymentStatus.balance.value) || !Number.isFinite(dto.legalMonetaryTotal.payableAmount.value)
-        || Math.abs(dto.paymentStatus.balance.value) > ORE_TOLERANCE
-        || Math.abs(dto.legalMonetaryTotal.payableAmount.value - amount) > ORE_TOLERANCE) continue
-    }
+    if (!source) continue
+    const dto = source.invoice
+    // A normal invoice, credit, unsettled claim or explicit booking reference
+    // must never be silently downgraded to historical payment-only metadata.
+    if (source.imported || !source.reviewable || dto.lines.length || !dto.paymentStatus.paid || dto.status !== 'paid'
+      || dto.invoiceTypeCode || dto.currencyCode !== 'SEK' || dto._raw?.journalEntryRef
+      || normalize(dto.customer.name) !== normalize(ref.customer) || !ISO_DATE_RE.test(dto.issueDate) || dto.issueDate > entry.date
+      || !Number.isFinite(dto.paymentStatus.balance.value) || !Number.isFinite(dto.legalMonetaryTotal.payableAmount.value)
+      || Math.abs(dto.paymentStatus.balance.value) > ORE_TOLERANCE
+      || Math.abs(dto.legalMonetaryTotal.payableAmount.value - amount) > ORE_TOLERANCE) continue
     findings.push({ paymentEntryId: entry.id, invoiceNumber: ref.number, customer: ref.customer,
       paymentDate: entry.date, paymentAmount: amount, description: entry.description,
       voucher: entry.series && entry.number !== null ? `${entry.series}${entry.number}` : '',
-      invoiceDate: source?.invoice.issueDate ?? null, sourceId: source?.sourceId ?? null,
-      chunkId: source?.chunkId ?? null, payloadHash: source?.payloadHash ?? null,
-      origin: source ? 'incomplete_invoice' : 'voucher_only' })
+      invoiceDate: source.invoice.issueDate, sourceId: source.sourceId,
+      chunkId: source.chunkId, payloadHash: source.payloadHash,
+      origin: 'incomplete_invoice' })
   }
   return findings.sort((a, b) => historicalFindingCursor(a) < historicalFindingCursor(b) ? -1
     : historicalFindingCursor(a) > historicalFindingCursor(b) ? 1 : 0)

@@ -14,14 +14,14 @@ function setup() {
   const ctx = { companyId: 'company', userId: 'user', supabase: db.supabase } as unknown as ExtensionContext
   return { db, ctx }
 }
-function queue(db: ReturnType<typeof createQueuedMockSupabase>, bank = 180000) {
+function queue(db: ReturnType<typeof createQueuedMockSupabase>, bank = 180000, hasSource = true) {
   const payload = sealMigrationPayload({ invoiceNumber: '216', issueDate: '2022-09-30', status: 'paid', currencyCode: 'SEK',
     customer: { name: 'Example AB' }, lines: [], paymentStatus: { paid: true, balance: { value: 0 } },
     legalMonetaryTotal: { payableAmount: { value: 180000 } }, _raw: {} }).payload
   db.enqueueMany([
     { data: { id: job, provider: 'bokio', account_key: 'account', state: 'needs_attention', fiscal_year_scope: null } },
     { data: [{ id: entry, entry_date: '2022-11-07', description: 'Faktura #216 betalad av Example AB', source_voucher_series: 'V', source_voucher_number: 93 }] },
-    { data: [{ id: chunk, source_id: 'source', payload, payload_hash: 'hash', target_id: null, state: 'needs_attention', error_code: 'MIGRATION_SOURCE_LINES_MISSING' }] },
+    { data: hasSource ? [{ id: chunk, source_id: 'source', payload, payload_hash: 'hash', target_id: null, state: 'needs_attention', error_code: 'MIGRATION_SOURCE_LINES_MISSING' }] : [] },
     { data: [] }, { data: [] },
     { data: [{ journal_entry_id: entry, account_number: '1510', debit_amount: 0, credit_amount: 180000 },
       { journal_entry_id: entry, account_number: '1930', debit_amount: bank, credit_amount: 0 }] },
@@ -91,4 +91,17 @@ it('also lists approved history in ascending payment-date order', async () => {
   ])
   const response = await route('GET')(new Request(`http://localhost/review?jobId=${job}`), ctx)
   expect((await response.json()).data.reviewed.map((row: { id: string }) => row.id)).toEqual(['z', 'a'])
+})
+
+
+it('does not offer references missing from the Bokio invoice source', async () => {
+  const { db, ctx } = setup(); queue(db, 180000, false)
+  const response = await route('GET')(new Request(`http://localhost/review?jobId=${job}`), ctx)
+  expect((await response.json()).data.findings).toEqual([])
+  expect(mocks.rpc).not.toHaveBeenCalled()
+})
+it('refuses a stale ledger-only proposal even if an old browser still submits it', async () => {
+  const { db, ctx } = setup(); queue(db, 180000, false)
+  expect((await route('POST')(post(), ctx)).status).toBe(409)
+  expect(mocks.rpc).not.toHaveBeenCalled()
 })
