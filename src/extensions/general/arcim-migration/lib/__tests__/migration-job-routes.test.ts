@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { createMockSupabase, createQueuedMockSupabase } from '@/tests/helpers'
-const { after, serviceRpc, worker, ensureIdentity, MismatchError } = vi.hoisted(() => ({
-  after: vi.fn(), serviceRpc: vi.fn(), worker: vi.fn(), ensureIdentity: vi.fn(),
+const { after, serviceRpc, worker, ensureIdentity, writePermission, MismatchError } = vi.hoisted(() => ({
+  writePermission: vi.fn(), after: vi.fn(), serviceRpc: vi.fn(), worker: vi.fn(), ensureIdentity: vi.fn(),
   MismatchError: class extends Error {
     constructor(public expectedOrgNumber: string, public actualOrgNumber: string, public actualCompanyName: string | null) { super('mismatch') }
   },
 }))
+vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: writePermission }))
 vi.mock('next/server', async importOriginal => ({ ...await importOriginal<typeof import('next/server')>(), after }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => ({ rpc: serviceRpc }) }))
 vi.mock('../migration-job-worker', () => ({
@@ -26,7 +27,7 @@ function context() {
   const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() }
   return { ...mock, log, ctx: { supabase: mock.supabase, companyId: 'company', userId: 'user', log } as unknown as ExtensionContext }
 }
-beforeEach(() => { vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'migration-route-test-key'); vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present') })
+beforeEach(() => { vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'migration-route-test-key'); vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present'); writePermission.mockResolvedValue({ ok: true }) })
 afterEach(() => vi.unstubAllEnvs())
 describe('migration job API', () => {
   it('rejects an unauthenticated request before creating service work', async () => {
@@ -200,4 +201,46 @@ it('describes issue invoice identity without returning encrypted source snapshot
   expect(body.data.issues[1]).toMatchObject({ source_id: 'source-2', targetId: 'existing-invoice', errorPhase: 'reconcile' })
   expect(body.data.issues[1]).not.toHaveProperty('invoiceNumber')
   expect(db.findCalls('migration_job_chunks', 'eq')).toContainEqual(['company_id', 'company'])
+})
+
+
+describe('finish execution while preserving unresolved review', () => {
+  it('derives company and actor from the authenticated context and starts no worker', async () => {
+    serviceRpc.mockResolvedValue({ data: 3, error: null })
+    const response = await route('POST', '/migration-jobs/finish-with-review')(request({ jobId: id }), context().ctx)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ data: { remaining: 3 } })
+    expect(serviceRpc).toHaveBeenCalledWith('finish_provider_migration_with_review', { p_job_id: id, p_company_id: 'company', p_user_id: 'user' })
+    expect(after).not.toHaveBeenCalled()
+  })
+  it('rejects unauthenticated, viewer and client-controlled identities', async () => {
+    const handler = route('POST', '/migration-jobs/finish-with-review')
+    expect((await handler(request({ jobId: id }))).status).toBe(401)
+    expect((await handler(request({ jobId: id, companyId: 'foreign' }), context().ctx)).status).toBe(400)
+    expect((await handler(request({ jobId: id, userId: 'other' }), context().ctx)).status).toBe(400)
+    writePermission.mockResolvedValue({ ok: false, response: new Response('{}', { status: 403 }) })
+    expect((await handler(request({ jobId: id }), context().ctx)).status).toBe(403)
+    expect(serviceRpc).not.toHaveBeenCalled()
+  })
+  it('does not claim completion when the locked database decision is refused', async () => {
+    serviceRpc.mockResolvedValue({ data: null, error: { message: 'MIGRATION_REVIEW_NOT_FINISHABLE' } })
+    expect((await route('POST', '/migration-jobs/finish-with-review')(request({ jobId: id }), context().ctx)).status).toBe(409)
+    expect(after).not.toHaveBeenCalled()
+  })
+  it('permits resuming a completed execution with deferred unresolved records', async () => {
+    const db = createQueuedMockSupabase()
+    db.enqueueMany([{ data: { id, state: 'completed', review_deferred_at: '2026-11-07T20:00:00Z' } }, { data: [] }, { data: [{ id: 'issue', resource: 'supplierInvoices', source_id: 'source', error_code: 'MIGRATION_PAYMENT_REVIEW' }] }])
+    const ctx = { ...context().ctx, supabase: db.supabase } as unknown as ExtensionContext
+    serviceRpc.mockResolvedValue({ data: null, error: null })
+    expect((await route('POST', '/migration-jobs/retry')(request({ jobId: id }), ctx)).status).toBe(202)
+    expect(serviceRpc).toHaveBeenCalledWith('retry_provider_migration_job', { p_job_id: id, p_company_id: 'company', p_user_id: 'user' })
+  })
+  it('loads saved review runs within the current company', async () => {
+    const { ctx, mockResult, supabase } = context()
+    mockResult({ data: [{ id, review_deferred_at: '2026-11-07T20:00:00Z', state: 'completed' }] })
+    const response = await route('GET', '/migration-jobs/reviews')(new Request('http://localhost/api/jobs/reviews'), ctx)
+    expect(response.status).toBe(200)
+    expect(supabase.from).toHaveBeenCalledWith('migration_jobs')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+  })
 })

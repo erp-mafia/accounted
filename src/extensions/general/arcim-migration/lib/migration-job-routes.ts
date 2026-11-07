@@ -1,3 +1,4 @@
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { SalesInvoiceDto } from '@/lib/providers/dto'
 import { after, NextResponse } from 'next/server'
@@ -13,6 +14,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 const CreateSchema = z.object({ consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4) }).strict()
 const PreflightSchema = z.object({ resources: z.array(z.enum(MIGRATION_RESOURCES)).max(4) }).strict()
+const FinishSchema = z.object({ jobId: z.uuid() }).strict()
 const JobSchema = z.object({ jobId: z.uuid(), consentId: z.uuid().optional() }).strict()
 
 function error(code: string, status: number) {
@@ -92,6 +94,32 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [
   {
+    method: 'GET', path: '/migration-jobs/reviews',
+    handler: async (_request, ctx) => {
+      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
+      const { data, error: readError } = await ctx.supabase.from('migration_jobs')
+        .select('id,review_deferred_at,state').eq('company_id', ctx.companyId)
+        .not('review_deferred_at', 'is', null).order('review_deferred_at', { ascending: false }).limit(50)
+      if (readError) return error('MIGRATION_LOOKUP_FAILED', 500)
+      return NextResponse.json({ data: data ?? [] }, { headers: { 'Cache-Control': 'no-store' } })
+    },
+  },
+  {
+    method: 'POST', path: '/migration-jobs/finish-with-review',
+    handler: async (request, ctx) => {
+      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
+      const body = await validateBody(request, FinishSchema)
+      if (!body.success) return body.response
+      const write = await requireWritePermission(ctx.supabase, ctx.userId, { companyId: ctx.companyId })
+      if (!write.ok) return write.response
+      const { data, error: finishError } = await createServiceClientNoCookies().rpc('finish_provider_migration_with_review', {
+        p_job_id: body.data.jobId, p_company_id: ctx.companyId, p_user_id: ctx.userId,
+      })
+      if (finishError) return error('MIGRATION_REVIEW_NOT_FINISHABLE', 409)
+      return NextResponse.json({ data: { remaining: data } })
+    },
+  },
+  {
     method: 'POST', path: '/migration-jobs/preflight',
     handler: async (request, ctx) => {
       if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
@@ -157,7 +185,7 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
       const configurationRefusal = encryptionRefusal(ctx)
       if (configurationRefusal) return configurationRefusal
       if (action === 'retry') {
-        if (!['needs_attention', 'retry_wait'].includes(status.job.state)) return error('MIGRATION_NOT_RETRYABLE', 409)
+        if (!['needs_attention', 'retry_wait'].includes(status.job.state) && !(status.job.state === 'completed' && status.job.review_deferred_at && status.issues.length)) return error('MIGRATION_NOT_RETRYABLE', 409)
         if (body.data.consentId) {
           const refusal = await sourceIdentityRefusal(ctx, body.data.consentId)
           if (refusal) return refusal

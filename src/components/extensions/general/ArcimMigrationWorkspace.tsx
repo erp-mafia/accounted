@@ -275,6 +275,7 @@ import {
 import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
+import ProviderMigrationReviews from './ProviderMigrationReviews'
 import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -3834,6 +3835,7 @@ export default function ArcimMigrationWorkspace({
         void handleReconnect('fortnox', id)
       }} />}
       {step === 'provider' && latestJobId && <Button variant="outline" onClick={() => setProviderJobId(latestJobId)}>{t('ext_arcim_job_latest')}</Button>}
+      {step === 'provider' && <ProviderMigrationReviews onOpen={setProviderJobId} />}
       {/* Step indicator: only during interactive steps */}
       {step !== 'provider' && isInteractiveStep && (
         <StepRail steps={userSteps} currentIndex={currentUserStepIndex} />

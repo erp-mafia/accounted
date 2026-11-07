@@ -5,6 +5,7 @@ export type MigrationJobState = 'queued' | 'running' | 'retry_wait' | 'needs_att
 export type MigrationJobPhase = 'discover' | 'import' | 'link' | 'reconcile' | 'settle' | 'completed'
 
 export interface ProviderMigrationJob {
+  review_deferred_at?: string | null
   id: string
   company_id: string
   user_id: string
