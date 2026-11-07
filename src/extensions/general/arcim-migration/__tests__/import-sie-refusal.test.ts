@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
+vi.mock('@/lib/import/sie-resync', () => ({ planSIEResync: vi.fn().mockResolvedValue(null) }))
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
 vi.mock('@/lib/import/sie-import', () => ({ loadMappings: vi.fn(), generateImportPreview: vi.fn() }))
 vi.mock('@/lib/import/sie-jobs', async (load) => ({
@@ -25,6 +26,7 @@ vi.mock('@/lib/import/sie-job-worker', () => ({ runSIEWorker: vi.fn() }))
 import { arcimMigrationExtension } from '../index'
 import { createClient } from '@/lib/supabase/server'
 import { submitSIEJob, jobDatabaseError } from '@/lib/import/sie-jobs'
+import { planSIEResync } from '@/lib/import/sie-resync'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 const handler = (arcimMigrationExtension.apiRoutes ?? []).find(
@@ -59,6 +61,7 @@ describe('POST /import-sie: job refusals', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     signIn('user-1')
+    vi.mocked(planSIEResync).mockResolvedValue(null)
   })
 
   it('401 without a signed-in user', async () => {
@@ -128,4 +131,22 @@ describe('POST /import-sie: job refusals', () => {
     expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', SIE, MAPPINGS,
       expect.objectContaining({ onExistingPeriod: 'block' }), undefined)
   })
+  it('ignores an older client replacement request and admits only incremental additions', async () => {
+    vi.mocked(planSIEResync).mockResolvedValueOnce({periodId:'period',added:1,unchanged:12,reviewCount:0,reviews:[],metadataChanged:false,newOrdinals:[12]})
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({id:'delta-1',job_state:'queued'} as never)
+    const {status}=await parseJsonResponse(await post({...BODY,options:{...BODY.options,supersedesImportId:'old-import'}}))
+    expect(status).toBe(202)
+    expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(),'company-1','user-1',expect.any(String),expect.any(Array),
+      expect.objectContaining({onExistingPeriod:'incremental',importOpeningBalances:false,importTransactions:true,supersedesImportId:undefined}),undefined)
+  })
+
+  it('returns current reviews without admitting a job when there are no additions', async () => {
+    vi.mocked(planSIEResync).mockResolvedValueOnce({periodId:'closed-period',added:0,unchanged:12,reviewCount:1,
+      reviews:[{sourceId:'A2',kind:'changed',entryId:'posted'}],metadataChanged:false,newOrdinals:[]})
+    const {status,body}=await parseJsonResponse<{result:{resync:{reviewCount:number};journalEntriesCreated:number}}>(await post(BODY))
+    expect(status).toBe(200)
+    expect(body.result).toMatchObject({journalEntriesCreated:0,resync:{unchanged:12,reviewCount:1}})
+    expect(submitSIEJob).not.toHaveBeenCalled()
+  })
+
 })

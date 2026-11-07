@@ -64,11 +64,11 @@ function voucher(ordinal: number, amount = 100) {
       { account_number: '3001', account_id: accounts[1], debit_amount: 0, credit_amount: amount, dimensions: {} },
     ] }
 }
-async function prepare(payloads = [[voucher(0)], [voucher(1)]]) {
+async function prepare(payloads = [[voucher(0)], [voucher(1)]], approvedManifest = manifest) {
   for (const [index, payload] of payloads.entries()) {
     await client.query('SELECT save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)', [company,job,worker,attempt,'vouchers',index,JSON.stringify(payload)])
   }
-  await client.query('SELECT seal_sie_import_preparation($1,$2,$3,$4,$5,$6)', [company,job,worker,attempt,JSON.stringify(manifest),payloads.length])
+  await client.query('SELECT seal_sie_import_preparation($1,$2,$3,$4,$5,$6)', [company,job,worker,attempt,JSON.stringify(approvedManifest),payloads.length])
 }
 async function chunk(index: number) {
   return (await client.query('SELECT import_sie_chunk($1,$2,$3,$4,$5,$6) result', [company,job,worker,attempt,'vouchers',index])).rows[0].result
@@ -80,6 +80,53 @@ async function rejects(query: () => Promise<unknown>, message: RegExp) {
 }
 
 describe('SIE database execution protocol', () => {
+  it('compares a re-sync across execution IDs without touching the original journal', async () => {
+    await finishOne()
+    const original=(await client.query('SELECT id,source_content_hash FROM journal_entries WHERE import_batch_id=$1',[job])).rows[0]
+    const before=(await client.query('SELECT count(*)::int AS n FROM journal_entries WHERE company_id=$1',[company])).rows[0].n
+    const incoming=[{...voucher(0),sieImportId:randomUUID(),sourceOrdinal:91}, {...voucher(1),sourceOrdinal:92}]
+    const compared=(await client.query('SELECT * FROM classify_sie_resync_entries($1,$2,$3)',[company,period,JSON.stringify(incoming)])).rows
+    expect(compared).toEqual([
+      {source_ordinal:91,outcome:'unchanged',entry_id:original.id},
+      {source_ordinal:92,outcome:'new',entry_id:null},
+    ])
+    const changed=(await client.query('SELECT * FROM classify_sie_resync_entries($1,$2,$3)',[company,period,JSON.stringify([voucher(0,200)])])).rows
+    expect(changed[0]).toMatchObject({outcome:'changed',entry_id:original.id})
+    expect((await client.query('SELECT count(*)::int AS n FROM journal_entries WHERE company_id=$1',[company])).rows[0].n).toBe(before)
+    expect((await client.query('SELECT source_content_hash FROM journal_entries WHERE id=$1',[original.id])).rows[0].source_content_hash).toBe(original.source_content_hash)
+  })
+  it('adds only a new voucher to an existing period and preserves the predecessor', async () => {
+    await finishOne()
+    const predecessor=job
+    const original=(await client.query('SELECT id FROM journal_entries WHERE import_batch_id=$1',[job])).rows[0].id
+    const next={...manifest,input:{...manifest.input,options:{onExistingPeriod:'incremental',importOpeningBalances:false,importTransactions:true}}}
+    job=(await client.query("SELECT (start_sie_import_job($1,$2,$3,'delta.se',$4,$5)).id",[company,actor,period,'b'.repeat(64),JSON.stringify(next)])).rows[0].id
+    attempt=(await client.query('SELECT j.* FROM claim_sie_import_job($1,$2) j',[worker,job])).rows[0].job_attempt
+    await prepare([[voucher(1)]],next)
+    await chunk(0)
+    await client.query('SELECT complete_sie_import_job($1,$2,$3,$4,$5,$6)',[company,job,worker,attempt,JSON.stringify({success:true,journalEntriesCreated:1,warnings:[]}),'{}'])
+    expect((await client.query('SELECT job_state FROM sie_imports WHERE id=$1',[predecessor])).rows[0].job_state).toBe('completed')
+    expect((await client.query('SELECT status FROM journal_entries WHERE id=$1',[original])).rows[0].status).toBe('posted')
+    expect((await client.query("SELECT count(*)::int n FROM journal_entries WHERE company_id=$1 AND source_type='import' AND status='posted'",[company])).rows[0].n).toBe(2)
+  })
+  it('refuses incremental opening balances and still fences conflicting source references', async () => {
+    await finishOne()
+    const invalid={...manifest,input:{...manifest.input,options:{onExistingPeriod:'incremental',importOpeningBalances:true,importTransactions:true}}}
+    await rejects(()=>client.query("SELECT start_sie_import_job($1,$2,$3,'bad.se',$4,$5)",[company,actor,period,'c'.repeat(64),JSON.stringify(invalid)]),/Invalid incremental/)
+    const allowed={...manifest,input:{...manifest.input,options:{onExistingPeriod:'incremental',importOpeningBalances:false,importTransactions:true}}}
+    job=(await client.query("SELECT (start_sie_import_job($1,$2,$3,'delta.se',$4,$5)).id",[company,actor,period,'b'.repeat(64),JSON.stringify(allowed)])).rows[0].id
+    attempt=(await client.query('SELECT j.* FROM claim_sie_import_job($1,$2) j',[worker,job])).rows[0].job_attempt
+    await prepare([[voucher(0)]],allowed)
+    await rejects(()=>chunk(0),/conflicting voucher/)
+  })
+  it('does not recreate a locally reversed source voucher as new', async () => {
+    await finishOne()
+    await undoOne()
+    const result=(await client.query('SELECT * FROM classify_sie_resync_entries($1,$2,$3)',[company,period,JSON.stringify([voucher(0)])])).rows
+    expect(result[0].outcome).toBe('changed')
+    expect(result[0].entry_id).toBeTruthy()
+  })
+
   async function nextOpening(start = '2027-01-01') {
     const next = randomUUID(), entry = randomUUID(), equity = randomUUID()
     await client.query('RESET ROLE')
@@ -291,7 +338,7 @@ describe('SIE database execution protocol', () => {
     const ib = (await client.query(`SELECT l.account_number, l.debit_amount::float8 AS debit, l.credit_amount::float8 AS credit, l.dimensions
       FROM journal_entry_lines l JOIN journal_entries e ON e.id = l.journal_entry_id
       WHERE e.company_id = $1 AND e.source_type = 'opening_balance' AND e.status = 'posted'
-      ORDER BY l.account_number, l.dimensions::text`, [company])).rows
+      ORDER BY l.account_number, (l.dimensions='{}'::jsonb) DESC, l.dimensions::text`, [company])).rows
     // #OIB on dimension 1 (kostnadsställe) resets annually: not carried.
     expect(ib).toEqual([
       { account_number: '1470', debit: 3800, credit: 0, dimensions: {} },
@@ -330,7 +377,7 @@ describe('SIE database execution protocol', () => {
     const ib = (await client.query(`SELECT l.account_number, l.debit_amount::float8 AS debit, l.credit_amount::float8 AS credit, l.dimensions
       FROM journal_entry_lines l JOIN journal_entries e ON e.id = l.journal_entry_id
       WHERE e.company_id = $1 AND e.source_type = 'opening_balance' AND e.status = 'posted'
-      ORDER BY l.account_number, l.dimensions::text`, [company])).rows
+      ORDER BY l.account_number, (l.dimensions='{}'::jsonb) DESC, l.dimensions::text`, [company])).rows
     expect(ib).toEqual([
       { account_number: '1470', debit: 5000, credit: 0, dimensions: {} },
       { account_number: '2081', debit: 0, credit: 5000, dimensions: {} },

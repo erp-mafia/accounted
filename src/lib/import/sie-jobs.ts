@@ -19,7 +19,7 @@ export interface SIEJobOptions {
   openingBalanceSeries?: string
   updateAccountNames?: boolean
   markImportedNoDocRequired?: boolean
-  onExistingPeriod?: 'block' | 'replace'
+  onExistingPeriod?: 'block' | 'replace' | 'incremental'
   supersedesImportId?: string
 }
 
@@ -283,7 +283,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   const { data, error } = await supabase.rpc(replacing ? 'replace_sie_import_job' : 'start_sie_import_job', {
     p_company_id: companyId, p_actor: userId, p_period_id: periodId, p_filename: options.filename,
     p_file_hash: sourceHash, p_manifest: { input, file_storage_path: path, originalSource },
-    p_supersedes_import_id: replacing ? options.supersedesImportId : predecessor?.id ?? null,
+    p_supersedes_import_id: replacing ? options.supersedesImportId : options.onExistingPeriod==='incremental' ? null : predecessor?.id ?? null,
   })
   if (error) throw jobDatabaseError(error)
   return data as SIEJob

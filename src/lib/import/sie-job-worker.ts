@@ -1,3 +1,4 @@
+import type { SIEResyncPlan } from './sie-resync'
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
@@ -87,6 +88,8 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
   const differenceAccount = typeof job.manifest.openingBalanceDifferenceAccount === 'string'
     ? job.manifest.openingBalanceDifferenceAccount : '2099'
   if (Math.abs(rounding) > 0.01) warnings.push(`Ingående balanser justerades med ${rounding} SEK på konto ${differenceAccount}.`)
+  const resyncPlan = job.manifest.incrementalPlan as SIEResyncPlan | undefined
+  if (resyncPlan?.reviewCount) warnings.push(`${resyncPlan.reviewCount} ändrade eller saknade källposter behöver granskas. Befintliga verifikat har bevarats.`)
   const notices = legacyNotices(warnings)
   // The IB was booked per account although the file split it per project
   // (issue #3313): the one warning here with a structured sv/en twin.
@@ -111,7 +114,8 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
     // Full mapping is retained in per-chunk receipts. Bound the final RPC.
     voucherNumberMapping:voucherMap.slice(0,200),
   }
-  const result: ImportResult = {success:true,importId:job.id,fiscalPeriodId:job.fiscal_period_id,
+  const result: ImportResult = {...(resyncPlan ? {resync:{added:resyncPlan.added,unchanged:resyncPlan.unchanged,
+    reviewCount:resyncPlan.reviewCount,reviews:resyncPlan.reviews,metadataChanged:resyncPlan.metadataChanged}} : {}),success:true,importId:job.id,fiscalPeriodId:job.fiscal_period_id,
     openingBalanceEntryId:opening[0]?.id ?? null,journalEntriesCreated:entries.length,
     journalEntryIds:entries.slice(0,200).map(e=>e.id),journalEntryIdsTruncated:entries.length > 200,
     errors:[],warnings,notices,accountsCreated,accountsRenamed:renames.length,

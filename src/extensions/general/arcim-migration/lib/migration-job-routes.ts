@@ -12,7 +12,7 @@ import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
-const CreateSchema = z.object({ consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4) }).strict()
+const CreateSchema = z.object({ consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4), years:z.array(z.number().int().min(1900).max(2200)).min(1).max(301).optional() }).strict()
 const PreflightSchema = z.object({ resources: z.array(z.enum(MIGRATION_RESOURCES)).max(4) }).strict()
 const FinishSchema = z.object({ jobId: z.uuid() }).strict()
 const JobSchema = z.object({ jobId: z.uuid(), consentId: z.uuid().optional() }).strict()
@@ -69,12 +69,15 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
   const { data: job, error: readError } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
   if (readError) throw new Error(readError.message)
   if (!job) return null
-  const [{ data: counts, error: countError }, { data: issues, error: issueError }] = await Promise.all([
+  const [{ data: counts, error: countError }, { data: issues, error: issueError }, {data: changes, error: changesError}] = await Promise.all([
     ctx.supabase.rpc('provider_migration_counts', { p_job_id: job.id }),
     ctx.supabase.from('migration_job_chunks').select('id,resource,source_id,error_code,payload,target_id,error_phase')
       .eq('company_id', ctx.companyId).eq('job_id', job.id).eq('state', 'needs_attention').order('id').limit(100),
+    ctx.supabase.from('migration_job_chunks').select('id,resource,source_id,target_id,payload,receipt')
+      .eq('company_id',ctx.companyId).eq('job_id',job.id).not('target_id','is',null)
+      .or('receipt->>imported.eq.true,receipt->>reason.eq.source_changed').order('resource_order').order('id').limit(100),
   ])
-  if (countError || issueError) throw new Error(countError?.message ?? issueError?.message)
+  if (countError || issueError || changesError) throw new Error(countError?.message ?? issueError?.message ?? changesError?.message)
   const described = (Array.isArray(issues) ? issues : []).map(row => {
     let invoice: Partial<SalesInvoiceDto> | null = null
     if (row.payload && ['salesInvoices', 'supplierInvoices'].includes(row.resource)) {
@@ -89,7 +92,16 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
       ...(typeof amount === 'number' && Number.isFinite(amount) ? { amount } : {}),
       ...(typeof invoice?.currencyCode === 'string' ? { currency: invoice.currencyCode } : {}) }
   })
-  return { job: job as ProviderMigrationJob, counts: counts ?? [], issues: described }
+  const describedChanges = (Array.isArray(changes) ? changes : []).map(row => {
+    let label = row.source_id as string
+    if (row.payload) try {
+      const value = openMigrationPayload<{invoiceNumber?:string;party?:{name?:string}}>(row.payload)
+      label = value.invoiceNumber || value.party?.name || label
+    } catch { /* A source ID remains a safe fallback. */ }
+    return {id:row.id,resource:row.resource,source_id:row.source_id,targetId:row.target_id,label,
+      kind:row.receipt?.reason==='source_changed' ? 'changed' as const : 'new' as const}
+  })
+  return { job: job as ProviderMigrationJob, counts: counts ?? [], issues: described, changes:describedChanges }
 }
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [
@@ -149,11 +161,14 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
         .select('fiscal_year_start,fiscal_year_end').eq('company_id', ctx.companyId).eq('status', 'completed')
       if (importsError) return error('MIGRATION_LOOKUP_FAILED', 500)
       if (!imports?.length) return error('PROVIDER_SIE_IMPORT_REQUIRED', 400)
+      if (body.data.years?.some(year => !imports.some(row => Number(row.fiscal_year_start?.slice(0,4))===year))) return error('PROVIDER_SIE_IMPORT_REQUIRED',400)
+      const scope = fiscalYearScopeFromImports(imports,{years:body.data.years})
+      if (body.data.years && !scope) return error('PROVIDER_SIE_IMPORT_REQUIRED',400)
       const refusal = await sourceIdentityRefusal(ctx, body.data.consentId)
       if (refusal) return refusal
       const { data: job, error: createError } = await createServiceClientNoCookies().rpc('create_provider_migration_job', {
         p_company_id: ctx.companyId, p_user_id: ctx.userId, p_consent_id: body.data.consentId,
-        p_resources: resources, p_scope: fiscalYearScopeFromImports(imports),
+        p_resources: resources, p_scope: scope,
       })
       if (createError) {
         logRefusal(ctx, createError, body.data.consentId)

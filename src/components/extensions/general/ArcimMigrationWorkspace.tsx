@@ -1,5 +1,6 @@
 'use client'
 
+import type { SIEResyncSummary } from '@/lib/import/sie-resync'
 import { findReopenableImportPeriod, type ImportFiscalPeriod } from '@/lib/import/reopen-import-period'
 
 import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
@@ -358,7 +359,7 @@ interface PreviewData {
   sourceYears?: SourceFiscalYear[]
   // The most years one run may select: /sie-data refuses more. Read from
   // the server so the picker never drifts from the route.
-  maxSelectedYears?: number
+  maxSelectedYears?: number | null
   assetStats: {
     total: number
     importable: number
@@ -367,6 +368,7 @@ interface PreviewData {
 }
 
 interface SIEFileStatus {
+  delta?: SIEResyncSummary | null
   fiscalYear: number
   fiscalYearStart?: string | null
   fiscalYearEnd?: string | null
@@ -1064,7 +1066,7 @@ function PreviewStep({
   error: string | null
   authExpired: boolean
   licenseMissing: boolean
-  /** Fiscal years (start years) ticked in the picker; default = the three latest. */
+  /** Fiscal years (start years) ticked in the picker; default = all source years. */
   selectedYears: number[]
   onSelectedYearsChange: (years: number[]) => void
   onReconnect: () => void
@@ -1114,11 +1116,7 @@ function PreviewStep({
           if (sieStats) {
             parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
             parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
-            parts.push(
-              sieStats.fiscalYears.length === 1
-                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
-                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
-            )
+            parts.push(t('ext_arcim_preview_sample_year', {years:sieStats.fiscalYears.join(', ')}))
           }
           if (assetCount > 0) {
             parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
@@ -1140,12 +1138,17 @@ function PreviewStep({
 
       {/* ── The year picker (issues #2211, #2238) ──
           Every fiscal year the source has, as hairline rows with a checkbox.
-          The three latest are ticked by default (the limit that used to be a
-          silent cap); older years are the user's own choice and their own
-          wait: each one is another SIE export fetched in the next step. */}
+          All years are ticked by default. The user can narrow the selection;
+          every selected year needs another source export in the next step. */}
       {showYearPicker && (
         <section className="space-y-3">
-          <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => onSelectedYearsChange(sourceYears.map(year => year.year))}>{t('ext_arcim_year_select_all')}</Button>
+              <Button variant="ghost" size="sm" onClick={() => onSelectedYearsChange([])}>{t('ext_arcim_year_select_clear')}</Button>
+            </div>
+          </div>
           <p className="text-[13px] text-muted-foreground">{t('ext_arcim_year_select_lede')}</p>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {sourceYears.map((fy) => {
@@ -1334,8 +1337,6 @@ function OptionsStep({
   }
 
   const fileStatuses = sieData?.fileStatuses ?? []
-  const newFileCount = sieData?.newFileCount ?? 0
-  const replacedFileCount = fileStatuses.filter(fs => fs.previousImport).length
   const yearsToReplace = fileStatuses
     .filter(fs => fs.previousImport)
     .map(fs => fs.fiscalYear)
@@ -1395,15 +1396,7 @@ function OptionsStep({
           <div>
             <OptionRow
               label="Bokföringsdata (SIE)"
-              description={
-                replacedFileCount > 0 && newFileCount > 0
-                  ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
-                  : replacedFileCount > 0
-                    ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
-                    : newFileCount > 0
-                      ? `${newFileCount} ny(a) räkenskapsår att importera`
-                      : 'Kontoplan, ingående balanser och verifikationer'
-              }
+              description={fileStatuses.some(file => file.previousImport) ? t('ext_arcim_resync_description') : t('ext_arcim_resync_first_import')}
               checked={options.importSIEData}
               onChange={() => toggleOption('importSIEData')}
             />
@@ -1412,13 +1405,14 @@ function OptionsStep({
               <div className="space-y-1 pb-3">
                 {fileStatuses.map((fs) => (
                   <p key={fs.fiscalYear} className="text-xs text-muted-foreground tabular-nums">
-                    {fs.previousImport
-                      ? `Räkenskapsår ${fs.fiscalYear}: ersätter tidigare import${
-                          fs.previousImport.importedAt
-                            ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
-                            : ''
-                        }`
-                      : `Räkenskapsår ${fs.fiscalYear}: ny data att importera`}
+                    {fs.delta
+                      ? t('ext_arcim_resync_year', {year:fs.fiscalYear,added:fs.delta.added,unchanged:fs.delta.unchanged,review:fs.delta.reviewCount})
+                      : t('ext_arcim_resync_new_year', {year:fs.fiscalYear})}
+                    {fs.delta?.metadataChanged && <span className="mt-1 block">{t('ext_arcim_resync_metadata_changed')}</span>}
+                    {fs.delta?.reviews.map((review,i) => <span className="mt-1 block" key={`${review.sourceId}:${i}`}>
+                      {review.entryId ? <Link className="underline" href={`/bookkeeping/${review.entryId}`} target="_blank" rel="noopener noreferrer">{review.sourceId}</Link> : review.sourceId}
+                      {' · '}{t(`ext_arcim_resync_review_${review.kind}`)}
+                    </span>)}
                   </p>
                 ))}
               </div>
@@ -1714,8 +1708,9 @@ function untransferredResultSentences(results: ImportResult[]): string[] {
  * the info icon next to the status. Nothing gets a box.
  */
 function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
+  const t = useTranslations('extensions')
   const [showRemarks, setShowRemarks] = useState(false)
-  const status = getFYStatus(result)
+  const status = (result.resync?.reviewCount ?? 0) > 0 ? {tone:'warning' as const,label:t('ext_arcim_resync_needs_review')} : getFYStatus(result)
   const d = result.details
   const fyLabel = d?.fiscalYear
     ? formatFiscalYearLabel(d.fiscalYear.start, d.fiscalYear.end)
@@ -2468,6 +2463,14 @@ function ResultStep({
               <FiscalYearLine key={i} result={r} index={i} />
             ))}
           </div>
+          {sieResults.filter(result => result.resync).map((result,i) => <div key={`resync:${i}`} className="space-y-2 text-sm">
+            <p>{t('ext_arcim_resync_result', {added:result.resync!.added,unchanged:result.resync!.unchanged,review:result.resync!.reviewCount})}</p>
+            {result.resync!.metadataChanged && <p className="text-muted-foreground">{t('ext_arcim_resync_metadata_changed')}</p>}
+            {result.resync!.reviews.map((review,index) => <p key={`${review.sourceId}:${index}`}>
+              {review.entryId ? <Link className="underline" href={`/bookkeeping/${review.entryId}`}>{review.sourceId}</Link> : review.sourceId}
+              {' · '}{t(`ext_arcim_resync_review_${review.kind}`)}
+            </p>)}
+          </div>)}
           {/* Company-level fact, said once: a prior year whose result was
               never transferred to equity skews every later opening balance. */}
           {untransferredResultSentences(sieResults).map((sentence, i) => (
@@ -3458,9 +3461,7 @@ export default function ArcimMigrationWorkspace({
       setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
-      if (data.allImported) {
-        setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
-      }
+      setMigrationOptions(prev => ({ ...prev, importSIEData: !data.allImported }))
 
       // Auto-skip only when the page has nothing to ask: no blank target, no
       // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
@@ -3577,7 +3578,8 @@ export default function ArcimMigrationWorkspace({
         // A confirmed reopen can then retry without replaying earlier years.
         const periods = await refreshFiscalPeriods()
         if (!Array.isArray(periods)) throw new Error('Fiscal period response is incomplete')
-        const blocked = findReopenableImportPeriod(periods, sieData.fileStatuses)
+        const workFiles = sieData.fileStatuses.filter(file => !file.delta || file.delta.added > 0)
+        const blocked = findReopenableImportPeriod(periods, workFiles)
         if (blocked) {
           setBlockedPeriod(blocked)
           throw new UserFacingError(t('ext_arcim_reopen_blocked', { name: blocked.name }))
@@ -3586,12 +3588,12 @@ export default function ArcimMigrationWorkspace({
         setMigrationProgress(10)
         setSieImportResults([])
 
-        // Complete fiscal years chronologically. Replacement is pinned to
-        // the execution reviewed in the preview, including on retries.
+        // Complete fiscal years chronologically; only new source vouchers
+        // are eligible for incremental writes, including on retries.
         const filesToImport = sieData.rawContent.map((content, i) => ({
           content,
           status: sieData.fileStatuses?.[i],
-        })).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
+        })).filter(file => !file.status?.delta || file.status.delta.added > 0 || file.status.delta.reviewCount > 0 || file.status.delta.metadataChanged).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
 
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)
@@ -3618,7 +3620,7 @@ export default function ArcimMigrationWorkspace({
                 importOpeningBalances: true,
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
-                supersedesImportId:filesToImport[i].status?.previousImport?.id,
+                incremental:!!filesToImport[i].status?.previousImport,
               },
             }),
           })
@@ -3632,10 +3634,10 @@ export default function ArcimMigrationWorkspace({
             throw new UserFacingError(`${yearLabel}${formatImportFailure(failure)}`)
           }
 
-          const submitted = await res.json() as {importId:string}
+          const submitted = await res.json() as {importId:string;result?:ImportResult}
           let result: ImportResult
           try {
-            result = await waitForSIEJob(submitted.importId,job => {
+            result = submitted.result ?? await waitForSIEJob(submitted.importId,job => {
               setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
             })
           } catch (err) {
@@ -3705,7 +3707,7 @@ export default function ArcimMigrationWorkspace({
         if (resources.length) {
           const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ consentId, resources }),
+            body: JSON.stringify({ consentId, resources, ...((sieData?.fileStatuses.length ?? selectedYears.length)>0 ? {years:[...new Set(sieData?.fileStatuses.map(file=>file.fiscalYear) ?? selectedYears)]} : {}) }),
           })
           const body = await response.json()
           if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
@@ -3754,7 +3756,7 @@ export default function ArcimMigrationWorkspace({
       migrationInFlightRef.current = false
       setIsStartingMigration(false)
     }
-  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast, t, refreshFiscalPeriods])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, selectedYears, sieData, toast, t, refreshFiscalPeriods])
 
   const handleReopenAndRetry = useCallback(async () => {
     if (!blockedPeriod || reopenInFlightRef.current || migrationInFlightRef.current) return
@@ -3809,7 +3811,7 @@ export default function ArcimMigrationWorkspace({
       const results: MigrationResults = {}
       for (const count of status.counts) {
         results[count.resource] = {
-          total: count.total, imported: count.imported, skipped: count.skipped,
+          total: count.total, imported: count.imported, skipped: count.skipped, unchanged:count.unchanged,
           skipReasons: { failed: count.needs_attention },
           ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
             fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,

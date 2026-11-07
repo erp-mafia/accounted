@@ -103,14 +103,23 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         <ul className="space-y-2 text-sm">
           {status.counts.map(row => <li key={row.resource} className="flex flex-wrap justify-between gap-2">
             <span>{t(`ext_arcim_job_resource_${row.resource}`)}</span>
-            <span className="tabular-nums text-muted-foreground">{t('ext_arcim_job_counts', {
-              imported: row.imported, total: row.total, skipped: row.skipped ?? 0, pending: row.pending, failed: row.needs_attention,
+            <span className="tabular-nums text-muted-foreground">{t((row.unchanged ?? 0) > 0 ? 'ext_arcim_job_delta_counts' : 'ext_arcim_job_counts', {
+              imported: row.imported, unchanged:row.unchanged ?? 0, total: row.total, skipped: row.skipped ?? 0, pending: row.pending, failed: row.needs_attention,
             })}</span>
           </li>)}
         </ul>
       </>}
-      {status && ['needs_attention', 'completed'].includes(status.job.state) &&
+      {status && ['needs_attention', 'completed'].includes(status.job.state) && (!status.counts.some(row => (row.unchanged ?? 0) > 0) || status.issues.some(issue => issue.resource==='salesInvoices')) &&
         <HistoricalReceivableFindings jobId={jobId} onApproved={() => setRefresh(n => n + 1)} />}
+      {!!status?.changes?.length && <section className="space-y-3">
+        <h3 className="font-medium">{t('ext_arcim_job_changes')}</h3>
+        <ul className="space-y-2 text-sm">{status.changes.map(change => <li key={change.id} data-ph-mask="">
+          {t(change.kind==='new' ? 'ext_arcim_job_change_new' : 'ext_arcim_job_change_changed')}{' · '}
+          {['salesInvoices','supplierInvoices'].includes(change.resource)
+            ? <Link className="underline" href={`/${change.resource==='salesInvoices' ? 'invoices' : 'supplier-invoices'}/${change.targetId}`}>{change.label}</Link>
+            : change.label}
+        </li>)}</ul>
+      </section>}
       {status?.job.state === 'completed' && <Button onClick={() => onResultRef.current(status)}>{t('ext_arcim_historical_results')}</Button>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {(needsAttention || deferred) && <div className="space-y-3">

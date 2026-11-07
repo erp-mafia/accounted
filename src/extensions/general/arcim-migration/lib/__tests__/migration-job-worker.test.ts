@@ -62,7 +62,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     const chain = { select: () => chain, eq: (key: string, value: unknown) => {
       filters[key] = value; if (key === 'state') state = value as string; return chain
     },
-      order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
+      in: () => chain, is: () => chain, order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
       then: (resolve: (data: unknown) => void) => resolve({ data: table === 'migration_jobs'
         ? Object.entries(filters).every(([key, value]) => job[key as keyof ProviderMigrationJob] === value) ? { ...job } : null
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
@@ -97,7 +97,7 @@ describe('bounded durable worker', () => {
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
     expect(db.job.state).toBe('running')
     expect(db.rpc.mock.calls.map(([name]) => name)).toEqual([
-      'claim_provider_migration_job', 'save_provider_migration_page',
+      'claim_provider_migration_job', 'read_provider_source_hash_baselines', 'save_provider_migration_page',
     ])
   })
   it.each(['salesInvoices', 'supplierInvoices'] as const)('isolates %s with inconsistent VAT rows before writing an invoice', async resource => {

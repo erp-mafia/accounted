@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
+vi.mock('@/lib/import/sie-resync', () => ({ planSIEResync: vi.fn().mockResolvedValue(null) }))
 vi.mock('@/lib/import/sie-import', () => ({
   loadMappings: vi.fn(),
   generateImportPreview: vi.fn(),

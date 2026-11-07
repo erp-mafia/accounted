@@ -78,7 +78,7 @@ export const SIEJobOptionsSchema = z.object({
   openingBalanceSeries: z.string().trim().min(1).max(16).optional(),
   updateAccountNames: z.boolean().default(true),
   markImportedNoDocRequired: z.boolean().default(false),
-  onExistingPeriod: z.enum(['block','replace']).default('block'),
+  onExistingPeriod: z.enum(['block','replace','incremental']).default('block'),
   supersedesImportId: z.string().uuid().optional(),
 })
 export const SIEJobMappingsSchema = z.array(z.object({

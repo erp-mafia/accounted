@@ -1,3 +1,4 @@
+import { sourceHashBaselines } from './migration-source-hashes'
 import { applyMigrationInvoiceCorrection } from '@/lib/providers/migration-corrections'
 import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -8,7 +9,7 @@ import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-co
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
-import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
+import { sealMigrationPayload, openMigrationPayload, migrationSourceHash } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
@@ -340,6 +341,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
           || !code.startsWith('MIGRATION_')) throw error
         record = { id: c.id, error: code }
       }
+      if (!record.error && !record.skip) record = {...record,source_hash:migrationSourceHash(openMigrationPayload(c.payload))}
       const size = Buffer.byteLength(JSON.stringify(record))
       if (size > MAX_BATCH_BYTES) record = { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
       if (bytes + size > MAX_BATCH_BYTES) await commit()
@@ -459,7 +461,10 @@ export async function runProviderMigrationWorker(options: {
           const page = await withinMigrationDeadline(withExecutionDeadline(deadline - 5000, 'migration-list',
             () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
               connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
-          const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
+          const baselines = await withinMigrationDeadline(sourceHashBaselines(supabase,job,resource,page.items.flatMap(dto=>dto.id ? [dto.id] : [])),deadline-5000)
+          if (baselines.length) await migrationRpc(supabase,job,'initialize_provider_source_hashes',{p_rows:baselines},deadline - 5000)
+          const records = page.items.map((dto, i) => ({ source_hash:migrationSourceHash(dto), source_id: dto.id || `missing:${job.next_page}:${i}`,
+            ...(['salesInvoices','supplierInvoices'].includes(resource) && !invoiceWithinScope(dto as InvoiceDto,job.fiscal_year_scope) ? {skip:'outsideFiscalYears'} : {}),
             ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
               ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
           // Persist bounded segments even when an unpaged upstream returns its

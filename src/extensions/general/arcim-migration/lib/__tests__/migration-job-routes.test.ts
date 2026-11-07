@@ -244,3 +244,21 @@ describe('finish execution while preserving unresolved review', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
   })
 })
+
+it('passes only selected completed fiscal years as exact invoice scope',async()=>{
+  const {ctx,mockResult}=context()
+  mockResult({data:[{fiscal_year_start:'2018-06-28',fiscal_year_end:'2018-12-31'},
+    {fiscal_year_start:'2019-01-01',fiscal_year_end:'2019-12-31'},
+    {fiscal_year_start:'2026-01-01',fiscal_year_end:'2026-12-31'}]})
+  serviceRpc.mockResolvedValue({data:{id},error:null})
+  expect((await route('POST')(request({consentId:id,resources:['supplierInvoices'],years:[2018,2026]}),ctx)).status).toBe(202)
+  expect(serviceRpc).toHaveBeenCalledWith('create_provider_migration_job',expect.objectContaining({p_scope:{
+    start:'2018-06-28',end:'2026-12-31',periods:[{start:'2018-06-28',end:'2018-12-31'},{start:'2026-01-01',end:'2026-12-31'}],
+  }}))
+})
+it('refuses unknown or incomplete year scope before creating work',async()=>{
+  const {ctx,mockResult}=context()
+  mockResult({data:[{fiscal_year_start:'2026-01-01',fiscal_year_end:null}]})
+  for(const years of [[2018],[2026]])expect((await route('POST')(request({consentId:id,resources:['supplierInvoices'],years}),ctx)).status).toBe(400)
+  expect(serviceRpc).not.toHaveBeenCalled()
+})

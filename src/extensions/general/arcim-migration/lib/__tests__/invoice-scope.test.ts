@@ -97,3 +97,18 @@ describe('fiscalYearScopeFromImports', () => {
     ])).toBeNull()
   })
 })
+
+it('preserves noncontiguous selected years without treating the gap as selected',()=>{
+  const rows=[
+    {fiscal_year_start:'2026-01-01',fiscal_year_end:'2026-12-31'},
+    {fiscal_year_start:'2019-01-01',fiscal_year_end:'2019-12-31'},
+    {fiscal_year_start:'2018-06-28',fiscal_year_end:'2018-12-31'},
+    {fiscal_year_start:'2026-01-01',fiscal_year_end:'2026-12-31'},
+  ]
+  const scope=fiscalYearScopeFromImports(rows,{years:[2026,2018]})
+  expect(scope?.periods).toEqual([{start:'2018-06-28',end:'2018-12-31'},{start:'2026-01-01',end:'2026-12-31'}])
+  expect(invoiceWithinScope(dto('2019-07-01',true,'2020-01-01'),scope)).toBe(false)
+  expect(invoiceWithinScope(dto('2019-07-01',true,'2026-01-01'),scope)).toBe(true)
+  expect(invoiceWithinScope(dto('2027-01-01',true,'2027-02-01'),scope)).toBe(false)
+  expect(invoiceWithinScope(dto('2020-07-01',false),scope)).toBe(true)
+})

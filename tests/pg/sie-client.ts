@@ -16,13 +16,16 @@ export function stagingSIEClient(client:PoolClient,source:string):SupabaseClient
     const values:unknown[] = [], where:string[] = [], order:string[] = []
     let offset = 0,limit = 1000,single = false,countOnly = false
     const filter = (column:string,op:string,value:unknown) => {
-      values.push(value);where.push(`${identifier(column)} ${op} $${values.length}`);return builder
+      const parts=column.split(/->>?/);let sql=identifier(parts[0]);
+      for(let i=1;i<parts.length;i++){if(!/^[A-Za-z_][A-Za-z_0-9]*$/.test(parts[i]))throw new Error('Unsafe JSON key');sql+=(i===parts.length-1&&column.includes('->>')?'->>':'->')+`'${parts[i]}'`}
+      values.push(value);where.push(`${sql} ${op} $${values.length}`);return builder
     }
     const builder = {
       select(value:string,options?:{count?:'exact';head?:boolean}) {
         countOnly = options?.count === 'exact' && options.head === true
         columns = value === '*' ? '*' : value.split(',').map(s=>identifier(s.trim())).join(',');return builder},
       eq(column:string,value:unknown) {return filter(column,'=',value)},
+      neq(column:string,value:unknown) {return filter(column,'<>',value)},
       gte(column:string,value:unknown) {return filter(column,'>=',value)},
       lte(column:string,value:unknown) {return filter(column,'<=',value)},
       lt(column:string,value:unknown) {return filter(column,'<',value)},
