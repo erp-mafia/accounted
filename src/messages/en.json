@@ -16516,6 +16516,7 @@
     "status_failed": "Failed",
     "status_outcome_unknown": "No answer from the bank",
     "status_bank_confirming": "Bank confirming",
+    "bank_silent_since": "No answer from the bank since {date}",
     "new_payee_row": "{supplier}: first payment to {payee}",
     "registered_name_bankgiro": "The bankgiro is registered to {name}",
     "registered_name_plusgiro": "The plusgiro is registered to {name}",

@@ -175,6 +175,98 @@ async function readBankItemRows(
   }
 }
 
+/**
+ * The matcher's persisted 1:1 proposal on a bank row. The matcher persists
+ * only the verifikat id; attachEntries fills in its label, date and text
+ * once the page is cut.
+ */
+function persistedBankProposal(tx: BankItemRow): ReconciliationProposal | null {
+  if (!tx.potential_journal_entry_id) return null
+  return {
+    journal_entry_id: tx.potential_journal_entry_id,
+    voucher_number: null,
+    voucher_series: null,
+    entry_date: tx.date,
+    description: '',
+    entry_status: 'posted',
+    confidence: Number(tx.potential_match_confidence ?? 0.75),
+    reasons: [tx.potential_match_method ?? 'föreslagen av matcharen'],
+  }
+}
+
+/**
+ * Rows nothing explains 1:1 are searched for a set of unlinked verifikat
+ * summing exactly to them (#2293) before they are offered as unmatched:
+ * "Bokför" is the door only when the ledger has nothing for the row.
+ */
+function bankCoveringSets(
+  supabase: SupabaseClient,
+  companyId: string,
+  account: CashAccountRow,
+  rows: BankItemRow[],
+): Promise<Map<string, ReconciliationProposal>> {
+  return proposeCoveringSets(
+    supabase,
+    companyId,
+    account,
+    rows
+      .filter((tx) => !tx.is_ignored && !tx.linked && !tx.potential_journal_entry_id)
+      .map((tx) => ({ id: tx.id, date: tx.date, amount: Number(tx.amount), currency: tx.currency })),
+  )
+}
+
+/** A bank row of bucket `proposed` and what it is proposed to link to. */
+export interface ProposedBankRow {
+  transaction_id: string
+  /** The bank row's date. */
+  date: string
+  /** How it was proposed: the matcher's method, or the covering set's kind (exact_sum_same_date). */
+  method: string | null
+  proposal: ReconciliationProposal
+}
+
+/**
+ * Every bank row of one account in bucket `proposed`, with its proposal: the
+ * matcher's persisted 1:1 match, else a covering set of verifikat summing
+ * exactly to the row. The rows and the rule are the listing's own, so
+ * use_proposals links what list_reconciliation_items shows (crm#1668): it
+ * read the persisted column alone and never saw a sum-matched row. null when
+ * the account is not the company's.
+ */
+export async function readProposedBankRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<ProposedBankRow[] | null> {
+  const { data: account, error } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, currency, is_primary')
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .maybeSingle<CashAccountRow>()
+  if (error) throw new Error(`Kunde inte hämta kassakonto: ${error.message}`)
+  if (!account) return null
+  const read = await readBankItemRows(supabase, companyId, account, account.currency ?? 'SEK', {
+    windowFrom: null,
+    windowTo: null,
+    withRows: true,
+    withLedger: false,
+    matchedOffset: 0,
+    matchedLimit: 0,
+  })
+  const coveringSets = await bankCoveringSets(supabase, companyId, account, read.open_rows)
+  const proposed: ProposedBankRow[] = []
+  for (const tx of read.open_rows) {
+    if (tx.is_ignored) continue
+    const persisted = persistedBankProposal(tx)
+    const proposal = persisted ?? coveringSets.get(tx.id) ?? null
+    if (!proposal) continue
+    const method = persisted ? tx.potential_match_method : (proposal.reasons[0] ?? null)
+    proposed.push({ transaction_id: tx.id, date: tx.date, method, proposal })
+  }
+  return proposed
+}
+
 function clampLimit(limit?: number): number {
   if (!limit || !Number.isFinite(limit) || limit < 1) return DEFAULT_ITEMS_LIMIT
   return Math.min(Math.floor(limit), MAX_ITEMS_LIMIT)
@@ -499,23 +591,10 @@ export async function listAccountItems(
       bucket: ReconciliationItemBucket,
       coveringSet: ReconciliationProposal | null,
     ): ReconciliationItem => {
-      // The matcher persists only the verifikat id; attachEntries fills in
-      // its label, date and text once the page is cut. Live proposals
-      // only: a matched row can keep a stale pointer (a multi-row
-      // bulk_book links through the junction and never clears it), and a
-      // real voucher label there would read as the row's link.
-      const persisted: ReconciliationProposal | null = tx.potential_journal_entry_id
-        ? {
-            journal_entry_id: tx.potential_journal_entry_id,
-            voucher_number: null,
-            voucher_series: null,
-            entry_date: tx.date,
-            description: '',
-            entry_status: 'posted',
-            confidence: Number(tx.potential_match_confidence ?? 0.75),
-            reasons: [tx.potential_match_method ?? 'föreslagen av matcharen'],
-          }
-        : null
+      // Live proposals only: a matched row can keep a stale pointer (a
+      // multi-row bulk_book links through the junction and never clears
+      // it), and a real voucher label there would read as the row's link.
+      const persisted = persistedBankProposal(tx)
       if (persisted && bucket === 'proposed') persistedProposals.add(persisted)
       // A row booked from itself is undone by storno of its verifikat,
       // never unlinked, so it offers no unmatch (PH 194).
@@ -543,18 +622,8 @@ export async function listAccountItems(
     }
 
     if (wantsExternal) {
-      // Rows nothing explains 1:1 are searched for a set of unlinked verifikat
-      // summing exactly to them (#2293) before they are offered as unmatched:
-      // "Bokför" is the door only when the ledger has nothing for the row.
       const coveringSets = buckets.some((b) => b === 'proposed' || b === 'unmatched_external')
-        ? await proposeCoveringSets(
-            supabase,
-            companyId,
-            account,
-            read.open_rows
-              .filter((tx) => !tx.is_ignored && !tx.linked && !tx.potential_journal_entry_id)
-              .map((tx) => ({ id: tx.id, date: tx.date, amount: Number(tx.amount), currency: tx.currency })),
-          )
+        ? await bankCoveringSets(supabase, companyId, account, read.open_rows)
         : new Map<string, ReconciliationProposal>()
       for (const tx of read.open_rows) {
         const coveringSet = coveringSets.get(tx.id) ?? null

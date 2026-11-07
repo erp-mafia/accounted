@@ -65,10 +65,9 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
 
       {preview.bolagsskattMissing && (
         <p className="px-1 text-[12.5px] leading-5 text-attn">
-          Året visar vinst men ingen skatt på årets resultat (konto 8910) finns bland de konton
-          som stängs. Gå tillbaka till dispositionssteget och boka bolagsskatten innan du
-          verkställer, om inte skattemässigt resultat är noll (t.ex. genom underskottsavdrag,
-          avsättning till periodiseringsfond eller överavskrivningar).{' '}
+          Året visar vinst och skatten på det som är bokfört blir mer än 0 kr, men ingen
+          bolagsskatt (konto 8910) är bokförd. Bokför bolagsskatten, eller de dispositioner som
+          sänker den, i dispositionssteget. Varningen hindrar inte att du verkställer.{' '}
           <button type="button" onClick={onBack} className="underline underline-offset-2 hover:opacity-80">
             Till dispositionssteget
           </button>

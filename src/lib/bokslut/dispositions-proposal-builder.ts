@@ -17,7 +17,13 @@ import {
 import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
 import { buildDeferredTaxProposal, closingDeficitOf } from './tax-provision/deferred-tax-service'
 import { buildDevelopmentFundProposal } from './development-fund'
-import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
+import type {
+  BolagsskattBasis,
+  CompletedDisposition,
+  DispositionsProposal,
+  ProposedDisposition,
+} from './types'
+import { formatCurrency } from '@/lib/utils'
 import type { EntityType } from '@/types'
 
 /**
@@ -138,6 +144,32 @@ export function bolagsskattDisposition(
       other: state.buildingTaxAdjustment,
     },
   })
+}
+
+/**
+ * Bolagsskatt on the ledger as it stands, no proposal pending: the real-state
+ * tax behind the year-end preview's "no tax booked" line (accounted#180). A
+ * profit year whose tax computes to 0 kr here (underskottsavdrag, ej
+ * skattepliktiga intäkter) has nothing to book.
+ */
+export async function bolagsskattOnLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<number> {
+  const { data: period, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, opening_balance_entry_id')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .single()
+  if (error || !period) throw new Error('Fiscal period not found')
+  const form = await resolveCompanyEntityType(supabase, companyId)
+  const state = await loadDispositionState(supabase, companyId, period, form)
+  return bolagsskattDisposition(state, {
+    pendingResultEffect: 0,
+    schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
+  }).amount
 }
 
 /**
@@ -266,6 +298,23 @@ export async function buildDispositionsProposal(
       ateforingTotal + overavskrivningarResultEffect - (avsattning?.amount ?? 0) - (slp?.amount ?? 0),
     schablonintaktAmount: ateforing.schablonintaktAmount,
   })
+  // The same computation on the ledger as it stands (nothing pending): what
+  // the POST books for bolagsskatt when the user skips every proposal above.
+  const taxBasis: BolagsskattBasis = {
+    bookedResultBeforeTax: state.result.beforeTax,
+    pending: pendingTaxBaseDispositions({
+      ateforing: ateforing.proposals,
+      overavskrivningar: overavskrivningar.proposal,
+      overavskrivningarResultEffect,
+      slp,
+      avsattning,
+    }),
+    taxWithProposals: bolagsskatt.amount,
+    taxAsBooked: bolagsskattDisposition(state, {
+      pendingResultEffect: 0,
+      schablonintaktAmount: ateforing.schablonintaktAmount,
+    }).amount,
+  }
   if (bookedTax > 0) {
     const expectedTax = bolagsskatt.amount
     const matches = bookedTax === expectedTax
@@ -274,14 +323,17 @@ export async function buildDispositionsProposal(
       label: 'Bolagsskatt 20,6 %',
       amount: bookedTax,
       status: matches ? 'booked' : 'needs_correction',
-      warnings: matches
-        ? []
-        : [
-            `Bokförd skatt är ${bookedTax} kr, men aktuellt underlag ger ${expectedTax} kr. Rätta den bokförda skatten innan bokslutet verkställs.`,
-          ],
+      warnings: matches ? [] : [bookedTaxMismatchWarning(bookedTax, taxBasis)],
     })
   } else if (bolagsskatt.amount > 0) {
     proposals.push(bolagsskatt)
+  } else if (taxBasis.taxAsBooked > 0 && taxBasis.pending.length > 0) {
+    // 0 kr only because of proposals the user may still skip. Without this
+    // card, skipping them left no way to book the tax in this step (the
+    // preview never offered it), and booking it by hand tripped the mismatch
+    // above (crm#1688). The POST recomputes it on the ledger after the
+    // dispositions actually booked, and books nothing when that is 0 kr.
+    proposals.push({ ...bolagsskatt, description: zeroedByProposalsDescription(taxBasis) })
   }
 
   // Uppskjuten skatt last, in a K3 year: it is not part of the tax base
@@ -314,6 +366,68 @@ export async function buildDispositionsProposal(
     completedDispositions,
     warnings,
     ...(deferred ? { deferredTax: deferred.snapshot } : {}),
+    taxBasis,
   }
+}
+
+/** The proposed, unposted dispositions that move the bolagsskatt base, in booking order. */
+function pendingTaxBaseDispositions(input: {
+  ateforing: ProposedDisposition[]
+  overavskrivningar: ProposedDisposition | null
+  overavskrivningarResultEffect: number
+  slp: ProposedDisposition | null
+  avsattning: ProposedDisposition | null
+}): BolagsskattBasis['pending'] {
+  const pending: BolagsskattBasis['pending'] = [
+    ...input.ateforing.map((p) => ({ kind: p.kind, label: p.label, resultEffect: p.amount })),
+  ]
+  if (input.overavskrivningar && input.overavskrivningarResultEffect !== 0) {
+    pending.push({
+      kind: 'overavskrivningar',
+      label: input.overavskrivningar.label,
+      resultEffect: input.overavskrivningarResultEffect,
+    })
+  }
+  if (input.slp) pending.push({ kind: input.slp.kind, label: input.slp.label, resultEffect: -input.slp.amount })
+  if (input.avsattning) {
+    pending.push({ kind: input.avsattning.kind, label: input.avsattning.label, resultEffect: -input.avsattning.amount })
+  }
+  return pending.filter((p) => p.resultEffect !== 0)
+}
+
+function kr(amount: number): string {
+  return formatCurrency(amount, 'SEK', { maximumFractionDigits: 0 })
+}
+
+/** "Förändring av överavskrivningar (-10 959 kr)": each pending disposition and its result effect. */
+function pendingList(basis: BolagsskattBasis, only?: (p: BolagsskattBasis['pending'][number]) => boolean): string {
+  return basis.pending
+    .filter((p) => !only || only(p))
+    .map((p) => `${p.label} (${p.resultEffect > 0 ? '+' : '-'}${kr(Math.abs(p.resultEffect))})`)
+    .join(', ')
+}
+
+/**
+ * A booked bolagsskatt that differs from the preview: which proposals the
+ * preview counts on, what the ledger as it stands gives, and the one way to
+ * line them up (the POST refuses to book bolagsskatt on top of a booked one).
+ */
+function bookedTaxMismatchWarning(bookedTax: number, basis: BolagsskattBasis): string {
+  // "Without them" is only a choice when every pending proposal can be skipped:
+  // an återföring may be mandatory (the 6th year), and it raises the tax.
+  const skippable = !basis.pending.some((p) => p.kind === 'periodiseringsfond_ateforing')
+  const basisText = basis.pending.length === 0
+    ? `bokföringen som den ser ut nu ger ${kr(basis.taxWithProposals)}`
+    : `skatten blir ${kr(basis.taxWithProposals)} om de föreslagna dispositionerna bokförs: ${pendingList(basis)}`
+      + (skippable ? `. Utan dem blir skatten ${kr(basis.taxAsBooked)}` : '')
+  return `Bokförd skatt är ${kr(bookedTax)}, men ${basisText}. `
+    + 'Storna verifikationen med den bokförda skatten och bokför skatten här i stället, så räknas den på de dispositioner du väljer.'
+}
+
+/** The 0 kr bolagsskatt card: which proposals zero it and how to pay tax this year instead. */
+function zeroedByProposalsDescription(basis: BolagsskattBasis): string {
+  // Only the ones that lower the tax: an återföring raises it (and may be mandatory).
+  return `0 kr om de föreslagna dispositionerna bokförs: ${pendingList(basis, (p) => p.resultEffect < 0)}. `
+    + 'Vill du hellre betala skatt i år, avmarkera dem (Hoppa över); skatten räknas då om på det som bokförs.'
 }
 

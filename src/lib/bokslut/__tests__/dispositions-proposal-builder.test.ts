@@ -268,3 +268,105 @@ describe('buildDispositionsProposal: the result the declaration reads', () => {
     ])
   })
 })
+
+/**
+ * crm#1688 (accounted#180): a first AB year with a small profit, where the
+ * proposed maximum överavskrivning turns the result into a loss. The preview's
+ * bolagsskatt was 0 kr with nothing on screen saying why, a hand-booked tax
+ * was "wrong" against proposals not booked yet, and skipping the överavskrivning
+ * left no bolagsskatt card to book the tax with.
+ */
+describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', () => {
+  const overavskrivning = {
+    kind: 'overavskrivningar' as const,
+    label: 'Förändring av överavskrivningar',
+    description: 'Överavskrivning enligt 30-regeln.',
+    amount: 10_959,
+    signedAmount: 10_959,
+    lines: [],
+    warnings: [],
+  }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<
+      typeof import('@/lib/bokslut/tax-provision/bolagsskatt-calculator')
+    >('@/lib/bokslut/tax-provision/bolagsskatt-calculator')
+    vi.mocked(calculateBolagsskatt).mockImplementation(actual.calculateBolagsskatt)
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 9_112.36, beforeTax: 9_112.36 })
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [],
+      nonDeductibleExpenses: 480,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 0,
+    })
+    vi.mocked(calculateOveravskrivningar).mockResolvedValue({
+      status: 'ready',
+      proposal: overavskrivning,
+      currentReserve: 0,
+      currentPeriodChange: 0,
+      targetReserve: 10_959,
+      maximumSignedChange: 10_959,
+    })
+  })
+
+  const period = { period_start: '2025-06-24', period_end: '2026-06-30' }
+
+  it('names the proposal that zeroes the tax, and the tax on the ledger as it stands', async () => {
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    expect(result.taxBasis).toEqual({
+      bookedResultBeforeTax: 9_112.36,
+      pending: [{ kind: 'overavskrivningar', label: 'Förändring av överavskrivningar', resultEffect: -10_959 }],
+      taxWithProposals: 0,
+      // floor10(9 112,36 + 480) = 9 590; 9 590 x 20,6 % = 1 975,54.
+      taxAsBooked: 1_976,
+    })
+  })
+
+  it('still offers the bolagsskatt card, so skipping the överavskrivning books the tax', async () => {
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
+    expect(tax?.amount).toBe(0)
+    expect(tax?.description).toContain('Förändring av överavskrivningar (-10 959 kr)')
+    expect(tax?.description).toContain('avmarkera dem')
+    // The tax math is unchanged: the card's computation is the preview's.
+    expect(tax?.computation).toEqual(expect.objectContaining({ taxAmount: 0 }))
+  })
+
+  it('explains a hand-booked tax with both figures and the way out', async () => {
+    vi.mocked(getBookedBolagsskatt).mockResolvedValue(2_431)
+
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    expect(result.proposals.find((p) => p.kind === 'bolagsskatt')).toBeUndefined()
+    const [booked] = result.completedDispositions ?? []
+    expect(booked).toEqual(expect.objectContaining({ kind: 'bolagsskatt', status: 'needs_correction' }))
+    const warning = booked.warnings[0]
+    expect(warning).toContain('Bokförd skatt är 2 431 kr')
+    expect(warning).toContain('skatten blir 0 kr om de föreslagna dispositionerna bokförs')
+    expect(warning).toContain('Förändring av överavskrivningar (-10 959 kr)')
+    expect(warning).toContain('Utan dem blir skatten 1 976 kr')
+    expect(warning).toContain('Storna verifikationen med den bokförda skatten')
+    expect(warning).not.toMatch(/[–—]/)
+  })
+
+  it('offers no bolagsskatt card in a loss year, where nothing carries tax', async () => {
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: -5_000, beforeTax: -5_000 })
+
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    expect(result.proposals.find((p) => p.kind === 'bolagsskatt')).toBeUndefined()
+    expect(result.taxBasis?.taxAsBooked).toBe(0)
+  })
+
+  it('keeps the plain bolagsskatt card when the tax stays above 0 kr', async () => {
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 100_000, beforeTax: 100_000 })
+
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
+    expect(tax?.amount).toBeGreaterThan(0)
+    expect(tax?.description).not.toContain('avmarkera')
+  })
+})

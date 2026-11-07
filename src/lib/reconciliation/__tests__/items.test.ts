@@ -11,7 +11,7 @@ vi.mock('../covering-set-candidate', () => ({
   proposeCoveringSets: (...args: unknown[]) => coveringSetsMock(...args),
 }))
 
-import { listAccountItems } from '../items'
+import { listAccountItems, readProposedBankRows } from '../items'
 
 const COMPANY = 'company-1'
 const CASH = '11111111-1111-4111-8111-111111111111'
@@ -395,6 +395,63 @@ describe('listAccountItems', () => {
     expect(result?.items.map((i) => i.item_id)).toEqual(['t-bg', 't-lonely'])
     // A set proposal already carries its verifikat: no extra read for it.
     expect(findCalls('journal_entries', 'in')).toEqual([])
+  })
+
+  it('reads for use_proposals exactly the rows the listing puts in proposed, sum-matched ones included (crm#1668)', async () => {
+    const setProposal = {
+      journal_entry_id: 'e-57',
+      voucher_number: 57,
+      voucher_series: 'A',
+      entry_date: '2026-07-31',
+      description: 'Inbetalning 063 + Inbetalning 064',
+      entry_status: 'posted' as const,
+      confidence: 0.95,
+      reasons: ['exact_sum_same_date'],
+      vouchers: [
+        { journal_entry_id: 'e-57', voucher_number: 57, voucher_series: 'A', entry_date: '2026-07-31', description: 'Inbetalning 063', amount: 62500 },
+        { journal_entry_id: 'e-58', voucher_number: 58, voucher_series: 'A', entry_date: '2026-07-31', description: 'Inbetalning 064', amount: 25750 },
+      ],
+    }
+    const rows = [
+      tx({ id: 't-bg', date: '2026-07-31', amount: 88250 }),
+      tx({ id: 't-1to1', date: '2026-07-20', amount: -400, potential_journal_entry_id: 'e-9', potential_match_method: 'auto_date_range', potential_match_confidence: 0.85 }),
+      tx({ id: 't-lonely', date: '2026-07-30', amount: -999 }),
+      tx({ id: 't-ign', date: '2026-07-29', amount: 5, is_ignored: true, potential_journal_entry_id: 'e-10', potential_match_confidence: 0.95 }),
+    ]
+    coveringSetsMock.mockResolvedValue(new Map([['t-bg', setProposal]]))
+
+    const listing = createQueuedMockSupabase()
+    listing.enqueue({ data: ACCOUNT })
+    listing.enqueue(read({ open_rows: rows }))
+    const listed = await listAccountItems(listing.supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'proposed' })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: ACCOUNT })
+    enqueue(read({ open_rows: rows }))
+    const proposed = await readProposedBankRows(supabase as never, COMPANY, CASH)
+
+    expect(proposed?.map((r) => r.transaction_id)).toEqual(listed?.items.map((i) => i.item_id))
+    expect(proposed?.map((r) => [r.transaction_id, r.proposal.reasons[0], r.proposal.confidence])).toEqual([
+      ['t-bg', 'exact_sum_same_date', 0.95],
+      ['t-1to1', 'auto_date_range', 0.85],
+    ])
+    expect(proposed?.[0].proposal.vouchers?.map((v) => v.journal_entry_id)).toEqual(['e-57', 'e-58'])
+    // The whole account, every open row: no window, no ledger side, no matched rows.
+    expect(rpcArgs(supabase as never)[0]).toMatchObject({
+      p_cash_account_id: CASH,
+      p_include_unassigned: true,
+      p_date_from: null,
+      p_date_to: null,
+      p_with_rows: true,
+      p_with_ledger: false,
+      p_matched_limit: 0,
+    })
+  })
+
+  it('answers null for an account that is not the company\'s', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    expect(await readProposedBankRows(supabase as never, COMPANY, CASH)).toBeNull()
   })
 
   it('keeps a set-explained row out of unmatched_external and skips the search when neither open bucket is wanted', async () => {

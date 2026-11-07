@@ -38,6 +38,7 @@ import type { Logger } from '@/lib/logger'
 import {
   getPaymentInitiationProvider,
   hasPaymentInitiationProviders,
+  PAYMENT_NOT_FOUND,
   PaymentProviderError,
   type PaymentInitiationProvider,
   type PaymentPartyContext,
@@ -177,12 +178,32 @@ function errorCode(err: unknown): string {
 }
 
 /**
+ * A read the bank refused outright rather than one that failed on the way:
+ * Connect answers 422 for the bank's refusal and the port says
+ * PAYMENT_NOT_FOUND for a payment the bank does not know. Asked the same way,
+ * it is refused on every run. SEB and Länsförsäkringar refuse a status read
+ * without a PSU-IP-Address ("PSU-IP-Address is mandatory for payment",
+ * "Invalid PSU-IP-Address"), and no address is kept for a signing started
+ * before payment_batch_psus.psu_ip_address existed. An unreachable service, a
+ * 5xx, a throttle or a lost answer is not a refusal: the next run asks again.
+ */
+function isRefusedRead(err: unknown): boolean {
+  return (
+    err instanceof PaymentProviderError &&
+    !err.retryable &&
+    !err.outcomeUnknown &&
+    (err.httpStatus === 422 || err.code === PAYMENT_NOT_FOUND)
+  )
+}
+
+/**
  * A signing started more than ABANDONED_SIGNING_MINUTES ago and never seen to
  * finish. The bank is asked first: the person may have signed and closed the
  * dialog before its next poll, and then the payments are accepted, not
- * abandoned. While they still read unsigned, the BankID itself is asked: one
- * that finalised is a signing the bank is still confirming; one that failed
- * gets its payments cancelled at the bank and its orders let go
+ * abandoned. While they still read unsigned, or the bank refuses the read
+ * (isRefusedRead), the BankID itself is asked: one that finalised is a
+ * signing the bank is still confirming; one that failed gets its payments
+ * cancelled at the bank and its orders let go
  * (endFailedSigning); one still open, or unreadable, is left for the next run
  * until UNANSWERED_SIGNING_MINUTES, then its orders go back to 'submitted'.
  */
@@ -222,6 +243,10 @@ async function settleAbandonedSignings(
 
     const statuses: PaymentOrderStatus[] = []
     let unknown = false
+    // A payment whose status the bank refuses to give is not known to be
+    // signed or closed: the BankID decides below, as for one still reading
+    // unsigned. Waiting would not help, the next run is refused the same way.
+    let refused = false
     for (const order of orders) {
       if (order.status !== 'awaiting_signature') {
         statuses.push(order.status)
@@ -238,15 +263,17 @@ async function settleAbandonedSignings(
         if (next !== order.status) result.moved += 1
         statuses.push(next)
       } catch (err) {
-        // Not knowing is not the same as abandoned: leave the batch for the next run.
-        unknown = true
         result.errors += 1
         log.warn('payment status sync failed for one order', { orderId: order.id, code: errorCode(err) })
+        // Not knowing is not the same as abandoned: a read that failed on the
+        // way leaves the batch for the next run.
+        if (isRefusedRead(err)) refused = true
+        else unknown = true
       }
     }
     if (unknown) continue
 
-    if (statuses.length > 0 && statuses.every((s) => s === 'rejected' || s === 'cancelled' || s === 'failed')) {
+    if (!refused && statuses.length > 0 && statuses.every((s) => s === 'rejected' || s === 'cancelled' || s === 'failed')) {
       // The bank closed every payment during the signing: nothing is left to sign again.
       const to: PaymentOrderBatchStatus = statuses.every((s) => s === 'rejected')
         ? 'rejected'
@@ -314,7 +341,10 @@ async function settleAbandonedSignings(
     // UNANSWERED_SIGNING_MINUTES no BankID is still open, but nothing is
     // cancelled on that inference: the orders go back to 'submitted' with
     // their payments at the bank, to sign again or cancel. Only the attempt
-    // that was read is reset: a restart since then has its own id.
+    // that was read is reset: a restart since then has its own id. A payment
+    // the bank refused to read about ends here too: Signera igen and Avbryt
+    // ask the bank with the person present, and a status the bank gives later
+    // still moves the order forward.
     if (!startedBefore(batch, UNANSWERED_SIGNING_MINUTES)) continue
     const { data: reset } = await writer
       .from('payment_order_batches')
@@ -333,7 +363,12 @@ async function settleAbandonedSignings(
       .eq('status', 'awaiting_signature')
     result.abandoned += 1
     await logPaymentOrderEvents(writer, [
-      { company_id: batch.company_id, batch_id: batch.id, event_type: 'error', detail: { code: 'SIGNING_ABANDONED', bank_id: bankId?.state ?? 'unreadable' } },
+      {
+        company_id: batch.company_id,
+        batch_id: batch.id,
+        event_type: 'error',
+        detail: { code: 'SIGNING_ABANDONED', bank_id: bankId?.state ?? 'unreadable', ...(refused ? { payment_status: 'refused' } : {}) },
+      },
     ], log)
   }
 }

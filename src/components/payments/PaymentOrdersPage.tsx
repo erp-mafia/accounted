@@ -32,6 +32,7 @@ import { SignPaymentOrdersDialog } from './SignPaymentOrdersDialog'
 import { RequestSigningLinkButton, RequestSigningLinkDialog, SigningLinkRowNote } from './RequestSigningLinkDialog'
 import { listOpenSigningLinks, openLinksByOrder, type OpenSigningLink } from './signing-links-client'
 import {
+  bankSilentSince,
   canCancel,
   needsResolution,
   PAYMENT_ORDER_SECTIONS,
@@ -510,6 +511,7 @@ export function PaymentOrdersPage() {
                     {rows.map((order) => {
                       const variant = PAYMENT_ORDER_STATUS_BADGE[order.status]
                       const held = needsResolution(order)
+                      const silentSince = bankSilentSince(order)
                       const checked = selected.has(order.id)
                       const canPick = isToSign && canWrite && available && selectable(order)
                       return (
@@ -584,6 +586,9 @@ export function PaymentOrdersPage() {
                               )}
                               {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
                                 <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
+                              )}
+                              {silentSince && (
+                                <span className="ml-2 text-xs text-muted-foreground">{tStatus('bank_silent_since', { date: formatDate(silentSince) })}</span>
                               )}
                             </td>
                           )}

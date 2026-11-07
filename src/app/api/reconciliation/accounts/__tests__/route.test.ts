@@ -174,6 +174,35 @@ describe('dashboard reconciliation routes', () => {
     expect(invalid.status).toBe(400)
   })
 
+  it('links: forwards the page button\'s set_confidence_threshold and rejects one above 1 (crm#1668)', async () => {
+    matchMock.mockResolvedValue({ dry_run: false, considered: 0, applied: [], skipped: [] })
+    const res = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, {
+        method: 'POST',
+        body: { use_proposals: true, set_confidence_threshold: 0.9 },
+      }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(res.status).toBe(200)
+    expect(matchMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      `bank:${CASH}`,
+      { use_proposals: true, set_confidence_threshold: 0.9 },
+      { dryRun: false },
+    )
+
+    const invalid = await linksPOST(
+      createMockRequest(`/api/reconciliation/accounts/bank:${CASH}/links`, {
+        method: 'POST',
+        body: { use_proposals: true, set_confidence_threshold: 1.5 },
+      }),
+      p({ accountKey: `bank:${CASH}` }),
+    )
+    expect(invalid.status).toBe(400)
+  })
+
   describe('links without an outside row: verifikat settled against each other (crm#1074)', () => {
     const SETTLEMENT_ID = '66666666-6666-4666-8666-666666666666'
     const settlement = {

@@ -16516,6 +16516,7 @@
     "status_failed": "Misslyckad",
     "status_outcome_unknown": "Svar saknas från banken",
     "status_bank_confirming": "Banken bekräftar",
+    "bank_silent_since": "Inget svar från banken sedan {date}",
     "new_payee_row": "{supplier}: första betalningen till {payee}",
     "registered_name_bankgiro": "Bankgirot är registrerat på {name}",
     "registered_name_plusgiro": "Plusgirot är registrerat på {name}",

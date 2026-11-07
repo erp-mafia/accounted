@@ -262,6 +262,33 @@ function isNotBookedStatus(status: string | undefined): boolean {
   return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
 }
 
+/** Enable Banking's TransactionStatus values; anything else is logged as OTHER, never verbatim. */
+const TRANSACTION_STATUSES = new Set(['BOOK', 'CNCL', 'HOLD', 'OTHR', 'PDNG', 'RJCT', 'SCHD'])
+
+const present = (value: unknown) => typeof value === 'string' && value.trim() !== ''
+
+/**
+ * Why entries were skipped as not booked, counted by the bank's status and
+ * the dates the entry carried, e.g. { 'BOOK/value_date': 3 } or
+ * { 'PDNG/booking_date+value_date': 1 }. Codes and field names only, never a
+ * value, so the log line can say whether a bank marks its rows pending or
+ * books them without a booking_date (PH 221: every Wamo entry was skipped,
+ * and the archived page is the only other place that says which).
+ */
+export function notBookedReasons(
+  entries: ReadonlyArray<{ status?: string; booking_date?: string | null; value_date?: string | null; transaction_date?: string | null }>,
+): Record<string, number> {
+  const reasons: Record<string, number> = {}
+  for (const entry of entries) {
+    const raw = typeof entry.status === 'string' ? entry.status.trim().toUpperCase() : ''
+    const status = raw === '' ? 'NONE' : TRANSACTION_STATUSES.has(raw) ? raw : 'OTHER'
+    const dates = (['booking_date', 'value_date', 'transaction_date'] as const).filter((field) => present(entry[field]))
+    const key = `${status}/${dates.length > 0 ? dates.join('+') : 'no_dates'}`
+    reasons[key] = (reasons[key] ?? 0) + 1
+  }
+  return reasons
+}
+
 /**
  * Sync transactions for a single bank account via Enable Banking PSD2.
  *
@@ -321,6 +348,8 @@ export async function syncAccountTransactions(
   // pages; the connector reports it, unless the service predates the field).
   let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string; page?: number }>
   let totalFetched: number
+  // The skipped entries by reason (notBookedReasons); the connector reports a count only.
+  let skippedReasons: Record<string, number> | undefined
   let effectiveFromDate: string | undefined
   let historyNarrowed = false
   let truncated = false
@@ -412,13 +441,17 @@ export async function syncAccountTransactions(
     // value_date/today, so it cannot tell booked from pending. A date is not
     // enough on its own either: an entry the bank marks as not booked
     // (NOT_BOOKED_STATUSES) is skipped whatever date it carries.
+    const skippedRaw: typeof fetched.transactions = []
     bookedEntries = bankTransactions.flatMap((tx, i) => {
       const raw = fetched.transactions[i]
       const bookingDate = raw?.booking_date
-      return typeof bookingDate === 'string' && bookingDate.trim() !== '' && !isNotBookedStatus(raw?.status)
-        ? [{ tx, bookingDate: bookingDate.trim(), page: rowPages?.[i] }]
-        : []
+      if (typeof bookingDate === 'string' && bookingDate.trim() !== '' && !isNotBookedStatus(raw?.status)) {
+        return [{ tx, bookingDate: bookingDate.trim(), page: rowPages?.[i] }]
+      }
+      if (raw) skippedRaw.push(raw)
+      return []
     })
+    if (skippedRaw.length > 0) skippedReasons = notBookedReasons(skippedRaw)
   }
 
   // Log the actual date range returned so we can compare against the requested
@@ -452,6 +485,7 @@ export async function syncAccountTransactions(
       accountUid: account.uid,
       skippedPending,
       total: totalFetched,
+      ...(skippedReasons ? { reasons: skippedReasons } : {}),
     })
   }
 

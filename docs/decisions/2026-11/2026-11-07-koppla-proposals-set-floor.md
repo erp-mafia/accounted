@@ -1,0 +1,1 @@
+[2026-11-07] The page's "Koppla N föreslagna" floors sum-matched sets at 0.9 (set_confidence_threshold, dashboard route only), so one click links same-date sums (0.95) but not 7-day window sums (0.85); 1:1 matcher proposals keep linking at any score (founder: "do what is recommended", over merging as is).
