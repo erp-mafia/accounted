@@ -31,6 +31,11 @@ const GROUP_HEADER_REDIRECTS: Record<string, string> = {
   '2640': '2641', // Ingående moms → Debiterad ingående moms
 }
 
+/** Whether source → target is one of the group-header redirects above. */
+export function isGroupHeaderRedirect(sourceAccount: string, targetAccount: string): boolean {
+  return GROUP_HEADER_REDIRECTS[sourceAccount] === targetAccount
+}
+
 /**
  * Check if an account is a source-system internal account that should be
  * excluded from import. BAS accounts use classes 1-8 (1000-8999). Account

@@ -41,7 +41,7 @@ export interface AgentToolError {
  * SALARY_RUN_VACATION_PAY_UNDETERMINED names each employee whose vacation
  * days cannot be priced, with the reason in English (issue #85).
  * VOUCHER_NEEDS_CONFIRMATION carries the booking-time warnings the person
- * must see before a voucher is staged again with acknowledge_warnings
+ * must see before a voucher is staged again with acknowledged_warnings
  * (lib/bookkeeping/voucher-warnings-guard.ts).
  * FORBIDDEN carries why: details.code ROLE_READ_ONLY or CONNECTION_READ_ONLY
  * (readOnlyRefusal, the same on every door), details.required_roles for an

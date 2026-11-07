@@ -9,6 +9,11 @@ import {
   isWooCommerceConfigured,
 } from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
+import {
+  classifyProbeFailure,
+  probeFailureLogFields,
+  probeFailureMessage,
+} from '@/extensions/general/woocommerce/lib/probe-failure'
 import { activateIfComplete } from '@/extensions/general/woocommerce/lib/connect'
 
 const log = createLogger('woocommerce/callback')
@@ -144,9 +149,17 @@ export async function POST(request: Request) {
   } catch (probeError) {
     log.error('credential probe failed during handshake', {
       connectionId: pending.id,
-      message: probeError instanceof Error ? probeError.message : String(probeError),
+      ...probeFailureLogFields(probeError),
     })
-    await markError('Nycklarna kunde inte verifieras mot butiken.')
+    // The panel shows this on the failed row. A cause the merchant can act on
+    // (firewall, redirecting address, dead host) is named; a refused key is
+    // not theirs to fix here, WooCommerce minted it a second ago.
+    const kind = classifyProbeFailure(probeError)
+    await markError(
+      kind === 'credentials' || kind === 'unknown'
+        ? 'Nycklarna kunde inte verifieras mot butiken.'
+        : probeFailureMessage(kind).sv,
+    )
     return NextResponse.json({ error: 'Credential verification failed' }, { status: 502 })
   }
 

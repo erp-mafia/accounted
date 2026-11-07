@@ -5,7 +5,7 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
-import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, validateIBBalance,
+import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, seriesNumberedInOrder, validateIBBalance,
   type SIEPendingNumberGaps } from './sie-import'
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
@@ -36,7 +36,9 @@ interface PreparedSummary {
   chunkCount: number
 }
 interface Snapshot { parsed: ParsedSIEFile; voucherGroups: number; hasCurrentYearIb: boolean; sourceSeries: string[];
-  metadataGroups:number; artifactWarning?:string; openingBalanceVoucherCandidate?:boolean }
+  metadataGroups:number; artifactWarning?:string; openingBalanceVoucherCandidate?:boolean
+  /** seriesNumberedInOrder over the whole file; absent in a snapshot sealed before it, which holds no missing number. */
+  numberedInOrder?:string[] }
 interface PreparationTotals {
   entries:number; movements:Array<[string,number]>; skippedSample:VoucherPreparation['skippedDetails']
   openingEntries?:number
@@ -45,6 +47,8 @@ interface PreparationTotals {
   append?:SIEAppendCounts
   /** Skipped vouchers whose number the next group's first booked voucher of the series holds. */
   pendingNumberGaps?:SIEPendingNumberGaps
+  /** The last source number per series, so a number missing across a group boundary is held too. */
+  lastSourceNumbers?:Record<string,number>
 }
 export interface SIEAppendCounts { present:number; possibleDuplicatesSkipped:number; possibleDuplicatesIncluded:number }
 
@@ -163,7 +167,8 @@ async function snapshotSource(supabase: SupabaseClient, job: SIEJob, deadline: n
     openingBalanceVoucherCandidate:hasOpeningBalanceVoucherCandidate(parsed),
     metadataGroups:metadata.length,artifactWarning:artifactScan.flagged ? formatSieArtifactWarning(artifactScan) : undefined,
     sourceSeries:[...new Set(parsed.vouchers.map(v => v.series || input.options.voucherSeries || 'B'))],
-    hasCurrentYearIb: getEffectiveOpeningBalances(parsed).balances.length > 0 }
+    hasCurrentYearIb: getEffectiveOpeningBalances(parsed).balances.length > 0,
+    numberedInOrder: seriesNumberedInOrder(parsed.vouchers) }
   // Save the effective set as well: the global OB-voucher check must not be
   // repeated on a subset of the file during mapping/finalization.
   const effective = getEffectiveOpeningBalances(parsed)
@@ -318,6 +323,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   // preparation, so nothing of the file is written.
   const append = input.options.onExistingPeriod === 'append'
   const sourceProgram = typeof job.manifest.source_program === 'string' ? job.manifest.source_program : null
+  // An append holds no numbers (sie-append.ts drops numberGap), so it gets no series to hold them in.
+  const numberedInOrder = append ? undefined : new Set(snapshot.numberedInOrder ?? [])
   for (let group = Number(job.manifest.preparedGroups ?? 0); group < snapshot.voucherGroups; group++) {
     if (Date.now() > deadline) return false
     const raw = await readCheckpoint<SIEVoucher[]>(supabase,job,SIE_CHECKPOINTS.snapshot+1+group)
@@ -326,8 +333,12 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     validateSIEReportingMappings({...snapshot.parsed,vouchers},accountMap,input.options)
     const prepared = input.options.importTransactions ? prepareSIEVouchers({...snapshot.parsed,vouchers},
       accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,
-        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds,pendingNumberGaps:totals.pendingNumberGaps}) : null
-    if (prepared) totals.pendingNumberGaps = prepared.pendingNumberGaps
+        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds,pendingNumberGaps:totals.pendingNumberGaps,
+        numberedInOrder,lastSourceNumbers:totals.lastSourceNumbers}) : null
+    if (prepared) {
+      totals.pendingNumberGaps = prepared.pendingNumberGaps
+      totals.lastSourceNumbers = prepared.lastSourceNumbers
+    }
     let entries = prepared?.preparedEntries ?? []
     if (append && prepared) {
       const groupStart = sourceOrdinal

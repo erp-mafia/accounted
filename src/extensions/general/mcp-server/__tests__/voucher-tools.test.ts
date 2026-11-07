@@ -467,7 +467,40 @@ describe('gnubok_create_voucher: staging gates', () => {
 
     await expect(staged).rejects.toMatchObject({ code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings } })
     const { toToolError } = await import('../tool-result')
-    expect(toToolError(await staged.catch((e: unknown) => e)).error.details).toEqual({ warnings })
+    const envelope = toToolError(await staged.catch((e: unknown) => e)).error
+    expect(envelope.details).toEqual({ warnings })
+    // The refusal names the field this tool declares, the one name v1 and
+    // the app use too (crm#1714).
+    expect(envelope.message_en).toContain('acknowledged_warnings')
+    expect(Object.keys((createVoucher.inputSchema as { properties: Record<string, unknown> }).properties)).toContain('acknowledged_warnings')
+  })
+
+  it('accepts the former acknowledge_warnings spelling without listing it (crm#1714)', async () => {
+    const { findUnknownArgKeys } = await import('../arg-guard')
+    const schema = createVoucher.inputSchema as Record<string, unknown>
+    expect(Object.keys(schema.properties as Record<string, unknown>)).not.toContain('acknowledge_warnings')
+    expect(findUnknownArgKeys(schema, { acknowledge_warnings: [], acknowledged_warnings: [] }, createVoucher.undeclaredArgs)).toEqual([])
+    expect(findUnknownArgKeys(schema, { acknowledge_warning: [] }, createVoucher.undeclaredArgs)).toEqual(['acknowledge_warning'])
+
+    mockVoucherGuard.mockResolvedValue({ ok: false, code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings: [] } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'fp-1', is_closed: false, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' }, error: null })
+    enqueue({
+      data: [
+        { account_number: '1010', account_name: 'Balanserade utgifter', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    await createVoucher
+      .execute(
+        { entry_date: '2026-05-12', description: 'Capitalize Cursor', fiscal_period_id: 'fp-1', lines: balancedLines, acknowledge_warnings: ['INPUT_VAT_ABOVE_RATE'] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .catch(() => undefined)
+    expect(mockVoucherGuard.mock.calls[0][4]).toEqual({ acknowledged: ['INPUT_VAT_ABOVE_RATE'] })
   })
 
   it('stages the confirmed codes for the approver and the commit', async () => {
@@ -492,7 +525,7 @@ describe('gnubok_create_voucher: staging gates', () => {
         description: 'Capitalize Cursor',
         fiscal_period_id: 'fp-1',
         lines: balancedLines,
-        acknowledge_warnings: ['INPUT_VAT_ABOVE_RATE'],
+        acknowledged_warnings: ['INPUT_VAT_ABOVE_RATE'],
       },
       'company-1',
       'user-1',

@@ -203,6 +203,17 @@ describe('gnubok_sie_preflight', () => {
     expect(mappings.find((m) => m.sourceAccount === '3001')).toMatchObject({ targetAccount: '3041', isOverride: true })
   })
 
+  // crm#1684: a remembered mapping still applies, but the scan names every
+  // account the import would book on another number than the file's.
+  it('names an account a remembered mapping books on another number, as an action', async () => {
+    const storedMappings = [{ source_account: '3001', source_name: 'Försäljning', target_account: '3041', confidence: 1, match_type: 'manual' }]
+    const result = await run({ file_content: VALID_SIE }, { storedMappings })
+    expect(result.verdict).toBe('ok_with_warnings')
+    const validation = result.validation as { warnings: string[]; notices: Array<Record<string, unknown>> }
+    expect(validation.warnings.join(' ')).toContain('3001 → 3041')
+    expect(validation.notices).toContainEqual(expect.objectContaining({ code: 'sie_account_remapped', severity: 'action' }))
+  })
+
   it('flags an org-number mismatch as another company\'s bookkeeping', async () => {
     const result = await run({ file_content: VALID_SIE }, { companyOrg: '5599999999' })
 

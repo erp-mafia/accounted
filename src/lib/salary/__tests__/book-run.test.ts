@@ -280,6 +280,155 @@ describe('advanceAndBookSalaryRun', () => {
       expect.objectContaining({ type: 'salary_run.booked' }),
     )
   })
+
+  it('announces the approval once the run is booked, before salary_run.booked', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review' }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } }, // paid → booked
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const emitted = vi.mocked(eventBus.emit).mock.calls.map(([event]) => (event as { type: string }).type)
+    expect(emitted).toEqual(['salary_run.approved', 'salary_run.booked'])
+  })
+})
+
+// A staged booking whose posting fails must not leave the run paid with no
+// verifikat (agent feedback 2026-11-02: four benefit-only runs were walked to
+// paid while the engine refused their voucher). The walk is handed back.
+describe('advanceAndBookSalaryRun: a booking that does not complete', () => {
+  type Call = { table: string; method: string; args: unknown[] }
+
+  /** The status-restoring UPDATE and its filters, or null when there was none. */
+  const restoreCall = (calls: Call[]) => {
+    const start = calls.findIndex(
+      (c) =>
+        c.table === 'salary_runs' &&
+        c.method === 'update' &&
+        ['draft', 'review', 'approved'].includes((c.args[0] as { status?: string }).status ?? '') &&
+        'paid_at' in (c.args[0] as Record<string, unknown>),
+    )
+    if (start === -1) return null
+    const filters = calls
+      .slice(start + 1)
+      .filter((c) => c.table === 'salary_runs' && (c.method === 'eq' || c.method === 'is'))
+      .slice(0, 4)
+      .map((c) => [c.method, ...c.args])
+    return { payload: calls[start].args[0], filters }
+  }
+
+  it('hands a walked run back to review when the engine refuses its voucher, and announces no approval', async () => {
+    const { supabase, enqueueMany, calls, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review', approved_by: null, approved_at: null, paid_at: null }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+      { data: [] }, // the run's vouchers in the ledger: none
+      { data: null }, // restore
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(
+      new Error('Journal entry is not balanced: debits (0) != credits (0)'),
+    )
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('not balanced')
+
+    expect(findCall('journal_entries', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(restoreCall(calls as Call[])).toEqual({
+      payload: { status: 'review', paid_at: null, approved_by: null, approved_at: null },
+      filters: [
+        ['eq', 'id', 'run-1'],
+        ['eq', 'company_id', 'company-1'],
+        ['eq', 'status', 'paid'],
+        ['is', 'booking_claim_id', null],
+      ],
+    })
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('hands a run that started approved back to approved on a refusal, keeping its approver', async () => {
+    const claimLine = {
+      item_type: 'expense_reimbursement',
+      amount: 500,
+      account_number: '2820',
+      is_net_deduction: false,
+      is_gross_deduction: false,
+      source_expense_claim_id: 'claim-1',
+    }
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: makeRun({
+          status: 'approved',
+          total_net: 23500,
+          approved_by: 'user-0',
+          approved_at: '2026-06-20T10:00:00Z',
+          paid_at: null,
+        }),
+      },
+      { data: [makeSre({ net_salary: 23500, line_items: [claimLine] })] },
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: [{ id: 'claim-1', status: 'paid', employee_id: 'e1', amount_sek: 500 }] }, // paid by bank meanwhile
+      { data: null }, // claim release
+      { data: [] }, // the run's vouchers in the ledger: none
+      { data: null }, // restore
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    // Only what the walk set is undone: the approval it found stays.
+    expect(restoreCall(calls as Call[])?.payload).toEqual({ status: 'approved', paid_at: null })
+  })
+
+  it('keeps the run paid when a voucher of it is already in the ledger, so the next booking adopts it', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'approved' }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+      { data: [{ id: 'je-1' }] }, // a voucher of the run is posted
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(new Error('transient'))
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('transient')
+
+    expect(restoreCall(calls as Call[])).toBeNull()
+  })
+
+  it('never moves a run that was already paid when the call started', async () => {
+    const { supabase, enqueueMany, calls, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: null }, // claim release
+    ])
+    vi.mocked(createSalaryRunEntries).mockRejectedValue(new Error('period locked'))
+
+    await expect(advanceAndBookSalaryRun(supabase as never, ARGS)).rejects.toThrow('period locked')
+
+    expect(findCall('journal_entries', 'select')).toBeUndefined()
+    expect(restoreCall(calls as Call[])).toBeNull()
+  })
 })
 
 describe('bookPaidSalaryRun', () => {

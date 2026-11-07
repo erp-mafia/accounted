@@ -248,6 +248,22 @@ const nextConfig: NextConfig = {
         destination: 'https://docs.accounted.se/llms-full.txt',
         permanent: true,
       },
+      // The skills catalogue lives at /.well-known/skills/index.json. Agents
+      // and scanners also probe the bare directory, which has no route of its
+      // own; on Vercel that path fell through to a pages-router lookup and
+      // answered 500 ("Cannot find module .../pages/.well-known/skills.js").
+      // Both spellings are listed: Next's trailing-slash redirect does not
+      // cover /.well-known on Vercel. The query string is forwarded.
+      {
+        source: '/.well-known/skills',
+        destination: '/.well-known/skills/index.json',
+        permanent: false,
+      },
+      {
+        source: '/.well-known/skills/',
+        destination: '/.well-known/skills/index.json',
+        permanent: false,
+      },
       // Dual-domain cutover (2026-07): the user-facing app moves to
       // app.accounted.se; app.gnubok.se stays alive for machine traffic
       // (MCP connectors, API keys, the Skatteverket OAuth callback,

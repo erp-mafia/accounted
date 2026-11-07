@@ -16,7 +16,11 @@ import { POST } from '../callback/route'
 import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
+import {
+  STORE_FIREWALL_CODE,
+  WooCommerceApiError,
+  testConnectionAndFetchStoreInfo,
+} from '@/extensions/general/woocommerce/lib/api-client'
 import { decryptCredential } from '@/extensions/general/woocommerce/lib/credentials'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -131,6 +135,22 @@ describe('POST /api/extensions/woocommerce/callback', () => {
       storeUrl: 'https://shop.example.se',
       consumerKey: 'ck_new',
     })
+  })
+
+  it('stores a firewall refusal as the reason the merchant can act on (crm#1669)', async () => {
+    const { enqueue, findCall } = mockServiceClient()
+    enqueue({ data: PENDING_ROW })
+    enqueue({ data: null }) // markError update
+    vi.mocked(testConnectionAndFetchStoreInfo).mockRejectedValue(
+      new WooCommerceApiError('WooCommerce API 403', 403, STORE_FIREWALL_CODE, { bodyKind: 'html' }),
+    )
+
+    const res = await POST(makeCallbackRequest(VALID_BODY))
+    expect(res.status).toBe(502)
+    const errorUpdate = findCall('woocommerce_connections', 'update')?.[0] as Record<string, unknown>
+    expect(errorUpdate.status).toBe('error')
+    expect(errorUpdate.error_message).toMatch(/brandvägg/)
+    expect(errorUpdate.consumer_key_encrypted).toBeNull()
   })
 
   it('stages the verified keys but leaves the row pending until the browser confirms', async () => {

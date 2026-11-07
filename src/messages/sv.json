@@ -719,6 +719,8 @@
   "pending": {
     "attach_adds_to_existing": "Läggs till bredvid {file}: båda blir underlag när transaktionen bokförs.",
     "attach_adds_to_existing_unnamed": "Läggs till bredvid dokumentet som redan finns: båda blir underlag när transaktionen bokförs.",
+    "attach_adds_to_verifikat": "Läggs till som ytterligare underlag på verifikationen, bredvid {file}. Verifikationen ändras inte.",
+    "attach_adds_to_verifikat_unnamed": "Läggs till som ytterligare underlag på verifikationen, bredvid underlaget som redan finns. Verifikationen ändras inte.",
     "type_confirm_supplier_payee": "Godkänn leverantörs nya bankuppgifter",
     "type_connect_pos_venue": "Koppla kassasystem",
     "type_disconnect_pos_connection": "Koppla från kassasystem",
@@ -13279,6 +13281,7 @@
     "v2_verdict_ok_manual": "Specifikationen och bokföringen stämmer.",
     "v2_verdict_no_bank_rows": "Inga transaktioner har kommit från banken för kontot än, så det finns inget att stämma av mot. Saknas rader som borde finnas kan du importera kontoutdraget som bankfil.",
     "v2_verdict_no_bank_rows_synced": "Senaste hämtningen från banken ({date}) gav inga transaktioner för kontot, så det finns inget att stämma av mot. Saknas rader som borde finnas kan du importera kontoutdraget som bankfil.",
+    "v2_verdict_no_skv_saldo": "Inget saldo har hämtats från Skatteverket, så det finns inget att stämma av skattekontot mot. Anslut Skatteverket under Inställningar > Skatteverket så hämtas saldot.",
     "v2_show_bridge": "Visa bryggan",
     "v2_hide_bridge": "Dölj bryggan",
     "v2_side_external_bank": "Kontoutdrag",

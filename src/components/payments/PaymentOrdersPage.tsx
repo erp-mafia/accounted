@@ -288,7 +288,9 @@ export function PaymentOrdersPage() {
       async () => {
         try {
           const result = await cancelPaymentOrder(order.id)
-          if (!result.cancelled) toast({ title: t('cancel_not_confirmed_title'), description: t('cancel_not_confirmed'), variant: 'destructive' })
+          // A payment the bank rejected when it was read after the cancel is closed too (crm#1699).
+          const closed = result.cancelled || result.status === 'rejected' || result.status === 'failed'
+          if (!closed) toast({ title: t('cancel_not_confirmed_title'), description: t('cancel_not_confirmed'), variant: 'destructive' })
         } catch (error) {
           // The bank holds the payment unsigned and will not cancel it: offered
           // as a release here once this dialog has closed (crm#1282).

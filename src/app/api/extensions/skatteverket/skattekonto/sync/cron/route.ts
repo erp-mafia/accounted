@@ -244,6 +244,7 @@ export async function GET(request: Request) {
       | 'skipped_cooldown'
       | 'unavailable'
       | 'expired'
+      | 'not_connected'
       | 'grant_withdrawn'
       | 'grant_refused'
       | 'system_auth_failed'
@@ -362,6 +363,16 @@ export async function GET(request: Request) {
       if (source === 'user' && err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
         return { userId, companyId, source, status: 'expired', error: err.code }
       }
+      // The token row listed above was gone when the sync read it: the
+      // connection was removed meanwhile, or another process was replacing
+      // the row on a refresh (storeTokens deletes, then inserts; the AGI
+      // kvittens cron refreshes the same row at the top of the hour). Each
+      // such "Sync failed" logged in production on 2026-11-05/06 was the
+      // second: the row was back a moment later. Not a failure; the next run
+      // reads the row as it is.
+      if (source === 'user' && err instanceof SkatteverketAuthError && err.code === 'NOT_CONNECTED') {
+        return { userId, companyId, source, status: 'not_connected', error: err.code }
+      }
 
       const felkod = err instanceof SkatteverketSkattekontoError ? err.felkod : null
       log.error('Sync failed', {
@@ -405,6 +416,7 @@ export async function GET(request: Request) {
   const skipped = results.filter(r => r.status === 'skipped_cooldown').length
   const unavailable = results.filter(r => r.status === 'unavailable').length
   const expired = results.filter(r => r.status === 'expired').length
+  const notConnected = results.filter(r => r.status === 'not_connected').length
   const grantWithdrawn = results.filter(r => r.status === 'grant_withdrawn').length
   const grantRefused = results.filter(r => r.status === 'grant_refused').length
   const systemAuthFailures = results.filter(r => r.status === 'system_auth_failed').length
@@ -416,6 +428,7 @@ export async function GET(request: Request) {
     skipped,
     unavailable,
     expired,
+    notConnected,
     grantWithdrawn,
     grantRefused,
     systemAuthFailures,
@@ -428,6 +441,7 @@ export async function GET(request: Request) {
     skipped,
     unavailable,
     expired,
+    notConnected,
     grantWithdrawn,
     grantRefused,
     systemAuthFailures,

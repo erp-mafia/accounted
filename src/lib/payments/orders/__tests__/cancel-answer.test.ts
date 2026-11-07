@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { registerPaymentInitiationProvider, resetPaymentInitiationProviders, type PaymentCancelResult } from '@/lib/payments/initiation/provider'
+import {
+  PaymentProviderError,
+  registerPaymentInitiationProvider,
+  resetPaymentInitiationProviders,
+  type PaymentCancelResult,
+  type ProviderPaymentState,
+} from '@/lib/payments/initiation/provider'
 import type { OperationContext } from '@/lib/operations/types'
 import type { PaymentOrderRow } from '../types'
 import { batch, COMPANY, fakeProvider, USER, waitingOrder } from './fixtures'
@@ -33,13 +39,18 @@ async function cancelAnswered(
   order: PaymentOrderRow,
   answer: PaymentCancelResult,
   signing?: string | Partial<CancelSigning>,
-  options: { releaseUnsigned?: boolean } = {},
+  options: { releaseUnsigned?: boolean; state?: ProviderPaymentState | Error } = {},
 ) {
-  registerPaymentInitiationProvider(fakeProvider({ cancelPayment: vi.fn().mockResolvedValue(answer) }))
+  const { state, ...cancelOptions } = options
+  const getPaymentState = state instanceof Error ? vi.fn().mockRejectedValue(state) : state ? vi.fn().mockResolvedValue(state) : undefined
+  provider = fakeProvider({ cancelPayment: vi.fn().mockResolvedValue(answer), ...(getPaymentState ? { getPaymentState } : {}) })
+  registerPaymentInitiationProvider(provider)
   db.setTable('payment_orders', { data: [order] })
   if (signing) db.setTable('payment_order_batches', { data: typeof signing === 'string' ? { status: signing } : signing })
-  return cancelPaymentOrder(ctx, { orderId: order.id, ...options })
+  return cancelPaymentOrder(ctx, { orderId: order.id, ...cancelOptions })
 }
+
+let provider: ReturnType<typeof fakeProvider>
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
@@ -89,16 +100,86 @@ describe('a cancel the bank refuses as too late', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_TOO_LATE' })
   })
 
-  it('leaves the other refusals as they were for an unsigned payment', async () => {
+  it('does not read the payment again: the unsigned release has its own path', async () => {
     const order = waitingOrder('o1', 1, { status: 'submitted' })
-    expect(await cancelAnswered(order, { outcome: 'needs_authorisation', providerStatus: 'RCVD', unsigned: true })).toMatchObject({
-      ok: false,
-      code: 'PAYMENT_CANCEL_NEEDS_SIGNING',
+    await cancelAnswered(order, { outcome: 'too_late', providerStatus: 'RCVD', unsigned: true })
+
+    expect(provider.getPaymentState).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1699: SEB did not confirm the cancel of an unsigned payment, answered
+// "not cancelled" to three retries, and had cancelled it a minute later,
+// which only the 15-minute status sync picked up. Meanwhile the person was
+// sent to an online bank that does not show unsigned payments.
+describe('a cancel the bank does not confirm', () => {
+  const RCVD: ProviderPaymentState = { providerStatus: 'RCVD', status: 'submitted', messages: [] }
+  const NOT_CONFIRMED: PaymentCancelResult = { outcome: 'not_cancelled', providerStatus: null }
+  const NEEDS_SIGNING: PaymentCancelResult = { outcome: 'needs_authorisation', providerStatus: 'ACTC' }
+
+  it.each([
+    ['not cancelled', NOT_CONFIRMED],
+    ['wants the cancel signed', NEEDS_SIGNING],
+  ])('the bank %s but its status read shows the payment cancelled: the order follows the bank at once', async (_name, answer) => {
+    const order = waitingOrder('o1', 1, { status: 'awaiting_signature' })
+    const outcome = await cancelAnswered(order, answer, 'awaiting_signature', {
+      state: { providerStatus: 'CANC', status: 'cancelled', messages: [] },
     })
-    expect(await cancelAnswered(order, { outcome: 'not_cancelled', providerStatus: 'RCVD', unsigned: true })).toMatchObject({
-      ok: false,
-      code: 'PAYMENT_CANCEL_NOT_CONFIRMED',
+
+    expect(outcome).toEqual({ ok: true, data: { cancelled: true, status: 'cancelled' } })
+    expect(provider.getPaymentState).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', provider_status: 'CANC' })
+    // Compare-and-set on the status the order had, and who asked is on the event.
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'awaiting_signature'])
+    const events = db.findCalls('payment_order_events', 'insert').flatMap((args) => args[0] as Array<Record<string, unknown>>)
+    expect(events).toContainEqual(
+      expect.objectContaining({ event_type: 'status_changed', from_status: 'awaiting_signature', to_status: 'cancelled', provider_status: 'CANC', actor_user_id: USER }),
+    )
+  })
+
+  it('a payment the bank rejected closes as rejected, not as cancelled', async () => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+    const outcome = await cancelAnswered(order, NOT_CONFIRMED, undefined, {
+      state: { providerStatus: 'RJCT', status: 'rejected', messages: [] },
     })
+
+    expect(outcome).toEqual({ ok: true, data: { cancelled: false, status: 'rejected' } })
+    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'rejected', provider_status: 'RJCT' })
+  })
+
+  it.each([
+    ['submitted (its signing abandoned)', waitingOrder('o1', 1, { status: 'submitted' }), undefined, NOT_CONFIRMED],
+    ['awaiting a signature nobody finished', waitingOrder('o1', 1, { status: 'awaiting_signature' }), 'awaiting_signature', NOT_CONFIRMED],
+    ['submitted, the cancel wanting a signature', waitingOrder('o1', 1, { status: 'submitted' }), undefined, NEEDS_SIGNING],
+  ] as const)('the bank still reports it unsigned, the order %s: says it is not paid without a signature, and changes nothing', async (_name, order, signing, answer) => {
+    const outcome = await cancelAnswered(order, answer, signing, { state: RCVD })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_PENDING_UNSIGNED', details: { payment_order_id: 'o1', provider_status: 'RCVD' } })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it.each([
+    ['its BankID finished while the bank still answers RCVD', waitingOrder('o1', 1, { status: 'awaiting_signature' }), 'signed'],
+    ['it carries a signature', waitingOrder('o1', 1, { status: 'submitted', signed_at: '2026-09-30T08:05:00Z' }), undefined],
+    ['its signing cannot be read', waitingOrder('o1', 1, { status: 'awaiting_signature' }), undefined],
+  ] as const)('never calls a payment unsigned when %s', async (_name, order, signing) => {
+    const outcome = await cancelAnswered(order, NOT_CONFIRMED, signing, { state: RCVD })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_NOT_CONFIRMED' })
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
+  })
+
+  it.each([
+    ['accepted (signed)', { providerStatus: 'ACSP', status: 'accepted', messages: [] } as ProviderPaymentState],
+    ['executed', { providerStatus: 'ACSC', status: 'executed', messages: [] } as ProviderPaymentState],
+    ['unreadable', new PaymentProviderError('format', 'FORMAT_ERROR', false, 400)],
+  ])('keeps the refusal as it was when the status read shows the payment %s', async (_name, state) => {
+    const order = waitingOrder('o1', 1, { status: 'submitted' })
+
+    expect(await cancelAnswered(order, NOT_CONFIRMED, undefined, { state })).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_NOT_CONFIRMED' })
+    expect(await cancelAnswered(order, NEEDS_SIGNING, undefined, { state })).toMatchObject({ ok: false, code: 'PAYMENT_CANCEL_NEEDS_SIGNING' })
+    // Only a payment the bank closed unpaid moves here; the rest is the status sync's.
+    expect(db.findCall('payment_orders', 'update')).toBeUndefined()
   })
 })
 

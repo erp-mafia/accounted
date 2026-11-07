@@ -1,0 +1,1 @@
+[2026-11-07] Chat intents without a thinking config get the standard 16000 output ceiling, not 5400, and bokslut.step keeps effort high (not xhigh): Sonnet 5 thinks at high by default, so 5400 cut heavy turns to no text; a ceiling is not a spend, xhigh would be.

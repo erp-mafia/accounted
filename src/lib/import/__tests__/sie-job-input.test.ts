@@ -342,6 +342,40 @@ describe('SIE durable input boundaries', () => {
       enqueueMany([{data:periods}])
       await expect(resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parseSIEFile(content))).rejects.toThrow('saknar #RAR')
     })
+  // Fortnox's "Kundfakturor och inbetalningar" export: no #RAR, verifikat over
+  // several years. No company year can contain it, and creating one (what the
+  // old refusal asked for) never helps: the refusal names the partial export.
+  const multiYear = '#FLAGGA 0\n#SIETYP 4\n#PROGRAM "Fortnox" 3.62\n' +
+    '#VER B 1 20200115 "Kundfaktura"\n{\n#TRANS 1510 {} 125\n#TRANS 3001 {} -125\n}\n' +
+    '#VER C 1 20261103 "Inbetalning"\n{\n#TRANS 1930 {} 125\n#TRANS 1510 {} -125\n}'
+  it.each([
+    { label: 'the books hold the years the file spans', periods: [
+      { period_start: '2020-01-01', period_end: '2020-12-31' }, { period_start: '2026-01-01', period_end: '2026-12-31' }] },
+    { label: 'the company has no year yet', periods: [] },
+  ])('names a multi-year file without #RAR as a partial export when $label', async ({ periods }) => {
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:periods}])
+    const parsed = parseSIEFile(multiYear)
+    const refusal = resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parsed)
+    await expect(refusal).rejects.toThrow('över mer än ett räkenskapsår (2020-01-15 till 2026-11-03)')
+    await expect(refusal).rejects.toThrow('Exportera i stället hela bokföringen som SIE typ 4, en fil per räkenskapsår')
+    await expect(refusal).rejects.not.toThrow('Skapa ett räkenskapsår')
+    expect(parsed.stats.fiscalYearStart).toBeFalsy()
+  })
+  it('still asks for a year when the dates fit one and the company has none, naming the dates', async () => {
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:[]}])
+    await expect(resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parseSIEFile(content)))
+      .rejects.toThrow('Skapa ett räkenskapsår som omfattar filens datum (2026-02-01 till 2026-02-01) först.')
+  })
+  it('resolves an extended first year of up to 18 months that contains every date', async () => {
+    const extended = content.replace('20260201', '20250715') + '\n#VER "" "" 20261220 "Late"\n{\n#TRANS 1930 {} 50\n#TRANS 3001 {} -50\n}'
+    const {supabase,enqueueMany} = createQueuedMockSupabase()
+    enqueueMany([{data:[{period_start:'2025-07-01',period_end:'2026-12-31'}]}])
+    const parsed = parseSIEFile(extended)
+    await resolveSIEFiscalYear(supabase as unknown as SupabaseClient,'company-1',parsed)
+    expect(parsed.stats).toMatchObject({ fiscalYearStart: '2025-07-01', fiscalYearEnd: '2026-12-31' })
+  })
   it('names an oversized voucher before any ledger write', () => {
     const withYear = '#RAR 0 20260101 20261231\n'+content
     const parsed = parseSIEFile(withYear)

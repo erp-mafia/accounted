@@ -719,6 +719,8 @@
   "pending": {
     "attach_adds_to_existing": "Added next to {file}: both become supporting documents when the transaction is booked.",
     "attach_adds_to_existing_unnamed": "Added next to the document already there: both become supporting documents when the transaction is booked.",
+    "attach_adds_to_verifikat": "Added to the journal entry as one more supporting document, next to {file}. The entry itself does not change.",
+    "attach_adds_to_verifikat_unnamed": "Added to the journal entry as one more supporting document, next to the one already there. The entry itself does not change.",
     "type_confirm_supplier_payee": "Approve a supplier's new bank details",
     "type_connect_pos_venue": "Connect point of sale",
     "type_disconnect_pos_connection": "Disconnect point of sale",
@@ -13279,6 +13281,7 @@
     "v2_verdict_ok_manual": "The specification and the books agree.",
     "v2_verdict_no_bank_rows": "No transactions have come from the bank for this account yet, so there is nothing to reconcile against. If rows are missing, import the bank statement as a file.",
     "v2_verdict_no_bank_rows_synced": "The last fetch from the bank ({date}) gave no transactions for this account, so there is nothing to reconcile against. If rows are missing, import the bank statement as a file.",
+    "v2_verdict_no_skv_saldo": "No balance has been fetched from Skatteverket, so there is nothing to reconcile the tax account against. Connect Skatteverket under Settings > Skatteverket to fetch it.",
     "v2_show_bridge": "Show the bridge",
     "v2_hide_bridge": "Hide the bridge",
     "v2_side_external_bank": "Bank statement",

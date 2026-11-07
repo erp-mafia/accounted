@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { PdfCanvasPreview, useDrawsPdfInPage } from '@/components/invoices/PdfCanvasPreview'
 import type { PdfPreviewState } from './use-editor-previews'
 
 type PreviewTab = 'document' | 'email'
@@ -76,6 +77,9 @@ export function EditorPreviewPane({
   // the pane back to the document.
   const tab: PreviewTab = emailDisabledReason ? 'document' : chosenTab
   const [zoom, setZoom] = useState<Zoom>('page')
+  // Safari and every iOS browser leave the <object> below blank for a blob:
+  // PDF (crm#1689): there the page draws the PDF itself.
+  const drawsInPage = useDrawsPdfInPage()
 
   // Double-buffered: a new render loads in a hidden <object> over the shown
   // one and swaps in once it has painted, so an edit never blanks the page.
@@ -146,7 +150,11 @@ export function EditorPreviewPane({
             )}
             aria-busy={pdf.loading}
           >
-            {visible ? (
+            {visible && drawsInPage ? (
+              // Draws the newest render and keeps the last drawing until it
+              // is done, so it needs no second buffer.
+              <PdfCanvasPreview url={target ?? visible} fit={zoom} title={t('preview_title')} className={PDF_BOX.width} />
+            ) : visible ? (
               // <object type="application/pdf">, not an <iframe>: Chrome's
               // frame pipeline intermittently blocked the PDF (see
               // InvoicePreviewCard).

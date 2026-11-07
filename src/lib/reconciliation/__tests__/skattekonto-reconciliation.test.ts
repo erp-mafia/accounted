@@ -471,6 +471,29 @@ describe('getSkattekontoReconciliationStatus', () => {
     expect(s.is_reconciled).toBe(false)
     // The SKV side is still listed so the user can work.
     expect(s.counts.unmatched_external).toBe(1)
+    // The bridge names no ledger figure it does not have (it read 0 kr).
+    expect(s.bridge.map((b) => b.key)).not.toContain('ledger_balance')
+    expect(s.bridge.find((b) => b.key === 'external_balance')?.amount).toBe(1000)
+  })
+
+  // crm#1701: rows from a file import and no saldo ever fetched. The bridge
+  // read "Saldo hos Skatteverket 0 kr" and the page said "stämmer".
+  it('without a saldo from Skatteverket: no balance line, no difference, never reconciled', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: null, rows: [row('r1', '2026-08-01', -500)] })
+    ledger([], { cutoff: 0, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.external_balance).toBeNull()
+    expect(s.skattekonto?.fetched_at).toBeNull()
+    expect(s.difference).toBeNull()
+    expect(s.unexplained_difference).toBeNull()
+    expect(s.is_reconciled).toBe(false)
+    expect(s.bridge.map((b) => b.key)).not.toContain('external_balance')
+    expect(s.bridge.find((b) => b.key === 'ledger_balance')?.amount).toBe(0)
+    // The rows stay listed so they can still be booked or matched.
+    expect(s.counts.unmatched_external).toBe(1)
   })
 
   it('does not propose an entry that another row already links live', async () => {

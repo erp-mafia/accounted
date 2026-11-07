@@ -398,15 +398,15 @@ export const transactionsAttachDocument = defineOperation({
   docs: {
     summary: 'Pin a document (receipt, invoice) to a bank transaction as its underlag.',
     description:
-      'Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat\'s underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. Attaching another document replaces the pin and is logged as a rättelse. Idempotent. Dry-runnable.',
+      'Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat\'s underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. Attaching another document replaces the pin and is logged as a rättelse; on a booked transaction whose pin is already its verifikat\'s underlag, the pin stays and the document is added to that verifikat as one more underlag. Idempotent. Dry-runnable.',
     useWhen: 'A receipt or invoice in the archive belongs to a bank transaction (same date, amount, counterparty).',
     doNotUseFor:
       'Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).',
     pitfalls: [
       'A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).',
       'A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.',
-      'Replacing a pinned document that is already linked to a verifikat returns 409 DOC_ATTACH_REPLACES_POSTED: reverse the entry first.',
-      'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED.',
+      'A pinned document linked to a verifikat other than the transaction\'s own booking is never replaced: 409 DOC_ATTACH_REPLACES_POSTED. On the transaction\'s own verifikat the new document is added beside it (preview adds_to_verifikat; answer previous_document_id null).',
+      'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED.',
       'Check date, amount and counterparty on both sides first: once the transaction is booked the link is immutable.',
     ],
     example: {
@@ -430,6 +430,7 @@ export const transactionsAttachDocument = defineOperation({
     'DOC_ATTACH_OTHER_VERIFIKAT',
     'DOC_ATTACH_REPLACES_POSTED',
     'DOC_ATTACH_PERIOD_LOCKED',
+    'PERIOD_LOCKED',
     'DOC_ATTACH_PROPAGATION_FAILED',
   ],
   http: {
@@ -452,8 +453,9 @@ export const transactionsAttachDocument = defineOperation({
       title: (input, preview = {}) =>
         `Koppla bilaga: ${preview.document_file_name} → ${preview.transaction_description || input.transaction_id}`,
       // AttachDocumentPreview's shape: both sides of the pairing, and what
-      // it replaces. A pinned document that is räkenskapsinformation is
-      // refused by the dry run, so a replaced one never is.
+      // it replaces or joins. A pinned document that is räkenskapsinformation
+      // is never replaced: the new one is added beside it on the verifikat
+      // (adds_to_verifikat) or the dry run refuses.
       preview: (_input, preview) => ({
         transaction_description: preview.transaction_description,
         transaction_amount: preview.transaction_amount,
@@ -470,10 +472,19 @@ export const transactionsAttachDocument = defineOperation({
         // A pinned document whose inbox item is matched to the row stays
         // underlag: the new one is added beside it, nothing is overwritten.
         will_overwrite_existing: preview.replaces_document === true && preview.previous_document_stays !== true,
-        adds_to_existing: preview.replaces_document === true && preview.previous_document_stays === true,
-        existing_document_id: preview.replaces_document === true ? preview.previous_document_id : null,
-        existing_document_file_name: preview.replaces_document === true ? preview.previous_document_file_name : null,
-        existing_document_is_rakenskapsinformation: false,
+        adds_to_existing:
+          (preview.replaces_document === true && preview.previous_document_stays === true) ||
+          preview.adds_to_verifikat === true,
+        // The row is booked and its pin is the verifikat's underlag: the new
+        // document becomes one more underlag of that verifikat.
+        adds_to_verifikat: preview.adds_to_verifikat === true,
+        existing_document_id:
+          preview.replaces_document === true || preview.adds_to_verifikat === true ? preview.previous_document_id : null,
+        existing_document_file_name:
+          preview.replaces_document === true || preview.adds_to_verifikat === true
+            ? preview.previous_document_file_name
+            : null,
+        existing_document_is_rakenskapsinformation: preview.adds_to_verifikat === true,
       }),
       extras: (input, preview) => ({
         // The approver sees a locked or closed period on the same row

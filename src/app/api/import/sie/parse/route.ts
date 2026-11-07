@@ -24,7 +24,8 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
+import { resolveSIEFiscalYear, SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { diagnoseOpeningBalanceContinuity } from '@/lib/import/sie-continuity'
 import { isVoucherOnlySIE } from '@/lib/import/sie-voucher-only'
@@ -203,6 +204,11 @@ export const POST = withRouteContext(
         },
       })
     } catch (err) {
+      // The file is readable and the import's own rule refused it (a file
+      // without #RAR no company year contains): its sentence says what to do.
+      // As SIE_PARSE_FAILED it read "the file may be damaged" instead, as on
+      // execute and append-plan.
+      if (err instanceof SIEJobValidationError) return sieJobValidationResponse(err, opLog, requestId)
       opLog.error('sie parse failed', err as Error)
       return errorResponseFromCode('SIE_PARSE_FAILED', opLog, {
         requestId,

@@ -5969,6 +5969,11 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Underlaget är redan kopplat till en annan verifikation.',
     message_en: 'The document is already the underlag of another journal entry.',
+    remediation: {
+      description:
+        'One document backing two purchases (an order paid in two charges, one agreement for two deposits): book this row, then link a byte-identical copy to its verifikat with copy: true. A receipt for one purchase stays where it is.',
+      tool: 'gnubok_link_document_to_voucher',
+    },
   },
   DOC_ATTACH_PERIOD_LOCKED: {
     httpStatus: 409,
@@ -11365,6 +11370,19 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Nothing was paid: the bank holds the payment unsigned (provider_status RCVD or PDNG) and refused the cancel. The order is unchanged. With details.releasable false, retry the cancel in half an hour. With details.releasable true, a person can release it in Accounted (Betalningar, Släpp betalningen): the order is cancelled there, and the bank keeps an unsigned payment it never executes.',
+    },
+  },
+  // The bank did not confirm the cancel of a payment it reports unsigned in a
+  // status read right after, and no signature of it finished here (crm#1699).
+  // Banks have so far cancelled or rejected every such payment within
+  // minutes; the 15-minute status sync applies their answer.
+  PAYMENT_CANCEL_PENDING_UNSIGNED: {
+    httpStatus: 409,
+    message_sv: 'Banken har inte bekräftat makuleringen än. Betalningen är inte signerad hos banken och betalas inte utan signering. Betalningens status hämtas från banken var 15:e minut och ordern följer med när banken har makulerat den. Står den kvar efter det, makulera igen.',
+    message_en: 'The bank has not confirmed the cancellation yet. The payment is not signed at the bank and will not be paid without a signature. The payment\'s status is read from the bank every 15 minutes and the order follows once the bank has cancelled it. If it is still there after that, cancel again.',
+    remediation: {
+      description:
+        'Nothing was paid: the bank reports the payment unsigned (details.provider_status, RCVD or PDNG) and has not confirmed the cancel. The order is unchanged. Do not prepare a new payment of the invoice meanwhile: the status sync (every 15 minutes) applies the bank\'s cancel or rejection and frees the invoice. Read the order again after it; if it is still open, call the cancel again.',
     },
   },
   PAYMENT_CANCEL_NOT_CONFIRMED: {

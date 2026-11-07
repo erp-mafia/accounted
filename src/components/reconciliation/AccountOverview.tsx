@@ -28,6 +28,7 @@ import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } fro
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
+import { lacksSkatteverketSaldo, sidesAgree } from './verdict'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -728,26 +729,28 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       const label = locale === 'en' ? l.label_en : l.label_sv
       return `${l.count} ${label.charAt(0).toLowerCase()}${label.slice(1)}`
     })
-  const diffAbs = Math.abs(status.difference ?? 0)
   // No bank row at all on the account (lib/reconciliation/service.ts): two
   // zeros are no agreement, so the sentence says what is missing instead of
-  // "Banken och bokföringen stämmer" (PH 195).
+  // "Banken och bokföringen stämmer" (PH 195). The same for a skattekonto
+  // with no saldo from Skatteverket (crm#1701).
   const noBankRows = !isSkv && !isManual && (status.bank as { no_bank_rows?: boolean } | null)?.no_bank_rows === true
   const verdict = noBankRows
     ? fetchedAt
       ? t('v2_verdict_no_bank_rows_synced', { date: formatDate(fetchedAt) })
       : t('v2_verdict_no_bank_rows')
-    : status.is_reconciled || diffAbs < 0.005
-      ? isSkv
-        ? t('v2_verdict_ok_skv')
-        : isManual
-          ? t('v2_verdict_ok_manual')
-          : balanceDiffers
-            ? t('v2_verdict_ok_bank_balance_differs')
-            : t('v2_verdict_ok_bank')
-      : explained.length > 0
-        ? t('v2_verdict_diff', { explanations: explained.join(', ') })
-        : null
+    : lacksSkatteverketSaldo(status)
+      ? t('v2_verdict_no_skv_saldo')
+      : sidesAgree(status)
+        ? isSkv
+          ? t('v2_verdict_ok_skv')
+          : isManual
+            ? t('v2_verdict_ok_manual')
+            : balanceDiffers
+              ? t('v2_verdict_ok_bank_balance_differs')
+              : t('v2_verdict_ok_bank')
+        : explained.length > 0
+          ? t('v2_verdict_diff', { explanations: explained.join(', ') })
+          : null
 
 
   // Default sign-off date: the window end, never past today nor past the

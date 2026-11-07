@@ -6,6 +6,7 @@ import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } fr
 import { roundOre } from '@/lib/money'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
 import { invoiceAutogiroPayerNumber } from '@/lib/invoices/payment-rows'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import type { ReminderLevel } from './policy'
 
@@ -98,6 +99,7 @@ const WORDS = {
     questions: 'Har du frågor? Svara direkt på det här mejlet.',
     sincerely: 'Med vänliga hälsningar,',
     orgNo: 'Org.nr:',
+    registeredOffice: 'Säte:',
     vat: 'VAT:',
   },
   en: {
@@ -119,6 +121,7 @@ const WORDS = {
     questions: 'Questions? Reply directly to this email.',
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
+    registeredOffice: 'Registered office:',
     vat: 'VAT:',
   },
 } as const
@@ -210,8 +213,16 @@ export function renderReminderEmail(data: ReminderEmailData): RenderedReminderEm
   const payment = invoiceEmailPaymentRows(company, invoice, lang)
   // As on the invoice email; never on an Autogiro invoice, which Bankgirot debits.
   const payLink = paid <= 0 && !invoiceAutogiroPayerNumber(invoice) ? invoice.payment_link_url?.trim() || null : null
+  // A reminder is a letter from the company: an aktiebolag's letters state
+  // its säte next to the org.nr (ABL 28 kap. 5 §), as the invoice e-mail does.
+  const registeredOffice = sellerRegisteredOffice(company)
   const footer = company.org_number
-    ? [`${W.orgNo} ${company.org_number}`, company.vat_number ? `${W.vat} ${company.vat_number}` : null, company.f_skatt ? F_SKATT : null]
+    ? [
+        `${W.orgNo} ${company.org_number}`,
+        registeredOffice ? `${W.registeredOffice} ${registeredOffice}` : null,
+        company.vat_number ? `${W.vat} ${company.vat_number}` : null,
+        company.f_skatt ? F_SKATT : null,
+      ]
         .filter((part): part is string => part !== null)
         .join(' | ')
     : null

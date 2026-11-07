@@ -124,6 +124,7 @@ import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { foldSellerVatIntoCost, sellerVatAsCostNote, sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { supplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
+import { isWholeKronaRoundingOf } from '@/lib/supplier-invoices/total-first'
 import {
   exceedsSupplierInvoiceTotalsTolerance,
   readSupplierInvoiceLinesAsGross,
@@ -626,6 +627,7 @@ import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
+import { ArchiveTooLargeError } from '@/lib/reports/archive-folder'
 import { CorrectionChainTooDeepError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
@@ -1589,9 +1591,10 @@ export interface McpTool {
   keywords?: string[]
   // Arguments the tool accepts without declaring them in inputSchema, so they
   // cost nothing in tools/list (payload-size.bench.test.ts): the unknown-
-  // argument guard (arg-guard.ts) lets exactly these through. Today only
-  // preview_token on the generated staging writes (operation-tools.ts), which
-  // the dry-run answer that hands the token out announces. Never serialized.
+  // argument guard (arg-guard.ts) lets exactly these through: preview_token
+  // on the generated staging writes (operation-tools.ts), which the dry-run
+  // answer that hands the token out announces, and a renamed argument's old
+  // spelling (gnubok_create_voucher's acknowledge_warnings). Never serialized.
   undeclaredArgs?: readonly string[]
   // visibility ['app']: a tool only an MCP Apps view calls (isViewOnlyTool).
   _meta?: { ui: { resourceUri?: string; visibility?: Array<'model' | 'app'> } }
@@ -1628,6 +1631,13 @@ export interface McpTool {
 // ── Shared constants ─────────────────────────────────────────
 
 const log = createLogger('mcp-server')
+
+/**
+ * The largest audit package gnubok_audit_package builds: it is saved as one
+ * object in the documents bucket, whose cap per object is 50 MB
+ * (storage.buckets.file_size_limit).
+ */
+const AUDIT_PACKAGE_MAX_BYTES = 50 * 1024 * 1024
 
 /**
  * The operation a generated tool was made from, by tool name: the package
@@ -5149,7 +5159,16 @@ async function approveOneOperation(params: {
     ...(result.code ? { error_code: result.code } : {}),
     ...(result.auto_rejected ? { auto_rejected: true } : {}),
     ...(result.operation_status ? { operation_status: result.operation_status } : {}),
+    // The commit's Swedish refusal names no field: the warnings are
+    // confirmed on a new staging, never on the approval (crm#1714).
+    ...(result.code === 'VOUCHER_NEEDS_CONFIRMATION' ? { next: VOUCHER_CONFIRMATION_NEXT } : {}),
   }
+}
+
+const VOUCHER_CONFIRMATION_NEXT: NextActionHint = {
+  description:
+    'Nothing was booked. Show the person data.warnings; only if they confirm the lines, stage the voucher again with acknowledged_warnings listing every code.',
+  tool: 'gnubok_create_voucher',
 }
 
 /**
@@ -5238,6 +5257,18 @@ const GRANTS_SWITCHED_OFF_HOW =
  */
 const INBOX_EARLIER_NAME_NOTE =
   'The address still carries an earlier company name and keeps working. An owner or admin gets one with the current name in Accounted: Inkorg, Lägg till brevlåda (the + by Brevlådor), "Skapa en med nuvarande namn". The old address keeps receiving, so suppliers can switch at their own pace. No tool changes the address.'
+
+/**
+ * The VOUCHER_NEEDS_CONFIRMATION codes a gnubok_create_voucher call confirms:
+ * acknowledged_warnings, the one name every door uses (v1, the app, the
+ * refusal text), or the tool's former acknowledge_warnings (crm#1714).
+ */
+const LEGACY_ACKNOWLEDGE_WARNINGS_ARG = 'acknowledge_warnings'
+
+function acknowledgedWarningCodes(args: Record<string, unknown>): string[] | undefined {
+  const codes = args.acknowledged_warnings ?? args[LEGACY_ACKNOWLEDGE_WARNINGS_ARG]
+  return Array.isArray(codes) ? codes.filter((code): code is string => typeof code === 'string') : undefined
+}
 
 export const tools: McpTool[] = [
   {
@@ -18373,11 +18404,20 @@ export const tools: McpTool[] = [
       // reaches this point on a VAT-registered company's invoice (it was
       // refused or reconciled above); one between 0.50 and that tolerance is
       // per-line VAT rounding on a long invoice, not öresavrundning, and is
-      // not carried. The net path registers the lines as payable, so it has
-      // no gap to carry.
-      const oreRounding = noDeductibleSellerVat
-        ? null
-        : supplierInvoiceRoundingItem(supplierInvoiceTotalsGap(total, pricedLineItems), currency)
+      // not carried. The net path (reverse charge, exempt, export) registers
+      // the line nets as payable: a document that charges no VAT and bills
+      // those nets rounded to whole kronor carries the same 3740 item, or the
+      // reskontra stays the öre apart from what the supplier asks (exempt
+      // invoices were registered short of their Att betala). A document that
+      // does charge VAT there is no rounding: payableRecomputed below names it.
+      const extractedLineVat = roundOre(extractedLineItems.reduce((sum, li) => sum + li.vat_amount, 0))
+      const sellerChargedVat = extractedVatHeader !== 0 ? extractedVatHeader : extractedLineVat
+      const roundingGap = supplierInvoiceTotalsGap(total, pricedLineItems)
+      const oreRounding = !noDeductibleSellerVat
+        ? supplierInvoiceRoundingItem(roundingGap, currency)
+        : sellerChargedVat === 0 && isWholeKronaRoundingOf(supplierInvoiceLinesInclVat(pricedLineItems), roundOre(total), currency)
+          ? supplierInvoiceRoundingItem(roundingGap, currency)
+          : null
       const lineItems = oreRounding
         ? [
             ...pricedLineItems,
@@ -18409,8 +18449,6 @@ export const tools: McpTool[] = [
       // carry on 2440, i.e. the sum of the line nets, never the document's
       // gross. What the seller billed stays visible in the preview so the
       // approver sees the gross next to what is registered.
-      const extractedLineVat = roundOre(extractedLineItems.reduce((sum, li) => sum + li.vat_amount, 0))
-      const sellerChargedVat = extractedVatHeader !== 0 ? extractedVatHeader : extractedLineVat
       const lineNetSum = roundOre(lineItems.reduce((sum, li) => sum + li.line_total, 0))
       const payableNet = lineNetSum !== 0
         ? lineNetSum
@@ -23210,7 +23248,10 @@ export const tools: McpTool[] = [
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const includeDocuments = args.include_documents !== false
       const estimateOnly = args.estimate_only === true
-      const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+      // The package is saved as one object in the documents bucket, whose cap
+      // per object (50 MB) is the real ceiling: the former 80 MB gate let a
+      // 50-80 MB package be built in memory only for the upload to refuse it.
+      const SIZE_LIMIT_BYTES = AUDIT_PACKAGE_MAX_BYTES
 
       // Verify period belongs to the company
       const { data: period, error: periodErr } = await supabase
@@ -23257,12 +23298,28 @@ export const tools: McpTool[] = [
         )
       }
 
-      // Generate the archive (long-running)
-      const zipBuffer = await generateFullArchive(supabase, companyId, {
-        scope: 'period',
-        period_id: fiscalPeriodId,
-        include_documents: includeDocuments,
-      })
+      // Generate the archive (long-running), never past what can be stored:
+      // the estimate counts documents only, and a period's behandlingshistorik
+      // alone can run to hundreds of MB, which ran the function out of memory
+      // and answered a platform HTML 500 instead of this error (crm#1703).
+      let zipBuffer: ArrayBuffer
+      try {
+        zipBuffer = await generateFullArchive(supabase, companyId, {
+          scope: 'period',
+          period_id: fiscalPeriodId,
+          include_documents: includeDocuments,
+          max_bytes: SIZE_LIMIT_BYTES,
+        })
+      } catch (err) {
+        if (!(err instanceof ArchiveTooLargeError)) throw err
+        throw codedRefusal(
+          'AUDIT_PACKAGE_TOO_LARGE',
+          `The audit package is over the ${Math.round(SIZE_LIMIT_BYTES / 1024 / 1024)} MB a package can be stored as and was not built. ` +
+            (includeDocuments
+              ? 'Retry with include_documents=false to omit receipt binaries, or download the complete archive in the web app.'
+              : 'Its behandlingshistorik and reports alone are over it: download the complete archive in the web app.'),
+        )
+      }
 
       // Upload to Storage under a per-user audit-packages folder
       const storagePath = `${userId}/audit-packages/${Date.now()}_${fileName}`
@@ -23274,7 +23331,7 @@ export const tools: McpTool[] = [
         })
       if (uploadErr) {
         // Storage refuses an object over the documents bucket's cap per file
-        // (50 MB, below the 80 MB estimate gate above). That is the archive's
+        // (a cap lowered below AUDIT_PACKAGE_MAX_BYTES). That is the archive's
         // size, not a fault: the identical call can never succeed.
         if (isStorageObjectTooLarge(uploadErr)) {
           throw codedRefusal(
@@ -25288,7 +25345,7 @@ export const tools: McpTool[] = [
 
       const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
       const { getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
-      const { suggestSIEMappings } = await import('@/lib/import/sie-preview-mappings')
+      const { suggestSIEMappings, remappedSIEAccounts, remappedSIEAccountsText } = await import('@/lib/import/sie-preview-mappings')
       const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
       const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport, loadMappings } = await import('@/lib/import/sie-import')
       const { BAS_REFERENCE } = await import('@/lib/bookkeeping/bas-data')
@@ -25443,7 +25500,11 @@ export const tools: McpTool[] = [
               'Filens ingående balans bokförs inte; verifikationerna läggs ovanpå den bokförda.',
           ]
         : []
-      const allWarnings = [...validation.warnings, ...encodingWarnings, ...bookedIbTexts, ...continuityTexts]
+      // A used account booked on another number than the file's (crm#1684):
+      // named before the import instead of applied silently.
+      const remapped = remappedSIEAccounts(parsed, mappings)
+      const remapTexts = remapped.length > 0 ? [remappedSIEAccountsText(remapped)] : []
+      const allWarnings = [...validation.warnings, ...encodingWarnings, ...bookedIbTexts, ...continuityTexts, ...remapTexts]
       const verdict = !validation.valid
         ? 'invalid'
         : duplicate
@@ -25474,6 +25535,7 @@ export const tools: McpTool[] = [
       for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
       for (const w of bookedIbTexts) notices.push({ code: 'sie_period_has_opening_balance', severity: 'action', text: w })
       for (const w of continuityTexts) notices.push({ code: 'sie_ib_continuity', severity: 'action', text: w })
+      for (const w of remapTexts) notices.push({ code: 'sie_account_remapped', severity: 'action', text: w })
       for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
       const fileCompanyHint =
@@ -25676,9 +25738,13 @@ export const tools: McpTool[] = [
       const accountsMapped = { covered: coveredAccounts.length, total: sourceAccountsInFile.size }
       // #63: what the approver signs off on, by the rule submitSIEJob applies.
       const onlyUsedAccounts = args.only_used_accounts === true
-      const usedMappings = onlyUsedAccounts
-        ? (await import('@/lib/import/sie-preview-mappings')).onlyUsedSIEMappings(parsed, mappingsParse.data)
-        : null
+      const { onlyUsedSIEMappings, remappedSIEAccounts, remappedSIEAccountsText } = await import('@/lib/import/sie-preview-mappings')
+      const usedMappings = onlyUsedAccounts ? onlyUsedSIEMappings(parsed, mappingsParse.data) : null
+      // An account the job would book on another number than the file's
+      // (crm#1684): a remembered mapping or one the agent chose. The approval
+      // card names it (preview.compliance_warning) instead of the approver
+      // signing off on a mapping count.
+      const remapped = remappedSIEAccounts(parsed, usedMappings ?? mappingsParse.data)
 
       // Another organisation's file is refused before the approver sees it,
       // unless the user confirmed it belongs here. submitSIEJob checks again
@@ -25745,10 +25811,12 @@ export const tools: McpTool[] = [
           import_transactions: flags.importTransactions,
           ...(usedMappings ? { only_used_accounts: { mappings_kept: usedMappings.length, mappings_left_out: mappingsParse.data.length - usedMappings.length } } : {}),
           ...(appendPlan ? { append: sieAppendSummary(appendPlan) } : {}),
+          ...(remapped.length > 0 ? { remapped_accounts: remapped } : {}),
           will: appendPlan
             ? `add ${appendPlan.counts.toAdd} new vouchers to the imported year as their own batch; ${appendPlan.counts.present} already booked are skipped`
             : 'create fiscal period + opening balances + journal entries from the parsed SIE',
         },
+        ...(remapped.length > 0 ? { complianceNote: remappedSIEAccountsText(remapped) } : {}),
         actor,
         next: {
           description: 'After commit, verify the imported balances with gnubok_get_trial_balance and check continuity via the IB/UB of adjacent periods.',
@@ -25779,6 +25847,10 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_voucher',
     keywords: ['verifikat', 'verifikation', 'manuell bokföring', 'bokföringsorder', 'manuellt verifikat', 'omvänd moms', 'momskod'],
+    // The field was named acknowledge_warnings here alone, while v1, the app
+    // and the shared refusal text say acknowledged_warnings (crm#1714). The
+    // old spelling stays accepted for agents that learned it.
+    undeclaredArgs: [LEGACY_ACKNOWLEDGE_WARNINGS_ARG],
     title: 'Create Manual Voucher (Verifikation)',
     description: 'Stage a manual verifikation with balanced lines: capitalization, accruals, FX, rättelser, IB. Omvänd moms: a line\'s vat_code. For a received handling pass inbox_item_id: the document becomes the verifikation (BFL 5 kap 6§); a filename in notes is not underlag. HIGH risk.',
     inputSchema: {
@@ -25797,7 +25869,7 @@ export const tools: McpTool[] = [
         },
         is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
         inbox_item_id: { type: 'string', description: 'Inbox item UUID to book directly. For a received handling this is the BFL 5 kap 6§ path: the document becomes the verifikation. On confirm the item and its document link to the new verifikat. Not in inbox? gnubok_upload_document first. Fails if already booked/converted.' },
-        acknowledge_warnings: { type: 'array', items: { type: 'string' }, description: 'VOUCHER_NEEDS_CONFIRMATION codes the person confirmed.' },
+        acknowledged_warnings: { type: 'array', items: { type: 'string' }, description: 'VOUCHER_NEEDS_CONFIRMATION codes a person confirmed.' },
         lines: {
           type: 'array',
           description: 'At least 2 balanced lines. sum(debit_amount) === sum(credit_amount), both > 0.',
@@ -26129,11 +26201,11 @@ export const tools: McpTool[] = [
       const voucherGuard = isOpeningBalance
         ? null
         : await runVoucherWarningsGuard(supabase, companyId, { entry_date: entryDate, description, lines: bookedLines }, log, {
-            acknowledged: Array.isArray(args.acknowledge_warnings) ? (args.acknowledge_warnings as string[]) : undefined,
+            acknowledged: acknowledgedWarningCodes(args),
           })
       if (voucherGuard && !voucherGuard.ok) {
         throw Object.assign(
-          new Error('The voucher deviates from what such a voucher normally looks like: show the person error.details.warnings, and stage again with acknowledge_warnings only if they confirm the lines.'),
+          new Error('The voucher deviates from what such a voucher normally looks like: show the person error.details.warnings, and stage again with acknowledged_warnings only if they confirm the lines.'),
           { code: voucherGuard.code, details: voucherGuard.details },
         )
       }

@@ -775,7 +775,7 @@ Example response `200`:
 **Cancel a bank payment order.**
 `scope:suppliers:write · risk:medium · idempotent · dry-run`
 
-Before the bank has the payment (draft, approved) the order is cancelled in Accounted. After that the bank is asked, and the order is cancelled only when the bank confirms the cancel; any other bank answer leaves the payment where it is and is reported as an error code. An executed payment cannot be cancelled. An order whose bank outcome is unknown is not cancelled here: a person resolves it in Accounted after checking the online bank. Dry-runnable.
+Before the bank has the payment (draft, approved) the order is cancelled in Accounted. After that the bank is asked, and the order is cancelled only when the bank confirms the cancel, in its answer or in a status read of the payment right after (an order the bank reports rejected then closes as rejected); any other bank answer leaves the payment where it is and is reported as an error code. An executed payment cannot be cancelled. An order whose bank outcome is unknown is not cancelled here: a person resolves it in Accounted after checking the online bank. Dry-runnable.
 
 **Use when:** A prepared or approved payment should not be made, or a payment the bank holds must be stopped before execution.
 **Do not use for:** Un-paying an invoice, or an executed payment (ask the bank to recall it).
@@ -784,6 +784,7 @@ Before the bank has the payment (draft, approved) the order is cancelled in Acco
 - PAYMENT_CANCEL_NEEDS_SIGNING: the bank wants the cancel signed; cancel it in the online bank.
 - PAYMENT_CANCEL_TOO_LATE: executed, or past the bank's cut-off.
 - PAYMENT_CANCEL_UNSIGNED_REFUSED: the bank holds the payment unsigned and refused the cancel; nothing is paid unless someone signs it. Retry in 30 minutes; with details.releasable true a person releases it in Accounted (Betalningar).
+- PAYMENT_CANCEL_PENDING_UNSIGNED: the bank has not confirmed the cancel of a payment it reports unsigned; nothing is paid unless someone signs it. The status sync (every 15 minutes) applies the bank's cancel; read the order again after it, and cancel again if it is still open. Do not prepare a new payment of the invoice meanwhile.
 - PAYMENT_CANCEL_NOT_CONFIRMED: the bank did not confirm; check the payment in the online bank. The order is unchanged.
 - PAYMENT_CANCEL_CONFIRMATION_REQUIRED: the bank may hold the payment but its answer was lost; a person resolves the order in Accounted.
 - PAYMENT_ORDER_CREATE_IN_PROGRESS: the payment is on its way to the bank right now; wait a few minutes.

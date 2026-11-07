@@ -87,14 +87,15 @@ export const SONNET_MODEL =
 export const EFFORT_STANDARD = 'high' as const
 export const EFFORT_DEEP = 'xhigh' as const
 
-// Output ceilings per tier. Previously derived as budget + 4096; with no budget
-// to derive from these are explicit, and there are now three of them because
-// max_tokens caps thinking AND the visible reply together: an intent that does
-// not think must not inherit a ceiling sized for one that does.
+// Output ceilings per tier. max_tokens caps thinking AND the visible reply
+// together, and it is a ceiling, not a spend: only generated tokens are billed.
 //
-// NO_THINKING is the old 4096 reply cap scaled by ~30% for Sonnet 5's new
-// tokenizer, which spends that much more on the same Swedish text, so the
-// effective reply length is unchanged rather than quietly cut.
-export const MAX_TOKENS_NO_THINKING = 5400
+// There is no "no thinking" tier. An intent without a `thinking` config sends
+// no `thinking` field, and Sonnet 5 then runs adaptive thinking at its default
+// effort (high), with the thinking text omitted. That is the same model at the
+// same effort as EFFORT_STANDARD, so it gets the same ceiling. The former
+// 5400 reply-sized cap let a heavy turn (bokslut.step, crm#1697) spend all of
+// it on hidden thinking and end with no text at all. ask-service.ts hit and
+// fixed the same thing for the ask surface.
 export const MAX_TOKENS_STANDARD = 16000
 export const MAX_TOKENS_DEEP = 24000

@@ -2,7 +2,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
-import { ArchiveFolder, collectBytes, readAhead, type ArchiveRead } from './archive-folder'
+import { ArchiveFolder, ArchiveTooLargeError, collectBytes, readAhead, type ArchiveRead } from './archive-folder'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
@@ -43,9 +43,18 @@ import type {
   IncomeStatementReport,
 } from '@/types'
 
-export type FullArchiveOptions =
+export type FullArchiveOptions = (
   | { scope: 'period'; period_id: string; include_documents?: boolean }
   | { scope: 'all'; include_documents?: boolean }
+) & {
+  /**
+   * generateFullArchive only: the most the caller can keep. Past it the build
+   * stops with ArchiveTooLargeError, before the behandlingshistorik or the
+   * ZIP is held whole (crm#1703: a period with 50 000 audit rows ran the
+   * function out of memory). The streamed download has no ceiling.
+   */
+  max_bytes?: number
+}
 
 export type ArchiveScope = FullArchiveOptions['scope']
 
@@ -181,7 +190,7 @@ export async function generateFullArchive(
   companyId: string,
   options: FullArchiveOptions
 ): Promise<ArrayBuffer> {
-  return collectBytes(streamFullArchive(supabase, companyId, options))
+  return collectBytes(streamFullArchive(supabase, companyId, options), options.max_bytes)
 }
 
 /**
@@ -272,10 +281,11 @@ async function buildFullArchive(
 
   const revision = zip.folder('revision')
 
+  const budget = options.max_bytes !== undefined ? auditBudget(options.max_bytes) : undefined
   const auditEntries =
     options.scope === 'period'
-      ? await fetchPeriodAuditEntries(supabase, companyId, periods[0])
-      : await fetchAllAuditEntries(supabase, companyId, {})
+      ? await fetchPeriodAuditEntries(supabase, companyId, periods[0], budget)
+      : await fetchAllAuditEntries(supabase, companyId, {}, budget)
   revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
 
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, options.scope)
@@ -1873,15 +1883,37 @@ async function buildEntryToPeriodMap(
  * the window is complemented with every audit row touching the period's
  * journal entries and lines, regardless of when it was logged.
  */
+/**
+ * What the behandlingshistorik may take of an archive with a ceiling: each
+ * page of audit rows is charged its JSON length as read, so the build stops
+ * at the ceiling instead of holding every row and then their text. The
+ * archive writes the rows indented, longer than charged, so the charge never
+ * refuses a file that would have fit.
+ */
+interface AuditBudget {
+  charge(rows: AuditLogEntry[]): void
+}
+
+function auditBudget(maxBytes: number): AuditBudget {
+  let used = 0
+  return {
+    charge(rows) {
+      for (const row of rows) used += JSON.stringify(row).length
+      if (used > maxBytes) throw new ArchiveTooLargeError(maxBytes)
+    },
+  }
+}
+
 async function fetchPeriodAuditEntries(
   supabase: SupabaseClient,
   companyId: string,
-  period: FiscalPeriodRow
+  period: FiscalPeriodRow,
+  budget?: AuditBudget
 ): Promise<AuditLogEntry[]> {
   const windowed = await fetchAllAuditEntries(supabase, companyId, {
     from_date: period.period_start,
     to_date: `${period.period_end}T23:59:59.999Z`,
-  })
+  }, budget)
 
   const entryIds = (
     await fetchAllRows<{ id: string }>(({ from, to }) =>
@@ -1937,6 +1969,7 @@ async function fetchPeriodAuditEntries(
         .order('id', { ascending: true })
         .range(from, to)
     )
+    budget?.charge(rows.filter((row) => !byId.has(row.id)))
     for (const row of rows) byId.set(row.id, row)
   }
 
@@ -1947,7 +1980,8 @@ async function fetchPeriodAuditEntries(
 async function fetchAllAuditEntries(
   supabase: SupabaseClient,
   companyId: string,
-  filters: { from_date?: string; to_date?: string }
+  filters: { from_date?: string; to_date?: string },
+  budget?: AuditBudget
 ): Promise<AuditLogEntry[]> {
   const all: AuditLogEntry[] = []
   const pageSize = 500
@@ -1962,6 +1996,7 @@ async function fetchAllAuditEntries(
       includeCount: false,
       ...(after ? { after } : {}),
     })
+    budget?.charge(result.data)
     all.push(...result.data)
     if (result.data.length < pageSize) {
       break

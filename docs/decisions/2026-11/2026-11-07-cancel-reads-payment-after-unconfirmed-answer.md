@@ -1,0 +1,1 @@
+[2026-11-07] After a cancel answered not_cancelled or needs_authorisation the payment is read once and the bank's status applied as the sync does; one still unsigned answers PAYMENT_CANCEL_PENDING_UNSIGNED, never a local cancel: the bank closed 9 of 9 such orders (crm#1699).

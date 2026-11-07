@@ -40,6 +40,9 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
   // The pinned document stays underlag (its inbox item is matched to the
   // row): this one is added beside it, nothing is replaced (crm#1479).
   const addsToExisting = !willOverwrite && data.adds_to_existing === true
+  // The row is already booked and its document is the verifikat's underlag:
+  // this one joins that verifikat, the posted entry does not change.
+  const addsToVerifikat = addsToExisting && data.adds_to_verifikat === true
   const existingDocName = data.existing_document_file_name as string | undefined
   // Fail safe: if the staging tool didn't explicitly assert the existing doc
   // is NOT räkenskapsinformation (i.e. `=== false`), treat overwrite as a
@@ -109,9 +112,13 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
       )}
       {addsToExisting && (
         <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
-          {existingDocName
-            ? t('attach_adds_to_existing', { file: existingDocName })
-            : t('attach_adds_to_existing_unnamed')}
+          {addsToVerifikat
+            ? existingDocName
+              ? t('attach_adds_to_verifikat', { file: existingDocName })
+              : t('attach_adds_to_verifikat_unnamed')
+            : existingDocName
+              ? t('attach_adds_to_existing', { file: existingDocName })
+              : t('attach_adds_to_existing_unnamed')}
         </div>
       )}
       {willOverwrite && !existingIsAccounting && (

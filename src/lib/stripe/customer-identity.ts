@@ -141,6 +141,11 @@ export interface SyncedBillingIdentity {
   addressOnFile: boolean
   /** The customer holds the company's legal name. */
   nameOnFile: boolean
+  /**
+   * The tax ID value the customer carries (ours, or one the payer entered
+   * earlier), when known. Null when none was looked up or added.
+   */
+  taxId: string | null
 }
 
 /** What Checkout assumes when nothing was prefilled: it collects everything itself. */
@@ -148,6 +153,7 @@ export const NOTHING_ON_FILE: SyncedBillingIdentity = Object.freeze({
   taxIdOnFile: false,
   addressOnFile: false,
   nameOnFile: false,
+  taxId: null,
 })
 
 /**
@@ -171,10 +177,12 @@ export async function syncStripeCustomerIdentity(
   if (Object.keys(fields).length > 0) await stripe.customers.update(customerId, fields)
 
   let taxIdOnFile = false
+  let taxId: string | null = null
   if (identity.vatNumber) {
     if (!opts.justCreated) {
       const existing = await stripe.customers.listTaxIds(customerId, { limit: 1 })
       taxIdOnFile = existing.data.length > 0
+      taxId = existing.data[0]?.value ?? null
     }
     if (!taxIdOnFile) {
       // Keyed: a renewal and a checkout send several subscription events at
@@ -185,10 +193,47 @@ export async function syncStripeCustomerIdentity(
         { idempotencyKey: `customer-tax-id:${customerId}:${identity.vatNumber}` },
       )
       taxIdOnFile = true
+      taxId = identity.vatNumber
     }
   }
 
-  return { taxIdOnFile, addressOnFile: identity.address !== null, nameOnFile: identity.name !== null }
+  return { taxIdOnFile, addressOnFile: identity.address !== null, nameOnFile: identity.name !== null, taxId }
+}
+
+/** Stripe's ceiling for a Checkout custom_text message. */
+const CHECKOUT_TEXT_MAX = 1200
+
+/**
+ * The sentence Checkout shows beside the pay button when the company's
+ * identity is already on the Stripe customer.
+ *
+ * With the identity prefilled, Stripe hides tax ID collection (it never
+ * shows a customer's saved tax IDs) and Checkout keeps the name, so the page
+ * shows no company at all: a payer reported that Checkout "does not let me
+ * enter company details or VAT ID" for a company whose name, org number, VAT
+ * number and address were on the customer (agent feedback 2026-11-02). This
+ * says what the invoice will carry and where to change it. Only what the sync
+ * actually wrote is listed; null when there is no name on file, in which
+ * case Checkout collects the details itself.
+ */
+export function checkoutIdentityNotice(
+  identity: CompanyBillingIdentity,
+  synced: SyncedBillingIdentity,
+  locale: 'sv' | 'en',
+): string | null {
+  if (!synced.nameOnFile || !identity.name) return null
+  const sv = locale === 'sv'
+  const parts = [identity.name]
+  if (identity.orgNumber) parts.push(`${sv ? 'org.nr' : 'org. no.'} ${identity.orgNumber}`)
+  if (synced.taxId) parts.push(`${sv ? 'momsreg.nr' : 'VAT no.'} ${synced.taxId}`)
+  if (synced.addressOnFile && identity.address) {
+    const a = identity.address
+    parts.push([a.line1, a.line2, [a.postal_code, a.city].filter(Boolean).join(' ')].filter(Boolean).join(', '))
+  }
+  const message = sv
+    ? `Fakturan ställs ut på ${parts.join(', ')}. Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.`
+    : `The invoice is issued to ${parts.join(', ')}. Anything wrong? Change it under Settings > Company > General and start the payment again.`
+  return message.length > CHECKOUT_TEXT_MAX ? `${message.slice(0, CHECKOUT_TEXT_MAX - 3)}...` : message
 }
 
 /**

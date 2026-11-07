@@ -18,6 +18,7 @@ import type {
   SIETransactionLine,
   SIEObjectBalance,
   SIEAccountMappingRecord,
+  SIEVoucher,
 } from './types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import type { SIEPreparedEntry } from './sie-job-contract'
@@ -811,11 +812,21 @@ export function prepareSIEVouchers(
     accountIds: Map<string, string>
     /** Skipped vouchers still waiting for a booked successor, carried from the previous voucher group. */
     pendingNumberGaps?: SIEPendingNumberGaps
+    /**
+     * Series whose numbers rise through the whole file (seriesNumberedInOrder):
+     * only there does a number missing between two of its vouchers hold its
+     * place. Omitted (an append, a job snapshotted before this): none does.
+     */
+    numberedInOrder?: ReadonlySet<string>
+    /** The last source number seen per series, carried from the previous voucher group. */
+    lastSourceNumbers?: Record<string, number>
   },
 ): {
   preparedEntries: SIEPreparedEntry[]
   /** Skipped vouchers no booked voucher of their series has followed yet: the next group's input. */
   pendingNumberGaps: SIEPendingNumberGaps
+  /** The last source number seen per series: the next group's input. */
+  lastSourceNumbers: Record<string, number>
   skippedDetails: {
     voucherId: string
     date: string
@@ -830,7 +841,9 @@ export function prepareSIEVouchers(
     originalLineCount?: number
   }[]
 } {
-  const results: ReturnType<typeof prepareSIEVouchers> = { preparedEntries: [], skippedDetails: [], pendingNumberGaps: {} }
+  const results: ReturnType<typeof prepareSIEVouchers> = {
+    preparedEntries: [], skippedDetails: [], pendingNumberGaps: {}, lastSourceNumbers: {},
+  }
   // A voucher the file numbers but the import does not book (crm#1599: one
   // the source system cancelled, only #BTRANS rows left) keeps its number:
   // the next booked voucher of its series carries the count as numberGap, the
@@ -838,6 +851,12 @@ export function prepareSIEVouchers(
   // gap (BFNAR 2013:2, voucher_gap_explanations). Without this every later
   // voucher of the series lands one number below its source number.
   const pendingGaps: SIEPendingNumberGaps = structuredClone(options.pendingNumberGaps ?? {})
+  // A number the file skips between two vouchers of a series (the source
+  // system left the voucher out of the export) is held the same way, so the
+  // vouchers after it keep their numbers too. Only in a series whose numbers
+  // rise through the whole file: out of order, the writer's numbering cannot
+  // follow the source anyway, and a held number would be explained wrongly.
+  const lastNumbers: Record<string, number> = { ...(options.lastSourceNumbers ?? {}) }
 
   // Pre-filter and prepare all valid vouchers
   interface PreparedVoucher {
@@ -980,11 +999,29 @@ export function prepareSIEVouchers(
     // A skipped voucher the source numbered holds its number for the next
     // booked voucher of the series. Without a source number (SIE4I) there is
     // no numbering to follow, nor for a repeated number (it holds none).
-    const holdNumber = (why: string) => {
-      if (voucher.numberOmitted || voucher.numberRepeated || !Number.isFinite(voucher.number)) return
+    const numbered = !voucher.numberOmitted && !voucher.numberRepeated && Number.isFinite(voucher.number)
+    const holdNumbers = (ref: string, count: number) => {
       const pending = (pendingGaps[resolvedSeries] ??= { count: 0, refs: [] })
-      pending.count++
-      if (pending.refs.length < GAP_REFS_NAMED) pending.refs.push(`${voucherId} (${why})`)
+      pending.count += count
+      if (pending.refs.length < GAP_REFS_NAMED) {
+        // `named` only once a ref names a range: a hold of single refs keeps its checkpointed shape.
+        const named = pending.named ?? pending.refs.length
+        pending.refs.push(ref)
+        if (count !== 1 || pending.named !== undefined) pending.named = named + count
+      }
+    }
+    const holdNumber = (why: string) => {
+      if (numbered) holdNumbers(`${voucherId} (${why})`, 1)
+    }
+    const ownSeries = voucher.series?.trim() ?? ''
+    if (numbered && ownSeries && options.numberedInOrder?.has(ownSeries)) {
+      const last = lastNumbers[ownSeries]
+      if (last !== undefined && voucher.number > last + 1) {
+        const from = `${ownSeries}${last + 1}`
+        const missing = voucher.number - last - 1
+        holdNumbers(`${missing === 1 ? from : `${from}-${ownSeries}${voucher.number - 1}`} (finns inte i filen)`, missing)
+      }
+      lastNumbers[ownSeries] = voucher.number
     }
 
     // Skip vouchers with unmapped accounts
@@ -1140,6 +1177,7 @@ export function prepareSIEVouchers(
     })),
   })) as SIEPreparedEntry[]
   results.pendingNumberGaps = pendingGaps
+  results.lastSourceNumbers = lastNumbers
 
   return results
 }
@@ -1151,11 +1189,34 @@ const GAP_REFS_NAMED = 5
  * Skipped vouchers of one series not yet followed by a booked one: the count
  * of numbers to hold and the first few refs with why each was not booked.
  */
-export type SIEPendingNumberGaps = Record<string, { count: number; refs: string[] }>
+export type SIEPendingNumberGaps = Record<string, {
+  count: number
+  refs: string[]
+  /** Numbers the refs cover, when a ref names a range; absent, one per ref. */
+  named?: number
+}>
+
+/**
+ * The series whose numbered vouchers rise through the file, in file order:
+ * the series where a number missing between two vouchers can hold its place.
+ * Repeated and omitted numbers hold none and are left out.
+ */
+export function seriesNumberedInOrder(vouchers: readonly SIEVoucher[]): string[] {
+  const last = new Map<string, number>()
+  const disordered = new Set<string>()
+  for (const voucher of vouchers) {
+    const series = voucher.series?.trim() ?? ''
+    if (!series || voucher.numberOmitted || voucher.numberRepeated || !Number.isFinite(voucher.number)) continue
+    const previous = last.get(series)
+    if (previous !== undefined && voucher.number <= previous) disordered.add(series)
+    last.set(series, voucher.number)
+  }
+  return [...last.keys()].filter((series) => !disordered.has(series))
+}
 
 /** The gap's documented explanation (voucher_gap_explanations, at most 500 characters). */
-function numberGapExplanation(held: { count: number; refs: string[] }): string {
-  const rest = held.count - held.refs.length
+function numberGapExplanation(held: { count: number; refs: string[]; named?: number }): string {
+  const rest = held.count - (held.named ?? held.refs.length)
   const named = rest > 0 ? `${held.refs.join(', ')} och ${rest} till` : held.refs.join(', ')
   const one = held.count === 1
   const text = `SIE-import: källsystemets ${one ? 'verifikation' : 'verifikationer'} ${named} bokfördes inte. ` +

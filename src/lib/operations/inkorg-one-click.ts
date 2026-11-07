@@ -588,7 +588,11 @@ function invoiceOf(
   }
   const vatOf = (index: number) => itemVat[index] ?? netVat(items[index].amount, items[index].vat_rate)
   const registeredTotal = sumOre(items.map((item, index) => item.amount + (vat.kind === 'reverse_charge' ? 0 : vatOf(index))))
-  if (total !== null && Math.abs(registeredTotal - total) > 0.01) return { ok: false, reason: 'amount_mismatch' }
+  // To the öre: the items carry the document's own net and VAT, so a total
+  // one öre off is the supplier's öresavrundning, and registering the items
+  // would leave the reskontra that öre apart from what the invoice bills. The
+  // editor carries it on 3740.
+  if (total !== null && registeredTotal !== roundOre(total)) return { ok: false, reason: 'amount_mismatch' }
 
   const invoice: OneClickInvoiceBody = {
     supplier_invoice_number: invoiceNumber,

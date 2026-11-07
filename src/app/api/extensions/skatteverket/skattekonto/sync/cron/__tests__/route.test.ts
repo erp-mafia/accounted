@@ -221,6 +221,25 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     expect(log.error).not.toHaveBeenCalled()
   })
 
+  // crm#1701 / Vercel: "Inte ansluten till Skatteverket. Anslut med BankID
+  // först." logged as "Sync failed" several times a day, for companies whose
+  // token row another process was replacing on a refresh at that moment.
+  it('a token row gone by the time the sync reads it is reported as not_connected, not logged as an error', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    mocks.syncSkattekonto.mockRejectedValue(
+      new SkatteverketAuthError('Inte ansluten till Skatteverket. Anslut med BankID först.', 'NOT_CONNECTED'),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 1, notConnected: 1, expired: 0, errors: 0 })
+    expect(body.results[0]).toMatchObject({ companyId, status: 'not_connected', error: 'NOT_CONNECTED' })
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
   it('a real failure is still an error', async () => {
     const companyId = '11111111-1111-4111-8111-111111111111'
     const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]

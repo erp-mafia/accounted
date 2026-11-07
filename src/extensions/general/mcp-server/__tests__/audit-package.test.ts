@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { toToolError } from '../tool-result'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { ArchiveTooLargeError } from '@/lib/reports/archive-folder'
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
   generateFullArchive: vi.fn(),
@@ -159,7 +160,7 @@ describe('gnubok_audit_package: execute', () => {
 
   it('throws when archive would exceed size limit and include_documents=true', async () => {
     vi.mocked(estimateArchiveSize).mockResolvedValue({
-      total_bytes: 100 * 1024 * 1024,  // > 80 MB limit
+      total_bytes: 100 * 1024 * 1024,  // > 50 MB limit
       breakdown: {} as never,
     } as never)
 
@@ -175,6 +176,23 @@ describe('gnubok_audit_package: execute', () => {
         'company-1', 'user-1', supabase,
       ),
     ).rejects.toMatchObject({ code: 'AUDIT_PACKAGE_TOO_LARGE', message: expect.stringMatching(/exceed.*MB/) })
+  })
+
+  it('refuses before building a package the documents bucket could never store (50 MB), not at the old 80 MB', async () => {
+    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 60 * 1024 * 1024 } as never)
+    const tool = tools.find((t) => t.name === 'gnubok_audit_package')!
+    const supabase = makePeriodMock({ id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+
+    await expect(tool.execute({ fiscal_period_id: 'p1' }, 'company-1', 'user-1', supabase)).rejects.toMatchObject({
+      code: 'AUDIT_PACKAGE_TOO_LARGE',
+    })
+    expect(generateFullArchive).not.toHaveBeenCalled()
+
+    const estimate = (await tool.execute({ fiscal_period_id: 'p1', estimate_only: true }, 'company-1', 'user-1', supabase)) as {
+      size_limit_bytes: number
+      within_limit: boolean
+    }
+    expect(estimate).toMatchObject({ size_limit_bytes: 50 * 1024 * 1024, within_limit: false })
   })
 
   it('throws when fiscal period is not found', async () => {
@@ -208,7 +226,7 @@ describe('gnubok_audit_package: an archive Storage refuses as too large', () => 
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'admin', companyId: 'company-1' })
-    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 60 * 1024 * 1024 } as never) // under the 80 MB gate
+    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 40 * 1024 * 1024 } as never) // under the 50 MB gate; a bucket cap lowered later
     vi.mocked(generateFullArchive).mockResolvedValue({ byteLength: 57 * 1024 * 1024 } as never)
   })
 
@@ -240,5 +258,51 @@ describe('gnubok_audit_package: an archive Storage refuses as too large', () => 
     const error = await refusal({ fiscal_period_id: 'p1' }, { message: 'Bucket not found', status: 404, statusCode: '404' })
     expect(error.code).not.toBe('AUDIT_PACKAGE_TOO_LARGE')
     expect(error.message_en).toBe('Failed to upload archive: Bucket not found')
+  })
+})
+
+describe('gnubok_audit_package: a period whose behandlingshistorik alone is too large (crm#1703)', () => {
+  // Documents were the only part the estimate counted: a period with 50 000
+  // audit rows held them all, then their JSON, then the ZIP, and the function
+  // ran out of memory, answering a platform HTML 500 instead of a JSON-RPC
+  // result. The build now stops at the cap and the tool answers a typed error.
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 9 * 1024 * 1024 } as never)
+    vi.mocked(generateFullArchive).mockRejectedValue(new ArchiveTooLargeError(50 * 1024 * 1024))
+  })
+
+  async function refusal(args: Record<string, unknown>) {
+    const tool = tools.find((t) => t.name === 'gnubok_audit_package')!
+    const supabase = makePeriodMock({ id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+    const thrown = await tool.execute(args, 'company-1', 'user-1', supabase).catch((err: unknown) => err)
+    return toToolError(thrown).error
+  }
+
+  it('builds with the cap as max_bytes and answers AUDIT_PACKAGE_TOO_LARGE, not retryable', async () => {
+    const error = await refusal({ fiscal_period_id: 'p1' })
+
+    expect(generateFullArchive).toHaveBeenCalledWith(expect.anything(), 'company-1', {
+      scope: 'period',
+      period_id: 'p1',
+      include_documents: true,
+      max_bytes: 50 * 1024 * 1024,
+    })
+    expect(error).toMatchObject({ code: 'AUDIT_PACKAGE_TOO_LARGE', retryable: false })
+    expect(error.message_en).toMatch(/include_documents=false/)
+  })
+
+  it('points at the web archive, not include_documents=false, when documents were already left out', async () => {
+    const error = await refusal({ fiscal_period_id: 'p1', include_documents: false })
+    expect(error.code).toBe('AUDIT_PACKAGE_TOO_LARGE')
+    expect(error.message_en).toMatch(/behandlingshistorik/)
+    expect(error.message_en).not.toMatch(/include_documents=false/)
+  })
+
+  it('lets any other failure through as it was', async () => {
+    vi.mocked(generateFullArchive).mockRejectedValue(new Error('boom'))
+    const error = await refusal({ fiscal_period_id: 'p1' })
+    expect(error.code).not.toBe('AUDIT_PACKAGE_TOO_LARGE')
   })
 })

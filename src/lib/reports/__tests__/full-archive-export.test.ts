@@ -9,6 +9,7 @@ import {
   MASTER_DATA_DUMP_TABLES,
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { ArchiveTooLargeError } from '../archive-folder'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
 import { balanceSheetFromTrialBalance } from '../balance-sheet'
@@ -442,6 +443,50 @@ describe('generateFullArchive', () => {
       expect(zip.file('dokument/manifest.json')).toBeNull()
       expect(zip.file('bokforing.se')).not.toBeNull()
       expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
+    })
+
+    it('stops reading the behandlingshistorik once it passes max_bytes, before holding it whole (crm#1703)', async () => {
+      const auditRow = (i: number) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        created_at: `2026-09-27T19:22:19.${String(999999 - i).padStart(6, '0')}+00:00`,
+        action: 'INSERT',
+        new_state: { note: 'x'.repeat(200) },
+      })
+      const page = (from: number) => Array.from({ length: 500 }, (_, i) => auditRow(from + i))
+      mockGetAuditLog
+        .mockResolvedValueOnce({ data: page(0) as never, count: 0 })
+        .mockResolvedValueOnce({ data: page(500) as never, count: 0 })
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+      ])
+
+      // One page is about 150 KB of JSON: the second passes 200 KB.
+      await expect(
+        generateFullArchive(supabase as any, 'company-1', {
+          scope: 'period',
+          period_id: PERIOD_2024.id,
+          include_documents: false,
+          max_bytes: 200 * 1024,
+        }),
+      ).rejects.toBeInstanceOf(ArchiveTooLargeError)
+      expect(mockGetAuditLog).toHaveBeenCalledTimes(2)
+    })
+
+    it('stops collecting the ZIP once it passes max_bytes', async () => {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+      ])
+
+      await expect(
+        generateFullArchive(supabase as any, 'company-1', {
+          scope: 'period',
+          period_id: PERIOD_2024.id,
+          include_documents: false,
+          max_bytes: 1,
+        }),
+      ).rejects.toBeInstanceOf(ArchiveTooLargeError)
     })
 
     it('throws when fiscal period not found', async () => {

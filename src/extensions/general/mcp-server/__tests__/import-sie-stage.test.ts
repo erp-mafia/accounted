@@ -85,6 +85,43 @@ describe('gnubok_import_sie: stage-time validation', () => {
   // dashboard and v1. They used to stage Boolean(undefined) = false, so an
   // omitted set imported nothing (refused after approval) or a first year
   // without its IB (decision 5, 2026-10-13).
+  // crm#1684: the approver signed off on a mapping count; an account the
+  // agent's mappings move to another number now shows on the approval card.
+  it('names an account the mappings book on another number on the approval card', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null })
+    enqueue({ data: { id: 'op-sie' }, error: null })
+    const remapped = COVER_VALID_SIE.map((m) => (m.sourceAccount === '6110' ? { ...m, targetAccount: '6100', matchType: 'manual', isOverride: true } : m))
+
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: remapped },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.remapped_accounts).toEqual([{ source: '6110', target: '6100' }])
+    expect(result.preview.compliance_warning).toContain('6110 → 6100')
+    const insert = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(insert.preview_data.compliance_warning).toContain('6110 → 6100')
+  })
+
+  it('adds no remap note when every account keeps its own number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5566778899' }, error: null })
+    enqueue({ data: { id: 'op-sie' }, error: null })
+    const result = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+    expect(result.preview).not.toHaveProperty('remapped_accounts')
+    expect(result.preview).not.toHaveProperty('compliance_warning')
+  })
+
   it('stages the job\'s defaults for omitted flags, and explicit ones as given', async () => {
     const omitted = createQueuedMockSupabase()
     omitted.enqueue({ data: { org_number: '5566778899' }, error: null })

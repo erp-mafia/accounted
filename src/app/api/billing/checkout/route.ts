@@ -6,6 +6,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
 import {
   NOTHING_ON_FILE,
+  checkoutIdentityNotice,
   loadCompanyBillingIdentity,
   syncStripeCustomerIdentity,
   type SyncedBillingIdentity,
@@ -146,15 +147,23 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       .upsert({ company_id: companyId, stripe_customer_id: customerId }, { onConflict: 'company_id' })
   }
 
+  // Checkout in the language the app is shown in (sv and en are both Stripe
+  // locales); left out, Stripe picks the browser's language.
+  const locale = localeFromCookieHeader(request.headers.get('cookie'))
+
   // The user is logged in to a company we already know (PH 191): put its
   // legal name, address, org number and VAT number on the Stripe customer so
   // Checkout does not ask for them again and every invoice and receipt
   // carries them. Best effort: on any failure Checkout opens as before and
   // collects the details itself, so a prefill problem never blocks payment.
   let synced: SyncedBillingIdentity = NOTHING_ON_FILE
+  // A prefilled identity is invisible in Checkout (no tax ID form, no
+  // business name field), so the page says what the invoice will carry.
+  let identityNotice: string | null = null
   try {
     const identity = await loadCompanyBillingIdentity(supabase, companyId)
     synced = await syncStripeCustomerIdentity(stripe, customerId, identity, { justCreated })
+    identityNotice = checkoutIdentityNotice(identity, synced, locale)
   } catch (err) {
     log.warn('billing.checkout: prefilling the Stripe customer failed, Checkout collects the details', {
       error: err instanceof Error ? err.message : String(err),
@@ -198,10 +207,9 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       metadata: { company_id: companyId },
       ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
+    ...(identityNotice ? { custom_text: { submit: { message: identityNotice } } } : {}),
     allow_promotion_codes: true,
-    // Checkout in the language the app is shown in (sv and en are both Stripe
-    // locales); left out, Stripe picks the browser's language.
-    locale: localeFromCookieHeader(request.headers.get('cookie')),
+    locale,
     success_url: `${appOrigin}/settings/billing?success=1`,
     cancel_url: `${appOrigin}/settings/billing?canceled=1`,
   })

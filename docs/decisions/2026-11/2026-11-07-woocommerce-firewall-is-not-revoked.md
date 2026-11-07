@@ -1,0 +1,1 @@
+[2026-11-07] A WooCommerce 401/403/406 without a WooCommerce JSON code (WAF page, Cloudflare challenge) is a firewall refusal, never a revoked key: the sync keeps the keys and connect names the firewall. The working auth mode is remembered per run only, no column (crm#1669).

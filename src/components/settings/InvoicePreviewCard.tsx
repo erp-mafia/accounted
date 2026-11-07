@@ -15,6 +15,7 @@ import { useCustomers } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { readPdfPreviewMeta } from '@/lib/invoices/editor/preview-request'
+import { PdfCanvasPreview, useDrawsPdfInPage } from '@/components/invoices/PdfCanvasPreview'
 import type { CompanySettings } from '@/types'
 
 interface InvoicePreviewCardProps {
@@ -33,6 +34,9 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   // instead of refusing: say what a real invoice would lack above the PDF.
   const [payeeNotice, setPayeeNotice] = useState<string | null>(null)
   const currentUrlRef = useRef<string | null>(null)
+  // Safari and every iOS browser leave the <object> blank for a blob: PDF
+  // (crm#1689): there the page draws the PDF itself.
+  const drawsInPage = useDrawsPdfInPage()
 
   const sampleItemDescription = t('sample_item_description')
   // The sample invoice's customer: the first of the cached register.
@@ -181,7 +185,24 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           <p className="text-xs text-muted-foreground">{payeeNotice}</p>
         )}
 
-        {!isLoading && !error && blobUrl && (
+        {!isLoading && !error && blobUrl && drawsInPage && (
+          <PdfCanvasPreview
+            url={blobUrl}
+            fit="width"
+            title={t('iframe_title')}
+            className="h-[70vh] w-full"
+            fallback={
+              <p className="p-4 text-sm text-muted-foreground">
+                {t('error')}:{' '}
+                <a href={blobUrl} target="_blank" rel="noreferrer" className="underline">
+                  {t('iframe_title')}
+                </a>
+              </p>
+            }
+          />
+        )}
+
+        {!isLoading && !error && blobUrl && !drawsInPage && (
           // <object> + type="application/pdf" invokes Chrome's PDF plugin
           // directly. <iframe> went through Chrome's frame pipeline first
           // and intermittently surfaced "Det här innehållet har blockerats"
