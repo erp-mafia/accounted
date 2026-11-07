@@ -1099,9 +1099,11 @@ export async function restartPaymentSigning(
     }
   }
   let next = moved.batch
-  // A new signing over the same payments: they keep the PSU-ID they were
-  // created with, and the IP address of the person restarting it.
-  if (!moved.same && built.storedPsu) {
+  // The payments keep the PSU-ID they were created with, and the signing the
+  // IP address of the person restarting it, a new signing or the same one: a
+  // signing started before the address was kept has none, and the status
+  // sync's reads at SEB and Länsförsäkringar are refused without one.
+  if (built.storedPsu) {
     await rememberBatchPsu({ batchId: next.id, companyId: ctx.companyId, personalNumber: party.ctx.signerPersonalNumber, ipAddress: party.ctx.psuIpAddress })
   }
   if (!moved.same && next.signing_target === 'basket') {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
 // 1630 here, what every company resolved to before the setting existed.
@@ -42,6 +42,12 @@ vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...args: unknown[]) => emitMock(...args) } }))
+// Bucket `proposed` of a bank account has its own suite (items.test.ts):
+// here only what use_proposals makes of it.
+const proposedBankRowsMock = vi.fn()
+vi.mock('../items', () => ({
+  readProposedBankRows: (...args: unknown[]) => proposedBankRowsMock(...args),
+}))
 // The bank-row ignore rule (lib/transactions/ignore.ts) runs for real; only
 // its suggestion-log side effect is observed here (record.ts has its suite).
 const snapshotSuggestionsMock = vi.fn()
@@ -73,6 +79,34 @@ const R1 = '22222222-2222-4222-8222-222222222222'
 const R2 = '33333333-3333-4333-8333-333333333333'
 const E1 = '44444444-4444-4444-8444-444444444444'
 const E2 = '55555555-5555-4555-8555-555555555555'
+
+function oneToOne(journalEntryId: string, confidence: number) {
+  return {
+    journal_entry_id: journalEntryId,
+    voucher_number: null,
+    voucher_series: null,
+    entry_date: '2026-03-02',
+    description: '',
+    entry_status: 'posted' as const,
+    confidence,
+    reasons: ['auto_date_range'],
+  }
+}
+
+function sumSet(journalEntryIds: string[], confidence: number, reason: string) {
+  return {
+    ...oneToOne(journalEntryIds[0], confidence),
+    reasons: [reason],
+    vouchers: journalEntryIds.map((id, i) => ({
+      journal_entry_id: id,
+      voucher_number: i + 1,
+      voucher_series: 'A',
+      entry_date: '2026-03-05',
+      description: `Verifikat ${i + 1}`,
+      amount: 100,
+    })),
+  }
+}
 
 describe('matchPairs', () => {
   beforeEach(() => {
@@ -239,7 +273,9 @@ describe('matchPairs', () => {
     // Anchoring cannot be undone by Koppla bort, so a guessed pair the
     // person did not look at one by one leaves the receipt on the row.
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: R2, potential_journal_entry_id: E2, potential_match_confidence: 0.95 }] }) // proposals
+    proposedBankRowsMock.mockResolvedValue([
+      { transaction_id: R2, date: '2026-03-02', method: null, proposal: oneToOne(E2, 0.95) },
+    ])
     enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
     manualLinkMock.mockResolvedValue({ success: true })
 
@@ -506,24 +542,107 @@ describe('matchPairs', () => {
     expect(result?.skipped[0].message).toContain(E2)
   })
 
-  it('applies every bank proposal with use_proposals when there are more than 1,000', async () => {
-    const { supabase, findCalls } = createPagedMockSupabase({
-      open_bank_rows: manyRows(1001, (i) => ({
-        id: `tx-${i}`,
-        potential_journal_entry_id: `je-${i}`,
-        potential_match_confidence: 0.95,
-      })),
-      cash_accounts: [{ ledger_account: '1930' }],
-    })
+  it('links the sum-matched proposals list_reconciliation_items shows, as one 1:N pair each, at the same threshold (crm#1668)', async () => {
+    const E3 = '77777777-7777-4777-8777-777777777777'
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    proposedBankRowsMock.mockResolvedValue([
+      { transaction_id: R2, date: '2026-03-05', method: 'exact_sum_same_date', proposal: sumSet([E2, E3], 0.95, 'exact_sum_same_date') },
+      { transaction_id: R1, date: '2026-03-02', method: 'auto_date_range', proposal: oneToOne(E1, 0.95) },
+      { transaction_id: 'tx-window', date: '2026-03-04', method: 'exact_sum_within_window', proposal: sumSet([E1, E3], 0.85, 'exact_sum_within_window') },
+    ])
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
     manualLinkMock.mockResolvedValue({ success: true })
+    linkToVouchersMock.mockResolvedValue({
+      success: true,
+      allocations: [
+        { journal_entry_id: E2, amount: 600 },
+        { journal_entry_id: E3, amount: 400 },
+      ],
+    })
 
-    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { use_proposals: true })
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      use_proposals: true,
+      confidence_threshold: 0.9,
+    })
 
-    expect(result?.considered).toBe(1001)
-    expect(result?.applied).toHaveLength(1001)
-    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['company_id', COMPANY])
-    expect(findCalls('open_bank_rows', 'eq')).toContainEqual(['cash_account_id', CASH])
-    expect(findCalls('open_bank_rows', 'not')).toContainEqual(['potential_journal_entry_id', 'is', null])
+    expect(proposedBankRowsMock).toHaveBeenCalledWith(supabase, COMPANY, CASH)
+    // 0.85 is below the threshold, as list_reconciliation_items shows it.
+    expect(result?.considered).toBe(2)
+    expect(manualLinkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, USER, '1930', {
+      anchorUnderlag: false,
+      linkBasis: { basis: 'rule_amount_date', evidence: { rule_id: 'auto_date_range', score: 0.95 } },
+    })
+    expect(linkToVouchersMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      R2,
+      [
+        { journal_entry_id: E2, amount: undefined },
+        { journal_entry_id: E3, amount: undefined },
+      ],
+      USER,
+      '1930',
+      { dryRun: false },
+    )
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1 },
+      { external_id: R2, journal_entry_id: E2, allocated_amount: 600 },
+      { external_id: R2, journal_entry_id: E3, allocated_amount: 400 },
+    ])
+    expect(result?.skipped).toEqual([])
+  })
+
+  it('takes a sum-matched proposal below 0.9 when the threshold lets it in', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    proposedBankRowsMock.mockResolvedValue([
+      { transaction_id: R1, date: '2026-03-04', method: 'exact_sum_within_window', proposal: sumSet([E1, E2], 0.85, 'exact_sum_within_window') },
+    ])
+    enqueue({ data: { ledger_account: '1930' } })
+    linkToVouchersMock.mockResolvedValue({ success: true, allocations: [{ journal_entry_id: E1, amount: 1 }, { journal_entry_id: E2, amount: 2 }] })
+
+    const none = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { use_proposals: true, confidence_threshold: 0.9 }, { dryRun: true })
+    expect(none?.considered).toBe(0)
+
+    const some = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { use_proposals: true, confidence_threshold: 0.8 })
+    expect(some?.considered).toBe(1)
+    expect(linkToVouchersMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('set_confidence_threshold floors only the sum-matched sets: a weak 1:1 proposal still links (the page button, crm#1668)', async () => {
+    const E3 = '77777777-7777-4777-8777-777777777777'
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    proposedBankRowsMock.mockResolvedValue([
+      { transaction_id: R1, date: '2026-03-02', method: 'auto_date_range', proposal: oneToOne(E1, 0.75) },
+      { transaction_id: R2, date: '2026-03-05', method: 'exact_sum_same_date', proposal: sumSet([E2, E3], 0.95, 'exact_sum_same_date') },
+      { transaction_id: 'tx-window', date: '2026-03-04', method: 'exact_sum_within_window', proposal: sumSet([E1, E3], 0.85, 'exact_sum_within_window') },
+    ])
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
+    manualLinkMock.mockResolvedValue({ success: true })
+    linkToVouchersMock.mockResolvedValue({
+      success: true,
+      allocations: [
+        { journal_entry_id: E2, amount: 600 },
+        { journal_entry_id: E3, amount: 400 },
+      ],
+    })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      use_proposals: true,
+      set_confidence_threshold: 0.9,
+    })
+
+    expect(result?.considered).toBe(2)
+    expect(manualLinkMock).toHaveBeenCalledTimes(1)
+    expect(linkToVouchersMock).toHaveBeenCalledTimes(1)
+    expect(linkToVouchersMock.mock.calls[0][2]).toBe(R2)
+    expect(result?.applied.map((a) => a.external_id)).not.toContain('tx-window')
+  })
+
+  it('answers nothing to link for an account that is not the company\'s', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    proposedBankRowsMock.mockResolvedValue(null)
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { use_proposals: true }, { dryRun: true })
+    expect(result).toMatchObject({ considered: 0, applied: [], skipped: [] })
   })
 })
 

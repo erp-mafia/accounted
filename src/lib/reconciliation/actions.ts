@@ -17,7 +17,6 @@ import {
 } from '@/lib/transactions/voucher-bank-leg'
 import { chunk } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   evaluateSkattekontoLink,
   linkSkattekontoRow,
@@ -45,6 +44,7 @@ import {
 } from './skattekonto-split'
 import { settleLedgerEntries, undoLedgerSettlement, type LedgerSettlement } from './ledger-settlement'
 import { parseAccountKey } from './schemas'
+import { readProposedBankRows } from './items'
 import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 import { linkBasisForReconciliationMethod, type LinkEvidence } from '@/lib/links/link-basis'
 
@@ -137,6 +137,14 @@ export interface MatchPairsInput {
   use_proposals?: boolean
   /** Only with use_proposals: skip proposals below this confidence. */
   confidence_threshold?: number
+  /**
+   * Only with use_proposals on a bank account: also skip sum-matched sets
+   * (proposals with vouchers, 1:N) below this confidence. The matcher's 1:1
+   * proposals are not affected. The page's "Koppla N föreslagna" sends 0.9:
+   * one click links same-date sums (0.95), while 7-day window sums (0.85)
+   * stay for a per-row look (founder decision 2026-11-07, crm#1668).
+   */
+  set_confidence_threshold?: number
 }
 
 export interface MatchPairsResult {
@@ -454,7 +462,7 @@ async function proposalsAsPairs(
   supabase: SupabaseClient,
   companyId: string,
   accountKey: string,
-  threshold: number,
+  thresholds: { proposal: number; set: number },
   skattekontoAccount: SkattekontoLedgerAccount | null,
   /** Filled per bank transaction with the matcher's method and score, for the link basis. */
   bankProposalOut?: Map<string, { method: string | null; confidence: number | null }>,
@@ -470,7 +478,7 @@ async function proposalsAsPairs(
     // together (a single row alone does not settle the verifikat).
     const pairsByEntry = new Map<string, ReconciliationPair>()
     for (const i of status.items.proposed) {
-      if (!i.proposal || i.proposal.confidence < threshold) continue
+      if (!i.proposal || i.proposal.confidence < thresholds.proposal) continue
       const entryId = i.proposal.journal_entry_id
       const ids = i.proposal.external_ids ?? [i.item_id]
       const key = i.proposal.external_ids ? `group:${entryId}` : `row:${i.item_id}`
@@ -479,32 +487,25 @@ async function proposalsAsPairs(
     return Array.from(pairsByEntry.values())
   }
   if (parsed.kind === 'bank') {
-    // Paged: past 1,000 open proposals the rest were silently left out.
-    const data = await fetchAllRows<{
-      id: string
-      potential_journal_entry_id: string
-      potential_match_method: string | null
-      potential_match_confidence: number | string | null
-    }>(
-      ({ from, to }) =>
-        supabase
-          .from('open_bank_rows')
-          .select('id, potential_journal_entry_id, potential_match_method, potential_match_confidence')
-          .eq('company_id', companyId)
-          .eq('cash_account_id', parsed.cashAccountId)
-          .not('potential_journal_entry_id', 'is', null)
-          .order('date')
-          .order('id')
-          .range(from, to),
-    )
-    const kept = data.filter((r) => Number(r.potential_match_confidence ?? 0) >= threshold)
+    // The rows bucket `proposed` lists, by the listing's own rule (crm#1668):
+    // the matcher's 1:1 match, else a set of verifikat summing exactly to the
+    // row, which becomes one 1:N pair the dry run splits and the person
+    // approves. Reading the persisted column alone never saw a sum match.
+    const proposed = await readProposedBankRows(supabase, companyId, parsed.cashAccountId)
+    const kept = (proposed ?? [])
+      .filter(
+        (r) =>
+          r.proposal.confidence >= thresholds.proposal &&
+          (!r.proposal.vouchers || r.proposal.confidence >= thresholds.set),
+      )
+      .sort((a, b) => a.date.localeCompare(b.date) || a.transaction_id.localeCompare(b.transaction_id))
     for (const r of kept) {
-      bankProposalOut?.set(r.id, {
-        method: r.potential_match_method,
-        confidence: r.potential_match_confidence === null ? null : Number(r.potential_match_confidence),
-      })
+      bankProposalOut?.set(r.transaction_id, { method: r.method, confidence: r.proposal.confidence })
     }
-    return kept.map((r) => ({ external_ids: [r.id], journal_entry_ids: [r.potential_journal_entry_id] }))
+    return kept.map((r) => ({
+      external_ids: [r.transaction_id],
+      journal_entry_ids: r.proposal.vouchers?.map((v) => v.journal_entry_id) ?? [r.proposal.journal_entry_id],
+    }))
   }
   return []
 }
@@ -563,7 +564,14 @@ export async function matchPairs(
   const bankProposals = new Map<string, { method: string | null; confidence: number | null }>()
   if (input.use_proposals) {
     pairs.push(
-      ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0, skattekontoAccount, bankProposals)),
+      ...(await proposalsAsPairs(
+        supabase,
+        companyId,
+        accountKey,
+        { proposal: input.confidence_threshold ?? 0, set: input.set_confidence_threshold ?? 0 },
+        skattekontoAccount,
+        bankProposals,
+      )),
     )
   }
 

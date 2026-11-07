@@ -1033,6 +1033,38 @@ describe('restartPaymentSigning', () => {
     expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-2', companyId: COMPANY, personalNumber: KEPT_PSU, ipAddress: '203.0.113.10' })
   })
 
+  it('keeps the restarting person\'s IP address for the same signing too, so the status sync can read its payments', async () => {
+    // A signing started before the address was kept has none: SEB and
+    // Länsförsäkringar refuse the sync's status reads without one.
+    mock.storedBatchPsu.mockResolvedValue(KEPT_PSU)
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    const same = batch({ provider_batch_id: 'basket-old' })
+    const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
+    db.setTable('payment_order_batches', [{ data: same }, { data: same }, { data: same }, { data: { ...same, status: 'awaiting_signature' } }, { data: same }])
+    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: null }, { data: both }])
+    db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: same, orders: both } })
+
+    const result = await restart()
+
+    expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-1' } })
+    expect(mock.rememberBatchPsu).toHaveBeenCalledWith({ batchId: 'batch-1', companyId: COMPANY, personalNumber: KEPT_PSU, ipAddress: '203.0.113.10' })
+    expect(mock.rememberBatchPsu.mock.invocationCallOrder[0]).toBeLessThan((provider.startSigning as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!)
+  })
+
+  it('keeps nothing for a restart whose payments have no kept PSU-ID: the number typed is not the one they were created with', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    const same = batch({ provider_batch_id: 'basket-old' })
+    const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
+    db.setTable('payment_order_batches', [{ data: same }, { data: same }, { data: same }, { data: { ...same, status: 'awaiting_signature' } }, { data: same }])
+    db.setTable('payment_orders', [{ data: both }, { data: both }, { data: both }, { data: null }, { data: both }])
+    db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: same, orders: both } })
+
+    expect(await restart()).toMatchObject({ ok: true })
+    expect(mock.rememberBatchPsu).not.toHaveBeenCalled()
+  })
+
   it('signs nothing while a create of the signing has not ended', async () => {
     const provider = fakeProvider()
     registerPaymentInitiationProvider(provider)

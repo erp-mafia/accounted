@@ -13,6 +13,9 @@ const ReconciliationLinksBodySchema = z
   .object({
     ...reconciliationLinksBodyFields,
     dry_run: z.boolean().optional(),
+    // The page's "Koppla N föreslagna" floor for sum-matched sets (crm#1668);
+    // dashboard only, v1 and MCP keep confidence_threshold alone.
+    set_confidence_threshold: z.number().min(0).max(1).optional(),
   })
   .refine(...reconciliationLinksBodyRefinement)
 

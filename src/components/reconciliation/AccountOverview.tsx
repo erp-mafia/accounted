@@ -247,7 +247,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   async function matchProposals() {
     setBusy('proposals')
     try {
-      const data = await postJson(`${base}/links`, { use_proposals: true })
+      // One click links every 1:1 proposal and same-date sum (0.95); a sum
+      // found within the 7-day window (0.85) waits for its own row's Koppla.
+      const data = await postJson(`${base}/links`, { use_proposals: true, set_confidence_threshold: 0.9 })
       if (data) {
         const applied = (data.applied as unknown[]).length
         const skipped = (data.skipped as unknown[]).length

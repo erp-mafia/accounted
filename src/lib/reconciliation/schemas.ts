@@ -250,8 +250,8 @@ export const ReconciliationProposalSchema = z.object({
    * is linked to all of them (1:N) and journal_entry_id is the first. Length 1
    * is one voucher of the exact amount the 1:1 matcher missed (dated 4 to 7
    * days off). Absent on persisted 1:1 proposals. Apply with explicit pairs
-   * (journal_entry_ids = every voucher); use_proposals reads the persisted
-   * column only.
+   * (journal_entry_ids = every voucher) or use_proposals, which links the
+   * listing's own proposals (crm#1668).
    */
   vouchers: z.array(ReconciliationProposalVoucherSchema).min(1).optional(),
   /**

@@ -30,7 +30,7 @@ vi.mock('@/lib/bank-feed/page-arrival', () => ({
 // Mock ingest
 const mockIngest = vi.fn()
 
-import { syncAccountTransactions } from '../sync'
+import { notBookedReasons, syncAccountTransactions } from '../sync'
 import type { StoredAccount } from '../../types'
 
 const USER_ID = 'user-1'
@@ -348,6 +348,43 @@ describe('syncAccountTransactions', () => {
     expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-03-01_-7500_0')
     // The skipped entry is counted, so an empty sync can say why (PH 221).
     expect(result.notBooked).toBe(1)
+  })
+
+  it('says in its log why each entry was skipped: the bank\'s status and which dates it carried, never a value (PH 221)', async () => {
+    // Every Wamo entry was skipped for twelve days; the log said only "3 of 3",
+    // not whether the bank marks them pending or books them without a booking_date.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '50', currency: 'SEK' }, value_date: '2026-10-31', transaction_date: '2026-10-31' },
+        { status: 'BOOK', transaction_amount: { amount: '60', currency: 'SEK' }, value_date: '2026-11-03', transaction_date: '2026-11-03' },
+        { status: 'PDNG', transaction_amount: { amount: '70', currency: 'SEK' }, booking_date: '2026-11-05', value_date: '2026-11-05' },
+        { status: 'BOOK', transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-11-04' },
+      ],
+      rawPages: ['{}'],
+    })
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-10-30', '2026-11-06', mockIngest
+    )
+
+    expect(result.notBooked).toBe(3)
+    expect(logSpy).toHaveBeenCalledWith('[enable-banking] Skipped pending transactions (not booked or no booking_date)', expect.objectContaining({
+      skippedPending: 3,
+      total: 4,
+      reasons: { 'BOOK/value_date+transaction_date': 2, 'PDNG/booking_date+value_date': 1 },
+    }))
+    logSpy.mockRestore()
   })
 
   it('reports no unbooked entries when every entry is booked (PH 221)', async () => {
@@ -1117,5 +1154,21 @@ describe('syncAccountTransactions: the person asking', () => {
     )
 
     expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
+  })
+})
+
+describe('notBookedReasons (PH 221)', () => {
+  it('counts by status and the dates present, and never logs a status the bank made up verbatim', () => {
+    expect(notBookedReasons([
+      { status: ' book ', value_date: '2026-10-31' },
+      { status: 'PDNG', booking_date: '2026-11-05', value_date: '2026-11-05', transaction_date: '2026-11-04' },
+      { status: 'weird-status-123', booking_date: '' },
+      {},
+    ])).toEqual({
+      'BOOK/value_date': 1,
+      'PDNG/booking_date+value_date+transaction_date': 1,
+      'OTHER/no_dates': 1,
+      'NONE/no_dates': 1,
+    })
   })
 })

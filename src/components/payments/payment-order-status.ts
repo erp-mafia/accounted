@@ -57,6 +57,31 @@ export function needsResolution(order: { status: PaymentOrderStatus; outcome_unk
 }
 
 /**
+ * How long the bank may go without answering about a payment it holds before
+ * the row says so. The status sync asks every 15 minutes and every answer
+ * moves provider_status_at, so a day is close to a hundred reads the bank
+ * refused or never answered (SEB and Länsförsäkringar refuse one without the
+ * signer's IP address, which signings started before 2026-10-31 lack).
+ */
+export const BANK_SILENT_AFTER_MS = 24 * 60 * 60_000
+
+const AT_THE_BANK: ReadonlySet<PaymentOrderStatus> = new Set(['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'])
+
+/**
+ * When the bank last answered about a payment it still holds, once that is
+ * longer ago than BANK_SILENT_AFTER_MS; null while it answers, and for an
+ * order whose outcome is unknown (needsResolution has its own line).
+ */
+export function bankSilentSince(
+  order: { status: PaymentOrderStatus; provider_status_at: string | null; outcome_unknown_at: string | null },
+  now: number = Date.now(),
+): string | null {
+  if (!AT_THE_BANK.has(order.status) || order.outcome_unknown_at !== null || !order.provider_status_at) return null
+  const at = Date.parse(order.provider_status_at)
+  return Number.isFinite(at) && now - at > BANK_SILENT_AFTER_MS ? order.provider_status_at : null
+}
+
+/**
  * Statuses the lifecycle lets a person cancel from the list: before the bank
  * has it, or while the payment waits there. A submitted order whose create is
  * still on its way is refused by the server (PAYMENT_ORDER_CREATE_IN_PROGRESS)

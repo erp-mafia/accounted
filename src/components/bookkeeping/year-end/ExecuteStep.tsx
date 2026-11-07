@@ -52,10 +52,9 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
           </p>
           {bolagsskattMissing && (
             <p className="text-[12.5px] leading-5 text-attn">
-              Ingen bolagsskatt är bokförd trots att året visar vinst. Om det inte är avsiktligt
-              (t.ex. underskottsavdrag, periodiseringsfond eller överavskrivningar som nollar det
-              skattemässiga resultatet), gå tillbaka och boka skatten i dispositionssteget innan
-              du verkställer.
+              Ingen bolagsskatt är bokförd, fast skatten på det som är bokfört blir mer än 0 kr.
+              Bokför den, eller de dispositioner som sänker den, i dispositionssteget. Varningen
+              hindrar inte att du verkställer.
             </p>
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
