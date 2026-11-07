@@ -1,0 +1,1 @@
+[2026-11-07] Bank ledger move timeouts (crm#1683, crm#1702) fixed by index-driven claim probes and a GIN index without pending list, not by retrying transient errors as triage proposed: the save took over 8 s on every attempt, so a retry could never succeed.
