@@ -1717,7 +1717,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     })),
   }
 
-  async function stage(extracted: unknown, opts: { vatRegistered?: boolean } = {}) {
+  async function stage(extracted: unknown, opts: { vatRegistered?: boolean; args?: Record<string, unknown> } = {}) {
     const inserts: Array<Record<string, unknown>> = []
     const supabase = makeMock({
       inbox: {
@@ -1733,7 +1733,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(
-      { inbox_item_id: 'inbox-ore' },
+      { inbox_item_id: 'inbox-ore', ...opts.args },
       'company-1', 'user-1', supabase,
     )) as { staged: boolean; preview: Record<string, unknown> }
     return { result, params: inserts[0]?.params as StagedParams }
@@ -1835,6 +1835,51 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     const lines = await registrationLines(params)
     expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
     expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(444192)
+  })
+
+  // A document without moms (exempt seller, export, reverse charge) whose Att
+  // betala is its line nets rounded to whole kronor: the net path registered
+  // the nets, the öre short of what the supplier asks.
+  const noVat = (total: number) => ({
+    supplier: { name: 'Föreningen' },
+    invoice: { invoiceNumber: 'NV-7', invoiceDate: '2026-10-20', dueDate: '2026-11-19', currency: 'SEK' },
+    totals: { subtotal: 2441.89, vat: 0, total, roundingAmount: roundOre(total - 2441.89) },
+    lineItems: [
+      { description: 'Avgift', quantity: 1, unitPrice: 2000, lineTotal: 2000, vatRate: 0, accountSuggestion: '6990' },
+      { description: 'Material', quantity: 1, unitPrice: 441.89, lineTotal: 441.89, vatRate: 0, accountSuggestion: '5460' },
+    ],
+  })
+
+  it('carries an exempt invoice\'s öresavrundning on 3740, so the payable is its Att betala', async () => {
+    const { result, params } = await stage(noVat(2442), { args: { vat_treatment_override: 'exempt' } })
+
+    expect(result.staged).toBe(true)
+    expect(params.vat_treatment).toBe('exempt')
+    expect(params.items[2]).toMatchObject({ account_number: '3740', line_total: 0.11, vat_rate: 0, vat_amount: 0 })
+    expect(params.subtotal).toBe(2442)
+    expect(params.vat_amount).toBe(0)
+    expect(params.total).toBe(2442)
+    expect(result.preview.payable_recomputed).toBeUndefined()
+    const lines = await registrationLines(params)
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe(0.11)
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2442)
+  })
+
+  it('carries a reverse-charge invoice\'s öresavrundning the same way', async () => {
+    const { params } = await stage(noVat(2442), { args: { vat_treatment_override: 'reverse_charge' } })
+
+    expect(params.vat_treatment).toBe('reverse_charge')
+    expect(params.items[2]).toMatchObject({ account_number: '3740', line_total: 0.11, vat_rate: 0 })
+    expect(params.total).toBe(2442)
+  })
+
+  it('keeps registering the nets when a no-VAT total is not their whole-krona rounding', async () => {
+    const { result, params } = await stage(noVat(2441.95), { args: { vat_treatment_override: 'exempt' } })
+
+    expect(params.items.some((i) => i.account_number === '3740')).toBe(false)
+    expect(params.total).toBe(2441.89)
+    expect(result.preview.payable_recomputed).toMatchObject({ extracted_total: 2441.95, payable_total: 2441.89 })
   })
 })
 

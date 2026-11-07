@@ -64,6 +64,7 @@ import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
+import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
 import { useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
@@ -288,6 +289,7 @@ export default function JournalEntryList({
   const [dateFromInput, setDateFromInput] = useState('')
   const [dateToInput, setDateToInput] = useState('')
   const [seriesFilter, setSeriesFilter] = useState<string>('all')
+  const seriesLetters = useSeriesFilterLetters(company?.id, seriesFilter)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
@@ -1284,7 +1286,7 @@ export default function JournalEntryList({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Alla serier</SelectItem>
-                    {'ABCDEFG'.split('').map((letter) => (
+                    {seriesLetters.map((letter) => (
                       <SelectItem key={letter} value={letter} className="font-mono">
                         Serie {letter}
                       </SelectItem>

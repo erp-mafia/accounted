@@ -1,0 +1,1 @@
+[2026-11-07] A staged salary booking (book_salary_run) that does not post hands the run back to the status it found, unless a voucher of it is in the ledger: for that door paid is set by the approval asking for the booking, so it must not stick when the booking fails.

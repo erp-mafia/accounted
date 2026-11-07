@@ -82,8 +82,8 @@ export interface AskResult {
 // Claude Sonnet 5 (the hosted assistant model) runs adaptive thinking at its
 // default effort (high) whenever a request does not say otherwise. max_tokens
 // caps thinking and the visible answer together, and thinking blocks come
-// back with empty text by default. The earlier 5400 was the no-thinking reply
-// ceiling (MAX_TOKENS_NO_THINKING), so a question the model reasoned hard
+// back with empty text by default. The earlier 5400 was the chat's former
+// no-thinking reply ceiling, so a question the model reasoned hard
 // about spent the whole budget on thinking and came back with no text at all:
 // prod 2026-10-17..23, single turns ending at exactly 5400 output tokens.
 // 16000 is what the streaming chat gives the same model at the same effort

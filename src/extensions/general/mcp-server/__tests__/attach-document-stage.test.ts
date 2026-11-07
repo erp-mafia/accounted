@@ -103,6 +103,7 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
       document_invoice_date: '2026-04-12',
       will_overwrite_existing: false,
       adds_to_existing: false,
+      adds_to_verifikat: false,
       existing_document_id: null,
       existing_document_file_name: null,
       existing_document_is_rakenskapsinformation: false,
@@ -185,15 +186,41 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 
-  it('refuses at staging replacing a pinned document that is räkenskapsinformation (the hand-written tool staged it)', async () => {
+  it('refuses at staging replacing a pinned document that is räkenskapsinformation of another verifikat than the row\'s', async () => {
     const { supabase } = db({
       transactions: { data: { ...TX_ROW, document_id: 'a0a0a0a0-0000-4000-8000-000000000001' } },
       document_attachments: { data: { journal_entry_id: 'b0b0b0b0-0000-4000-8000-000000000002', file_name: 'gammalt.pdf' } },
+      transaction_voucher_links: { data: [] },
     })
     await expect(
       tool.execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never),
     ).rejects.toMatchObject({ code: 'DOC_ATTACH_REPLACES_POSTED' })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('stages a further document for a booked row as one more underlag of its verifikat, beside the pin', async () => {
+    const PREVIOUS = 'a0a0a0a0-0000-4000-8000-000000000001'
+    const ENTRY = 'b0b0b0b0-0000-4000-8000-000000000002'
+    const { supabase, findCalls } = db({
+      transactions: [{ data: { ...TX_ROW, document_id: PREVIOUS, journal_entry_id: ENTRY } }, { data: [] }],
+      document_attachments: [{ data: { journal_entry_id: ENTRY, file_name: 'kvitto-1.pdf' } }, { data: DOC_ROW }],
+    })
+    const result = (await tool.execute(
+      { transaction_id: TX, document_id: DOC },
+      'company-1', 'user-1', supabase as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    expect(findCalls('pending_operations', 'insert')[0]?.[0]).toMatchObject({
+      preview_data: expect.objectContaining({
+        will_overwrite_existing: false,
+        adds_to_existing: true,
+        adds_to_verifikat: true,
+        existing_document_id: PREVIOUS,
+        existing_document_file_name: 'kvitto-1.pdf',
+        existing_document_is_rakenskapsinformation: true,
+      }),
+    })
   })
 
   // crm#1479: a file of another seller, larger than the row, became underlag

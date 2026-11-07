@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { SIEJobMappingsSchema } from '@/lib/api/schemas'
 import { suggestMappings } from '../account-mapper'
-import { onlyUsedSIEMappings, prepareSIEPreviewMappings, sieUsedAccounts } from '../sie-preview-mappings'
+import { onlyUsedSIEMappings, prepareSIEPreviewMappings, remappedSIEAccounts, remappedSIEAccountsText, sieUsedAccounts } from '../sie-preview-mappings'
 import { parseSIEFile } from '../sie-parser'
 import { SIEJobValidationError, validateSIEJobInput } from '../sie-jobs'
 import { buildSIEAccountRows } from '../account-sync'
@@ -194,5 +194,51 @@ describe('only the accounts the file uses (#63)', () => {
     expect(() => validateSIEJobInput(source, parsed, kept,
       { filename: 'test.se', createFiscalPeriod: true, importTransactions: true, importOpeningBalances: true })).not.toThrow()
     expect(buildSIEAccountRows('company', 'user', kept).map(a => a.account_number).sort()).toEqual(['1930', '2440', '3001', '9999'])
+  })
+})
+
+// crm#1684: a #TRANS row the import books on another account than the file's
+// is a choice somebody made (a remembered mapping, a hand pick, an agent's
+// mappings). The unattended doors name it before the import runs.
+describe('accounts booked on another number than the file\'s (crm#1684)', () => {
+  const file = '#SIETYP 4\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 2640 "Ingående moms"\n' +
+    '#KONTO 3041 "Sales 25"\n#KONTO 3047 "Sales other"\n#KONTO 3049 "Unused"\n' +
+    '#VER B 1 20260216 "Invoice"\n{\n#TRANS 1930 {} 125\n#TRANS 2640 {} 0\n#TRANS 3047 {} -125\n}'
+  const mapping = (sourceAccount: string, targetAccount: string) => ({ sourceAccount, targetAccount })
+
+  it('lists a used source account mapped to another number', () => {
+    const parsed = parseSIEFile(file)
+    expect(remappedSIEAccounts(parsed, [mapping('1930', '1930'), mapping('3047', '3041')]))
+      .toEqual([{ source: '3047', target: '3041' }])
+  })
+
+  it('lists nothing when every account keeps its own number: the mapper\'s default', () => {
+    const parsed = parseSIEFile(file)
+    const suggested = prepareSIEPreviewMappings(parsed, suggestMappings(parsed.accounts, BAS_REFERENCE)).mappings
+    expect(suggested.find(m => m.sourceAccount === '3047')).toMatchObject({ targetAccount: '3047' })
+    expect(remappedSIEAccounts(parsed, suggested)).toEqual([])
+  })
+
+  it('applies a remembered mapping as before, and names it', () => {
+    const parsed = parseSIEFile(file)
+    const stored = [{ source_account: '3047', source_name: 'Sales other', target_account: '3041', confidence: 1, match_type: 'manual' as const }]
+    const suggested = prepareSIEPreviewMappings(parsed, suggestMappings(parsed.accounts, BAS_REFERENCE, stored as never)).mappings
+    expect(suggested.find(m => m.sourceAccount === '3047')).toMatchObject({ targetAccount: '3041', isOverride: true })
+    expect(remappedSIEAccounts(parsed, suggested)).toEqual([{ source: '3047', target: '3041' }])
+  })
+
+  it('skips unused definitions, unmapped rows and the 2640 group-header redirect', () => {
+    const parsed = parseSIEFile(file)
+    expect(remappedSIEAccounts(parsed, [
+      mapping('3049', '3041'), // no row in the file uses it
+      mapping('1930', ''), // unmapped: the job refuses or skips, not a remap
+      mapping('2640', '2641'), // BAS group header, not a posting account
+    ])).toEqual([])
+  })
+
+  it('names every pair in Swedish and folds a long list', () => {
+    const remapped = Array.from({ length: 3 }, (_, i) => ({ source: `304${i}`, target: '3041' }))
+    expect(remappedSIEAccountsText(remapped)).toContain('3 av filens konton bokförs på ett annat kontonummer än i filen (3040 → 3041, 3041 → 3041, 3042 → 3041)')
+    expect(remappedSIEAccountsText(remapped, 2)).toContain('(3040 → 3041, 3041 → 3041 samt ytterligare 1)')
   })
 })

@@ -16,6 +16,11 @@ import {
 import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
+import {
+  classifyProbeFailure,
+  probeFailureLogFields,
+  probeFailureMessage,
+} from './lib/probe-failure'
 import { buildAuthorizeUrl } from './lib/connect'
 import { syncWooCommerceOrders, wooStoreScope, type WooCommerceSyncSummary } from './lib/order-sync'
 import {
@@ -348,13 +353,12 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       } catch (probeError) {
         log.warn('[woocommerce] Manual credential probe failed', {
           companyId: ctx.companyId,
-          message: probeError instanceof Error ? probeError.message : String(probeError),
+          ...probeFailureLogFields(probeError),
         })
+        const kind = classifyProbeFailure(probeError)
+        const copy = probeFailureMessage(kind)
         return NextResponse.json(
-          {
-            error:
-              'Kunde inte ansluta till butiken med de angivna nycklarna. Kontrollera adressen och att nyckeln har läsbehörighet.',
-          },
+          { error: copy.sv, error_en: copy.en, code: `PROBE_${kind.toUpperCase()}` },
           { status: 400 },
         )
       }

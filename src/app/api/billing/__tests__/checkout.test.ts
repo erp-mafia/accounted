@@ -540,6 +540,34 @@ describe('POST /api/billing/checkout', () => {
       expect(session.billing_address_collection).toBe('auto')
       expect(session.customer_update).toEqual({ name: 'never', address: 'never' })
       expect(session.automatic_tax).toEqual({ enabled: true })
+      // Agent feedback 2026-11-02: the page itself shows the prefilled identity.
+      expect(session.custom_text).toEqual({
+        submit: {
+          message:
+            'Fakturan ställs ut på Bolaget AB, org.nr 556677-8899, momsreg.nr SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
+            'Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.',
+        },
+      })
+    })
+
+    it('shows the identity notice in English when the app is in English', async () => {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      companyRows('ab')
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+      await POST(
+        createMockRequest('/api/billing/checkout', {
+          method: 'POST',
+          body: {},
+          headers: { cookie: 'gnubok-locale=en' },
+        }),
+        routeParams,
+      )
+
+      const session = sessionsCreate.mock.calls[0][0]
+      expect(session.locale).toBe('en')
+      expect(session.custom_text.submit.message).toMatch(/^The invoice is issued to Bolaget AB, org\. no\. 556677-8899, VAT no\. SE556677889901/)
     })
 
     it('updates a reused customer instead of creating one, and adds the VAT id only when it has none', async () => {
@@ -612,6 +640,8 @@ describe('POST /api/billing/checkout', () => {
           customer_update: { name: 'auto', address: 'auto' },
         }),
       )
+      // Nothing was written, so nothing is claimed: Checkout collects it.
+      expect(sessionsCreate.mock.calls[0][0].custom_text).toBeUndefined()
     })
 
     it('opens Checkout as before, touching no customer, when the company read fails', async () => {

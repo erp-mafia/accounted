@@ -15,7 +15,8 @@ import {
  * bind a forwarded/uploaded invoice or receipt before the transaction is
  * categorized; on an already booked transaction the link propagates to the
  * verifikat at once. Idempotent: overwrites any existing link unless that
- * one is already räkenskapsinformation.
+ * one is already räkenskapsinformation; on the row's own verifikat the new
+ * document is then added beside it as one more underlag.
  *
  * The rules live in lib/transactions/document-attach.ts, shared with the v1
  * operation transactions.attach-document and the MCP approval path.

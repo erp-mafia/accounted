@@ -353,16 +353,57 @@ export function voucherDate(voucher: SIEVoucher): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
-/** SIE4I may omit #RAR. Resolve only an existing period containing every date. */
+/**
+ * The longest a fiscal year can be: an extended first or changed year runs up
+ * to 18 months (SIE skill, validation-rules "Broken fiscal year validation").
+ * Verifikat dated further apart than that cannot share one year.
+ */
+const MAX_FISCAL_YEAR_MONTHS = 18
+
+function spansMoreThanAFiscalYear(first: string, last: string): boolean {
+  const [year, month, day] = first.split('-').map(Number)
+  const limit = new Date(Date.UTC(year, month - 1 + MAX_FISCAL_YEAR_MONTHS, day)).toISOString().slice(0, 10)
+  return last >= limit
+}
+
+/**
+ * SIE4I may omit #RAR. Resolve only an existing period containing every date.
+ *
+ * A file without #RAR whose verifikat run over more than one fiscal year
+ * (Fortnox's "Kundfakturor och inbetalningar" export, spans of up to ten
+ * years) can never be resolved this way, and creating a year, which the
+ * generic refusal asked for, does not help. Such a file is a partial export:
+ * customer invoices and payments only, verifikat a full SIE of the same years
+ * already carries. The refusal says what the file is and what to export
+ * instead; importing it into whichever years exist would book those verifikat
+ * a second time.
+ */
 export async function resolveSIEFiscalYear(supabase:SupabaseClient,companyId:string,parsed:ParsedSIEFile):Promise<void> {
   if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) return
   if (!parsed.vouchers.length) throw new SIEJobValidationError('SIE-filen saknar räkenskapsår.')
   const dates = parsed.vouchers.map(voucherDate).sort()
+  const first = dates[0]
+  const last = dates[dates.length-1]
+  // Every company year the file's dates touch; the containing one is among them.
   const {data,error} = await supabase.from('fiscal_periods').select('period_start,period_end')
-    .eq('company_id',companyId).lte('period_start',dates[0]).gte('period_end',dates[dates.length-1]).limit(2)
+    .eq('company_id',companyId).lte('period_start',last).gte('period_end',first).order('period_start')
   if (error) throw error
-  if (data?.length !== 1) throw new SIEJobValidationError('SIE-filen saknar #RAR. Skapa ett räkenskapsår som omfattar filens datum först.')
-  applySIEFiscalYear(parsed,{start:data[0].period_start,end:data[0].period_end})
+  const periods = (data ?? []) as Array<{period_start:string;period_end:string}>
+  const containing = periods.filter(p => p.period_start <= first && p.period_end >= last)
+  if (containing.length === 1) {
+    applySIEFiscalYear(parsed,{start:containing[0].period_start,end:containing[0].period_end})
+    return
+  }
+  if (containing.length === 0 && (periods.length > 1 || spansMoreThanAFiscalYear(first,last))) {
+    throw new SIEJobValidationError(
+      `SIE-filen saknar räkenskapsår (#RAR) och verifikationerna sträcker sig över mer än ett räkenskapsår (${first} till ${last}). ` +
+      'En sådan fil, till exempel Fortnox export Kundfakturor och inbetalningar, är en delexport med bara en del av bokföringen. ' +
+      'Exportera i stället hela bokföringen som SIE typ 4, en fil per räkenskapsår. ' +
+      'Är räkenskapsåren redan importerade finns verifikationerna redan i bokföringen: importera inte filen ovanpå, då bokförs de två gånger. ' +
+      'Ska bara filens verifikationer läggas till, exportera en fil per räkenskapsår.',
+    )
+  }
+  throw new SIEJobValidationError(`SIE-filen saknar #RAR. Skapa ett räkenskapsår som omfattar filens datum (${first} till ${last}) först.`)
 }
 
 export function applySIEFiscalYear(parsed:ParsedSIEFile,period?:{start:string;end:string}):void {

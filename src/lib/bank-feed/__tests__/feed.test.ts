@@ -53,6 +53,7 @@ import {
   extendedHistoryWindowOpen,
   incrementalWindow,
   initialWindow,
+  READ_AUTHENTICATION_REFUSED_MESSAGE,
   runOpenPaymentsSync,
   shouldAskForEnrichment,
   SYNC_FAILED_MESSAGE,
@@ -530,6 +531,21 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.persistFailure).toHaveBeenCalledWith(supabase, expect.objectContaining({ status: 'expired', message }))
     expect(mocks.holdLease).not.toHaveBeenCalled()
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.sync_failed', payload: expect.objectContaining({ errorClass: 'consent_refused', status: 'expired', ebCode: 'PSU_CREDENTIALS_INVALID' }) }))
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  // A read refused as AUTHENTICATION_FAILED never passed again without a
+  // renewal in production, while the row sat in 'error' and the cron asked
+  // every six hours. It needs a renewal, once, with a sentence that says so.
+  it('flips the row to expired when the bank refuses a read as AUTHENTICATION_FAILED, and stops asking', async () => {
+    mocks.syncAccount.mockRejectedValueOnce(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode: 'AUTHENTICATION_FAILED' }))
+    const { supabase } = stub({ bank_connections: [{ data: row({ status: 'error' }), error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
+    expect(consentRefusedMessage('AUTHENTICATION_FAILED')).toBe(READ_AUTHENTICATION_REFUSED_MESSAGE)
+    expect(READ_AUTHENTICATION_REFUSED_MESSAGE).not.toContain('Försök igen')
+    expect(mocks.persistFailure).toHaveBeenCalledWith(supabase, expect.objectContaining({ status: 'expired', message: READ_AUTHENTICATION_REFUSED_MESSAGE }))
+    expect(mocks.holdLease).not.toHaveBeenCalled()
+    expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.sync_failed', payload: expect.objectContaining({ errorClass: 'consent_refused', status: 'expired', ebCode: 'AUTHENTICATION_FAILED' }) }))
     expect(log.error).not.toHaveBeenCalled()
   })
 

@@ -387,6 +387,16 @@ describe('planOneClick: the form', () => {
     expect(balanced(plan.lines)).toBe(true)
   })
 
+  it('opens the editor for an invoice whose Att betala is öresavrundad, even by one öre', () => {
+    // 132,81 + 25 % moms 33,20 = 166,01; the supplier bills 166. Registering
+    // the rows left the reskontra an öre above what the invoice asks for.
+    const oneOre = { ...invoice, totals: { subtotal: 132.81, vatAmount: 33.2, total: 166 }, vatBreakdown: [{ rate: 25, base: 132.81, amount: 33.2 }] }
+    const plan = planOneClick(input({ ...consulting, bank: null, reading: oneOre }))
+    expect([plan.form, plan.ask, plan.reason]).toEqual(['register', 'editor', 'amount_mismatch'])
+    const fortyOre = { ...invoice, totals: { subtotal: 4990, vatAmount: 299.4, total: 5289 }, vatBreakdown: [{ rate: 6, base: 4990, amount: 299.4 }] }
+    expect(planOneClick(input({ ...consulting, bank: null, reading: fortyOre })).reason).toBe('amount_mismatch')
+  })
+
   it('names the matched supplier on a register path', () => {
     const plan = planOneClick(input({ ...consulting, bank: null, supplier: { id: 'sup-9', supplierType: 'swedish_business', defaultExpenseAccount: '6550', paymentTermsDays: 30 } }))
     expect(plan.supplier).toEqual({ id: 'sup-9' })

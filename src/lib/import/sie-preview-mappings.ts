@@ -2,7 +2,7 @@ import { isAccountNumber } from '@/lib/invariants/account-number'
 // The client-safe number list (this module reaches the import wizards), not
 // the full BAS reference: the same answer without 315 KB in the bundle.
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
-import { isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
+import { isGroupHeaderRedirect, isSystemAccount, isValidBASRange, suggestMappings, type MappableAccount } from './account-mapper'
 import { rcBasisPairsByAccount } from './rc-basis-pairs'
 import type { AccountMapping, ParsedSIEFile, SIEAccount, SIEAccountMappingRecord } from './types'
 
@@ -45,6 +45,38 @@ export function obsAccountsOf(
     }
   }
   return [...accounts].sort()
+}
+
+/**
+ * The accounts the file uses that the import books on ANOTHER number than the
+ * file's (crm#1684): a mapping remembered from an earlier import, one chosen
+ * by hand, or one an agent passed to gnubok_import_sie. The mapper itself
+ * never merges a valid account into a different one (#2212), so every entry
+ * here is a choice somebody made, and a ledger migration that moves a #TRANS
+ * row to another account changes the reports. The unattended doors list them
+ * before the import runs instead of applying them silently. The BAS group
+ * header redirect (2640 to 2641) is not listed: 2640 is not a posting account.
+ */
+export function remappedSIEAccounts(
+  parsed: Parameters<typeof sieUsedAccounts>[0],
+  mappings: ReadonlyArray<Pick<AccountMapping, 'sourceAccount' | 'targetAccount'>>,
+): Array<{ source: string; target: string }> {
+  const used = sieUsedAccounts(parsed)
+  const remapped = new Map<string, string>()
+  for (const { sourceAccount, targetAccount } of mappings) {
+    if (!targetAccount || targetAccount === sourceAccount || !used.has(sourceAccount)) continue
+    if (isGroupHeaderRedirect(sourceAccount, targetAccount)) continue
+    remapped.set(sourceAccount, targetAccount)
+  }
+  return [...remapped].sort(([a], [b]) => a.localeCompare(b)).map(([source, target]) => ({ source, target }))
+}
+
+/** Swedish sentence naming the remapped accounts, for warnings and notices. */
+export function remappedSIEAccountsText(remapped: ReadonlyArray<{ source: string; target: string }>, limit = 20): string {
+  const shown = remapped.slice(0, limit).map(({ source, target }) => `${source} → ${target}`).join(', ')
+  const more = remapped.length > limit ? ` samt ytterligare ${remapped.length - limit}` : ''
+  return `${remapped.length} av filens konton bokförs på ett annat kontonummer än i filen (${shown}${more}). ` +
+    'Kontrollera att det är avsiktligt; annars ska kontot behålla sitt eget nummer.'
 }
 
 /**

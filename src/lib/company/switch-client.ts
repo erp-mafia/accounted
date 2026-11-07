@@ -1,5 +1,6 @@
 'use client'
 
+import { unstable_isUnrecognizedActionError } from 'next/navigation'
 import { switchCompany } from '@/lib/company/actions'
 import {
   TAB_SYNC_CHANNEL,
@@ -35,6 +36,16 @@ export async function performCompanySwitch(
   let result: { error?: string }
   try {
     result = await switchCompany(companyId)
+  } catch (err) {
+    // A tab loaded before a deploy still holds the old build's action id,
+    // which the new server does not know ("Server Action ... was not found
+    // on the server"). The switch never ran. Reloading loads the new build,
+    // where picking the company again works (Next.js docs: "Surface the
+    // error as a retry path ... so a refresh recovers the user").
+    if (unstable_isUnrecognizedActionError(err)) {
+      return reloadOnceForNewDeploy() ? undefined : { error: 'stale_client' }
+    }
+    throw err
   } finally {
     markCompanySwitchInFlight(false)
   }
@@ -72,4 +83,29 @@ export async function performCompanySwitch(
   // fetches, blob URLs, etc. This is the whole point: nothing from the
   // previous company can survive the switch.
   window.location.assign(options.destination ?? '/')
+}
+
+const STALE_DEPLOY_RELOAD_KEY = 'accounted:stale-deploy-reload-at'
+const STALE_DEPLOY_RELOAD_WINDOW_MS = 60_000
+
+/**
+ * Reload once onto the current deploy. Returns false, without reloading,
+ * when this tab already reloaded for the same reason within the last minute
+ * (a server that is itself behind the client would otherwise loop us) or
+ * when sessionStorage is unavailable (no guard, so no automatic reload).
+ */
+function reloadOnceForNewDeploy(): boolean {
+  try {
+    const now = Date.now()
+    const last = Number(window.sessionStorage.getItem(STALE_DEPLOY_RELOAD_KEY) ?? 0)
+    if (now - last < STALE_DEPLOY_RELOAD_WINDOW_MS) return false
+    window.sessionStorage.setItem(STALE_DEPLOY_RELOAD_KEY, String(now))
+  } catch {
+    // sessionStorage unavailable (private mode, blocked storage): without the
+    // guard we cannot rule out a reload loop, so we do not reload and the
+    // caller shows its "switch failed" toast instead.
+    return false
+  }
+  window.location.reload()
+  return true
 }

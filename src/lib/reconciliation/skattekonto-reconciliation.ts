@@ -1197,15 +1197,22 @@ export async function getSkattekontoReconciliationStatus(
     Math.abs(openingDifference ?? 0) < 0.01 &&
     Math.abs(unexplained ?? 0) < 0.01
 
-  const bridge: BridgeLine[] = [
-    {
+  // A balance this status does not know is no bridge line (crm#1701): with
+  // no saldo from Skatteverket (rows from a file import, never fetched) the
+  // line read "Saldo hos Skatteverket 0 kr", and a failed ledger read put
+  // 0 kr on the ledger side. The status carries null; readers say unknown.
+  const bridge: BridgeLine[] = []
+  if (saldo !== null) {
+    bridge.push({
       key: 'external_balance',
       label_sv: 'Saldo hos Skatteverket',
       label_en: 'Balance at Skatteverket',
-      amount: saldo ?? 0,
+      amount: saldo,
       count: null,
       items_bucket: null,
-    },
+    })
+  }
+  bridge.push(
     {
       key: 'unmatched_external',
       label_sv: 'Händelser som saknas i bokföringen',
@@ -1222,7 +1229,7 @@ export async function getSkattekontoReconciliationStatus(
       count: counts.unmatched_ledger,
       items_bucket: 'unmatched_ledger',
     },
-  ]
+  )
   if (counts.ignored > 0) {
     bridge.push({
       key: 'ignored',
@@ -1243,14 +1250,16 @@ export async function getSkattekontoReconciliationStatus(
       items_bucket: null,
     })
   }
-  bridge.push({
-    key: 'ledger_balance',
-    label_sv: `Bokfört på ${account}`,
-    label_en: `Booked on ${account}`,
-    amount: ledgerBalance ?? 0,
-    count: null,
-    items_bucket: null,
-  })
+  if (ledgerBalance !== null) {
+    bridge.push({
+      key: 'ledger_balance',
+      label_sv: `Bokfört på ${account}`,
+      label_en: `Booked on ${account}`,
+      amount: ledgerBalance,
+      count: null,
+      items_bucket: null,
+    })
+  }
 
   const truncated = (Object.keys(items) as Array<keyof SkattekontoReconciliationItems>).filter(
     (k) => items[k].length >= MAX_ITEMS_PER_BUCKET,

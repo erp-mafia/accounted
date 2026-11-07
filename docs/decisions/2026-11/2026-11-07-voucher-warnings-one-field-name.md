@@ -1,0 +1,1 @@
+[2026-11-07] gnubok_create_voucher's confirmed-warnings field is acknowledged_warnings, the name v1, the app and the refusal text use; acknowledge_warnings stays an undeclared alias. Chose one name over the triage's per-door hint: a hint per door keeps two names an integrator must learn (crm#1714).

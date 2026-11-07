@@ -80,13 +80,30 @@ export function readAhead(reads: ArchiveRead[], ahead: number): ArchiveRead[] {
   })
 }
 
-/** Read a byte stream to its end, into one ArrayBuffer of exactly its length. */
-export async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<ArrayBuffer> {
+/**
+ * An archive past its caller's max_bytes, thrown while it is built: a caller
+ * that keeps the archive in memory, or stores it where objects are capped,
+ * learns it will not fit before it holds it whole (crm#1703).
+ */
+export class ArchiveTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`The archive is over ${Math.round(maxBytes / 1024 / 1024)} MB`)
+    this.name = 'ArchiveTooLargeError'
+  }
+}
+
+/**
+ * Read a byte stream to its end, into one ArrayBuffer of exactly its length.
+ * With maxBytes, stops reading and throws ArchiveTooLargeError once the
+ * stream has passed it.
+ */
+export async function collectBytes(chunks: AsyncIterable<Uint8Array>, maxBytes?: number): Promise<ArrayBuffer> {
   const parts: Uint8Array[] = []
   let length = 0
   for await (const chunk of chunks) {
     parts.push(chunk)
     length += chunk.length
+    if (maxBytes !== undefined && length > maxBytes) throw new ArchiveTooLargeError(maxBytes)
   }
   const out = new Uint8Array(length)
   let at = 0

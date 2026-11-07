@@ -1,0 +1,1 @@
+[2026-11-07] Inbox supplier invoices carry the öresavrundning on 3740 also when the document has no moms (exempt, export, reverse charge) and in the one-click plan to the öre, so the reskontra equals the invoice's Att betala on every inbox door.

@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   getAnthropic,
   MAX_TOKENS_DEEP,
-  MAX_TOKENS_NO_THINKING,
   MAX_TOKENS_STANDARD,
   SONNET_MODEL,
 } from '@/lib/agent/composer/client'
@@ -396,17 +395,17 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   // reasoning and the default returned none. Without it the collapsible
   // "Tänker …" block in the chat would silently never populate.
   //
-  // max_tokens now covers thinking and the reply together, so the ceiling
-  // follows what the intent opted into. An intent with no thinking keeps its
-  // reply-sized cap: giving it the reasoning tier's headroom would let a plain
-  // answer run four times longer for no reason.
+  // max_tokens covers thinking and the reply together, so the ceiling follows
+  // the effort the model actually runs at. An intent with no thinking config
+  // still thinks (Sonnet 5 defaults to adaptive at effort high, text omitted),
+  // so it gets the standard ceiling, never a reply-sized one: see
+  // MAX_TOKENS_STANDARD in lib/agent/composer/client.ts.
   const thinking = intent.thinking
     ? { type: 'adaptive' as const, display: 'summarized' as const }
     : undefined
   const outputConfig = intent.thinking ? { effort: intent.thinking.effort } : undefined
-  const maxTokens = !intent.thinking
-    ? MAX_TOKENS_NO_THINKING
-    : intent.thinking.effort === 'xhigh' || intent.thinking.effort === 'max'
+  const maxTokens =
+    intent.thinking?.effort === 'xhigh' || intent.thinking?.effort === 'max'
       ? MAX_TOKENS_DEEP
       : MAX_TOKENS_STANDARD
 

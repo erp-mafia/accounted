@@ -192,6 +192,38 @@ describe('POST /api/import/sie/parse', () => {
     expect((body as { appendOnly?: boolean }).appendOnly).toBe(false)
   })
 
+  // Fortnox's "Kundfakturor och inbetalningar" export: no #RAR, verifikat
+  // over several years. The refusal used to come back as SIE_PARSE_FAILED
+  // ("the file may be damaged") with the real sentence only in the logs.
+  it('says a multi-year file without #RAR is a partial export, as a 400 the UI shows', async () => {
+    reset()
+    enqueue({ data: [] }) // fiscal_periods the file's dates touch: none
+    const partial = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#PROGRAM "Fortnox" 3.62',
+      '#VER B 1 20200115 "Kundfaktura"',
+      '{',
+      '#TRANS 1510 {} 125.00',
+      '#TRANS 3001 {} -125.00',
+      '}',
+      '#VER C 1 20261103 "Inbetalning"',
+      '{',
+      '#TRANS 1930 {} 125.00',
+      '#TRANS 1510 {} -125.00',
+      '}',
+    ].join('\n')
+
+    const response = await POST(fileRequest(partial, 'Kundfakturor och inbetalningar_20200101-20261103.si'), emptyParams)
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    const { getErrorMessage } = await import('@/lib/errors/get-error-message')
+    const shown = getErrorMessage(body)
+    expect(shown).toContain('verifikationerna sträcker sig över mer än ett räkenskapsår (2020-01-15 till 2026-11-03)')
+    expect(shown).toContain('Exportera i stället hela bokföringen som SIE typ 4')
+    expect(shown).not.toContain('skadad')
+  })
+
   it('returns 400 for a file extension that is not SIE', async () => {
     const response = await POST(fileRequest(CLEAN_SIE, 'test.txt'), emptyParams)
     const body = (await response.json()) as { error?: { code?: string; message?: string } }

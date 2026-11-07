@@ -6,6 +6,7 @@ import {
   ensureFiscalPeriod,
   precheckFiscalPeriod,
   prepareSIEVouchers,
+  seriesNumberedInOrder,
   buildSIEOpeningBalanceEntry,
   computeVoucherNumberRanges,
 } from '../sie-import'
@@ -1752,5 +1753,101 @@ describe('prepareSIEVouchers: a skipped source voucher keeps its number (crm#159
   it('a voucher with nothing skipped before it carries no numberGap, so its payload is as before', () => {
     const [entry] = prepare([booked('A', 1)]).preparedEntries
     expect(entry).not.toHaveProperty('numberGap')
+  })
+})
+
+describe('prepareSIEVouchers: a number missing from the file keeps its place (agent feedback 2026-11-01/02)', () => {
+  const map = new Map([['1930', '1930'], ['5611', '5611']])
+  const booked = (series: string, number: number) => ({
+    series, number, date: new Date(2026, 1, 17), description: `Voucher ${series}${number}`,
+    lines: [{ account: '5611', amount: 500 }, { account: '1930', amount: -500 }],
+  })
+  const cancelled = (series: string, number: number) => ({
+    ...booked(series, number), lines: [],
+    corrections: { struck: [{ account: '5611', amount: 500 }, { account: '1930', amount: -500 }], added: [] },
+  })
+  const prepare = (
+    vouchers: ParsedSIEFile['vouchers'],
+    carried: { lastSourceNumbers?: Record<string, number>; pendingNumberGaps?: Record<string, { count: number; refs: string[] }> } = {},
+    numberedInOrder: ReadonlySet<string> | null = new Set(seriesNumberedInOrder(vouchers)),
+  ) => prepareSIEVouchers(makeParsedFile({ vouchers }), map, 'A', 'import-1',
+    { startOrdinal: 0, accountIds: new Map(), numberedInOrder: numberedInOrder ?? undefined, ...carried })
+  const gaps = (result: ReturnType<typeof prepare>) =>
+    result.preparedEntries.map((e) => [e.sourceId, e.numberGap?.count ?? 0])
+
+  it('holds the numbers between two vouchers of the series, with the explanation', () => {
+    const result = prepare([booked('A', 1), booked('A', 2), booked('A', 5), booked('A', 6)])
+
+    expect(gaps(result)).toEqual([['A1', 0], ['A2', 0], ['A5', 2], ['A6', 0]])
+    expect(result.preparedEntries[2].numberGap?.explanation).toBe(
+      'SIE-import: källsystemets verifikationer A3-A4 (finns inte i filen) bokfördes inte. ' +
+      'Numren hålls tomma så att serien följer källsystemets numrering.',
+    )
+  })
+
+  it('names one missing number on its own', () => {
+    const result = prepare([booked('A', 1), booked('A', 3)])
+    expect(result.preparedEntries[1].numberGap).toEqual({
+      count: 1,
+      explanation: 'SIE-import: källsystemets verifikation A2 (finns inte i filen) bokfördes inte. ' +
+        'Numret hålls tomt så att serien följer källsystemets numrering.',
+    })
+  })
+
+  it('holds a missing number and a cancelled voucher together, in number order', () => {
+    const result = prepare([booked('A', 1), cancelled('A', 3), booked('A', 4)])
+
+    expect(gaps(result)).toEqual([['A1', 0], ['A4', 2]])
+    expect(result.preparedEntries[1].numberGap?.explanation).toContain(
+      'A2 (finns inte i filen), A3 (makulerat i källsystemet)',
+    )
+  })
+
+  it('counts the numbers a range covers when it summarises the rest', () => {
+    const result = prepare([booked('A', 1), cancelled('A', 5), cancelled('A', 7), cancelled('A', 9), booked('A', 12)])
+
+    // A2-A4, A5, A6, A7, A8 named (7 numbers); A9, A10-A11 counted.
+    expect(result.preparedEntries[1].numberGap?.count).toBe(10)
+    expect(result.preparedEntries[1].numberGap?.explanation).toContain(
+      'A2-A4 (finns inte i filen), A5 (makulerat i källsystemet), A6 (finns inte i filen), ' +
+      'A7 (makulerat i källsystemet), A8 (finns inte i filen) och 3 till',
+    )
+  })
+
+  it('holds nothing before the first voucher of a series (the source may number on from an earlier year)', () => {
+    const result = prepare([booked('A', 221), booked('A', 222)])
+    expect(gaps(result)).toEqual([['A221', 0], ['A222', 0]])
+  })
+
+  it('holds no missing number in a series out of order in the file, nor when the job gives no series', () => {
+    const disordered = [booked('A', 1), booked('A', 5), booked('A', 3), booked('B', 1), booked('B', 3)]
+    expect(seriesNumberedInOrder(disordered)).toEqual(['B'])
+    expect(gaps(prepare(disordered))).toEqual([['A1', 0], ['A5', 0], ['A3', 0], ['B1', 0], ['B3', 1]])
+
+    expect(gaps(prepare([booked('A', 1), booked('A', 3)], {}, null))).toEqual([['A1', 0], ['A3', 0]])
+  })
+
+  it('leaves repeated and omitted numbers out of the order check', () => {
+    const vouchers = [booked('A', 1), { ...booked('A', 1), numberRepeated: true }, { ...booked('', 0), numberOmitted: true }]
+    expect(seriesNumberedInOrder(vouchers)).toEqual(['A'])
+  })
+
+  it('carries the last number across voucher groups', () => {
+    const first = prepare([booked('A', 1), booked('A', 2)], {}, new Set(['A']))
+    expect(first.lastSourceNumbers).toEqual({ A: 2 })
+
+    const second = prepare([booked('A', 5)], { lastSourceNumbers: first.lastSourceNumbers }, new Set(['A']))
+    expect(second.preparedEntries[0].numberGap?.count).toBe(2)
+    expect(second.lastSourceNumbers).toEqual({ A: 5 })
+    expect(first.lastSourceNumbers).toEqual({ A: 2 })
+  })
+
+  it('adds to a hold carried from a checkpoint written before ranges were counted', () => {
+    const result = prepare([booked('A', 5)],
+      { lastSourceNumbers: { A: 2 }, pendingNumberGaps: { A: { count: 1, refs: ['A2 (makulerat i källsystemet)'] } } },
+      new Set(['A']))
+    expect(result.preparedEntries[0].numberGap?.count).toBe(3)
+    expect(result.preparedEntries[0].numberGap?.explanation).toContain('A2 (makulerat i källsystemet), A3-A4 (finns inte i filen) bokfördes')
+    expect(result.preparedEntries[0].numberGap?.explanation).not.toContain('till')
   })
 })

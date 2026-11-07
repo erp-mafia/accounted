@@ -21,7 +21,11 @@
  * lib/salary/approve-run.ts), then books. Missing bank details surface as
  * warnings rather than blockers (mirroring the dashboard's force-approve
  * path): the payment-file generators hard-block on them where it actually
- * matters.
+ * matters. The walk holds only if the booking does: a booking that does not
+ * complete hands the run back to the status it started from
+ * (restoreWalkedRun), so a failed staged booking never leaves a run paid
+ * with no verifikat, and the walk's salary_run.approved is announced only
+ * once the run is booked.
  *
  * Both refuse a run that pays out on a payment date still ahead unless the
  * caller confirmed it (confirmPaymentDateAhead, paymentDateAheadRefusal in
@@ -338,11 +342,19 @@ function bookingClaimRefusal(
   return { ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: refusal.currentStatus } }
 }
 
+/**
+ * Runs after the flip to 'booked' and before salary_run.booked is emitted:
+ * the MCP walk announces its approval here, once the run it approved is
+ * booked.
+ */
+type OnBooked = () => Promise<void>
+
 async function bookLoadedRun(
   supabase: SupabaseClient,
   args: BookRunArgs,
   run: Record<string, unknown>,
   roster: RosterRow[],
+  onBooked?: OnBooked,
 ): Promise<BookRunResult<BookedRunData>> {
   // Claim first: before the YTD refresh, the utlägg check, the nollkörning
   // branch and the posting, so a concurrent call for the same run posts
@@ -352,7 +364,7 @@ async function bookLoadedRun(
 
   let result: BookRunResult<BookedRunData> | undefined
   try {
-    result = await bookClaimedRun(supabase, args, bookingClaim.claimId, run, roster)
+    result = await bookClaimedRun(supabase, args, bookingClaim.claimId, run, roster, onBooked)
     return result
   } finally {
     // A booked run's flip already cleared the claim; anything else hands the
@@ -398,6 +410,7 @@ async function bookClaimedRun(
   claimId: string,
   run: Record<string, unknown>,
   roster: RosterRow[],
+  onBooked?: OnBooked,
 ): Promise<BookRunResult<BookedRunData>> {
   const { companyId, userId, salaryRunId, log } = args
   // Refresh the payslip's "Ackumulerat" snapshot before the status flip. The
@@ -428,6 +441,7 @@ async function bookClaimedRun(
   if (isNollkorning(run)) {
     const flipped = await markClaimedRunBooked(supabase, args, claimId, null)
     if (!flipped.ok) return flipped
+    await onBooked?.()
 
     await eventBus.emit({
       type: 'salary_run.booked',
@@ -465,6 +479,7 @@ async function bookClaimedRun(
   const flipped = await markClaimedRunBooked(supabase, args, claimId, vouchers)
   if (!flipped.ok) return flipped
   const { run: bookedRun, entryIds } = flipped.data
+  await onBooked?.()
 
   // Utlägg repaid with this salary: mark the claims paid with a payout batch
   // that points at the salary verifikat (same batch mechanism as the bank
@@ -689,6 +704,7 @@ export async function advanceAndBookSalaryRun(
   }
 
   let status = run.status as string
+  const startStatus = status
   if (status === 'booked') {
     return { ok: false, code: 'SALARY_RUN_ALREADY_BOOKED' }
   }
@@ -757,10 +773,6 @@ export async function advanceAndBookSalaryRun(
     if (error || !approved) {
       return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: error ?? undefined }
     }
-    await eventBus.emit({
-      type: 'salary_run.approved',
-      payload: { salaryRunId, approvedBy: userId, userId, companyId },
-    })
     status = 'approved'
   }
 
@@ -779,7 +791,97 @@ export async function advanceAndBookSalaryRun(
     status = 'paid'
   }
 
-  const booked = await bookLoadedRun(supabase, args, run, roster)
-  if (!booked.ok) return booked
+  // The approval is announced once the run it approved is booked (onBooked):
+  // a booking that fails hands the run back below, and an approval event for
+  // a run back in review would be false.
+  const announceApproval: OnBooked | undefined =
+    startStatus === 'draft' || startStatus === 'review'
+      ? async () => {
+          try {
+            await eventBus.emit({
+              type: 'salary_run.approved',
+              payload: { salaryRunId, approvedBy: userId, userId, companyId },
+            })
+          } catch (err) {
+            args.log.warn('salary_run.approved emit failed', {
+              salaryRunId,
+              message: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+      : undefined
+
+  let booked: BookRunResult<BookedRunData>
+  try {
+    booked = await bookLoadedRun(supabase, args, run, roster, announceApproval)
+  } catch (err) {
+    await restoreWalkedRun(supabase, args, run, startStatus)
+    throw err
+  }
+  if (!booked.ok) {
+    await restoreWalkedRun(supabase, args, run, startStatus)
+    return booked
+  }
   return { ok: true, data: { ...booked.data, warnings } }
+}
+
+/**
+ * Undo this call's own status walk when its booking did not complete. The
+ * staged operation asked for a booked run, so a refusal or an engine error
+ * puts the run back in the status the approval found it in, instead of
+ * leaving it paid with no verifikat (agent feedback 2026-11-02: four
+ * benefit-only runs walked to paid while the engine refused their voucher;
+ * the booking succeeding is what makes the run paid here, not a payout).
+ *
+ * Only while the ledger holds nothing of the run: a run with a posted voucher
+ * stays paid, where it cannot be unapproved and the next booking adopts the
+ * voucher. The update is conditional on paid and unclaimed, so it never
+ * undoes a concurrent booking. Never throws: a run that stays paid is still
+ * booked with Bokför on the run page or another staged booking.
+ */
+async function restoreWalkedRun(
+  supabase: SupabaseClient,
+  { companyId, salaryRunId, log }: BookRunArgs,
+  run: Record<string, unknown>,
+  startStatus: string,
+): Promise<void> {
+  if (startStatus === 'paid') return
+  try {
+    const { data: posted, error: postedError } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('source_type', 'salary_payment')
+      .eq('source_id', salaryRunId)
+      .in('status', ['posted', 'reversed'])
+      .limit(1)
+    if (postedError || (posted ?? []).length > 0) {
+      log.warn('salary run left paid after a failed booking', {
+        salaryRunId,
+        reason: postedError ? 'ledger read failed' : 'the run has posted vouchers',
+      })
+      return
+    }
+
+    const restore: Record<string, unknown> = { status: startStatus, paid_at: run.paid_at ?? null }
+    if (startStatus === 'draft' || startStatus === 'review') {
+      restore.approved_by = run.approved_by ?? null
+      restore.approved_at = run.approved_at ?? null
+    }
+    const { error } = await supabase
+      .from('salary_runs')
+      .update(restore)
+      .eq('id', salaryRunId)
+      .eq('company_id', companyId)
+      .eq('status', 'paid')
+      .is('booking_claim_id', null)
+    if (error) {
+      log.warn('salary run left paid after a failed booking', { salaryRunId, message: error.message })
+    }
+  } catch (err) {
+    log.warn('salary run left paid after a failed booking', {
+      salaryRunId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 }

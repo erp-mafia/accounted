@@ -16,10 +16,14 @@ import {
   PaymentProviderError,
   type PaymentCancelOutcome,
   type PaymentCancelResult,
+  type PaymentInitiationProvider,
+  type PaymentPartyContext,
+  type ProviderPaymentState,
 } from '@/lib/payments/initiation/provider'
 import { createServiceClient } from '@/lib/supabase/server'
+import { applyProviderState } from './apply-state'
 import { buildPartyContext } from './party'
-import { SIGNING_FINISHED_BATCH_STATUSES } from './status'
+import { SIGNING_FINISHED_BATCH_STATUSES, type PaymentOrderStatus } from './status'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 import { executionDateFor } from '@/lib/payments/bank-days'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -67,6 +71,42 @@ function refusedWhileUnsigned(order: PaymentOrderRow, answer: PaymentCancelResul
   if (order.status === 'submitted') return true
   if (order.status !== 'awaiting_signature' || !order.batch_id || !signing) return false
   return !SIGNING_FINISHED_BATCH_STATUSES.has(signing.status)
+}
+
+/**
+ * Bank statuses that end a payment unpaid: after a cancel the bank did not
+ * confirm, an order the bank's own status read puts here follows it at once.
+ */
+const CLOSED_UNPAID: ReadonlySet<PaymentOrderStatus> = new Set(['cancelled', 'rejected', 'failed'])
+
+/** The payment as the bank reports it now; null when it cannot be read (the status sync reads it again). */
+async function readBankState(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  order: PaymentOrderRow,
+): Promise<ProviderPaymentState | null> {
+  try {
+    return await provider.getPaymentState(party, order.provider_payment_id as string, order.provider_payment_product ?? 'domestic')
+  } catch (error) {
+    ctx.log.warn('payment status read after an unconfirmed cancel failed', {
+      orderId: order.id,
+      code: error instanceof PaymentProviderError ? error.code : 'UNEXPECTED_ERROR',
+    })
+    return null
+  }
+}
+
+/**
+ * No signature of the order finished here: it never left 'submitted', or its
+ * signing is neither finished nor signed. An order whose BankID finished
+ * while the bank still answers RCVD (isBankConfirming) is signed.
+ */
+function noSignatureHere(order: PaymentOrderRow, signing: CancelSigning | null): boolean {
+  if (order.signed_at) return false
+  if (order.status === 'submitted') return true
+  if (order.status !== 'awaiting_signature' || !order.batch_id || !signing) return false
+  return !signing.signed_at && !SIGNING_FINISHED_BATCH_STATUSES.has(signing.status)
 }
 
 /**
@@ -409,6 +449,35 @@ export async function cancelPaymentOrder(
         detail: { code: 'BANK_CANCEL_NOT_CONFIRMED', answer: answer.outcome, provider_payment_id: order.provider_payment_id },
       },
     ], ctx.log)
+    if (answer.outcome === 'needs_authorisation' || answer.outcome === 'not_cancelled') {
+      // The payment itself, read once (crm#1699). Every unsigned payment whose
+      // cancel a bank did not confirm so far was cancelled or rejected by the
+      // bank within minutes (often by the cancel asked a moment earlier), and
+      // only the 15-minute status sync picked that up: until then the person
+      // was told to look in an online bank that does not show unsigned
+      // payments. What the bank reports is applied as the sync applies it
+      // (applyProviderState, forward only): the order closes on the bank's
+      // word, never on ours.
+      const state = await readBankState(ctx, provider, party.ctx, order)
+      if (state && CLOSED_UNPAID.has(state.status)) {
+        const next = await applyProviderState(writer, order, state, ctx.userId, ctx.log)
+        if (CLOSED_UNPAID.has(next)) return { ok: true, data: { cancelled: next === 'cancelled', status: next } }
+      }
+      // The bank says, in this read, that it holds the payment unsigned (its
+      // 'submitted': RCVD or PDNG), and no signature of it finished here:
+      // nothing is paid unless someone signs it, and the status sync applies
+      // the bank's cancel when it comes.
+      if (
+        state?.status === 'submitted' &&
+        noSignatureHere(order, order.status === 'awaiting_signature' ? await readSigning(ctx, order) : null)
+      ) {
+        return {
+          ok: false,
+          code: 'PAYMENT_CANCEL_PENDING_UNSIGNED',
+          details: { payment_order_id: order.id, provider_status: state.providerStatus },
+        }
+      }
+    }
     // Read after the bank answered, so a signing started meanwhile counts.
     const signing = answer.outcome === 'too_late' && answer.unsigned === true ? await readSigning(ctx, order) : null
     if (!refusedWhileUnsigned(order, answer, signing)) {

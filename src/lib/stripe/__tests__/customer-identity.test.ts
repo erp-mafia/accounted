@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type Stripe from 'stripe'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
+  NOTHING_ON_FILE,
   billingIdentityChanged,
+  checkoutIdentityNotice,
   companyBillingIdentity,
   loadCompanyBillingIdentity,
   stripeCustomerIdentityFields,
@@ -164,7 +166,7 @@ describe('syncStripeCustomerIdentity', () => {
       { type: 'eu_vat', value: 'SE556677889901' },
       { idempotencyKey: 'customer-tax-id:cus_new:SE556677889901' },
     )
-    expect(result).toEqual({ taxIdOnFile: true, addressOnFile: true, nameOnFile: true })
+    expect(result).toEqual({ taxIdOnFile: true, addressOnFile: true, nameOnFile: true, taxId: 'SE556677889901' })
   })
 
   it('updates an existing customer and adds the VAT number when it has no tax ID', async () => {
@@ -181,12 +183,14 @@ describe('syncStripeCustomerIdentity', () => {
   })
 
   it('keeps a tax ID the customer already has and adds no duplicate', async () => {
-    listTaxIds.mockResolvedValue({ data: [{ id: 'txi_1' }] })
+    listTaxIds.mockResolvedValue({ data: [{ id: 'txi_1', value: 'SE112233445501' }] })
 
     const result = await syncStripeCustomerIdentity(stripe, 'cus_old', full, { justCreated: false })
 
     expect(createTaxId).not.toHaveBeenCalled()
     expect(result.taxIdOnFile).toBe(true)
+    // The value Stripe holds, which is what the invoice carries, not ours.
+    expect(result.taxId).toBe('SE112233445501')
   })
 
   it('adds no tax ID without a VAT number and reports none on file', async () => {
@@ -194,7 +198,7 @@ describe('syncStripeCustomerIdentity', () => {
 
     expect(listTaxIds).not.toHaveBeenCalled()
     expect(createTaxId).not.toHaveBeenCalled()
-    expect(result).toEqual({ taxIdOnFile: false, addressOnFile: true, nameOnFile: true })
+    expect(result).toEqual({ taxIdOnFile: false, addressOnFile: true, nameOnFile: true, taxId: null })
   })
 
   it('makes no Stripe call when nothing is known', async () => {
@@ -206,7 +210,7 @@ describe('syncStripeCustomerIdentity', () => {
     )
 
     expect(update).not.toHaveBeenCalled()
-    expect(result).toEqual({ taxIdOnFile: false, addressOnFile: false, nameOnFile: false })
+    expect(result).toEqual({ taxIdOnFile: false, addressOnFile: false, nameOnFile: false, taxId: null })
   })
 
   it('propagates a Stripe error to the caller', async () => {
@@ -284,7 +288,7 @@ describe('syncCompanyStripeIdentity', () => {
       { type: 'eu_vat', value: 'SE556677889901' },
       { idempotencyKey: 'customer-tax-id:cus_1:SE556677889901' },
     )
-    expect(result).toEqual({ taxIdOnFile: true, addressOnFile: true, nameOnFile: true })
+    expect(result).toEqual({ taxIdOnFile: true, addressOnFile: true, nameOnFile: true, taxId: 'SE556677889901' })
   })
 
   it('uses the customer the caller already has without reading the row', async () => {
@@ -302,5 +306,57 @@ describe('syncCompanyStripeIdentity', () => {
 
     await expect(syncCompanyStripeIdentity(supabase, 'company-1', { stripe })).rejects.toThrow('boom')
     expect(update).not.toHaveBeenCalled()
+  })
+})
+
+// Agent feedback 2026-11-02: with the identity prefilled, Checkout shows no
+// company at all, and the payer concluded they could not enter it.
+describe('checkoutIdentityNotice', () => {
+  const full: CompanyBillingIdentity = companyBillingIdentity(AB_COMPANY, settings())
+  const synced = { taxIdOnFile: true, addressOnFile: true, nameOnFile: true, taxId: 'SE556677889901' }
+
+  it('names what the invoice carries and where to change it, in Swedish', () => {
+    expect(checkoutIdentityNotice(full, synced, 'sv')).toBe(
+      'Fakturan ställs ut på Bolaget AB, org.nr 556677-8899, momsreg.nr SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
+        'Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.',
+    )
+  })
+
+  it('in English', () => {
+    expect(checkoutIdentityNotice(full, synced, 'en')).toBe(
+      'The invoice is issued to Bolaget AB, org. no. 556677-8899, VAT no. SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
+        'Anything wrong? Change it under Settings > Company > General and start the payment again.',
+    )
+  })
+
+  it('lists only what is on the customer: no VAT number for a company without one, the tax ID Stripe holds otherwise', () => {
+    const noVat = checkoutIdentityNotice({ ...full, vatNumber: null }, { ...synced, taxIdOnFile: false, taxId: null }, 'sv')
+    expect(noVat).not.toContain('momsreg.nr')
+    expect(noVat).toContain('org.nr 556677-8899')
+
+    const theirs = checkoutIdentityNotice(full, { ...synced, taxId: 'SE112233445501' }, 'sv')
+    expect(theirs).toContain('momsreg.nr SE112233445501')
+    expect(theirs).not.toContain('SE556677889901')
+  })
+
+  it('never shows an enskild firma owner personnummer', () => {
+    const ef = companyBillingIdentity(
+      { name: 'Firma Test', org_number: '198001019994', entity_type: 'enskild_firma' },
+      settings({ entity_type: 'enskild_firma', company_name: 'Firma Test', org_number: '198001019994', vat_registered: false, vat_number: null }),
+    )
+    const notice = checkoutIdentityNotice(ef, { ...synced, taxIdOnFile: false, taxId: null }, 'sv')
+    expect(notice).toContain('Firma Test')
+    expect(notice).not.toMatch(/19800101|org\.nr/)
+  })
+
+  it('says nothing when no name was written, so Checkout collects the details itself', () => {
+    expect(checkoutIdentityNotice(full, NOTHING_ON_FILE, 'sv')).toBeNull()
+    expect(checkoutIdentityNotice({ ...full, name: null }, synced, 'sv')).toBeNull()
+  })
+
+  it('stays inside Stripe custom_text limit and has no em or en dashes', () => {
+    const long = checkoutIdentityNotice({ ...full, name: 'A'.repeat(2000) }, synced, 'sv')!
+    expect(long.length).toBeLessThanOrEqual(1200)
+    expect(checkoutIdentityNotice(full, synced, 'sv')! + checkoutIdentityNotice(full, synced, 'en')!).not.toMatch(/[\u2013\u2014]/)
   })
 })

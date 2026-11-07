@@ -96,6 +96,42 @@ describe('gnubok_approve_pending_operation: a resent approval', () => {
     })
   })
 
+  it('names the field and the tool when the commit refuses a voucher with new warnings (crm#1714)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: operation(), error: null })
+    const warnings = [{ code: 'BANK_MOVEMENT_ALREADY_BOOKED', message_sv: 'x', message_en: 'x', details: {} }]
+    commitSpy.mockResolvedValue({
+      status: 'rejected',
+      auto_rejected: true,
+      error: 'Verifikationen avviker.',
+      http_status: 409,
+      code: 'VOUCHER_NEEDS_CONFIRMATION',
+      data: { warnings },
+      operation_status: 'rejected',
+    })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      error_code: 'VOUCHER_NEEDS_CONFIRMATION',
+      data: { warnings },
+      next: { tool: 'gnubok_create_voucher' },
+    })
+    expect((result.next as { description: string }).description).toContain('acknowledged_warnings')
+  })
+
+  it('adds no voucher hint to any other refusal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: operation(), error: null })
+    commitSpy.mockResolvedValue({ status: 'rejected', auto_rejected: true, error: 'Perioden är låst.', http_status: 409, code: 'PERIOD_LOCKED', operation_status: 'rejected' })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({ status: 'rejected', error_code: 'PERIOD_LOCKED' })
+    expect(result).not.toHaveProperty('next')
+  })
+
   it('still demands confirmed=true for a high-risk operation, settled or not', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: operation({ status: 'committed' }), error: null })

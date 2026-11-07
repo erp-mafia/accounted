@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
-import { ArchiveFolder, collectBytes, readAhead, type ArchiveContent } from '../archive-folder'
+import { ArchiveFolder, ArchiveTooLargeError, collectBytes, readAhead, type ArchiveContent } from '../archive-folder'
 
 function deferred() {
   let resolve!: (value: ArchiveContent | null) => void
@@ -87,5 +87,27 @@ describe('readAhead', () => {
     await expect(reads[0]()).resolves.toBe('a')
     await new Promise((r) => setTimeout(r, 0))
     await expect(reads[1]()).rejects.toThrow('storage unavailable')
+  })
+})
+
+describe('collectBytes with maxBytes', () => {
+  async function* chunks(...sizes: number[]) {
+    for (const size of sizes) yield new Uint8Array(size)
+  }
+
+  it('collects a stream up to and at the cap', async () => {
+    expect((await collectBytes(chunks(3, 4), 7)).byteLength).toBe(7)
+  })
+
+  it('stops at the first chunk past the cap, without reading on (crm#1703)', async () => {
+    let read = 0
+    async function* counted() {
+      for (const size of [4, 4, 4]) {
+        read++
+        yield new Uint8Array(size)
+      }
+    }
+    await expect(collectBytes(counted(), 6)).rejects.toBeInstanceOf(ArchiveTooLargeError)
+    expect(read).toBe(2)
   })
 })

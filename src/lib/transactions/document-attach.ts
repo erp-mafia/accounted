@@ -9,7 +9,10 @@
  * Attach:
  *   - both rows must belong to the company (service-role doors skip RLS);
  *   - a pinned document that is already räkenskapsinformation (linked to a
- *     verifikat) is never replaced: storno the entry first;
+ *     verifikat) is never replaced. When that verifikat is the row's own
+ *     booking, another document is added to it as one more underlag and the
+ *     pin stays (attachBesidePin); a pin on any other verifikat still needs
+ *     a storno first;
  *   - a document that is the underlag of ANOTHER verifikat is refused; the
  *     same verifikat (directly or through a bulk-book voucher link) is an
  *     idempotent re-attach;
@@ -44,6 +47,7 @@ import {
   resolveVoucherLinkedEntryIds,
 } from '@/lib/transactions/inbox-underlag'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkEvidence } from '@/lib/links/link-basis'
 import { documentFitGate, type DocumentFitDeps } from '@/lib/documents/bank-match/fit'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -128,9 +132,17 @@ export async function attachDocumentToTransaction(
 
   const previousDocumentId = (tx.document_id as string | null) ?? null
   let previousFileName: string | null = null
+  // The verifikat the row is booked on, when its pinned document is already
+  // that verifikat's underlag: the new document joins it beside the pin.
+  let besidePinOn: string | null = null
 
-  // The pinned document is räkenskapsinformation: say so before the DB
-  // trigger raises a raw check violation. Same refusal the trigger enforces.
+  // The pinned document is räkenskapsinformation and is never replaced (the
+  // transactions trigger refuses moving it). On the row's own verifikat the
+  // new document is one more underlag: the posted entry does not change and
+  // nothing is removed, so no storno is needed (BFL 5 kap 6-7 §§). Staged
+  // attaches met a refusal here when the row was booked with another
+  // document between staging and approval. Only a pin held by another
+  // verifikat than the row's booking keeps the refusal.
   if (previousDocumentId && previousDocumentId !== documentId) {
     const { data: existing, error: existingError } = await supabase
       .from('document_attachments')
@@ -139,8 +151,16 @@ export async function attachDocumentToTransaction(
       .eq('company_id', companyId)
       .maybeSingle()
     if (existingError) return failed(existingError)
-    if (existing?.journal_entry_id) {
-      return { ok: false, code: 'DOC_ATTACH_REPLACES_POSTED', details: { previous_document_id: previousDocumentId } }
+    const pinEntryId = (existing?.journal_entry_id as string | null) ?? null
+    if (pinEntryId) {
+      const rowEntryId =
+        (tx.journal_entry_id as string | null) ??
+        (await resolveVoucherLinkedEntryIds(supabase, companyId, [transactionId])).get(transactionId) ??
+        null
+      if (pinEntryId !== rowEntryId) {
+        return { ok: false, code: 'DOC_ATTACH_REPLACES_POSTED', details: { previous_document_id: previousDocumentId } }
+      }
+      besidePinOn = pinEntryId
     }
     previousFileName = (existing?.file_name as string | null) ?? null
   }
@@ -177,7 +197,7 @@ export async function attachDocumentToTransaction(
   if (options.dryRun) {
     // What the document says (the hints the pairing was chosen on), and who
     // else already holds it: one document normally backs one purchase.
-    const replacesPin = previousDocumentId != null && previousDocumentId !== documentId
+    const replacesPin = previousDocumentId != null && previousDocumentId !== documentId && besidePinOn == null
     const [{ data: inbox }, claims, previousStays] = await Promise.all([
       supabase
         .from('invoice_inbox_items')
@@ -219,6 +239,9 @@ export async function attachDocumentToTransaction(
         // matched to this transaction: both documents become underlag, the
         // new one is added (lib/transactions/inbox-underlag.ts).
         previous_document_stays: replacesPin && previousStays === true,
+        // The row is booked and its pin is the verifikat's underlag: the pin
+        // stays and this document is added to that verifikat beside it.
+        adds_to_verifikat: besidePinOn != null,
         transaction_booked: tx.journal_entry_id != null,
         journal_entry_id: (tx.journal_entry_id as string | null) ?? null,
         shared_document_warning: sharedDocumentWarning(claims.get(documentId) ?? [], { transaction_id: transactionId }),
@@ -227,6 +250,8 @@ export async function attachDocumentToTransaction(
       },
     }
   }
+
+  if (besidePinOn) return attachBesidePin(ctx, transactionId, documentId, docJournalEntryId, besidePinOn)
 
   // Race-free read of journal_entry_id: UPDATE ... RETURNING, so the value we
   // propagate against reflects any concurrent categorize that committed
@@ -266,19 +291,10 @@ export async function attachDocumentToTransaction(
   // same-value rewrite, so an idempotent re-attach skips it.
   const journalEntryId = (postUpdate.journal_entry_id as string | null) ?? null
   if (journalEntryId && docJournalEntryId !== journalEntryId) {
-    const { error: linkErr } = await supabase
-      .from('document_attachments')
-      .update({
-        journal_entry_id: journalEntryId,
-        // The caller pinned this document to the bank row its verifikat books;
-        // the request scope says who.
-        ...linkBasisColumns('user_confirmed', { rule_id: 'bank_row_document_pin' }),
-      })
-      .eq('id', documentId)
-      .eq('company_id', companyId)
+    // The caller pinned this document to the bank row its verifikat books.
+    const linkErr = await linkToBookedEntry(supabase, companyId, documentId, journalEntryId, { rule_id: 'bank_row_document_pin' })
     if (linkErr) {
-      const linkMsg = (linkErr as { message?: string }).message ?? ''
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(linkMsg)) {
+      if (isPeriodLockError(linkErr)) {
         // Honest about the partial write: the pin (and the inbox back-link)
         // persisted; only the verifikat link was blocked.
         return { ok: false, code: 'DOC_ATTACH_PERIOD_LOCKED', details: { journal_entry_id: journalEntryId } }
@@ -328,6 +344,85 @@ export async function attachDocumentToTransaction(
       document_id: documentId,
       previous_document_id: previousDocumentId,
       journal_entry_id: effectiveJournalEntryId,
+    },
+  }
+}
+
+/**
+ * Point the document at the verifikat that books its bank row. The request
+ * scope (linkBasisColumns) says who confirmed it; the audit trigger on
+ * document_attachments keeps when. Returns the write error, or null.
+ */
+async function linkToBookedEntry(
+  supabase: OperationContext['supabase'],
+  companyId: string,
+  documentId: string,
+  journalEntryId: string,
+  evidence: LinkEvidence,
+): Promise<unknown> {
+  const { error } = await supabase
+    .from('document_attachments')
+    .update({ journal_entry_id: journalEntryId, ...linkBasisColumns('user_confirmed', evidence) })
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+  return error ?? null
+}
+
+function isPeriodLockError(error: unknown): boolean {
+  return /locked\/closed fiscal period|Bokföringen är låst/i.test((error as { message?: string } | null)?.message ?? '')
+}
+
+/**
+ * Add a document to the verifikat of a booked row whose pinned document is
+ * already that verifikat's underlag: a second receipt, the invoice beside a
+ * payment confirmation. The pin stays and the posted entry is untouched; the
+ * verifikat gains one more underlag (BFL 5 kap 6-7 §§), linked with who
+ * confirmed it. The link is written first, so a closed or locked period
+ * refuses with nothing written. The inbox item the document came from then
+ * reads matched and handled, as after a pin.
+ */
+async function attachBesidePin(
+  ctx: OperationContext,
+  transactionId: string,
+  documentId: string,
+  docJournalEntryId: string | null,
+  journalEntryId: string,
+): Promise<OperationOutcome<AttachDocumentResult>> {
+  const { supabase, companyId, log } = ctx
+  if (docJournalEntryId !== journalEntryId) {
+    const linkErr = await linkToBookedEntry(supabase, companyId, documentId, journalEntryId, { rule_id: 'bank_row_extra_underlag' })
+    if (linkErr) {
+      if (isPeriodLockError(linkErr)) {
+        return { ok: false, code: 'PERIOD_LOCKED', details: { journal_entry_id: journalEntryId } }
+      }
+      log.error('attach document: adding underlag to the verifikat failed', { cause: errorCauseTag(linkErr) })
+      return failed(linkErr)
+    }
+  }
+
+  // Best-effort, as for a pin: the link above is the legally relevant write.
+  const { error: inboxLinkErr } = await supabase
+    .from('invoice_inbox_items')
+    .update({ matched_transaction_id: transactionId })
+    .eq('document_id', documentId)
+    .eq('company_id', companyId)
+    .is('matched_transaction_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (inboxLinkErr) {
+    log.error('attach document: inbox back-link failed', { cause: errorCauseTag(inboxLinkErr) })
+  }
+  await completeInboxItemsForBookedTransaction(supabase, companyId, transactionId, {
+    directJournalEntryId: journalEntryId,
+  })
+
+  return {
+    ok: true,
+    data: {
+      transaction_id: transactionId,
+      document_id: documentId,
+      // Nothing was replaced: the pin stays beside the added document.
+      previous_document_id: null,
+      journal_entry_id: journalEntryId,
     },
   }
 }

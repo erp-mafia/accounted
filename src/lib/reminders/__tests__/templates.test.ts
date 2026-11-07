@@ -134,6 +134,32 @@ describe('renderReminderEmail', () => {
     expect(mail.html).not.toContain('<script>')
   })
 
+  // An aktiebolag's letters state its säte (ABL 28 kap. 5 §): the reminder
+  // footer prints it next to the org.nr, as the invoice e-mail does.
+  it("prints the seller's säte in the footer when set", () => {
+    const company = makeCompanySettings({
+      entity_type: 'aktiebolag',
+      org_number: '5566778899',
+      registered_office: 'Stockholm',
+      vat_number: 'SE556677889901',
+      f_skatt: true,
+    })
+    const mail = renderReminderEmail(data({ company }))
+    expect(mail.text).toContain('Org.nr: 5566778899 | Säte: Stockholm | VAT: SE556677889901 | Innehar F-skattsedel')
+    expect(mail.html).toContain('Org.nr: 5566778899 | Säte: Stockholm')
+    const en = renderReminderEmail(data({ company: { ...company, registered_office: 'Malmö <b>' }, customer: makeCustomer({ language: 'en' }) }))
+    expect(en.html).toContain('Reg. no.: 5566778899 | Registered office: Malmö &lt;b&gt;')
+    expect(en.html).not.toContain('Malmö <b>')
+  })
+
+  it('prints no säte when none is set, nor for an enskild firma', () => {
+    const none = renderReminderEmail(data({ company: makeCompanySettings({ entity_type: 'aktiebolag', org_number: '5566778899', registered_office: null, vat_number: null, f_skatt: false }) }))
+    expect(none.text).toContain('Org.nr: 5566778899\n')
+    expect(none.text).not.toContain('Säte')
+    const ef = renderReminderEmail(data({ company: makeCompanySettings({ entity_type: 'enskild_firma', org_number: '199001011234', registered_office: 'Stockholm' }) }))
+    expect(ef.text).not.toContain('Säte')
+  })
+
   it('has a stock text for every level in both languages', () => {
     for (const lang of ['sv', 'en'] as const) {
       for (const level of [1, 2, 3] as const) {

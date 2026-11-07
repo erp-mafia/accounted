@@ -59,7 +59,23 @@ export const SYNC_FAILED_MESSAGE = 'Banksynkningen misslyckades. Försök igen o
  * brings the feed back.
  */
 export function consentRefusedMessage(providerCode: string | null): string {
+  if (isReadAuthenticationRefusal(providerCode)) return READ_AUTHENTICATION_REFUSED_MESSAGE
   return `${consentFailureText(providerCode).sv} Förnya kopplingen med BankID för att fortsätta synka.`
+}
+
+/**
+ * A read the bank refuses as AUTHENTICATION_FAILED: the bank no longer
+ * accepts the consent's access. In production no connection read again after
+ * it without a renewal (62 refusals on three connections, 2026-10-22 to
+ * 11-06), while the cron asked every six hours with "Försök igen om en
+ * stund". In the BankID step the same code is a signing that failed and may
+ * be tried again (./failure-text.ts), so it is a read refusal only, not one
+ * of OPEN_BANKING_PERMANENT_FAILURES.
+ */
+export const READ_AUTHENTICATION_REFUSED_MESSAGE = 'Banken godtar inte längre kopplingens behörighet. Förnya kopplingen med BankID för att fortsätta synka.'
+
+function isReadAuthenticationRefusal(providerCode: string | null | undefined): boolean {
+  return providerCode?.trim().toUpperCase() === 'AUTHENTICATION_FAILED'
 }
 
 export const INCREMENTAL_LOOKBACK_DAYS = 7
@@ -240,7 +256,8 @@ function classify(error: unknown): { status: 'expired' | 'error' | null; code: '
   // online bank (an agreement, a right, KYC, crm#1355): it answers the same
   // on every read until someone renews, so the row needs a renewal exactly
   // like a consent that is over, never an endless retry.
-  if (error instanceof BankFeedRefusedError && isPermanentConsentFailure(error.providerCode)) {
+  if (error instanceof BankFeedRefusedError
+    && (isPermanentConsentFailure(error.providerCode) || isReadAuthenticationRefusal(error.providerCode))) {
     return { status: 'expired', code: 'BANK_SESSION_EXPIRED', errorClass: 'consent_refused' }
   }
   if (error instanceof RateLimitedError) return { status: null, code: 'BANK_RATE_LIMITED', errorClass: 'rate_limited' }
