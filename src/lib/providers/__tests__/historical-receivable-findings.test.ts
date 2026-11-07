@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SalesInvoiceDto } from '../dto'
-import { findHistoricalReceivableCandidates, parseHistoricalPaymentDescription, type HistoricalInvoiceSource, type HistoricalPaymentEntry } from '../historical-receivable-findings'
+import { findHistoricalReceivableCandidates, parseHistoricalPaymentDescription, pageHistoricalReceivableFindings, type HistoricalInvoiceSource, type HistoricalPaymentEntry } from '../historical-receivable-findings'
 const entry: HistoricalPaymentEntry = { id: 'payment', date: '2022-11-07', description: 'Faktura #216 betalad av Example AB',
   series: 'V', number: 93, receivableCredit: 180000, bankDebit: 180000 }
 const source: HistoricalInvoiceSource = { chunkId: 'chunk', sourceId: 'source', payloadHash: 'hash', imported: false, reviewable: true,
@@ -52,4 +52,26 @@ it('does not claim a source match from non-finite totals or invalid dates', () =
   expect(find(entry, [{ ...source, invoice: { ...source.invoice, issueDate: '' } }])).toEqual([])
   expect(find(entry, [{ ...source, invoice: { ...source.invoice, paymentStatus: { ...source.invoice.paymentStatus, balance: { value: NaN, currencyCode: 'SEK' } } } }])).toEqual([])
   expect(find({ ...entry, date: '' })).toEqual([])
+})
+
+
+it('shows oldest payments first even when internal IDs have the opposite order', () => {
+  const found = findHistoricalReceivableCandidates([
+    { ...entry, id: 'a', date: '2022-01-01' },
+    { ...entry, id: 'z', date: '2018-10-03' },
+    { ...entry, id: 'b', date: '2022-01-01' },
+  ], [], new Set())
+  expect(found.map(row => [row.paymentDate, row.paymentEntryId])).toEqual([
+    ['2018-10-03', 'z'], ['2022-01-01', 'a'], ['2022-01-01', 'b'],
+  ])
+})
+it('keeps chronological page boundaries when the last row of the prior page gets approved', () => {
+  const entries = Array.from({ length: 25 }, (_, i) => ({ ...entry, id: String(100 - i), date: `2022-01-${String(i + 1).padStart(2, '0')}` }))
+  const found = findHistoricalReceivableCandidates(entries.reverse(), [], new Set())
+  const first = pageHistoricalReceivableFindings(found)
+  expect(first.findings).toHaveLength(20)
+  expect(first.findings[19].paymentDate).toBe('2022-01-20')
+  const next = pageHistoricalReceivableFindings(found.filter(row => row.paymentDate !== '2022-01-20'), first.next!)
+  expect(next.findings.map(row => row.paymentDate)).toEqual(['2022-01-21', '2022-01-22', '2022-01-23', '2022-01-24', '2022-01-25'])
+  expect(next.next).toBeNull()
 })

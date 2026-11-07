@@ -74,3 +74,21 @@ it('refuses approval if the ledger no longer supports the proposed amount', asyn
   expect((await route('POST')(post(), ctx)).status).toBe(409)
   expect(mocks.rpc).not.toHaveBeenCalled()
 })
+
+
+it('rejects malformed chronological cursors before reading company data', async () => {
+  const { db, ctx } = setup()
+  expect((await route('GET')(new Request(`http://localhost/review?jobId=${job}&after=invalid`), ctx)).status).toBe(400)
+  expect(db.calls).toHaveLength(0)
+})
+it('also lists approved history in ascending payment-date order', async () => {
+  const { db, ctx } = setup()
+  db.enqueueMany([
+    { data: { id: job, provider: 'bokio', state: 'completed' } },
+    { data: [] }, { data: [] }, { data: [] },
+    { data: [{ id: 'a', payment_journal_entry_id: 'newer', payment_date: '2022-01-01', decision: 'approved' },
+      { id: 'z', payment_journal_entry_id: 'older', payment_date: '2018-10-03', decision: 'approved' }] },
+  ])
+  const response = await route('GET')(new Request(`http://localhost/review?jobId=${job}`), ctx)
+  expect((await response.json()).data.reviewed.map((row: { id: string }) => row.id)).toEqual(['z', 'a'])
+})

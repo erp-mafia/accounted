@@ -8,9 +8,10 @@ import { validateBody } from '@/lib/api/validate'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { openMigrationPayload } from '@/lib/providers/migration-payload'
-import { findHistoricalReceivableCandidates, type HistoricalInvoiceSource, type HistoricalPaymentEntry } from '@/lib/providers/historical-receivable-findings'
+import { findHistoricalReceivableCandidates, pageHistoricalReceivableFindings, type HistoricalInvoiceSource, type HistoricalPaymentEntry } from '@/lib/providers/historical-receivable-findings'
 
-const Query = z.object({ jobId: z.uuid(), after: z.uuid().optional() })
+const Cursor = z.object({ date: z.iso.date(), id: z.uuid() })
+const Query = z.object({ jobId: z.uuid(), after: z.string().max(64).optional() })
 const Approve = z.object({ jobId: z.uuid(), paymentEntryId: z.uuid() }).strict()
 function failure(status: number) {
   return NextResponse.json({ error: { code: 'HISTORICAL_RECEIVABLE_REVIEW',
@@ -64,7 +65,10 @@ export async function loadHistoricalReceivableFindings(ctx: ExtensionContext, jo
     payloadHash: row.payload_hash, invoice: openMigrationPayload<SalesInvoiceDto>(row.payload), imported: !!row.target_id,
     reviewable: row.state === 'needs_attention' && row.error_code === 'MIGRATION_SOURCE_LINES_MISSING' }))
   const findings = findHistoricalReceivableCandidates(payments, sources, new Set(invoices.flatMap(row => row.invoice_number ? [row.invoice_number] : [])))
-  return { findings, reviewed: reviewed.filter(row => row.decision === 'approved') }
+  return { findings, reviewed: reviewed.filter(row => row.decision === 'approved').sort((a, b) => {
+    const left = `${a.payment_date}|${a.id}`, right = `${b.payment_date}|${b.id}`
+    return left < right ? -1 : left > right ? 1 : 0
+  }) }
 }
 
 export const historicalReceivableRoutes: ApiRouteDefinition[] = [
@@ -75,11 +79,15 @@ export const historicalReceivableRoutes: ApiRouteDefinition[] = [
       const url = new URL(request.url)
       const query = Query.safeParse({ jobId: url.searchParams.get('jobId'), after: url.searchParams.get('after') ?? undefined })
       if (!query.success) return failure(400)
+      if (query.data.after) {
+        const parts = query.data.after.split('|')
+        if (parts.length !== 2 || !Cursor.safeParse({ date: parts[0], id: parts[1] }).success) return failure(400)
+      }
       const result = await loadHistoricalReceivableFindings(ctx, query.data.jobId)
       if (!result) return failure(404)
-      const remaining = query.data.after ? result.findings.filter(row => row.paymentEntryId > query.data.after!) : result.findings
-      return NextResponse.json({ data: { findings: remaining.slice(0, 20).map(({ payloadHash: _hash, ...row }) => row),
-        next: remaining.length > 20 ? remaining[19].paymentEntryId : null, reviewed: result.reviewed, total: result.findings.length } },
+      const page = pageHistoricalReceivableFindings(result.findings, query.data.after)
+      return NextResponse.json({ data: { findings: page.findings.map(({ payloadHash: _hash, ...row }) => row),
+        next: page.next, reviewed: result.reviewed, total: result.findings.length } },
       { headers: { 'Cache-Control': 'no-store' } })
     },
   },

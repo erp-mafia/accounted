@@ -75,5 +75,16 @@ export function findHistoricalReceivableCandidates(
       chunkId: source?.chunkId ?? null, payloadHash: source?.payloadHash ?? null,
       origin: source ? 'incomplete_invoice' : 'voucher_only' })
   }
-  return findings
+  return findings.sort((a, b) => historicalFindingCursor(a) < historicalFindingCursor(b) ? -1
+    : historicalFindingCursor(a) > historicalFindingCursor(b) ? 1 : 0)
+}
+
+/** Include the payment date so pagination remains valid when a reviewed row disappears. */
+export function historicalFindingCursor(row: Pick<HistoricalReceivableFinding, 'paymentDate' | 'paymentEntryId'>): string {
+  return `${row.paymentDate}|${row.paymentEntryId}`
+}
+
+export function pageHistoricalReceivableFindings(findings: readonly HistoricalReceivableFinding[], after?: string) {
+  const remaining = after ? findings.filter(row => historicalFindingCursor(row) > after) : findings
+  return { findings: remaining.slice(0, 20), next: remaining.length > 20 ? historicalFindingCursor(remaining[19]) : null }
 }
