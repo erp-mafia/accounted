@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
@@ -37,6 +38,7 @@ export function JournalEntryReviewContent({
   showBalanceBadge = true,
   hideDate = false,
 }: JournalEntryReviewContentProps) {
+  const t = useTranslations('journal_form')
   const activeLines = lines.filter(
     (l) => l.account_number && (l.debit_amount || l.credit_amount)
   )
@@ -47,29 +49,29 @@ export function JournalEntryReviewContent({
       <div className="bg-muted rounded-lg p-4 space-y-2">
         <div className={`grid gap-4 text-sm ${hideDate && !voucherSeries ? 'grid-cols-1' : hideDate || !voucherSeries ? 'grid-cols-2' : 'grid-cols-3'}`}>
           <div>
-            <span className="text-muted-foreground">Räkenskapsår</span>
+            <span className="text-muted-foreground">{t('fiscal_year')}</span>
             <p className="font-medium">{fiscalYearShortName(periodName)}</p>
           </div>
           {!hideDate && (
             <div>
-              <span className="text-muted-foreground">Datum</span>
+              <span className="text-muted-foreground">{t('date')}</span>
               <p className="font-medium">{formatDate(entryDate)}</p>
             </div>
           )}
           {voucherSeries && (
             <div>
-              <span className="text-muted-foreground">Serie</span>
+              <span className="text-muted-foreground">{t('series')}</span>
               <p className="font-medium font-mono">{voucherSeries}</p>
             </div>
           )}
         </div>
         <div className="text-sm">
-          <span className="text-muted-foreground">Beskrivning</span>
+          <span className="text-muted-foreground">{t('description')}</span>
           <p className="font-medium">{description}</p>
         </div>
         {notes && (
           <div className="text-sm">
-            <span className="text-muted-foreground">Intern anteckning</span>
+            <span className="text-muted-foreground">{t('internal_note')}</span>
             <p className="text-muted-foreground italic">{notes}</p>
           </div>
         )}
@@ -81,13 +83,13 @@ export function JournalEntryReviewContent({
           {showBalanceBadge && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <CheckCircleIcon className="h-3.5 w-3.5" />
-              Debet = Kredit
+              {t('review_balanced')}
             </span>
           )}
           {attachmentCount != null && attachmentCount > 0 && (
             <Badge variant="outline">
               <PaperClipIcon className="h-3 w-3 mr-1" />
-              {attachmentCount} underlag
+              {t('review_attachments', { count: attachmentCount })}
             </Badge>
           )}
         </div>

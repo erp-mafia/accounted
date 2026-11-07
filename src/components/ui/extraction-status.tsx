@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import {
   CheckIcon,
   ExclamationCircleIcon,
@@ -20,9 +21,10 @@ interface Props {
 // useDocumentExtraction hook output. "disabled" renders nothing: the free
 // tier has no AI extraction and shouldn't see scary UI.
 //
-// Copy is intentionally short and Swedish. The status changes inline; the
-// layout doesn't shift between states (icon + single line).
+// Copy is intentionally short. The status changes inline; the layout
+// doesn't shift between states (icon + single line).
 export default function ExtractionStatus({ status, elapsedMs = 0, className }: Props) {
+  const t = useTranslations('document_upload')
   if (status === 'idle' || status === 'disabled') return null
 
   const slow = elapsedMs > 8_000
@@ -36,7 +38,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
         )}
       >
         <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-        {slow ? 'Tar lite längre än vanligt…' : 'Läser dokumentet…'}
+        {slow ? t('extraction_slow') : t('extraction_running')}
       </span>
     )
   }
@@ -50,7 +52,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
         )}
       >
         <CheckIcon className="h-3.5 w-3.5" />
-        Inläst av AI
+        {t('extraction_succeeded')}
       </span>
     )
   }
@@ -64,7 +66,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
         )}
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-        Filtypen kan inte läsas automatiskt
+        {t('extraction_unsupported')}
       </span>
     )
   }
@@ -78,7 +80,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
       )}
     >
       <ExclamationCircleIcon className="h-3.5 w-3.5" />
-      Kunde inte läsa automatiskt: fyll i manuellt
+      {t('extraction_failed')}
     </span>
   )
 }

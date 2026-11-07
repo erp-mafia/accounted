@@ -71,59 +71,62 @@ export interface RegisterImportConfig<R extends ReviewRow = ReviewRow> {
   parseInBrowser?(file: File, overrides: Record<string, number | null> | undefined): Promise<ArticleBrowserParseOutcome>
 }
 
-const CUSTOMER_COLUMN_SPECS = (customerNumberLabel: string): RegisterColumnSpec<string>[] => [
-  { key: 'name_col', label: 'Namn', required: true },
+/** Reads import.register_column: the labels of the file columns to map. */
+type ColumnLabels = (key: string) => string
+
+const customerColumnSpecs = (tColumn: ColumnLabels, customerNumberLabel: string): RegisterColumnSpec<string>[] => [
+  { key: 'name_col', label: tColumn('name'), required: true },
   { key: 'customer_number_col', label: customerNumberLabel, required: false },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'customer_type_col', label: 'Kundtyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
+  { key: 'org_number_col', label: tColumn('org_number'), required: false },
+  { key: 'customer_type_col', label: tColumn('customer_type'), required: false },
+  { key: 'email_col', label: tColumn('email'), required: false },
+  { key: 'phone_col', label: tColumn('phone'), required: false },
+  { key: 'address_line1_col', label: tColumn('address_line1'), required: false },
+  { key: 'address_line2_col', label: tColumn('address_line2'), required: false },
+  { key: 'postal_code_col', label: tColumn('postal_code'), required: false },
+  { key: 'city_col', label: tColumn('city'), required: false },
+  { key: 'country_col', label: tColumn('country'), required: false },
+  { key: 'vat_number_col', label: tColumn('vat_number'), required: false },
+  { key: 'payment_terms_col', label: tColumn('payment_terms'), required: false },
+  { key: 'notes_col', label: tColumn('notes'), required: false },
 ]
 
-const SUPPLIER_COLUMN_SPECS: RegisterColumnSpec<string>[] = [
-  { key: 'name_col', label: 'Namn', required: true },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'supplier_type_col', label: 'Leverantörstyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
+const supplierColumnSpecs = (tColumn: ColumnLabels): RegisterColumnSpec<string>[] => [
+  { key: 'name_col', label: tColumn('name'), required: true },
+  { key: 'org_number_col', label: tColumn('org_number'), required: false },
+  { key: 'supplier_type_col', label: tColumn('supplier_type'), required: false },
+  { key: 'email_col', label: tColumn('email'), required: false },
+  { key: 'phone_col', label: tColumn('phone'), required: false },
+  { key: 'address_line1_col', label: tColumn('address_line1'), required: false },
+  { key: 'address_line2_col', label: tColumn('address_line2'), required: false },
+  { key: 'postal_code_col', label: tColumn('postal_code'), required: false },
+  { key: 'city_col', label: tColumn('city'), required: false },
+  { key: 'country_col', label: tColumn('country'), required: false },
+  { key: 'vat_number_col', label: tColumn('vat_number'), required: false },
   { key: 'bankgiro_col', label: 'Bankgiro', required: false },
   { key: 'plusgiro_col', label: 'Plusgiro', required: false },
-  { key: 'bank_account_col', label: 'Bankkonto', required: false },
+  { key: 'bank_account_col', label: tColumn('bank_account'), required: false },
   { key: 'iban_col', label: 'IBAN', required: false },
   { key: 'bic_col', label: 'BIC/SWIFT', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'default_currency_col', label: 'Valuta', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
+  { key: 'payment_terms_col', label: tColumn('payment_terms'), required: false },
+  { key: 'default_currency_col', label: tColumn('currency'), required: false },
+  { key: 'notes_col', label: tColumn('notes'), required: false },
 ]
 
-const ARTICLE_COLUMN_SPECS: RegisterColumnSpec<string>[] = [
-  { key: 'name_col', label: 'Benämning', required: true },
-  { key: 'article_number_col', label: 'Artikelnummer', required: false },
-  { key: 'type_col', label: 'Typ (vara/tjänst)', required: false },
-  { key: 'unit_col', label: 'Enhet', required: false },
-  { key: 'price_col', label: 'Pris exkl moms', required: false },
-  { key: 'currency_col', label: 'Valuta', required: false },
-  { key: 'vat_rate_col', label: 'Moms (%)', required: false },
-  { key: 'revenue_account_col', label: 'Försäljningskonto', required: false },
-  { key: 'cost_price_col', label: 'Inköpspris', required: false },
+const articleColumnSpecs = (tColumn: ColumnLabels): RegisterColumnSpec<string>[] => [
+  { key: 'name_col', label: tColumn('article_name'), required: true },
+  { key: 'article_number_col', label: tColumn('article_number'), required: false },
+  { key: 'type_col', label: tColumn('article_type'), required: false },
+  { key: 'unit_col', label: tColumn('unit'), required: false },
+  { key: 'price_col', label: tColumn('price'), required: false },
+  { key: 'currency_col', label: tColumn('currency'), required: false },
+  { key: 'vat_rate_col', label: tColumn('vat_rate'), required: false },
+  { key: 'revenue_account_col', label: tColumn('revenue_account'), required: false },
+  { key: 'cost_price_col', label: tColumn('cost_price'), required: false },
   { key: 'ean_col', label: 'EAN', required: false },
-  { key: 'housework_type_col', label: 'ROT/RUT-arbetstyp', required: false },
-  { key: 'name_en_col', label: 'Benämning (engelska)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
+  { key: 'housework_type_col', label: tColumn('housework_type'), required: false },
+  { key: 'name_en_col', label: tColumn('name_en'), required: false },
+  { key: 'notes_col', label: tColumn('notes'), required: false },
 ]
 
 const VAT_RATES = [25, 12, 6, 0] as const
@@ -178,6 +181,7 @@ function typeColumn<R extends ReviewRow>(
 /** The register's import config, for the register the wizard has open. */
 export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterImportConfig {
   const t = useTranslations('import.register_edit')
+  const tColumn = useTranslations('import.register_column')
   const tCustomers = useTranslations('customers')
   const tSuppliers = useTranslations('suppliers')
   const tArticles = useTranslations('articles')
@@ -190,7 +194,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
     if (entity === 'customers') {
       const config: RegisterImportConfig<AnnotatedCustomerRow> = {
         entity,
-        columnSpecs: CUSTOMER_COLUMN_SPECS(tCustomerForm('customer_number_label')),
+        columnSpecs: customerColumnSpecs(tColumn, tCustomerForm('customer_number_label')),
         executeReviewOnly: [],
         reviewFields: customerFields,
         possibleDuplicate: {
@@ -236,7 +240,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
     if (entity === 'suppliers') {
       const config: RegisterImportConfig<AnnotatedSupplierRow> = {
         entity,
-        columnSpecs: SUPPLIER_COLUMN_SPECS,
+        columnSpecs: supplierColumnSpecs(tColumn),
         executeReviewOnly: [],
         reviewFields: supplierFields,
         possibleDuplicate: {
@@ -275,7 +279,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
 
     const config: RegisterImportConfig<AnnotatedArticleRow> = {
       entity,
-      columnSpecs: ARTICLE_COLUMN_SPECS,
+      columnSpecs: articleColumnSpecs(tColumn),
       // The parser's VAT reinterpretation marker is for the review step only.
       executeReviewOnly: ['vat_rate_adjusted'],
       reviewFields: articleFields,
@@ -364,5 +368,5 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
       },
     }
     return config as unknown as RegisterImportConfig
-  }, [entity, t, tCustomers, tSuppliers, tArticles, tCustomerForm, customerFields, supplierFields, articleFields])
+  }, [entity, t, tColumn, tCustomers, tSuppliers, tArticles, tCustomerForm, customerFields, supplierFields, articleFields])
 }

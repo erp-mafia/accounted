@@ -1,5 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
+import { getTranslations } from 'next-intl/server'
 import ChatConversationView from '@/components/agent/ChatConversationView'
+import { intentLabelKey } from '@/components/agent/intent-label-keys'
 import type { StoredStagedOperation } from '@/types'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
 
@@ -54,30 +56,16 @@ export default async function ChatConversationPage({ params }: PageProps) {
   // failure this query exists to prevent: fail loudly instead of quietly
   // rendering a thread that looks like it never staged anything.
   if (staged.error) throw staged.error
+  const t = await getTranslations('agent_chat')
 
   return (
     <ChatConversationView
       conversationId={id}
       intentId={conversation.intent_id}
       contextRef={conversation.context_ref}
-      title={conversation.title ?? intentLabel(conversation.intent_id)}
+      title={conversation.title ?? t(intentLabelKey(conversation.intent_id))}
       rawMessages={(messages ?? []) as { role: string; content: unknown; hidden?: boolean }[]}
       stagedOperations={(staged.data ?? []) as StoredStagedOperation[]}
     />
   )
-}
-
-function intentLabel(intentId: string): string {
-  switch (intentId) {
-    case 'general.help':
-      return 'Fråga din assistent'
-    case 'transaction.categorization':
-      return 'Hjälp med transaktion'
-    case 'invoice.draft':
-      return 'Hjälp med faktura'
-    case 'supplier_invoice.review':
-      return 'Granska leverantörsfaktura'
-    default:
-      return intentId
-  }
 }

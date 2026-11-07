@@ -30,16 +30,11 @@ const VIEW_ROUTE: Record<View, string> = {
   skills: '/skills',
 }
 
-const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
-  { value: 'knowledge', label: 'Kunskap' },
-  { value: 'memory', label: 'Minne' },
-  { value: 'skills', label: 'Kompetens' },
-]
-
 /** `agentsEnabled`: the Kompetens view links to the Agenter page, hidden in production while it is finished. */
 export function AssistantSettingsContent({ agentsEnabled = true }: { agentsEnabled?: boolean }) {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tViews = useTranslations('agentKnowledge')
   const searchParams = useSearchParams()
   const router = useRouter()
   const raw = searchParams.get('view')
@@ -56,7 +51,16 @@ export function AssistantSettingsContent({ agentsEnabled = true }: { agentsEnabl
       <SettingsSectionHeader title={tNav('assistant')} intro={tIntro('assistant')} />
 
       <div className="mt-6">
-        <SettingsSeg value={view} onChange={setView} options={agentsEnabled ? VIEW_OPTIONS : VIEW_OPTIONS.filter((o) => o.value !== 'skills')} aria-label="Välj vy" />
+        <SettingsSeg<View>
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'knowledge', label: tViews('view_knowledge') },
+            { value: 'memory', label: tViews('view_memory') },
+            ...(agentsEnabled ? [{ value: 'skills' as const, label: tViews('view_skills') }] : []),
+          ]}
+          aria-label={tViews('view_label')}
+        />
       </div>
 
       {/* Only the active view mounts, so each panel's data is fetched lazily
