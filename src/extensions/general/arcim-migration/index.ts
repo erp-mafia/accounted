@@ -1,3 +1,5 @@
+import { historicalReceivableRoutes } from './lib/historical-receivable-routes'
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { readSIEIntakeFile } from '@/lib/import/sie-intake'
@@ -271,6 +273,16 @@ async function buildBjornLundenActivationUrl(
  * only the error itself holds. Without the override the code would fall
  * through entryFor() to INTERNAL_ERROR and answer 500.
  */
+/** Keep SIE permission failures consistent across preview and year selection. */
+function bokioSiePermissionResponse(error: unknown): NextResponse | null {
+  if (!(error instanceof BokioApiError) || error.statusCode !== 403) return null
+  return errorResponseFromCode('PROVIDER_RESOURCE_FORBIDDEN', moduleLog, {
+    status: 403,
+    messageSv: 'Bokio nekade SIE-exporten. Kontrollera att integrationstoken har behörigheterna fiscal-years:read och sie:read och att abonnemanget tillåter API-export. Uppdatera token i anslutningen om du skapar en ny.',
+    messageEn: 'Bokio denied the SIE export. Check that the integration token has the fiscal-years:read and sie:read scopes and that your plan allows API export. Update the connection token if you create a new one.',
+  })
+}
+
 function providerFailureResponse(error: unknown, fallbackCode: string): NextResponse {
   const classified = classifyProviderError(error)
   const ctx = {
@@ -324,6 +336,7 @@ export const arcimMigrationExtension: Extension = {
 
   apiRoutes: [
     ...migrationJobRoutes,
+    ...historicalReceivableRoutes,
     ...invoiceCompletionRoutes,
     // ── List available providers ───────────────────────────────────
     {
@@ -1090,6 +1103,8 @@ export const arcimMigrationExtension: Extension = {
                 }
               }
             } catch (err) {
+              const denied = bokioSiePermissionResponse(err)
+              if (denied) return denied
               log.info('SIE export failed:', err instanceof Error ? err.message : String(err))
             }
           }
@@ -1352,6 +1367,8 @@ export const arcimMigrationExtension: Extension = {
           // stable. A re-sync replaces the prior import for the same period.
           const fileStatuses: {
             fiscalYear: number
+            fiscalYearStart: string | null
+            fiscalYearEnd: string | null
             rawContent: string
             previousImport: {
               id: string
@@ -1387,6 +1404,8 @@ export const arcimMigrationExtension: Extension = {
 
             fileStatuses.push({
               fiscalYear: file.fiscalYear,
+              fiscalYearStart: fyStart,
+              fiscalYearEnd: fyEnd,
               rawContent: file.rawContent,
               previousImport: priorImport
                 ? {
@@ -1413,6 +1432,8 @@ export const arcimMigrationExtension: Extension = {
             rawContent: fileStatuses.map(f => f.rawContent),
             fileStatuses: fileStatuses.map(f => ({
               fiscalYear: f.fiscalYear,
+              fiscalYearStart: f.fiscalYearStart,
+              fiscalYearEnd: f.fiscalYearEnd,
               previousImport: f.previousImport,
               // Back-compat for older wizard builds: an `alreadyImported`
               // boolean. The new wizard reads `previousImport` directly.
@@ -1432,6 +1453,8 @@ export const arcimMigrationExtension: Extension = {
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)
+          const denied = bokioSiePermissionResponse(error)
+          if (denied) return denied
           return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
       },

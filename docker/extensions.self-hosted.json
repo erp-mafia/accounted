@@ -1,1 +1,1 @@
-{"extensions": ["email", "invoice-inbox", "document-extraction", "push-notifications", "calendar", "mcp-server", "enable-banking", "skatteverket"]}
+{"extensions": ["email", "arcim-migration", "invoice-inbox", "document-extraction", "push-notifications", "calendar", "mcp-server", "enable-banking", "skatteverket"]}

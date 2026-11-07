@@ -10,11 +10,21 @@ import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './pro
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 const CreateSchema = z.object({ consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4) }).strict()
+const PreflightSchema = z.object({ resources: z.array(z.enum(MIGRATION_RESOURCES)).max(4) }).strict()
 const JobSchema = z.object({ jobId: z.uuid(), consentId: z.uuid().optional() }).strict()
 
 function error(code: string, status: number) {
   return NextResponse.json({ error: { code, message: 'Importen kunde inte fortsätta. Dina sparade framsteg finns kvar.',
     message_en: 'The import could not continue. Your saved progress is preserved.' } }, { status })
+}
+
+/** Shared by the wizard preflight and direct job admission/retry. Never exposes the key. */
+function encryptionRefusal(ctx: ExtensionContext): NextResponse | null {
+  if (process.env.PERSONNUMMER_ENCRYPTION_KEY?.trim()) return null
+  return errorResponseFromCode('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED', ctx.log, {
+    messageSv: 'Registerimporten kan inte starta: servern saknar krypteringsnyckeln PERSONNUMMER_ENCRYPTION_KEY. Administratören behöver konfigurera den innan du försöker igen.',
+    messageEn: 'Register import cannot start: the server is missing PERSONNUMMER_ENCRYPTION_KEY. An administrator must configure it before you retry.',
+  })
 }
 
 /**
@@ -66,12 +76,27 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [
   {
+    method: 'POST', path: '/migration-jobs/preflight',
+    handler: async (request, ctx) => {
+      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
+      const body = await validateBody(request, PreflightSchema)
+      if (!body.success) return body.response
+      if (body.data.resources.length) {
+        const refusal = encryptionRefusal(ctx)
+        if (refusal) return refusal
+      }
+      return NextResponse.json({ data: { ready: true } }, { headers: { 'Cache-Control': 'no-store' } })
+    },
+  },
+  {
     method: 'POST', path: '/migration-jobs',
     handler: async (request, ctx) => {
       if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
       const body = await validateBody(request, CreateSchema)
       if (!body.success) return body.response
       const resources = MIGRATION_RESOURCES.filter(resource => body.data.resources.includes(resource))
+      const configurationRefusal = encryptionRefusal(ctx)
+      if (configurationRefusal) return configurationRefusal
       const { data: consent, error: consentError } = await ctx.supabase.from('provider_consents').select('id')
         .eq('id', body.data.consentId).eq('company_id', ctx.companyId).in('status', [0, 1]).maybeSingle()
       if (consentError) return error('MIGRATION_LOOKUP_FAILED', 500)
@@ -113,6 +138,8 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
       if (!body.success) return body.response
       const status = await readMigrationStatus(ctx, body.data.jobId)
       if (!status) return error('NOT_FOUND', 404)
+      const configurationRefusal = encryptionRefusal(ctx)
+      if (configurationRefusal) return configurationRefusal
       if (action === 'retry') {
         if (!['needs_attention', 'retry_wait'].includes(status.job.state)) return error('MIGRATION_NOT_RETRYABLE', 409)
         if (body.data.consentId) {

@@ -4,7 +4,7 @@ import type { SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/provid
 
 /**
  * Guards two migration hardenings:
- *  - empty invoice numbers from a provider payload must be stored as NULL,
+ *  - empty sales invoice numbers from a provider payload must be stored as NULL,
  *    never '': the unique indexes on (company_id, invoice_number) and
  *    (company_id, supplier_id, supplier_invoice_number) treat NULLs as
  *    distinct but collide on repeated empty strings;
@@ -55,7 +55,7 @@ function makeSupplierDto(invoiceNumber: string): SupplierInvoiceDto {
   }
 }
 
-describe('invoice number nulling', () => {
+describe('invoice number mapping', () => {
   it('sales invoice: empty invoiceNumber becomes NULL, real one is kept', () => {
     const empty = mapSalesInvoice(makeSalesDto({ invoiceNumber: '' }), 'u', 'c', 'cust').invoice
     expect(empty.invoice_number).toBeNull()
@@ -64,9 +64,9 @@ describe('invoice number nulling', () => {
     expect(real.invoice_number).toBe('F-7')
   })
 
-  it('supplier invoice: empty invoiceNumber becomes NULL', () => {
+  it('supplier invoice: empty invoiceNumber becomes a dash', () => {
     const empty = mapSupplierInvoice(makeSupplierDto(''), 'u', 'c', 'sup').invoice
-    expect(empty.supplier_invoice_number).toBeNull()
+    expect(empty.supplier_invoice_number).toBe('-')
 
     const real = mapSupplierInvoice(makeSupplierDto('LF-9'), 'u', 'c', 'sup').invoice
     expect(real.supplier_invoice_number).toBe('LF-9')
@@ -95,5 +95,22 @@ describe('sales invoice remaining_amount', () => {
   it('negative provider balance never yields negative remaining', () => {
     const inv = mapSalesInvoice(makeSalesDto({ paid: false, balance: -3, total: 1000 }), 'u', 'c', 'cust').invoice
     expect(inv.remaining_amount).toBe(0)
+  })
+})
+
+
+describe('supplier invoice OCR fallback', () => {
+  it('uses OCR for an empty or whitespace-only invoice number and preserves the payment reference', () => {
+    for (const invoiceNumber of ['', '   ']) {
+      const dto = { ...makeSupplierDto(invoiceNumber), ocrNumber: ' 001234567890 ' }
+      const mapped = mapSupplierInvoice(dto, 'u', 'c', 'sup').invoice
+      expect(mapped.supplier_invoice_number).toBe('001234567890')
+      expect(mapped.payment_reference).toBe(dto.ocrNumber)
+      expect(dto.invoiceNumber).toBe(invoiceNumber)
+    }
+  })
+  it('prefers the real invoice number and uses a dash if both are missing', () => {
+    expect(mapSupplierInvoice({ ...makeSupplierDto('F-42'), ocrNumber: '00123' }, 'u', 'c', 'sup').invoice.supplier_invoice_number).toBe('F-42')
+    expect(mapSupplierInvoice({ ...makeSupplierDto(' '), ocrNumber: ' ' }, 'u', 'c', 'sup').invoice.supplier_invoice_number).toBe('-')
   })
 })

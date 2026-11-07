@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { createMockSupabase } from '@/tests/helpers'
 const { after, serviceRpc, worker, ensureIdentity, MismatchError } = vi.hoisted(() => ({
@@ -25,7 +25,8 @@ function context() {
   const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() }
   return { ...mock, log, ctx: { supabase: mock.supabase, companyId: 'company', userId: 'user', log } as unknown as ExtensionContext }
 }
-beforeEach(() => { vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present') })
+beforeEach(() => { vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'migration-route-test-key'); vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present') })
+afterEach(() => vi.unstubAllEnvs())
 describe('migration job API', () => {
   it('rejects an unauthenticated request before creating service work', async () => {
     expect((await route('POST')(request({ consentId: id, resources: ['customers'] }))).status).toBe(401)
@@ -129,5 +130,52 @@ describe('source identity before the job is created', () => {
     expect((await route('POST', '/migration-jobs/retry')(request({ jobId: id, consentId: id }), ctx)).status).toBe(202)
     expect(ensureIdentity).toHaveBeenCalledWith('company', id)
     expect(serviceRpc).toHaveBeenCalledWith('create_provider_migration_job', expect.objectContaining({ p_consent_id: id }))
+  })
+})
+
+
+describe('migration readiness before SIE work', () => {
+  it('refuses selected registers with an actionable 503 before any database or worker call', async () => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    const { ctx, supabase } = context()
+    const response = await route('POST', '/migration-jobs/preflight')(request({ resources: ['customers', 'salesInvoices'] }), ctx)
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body.error.code).toBe('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')
+    expect(body.error.message).toContain('Administratören')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(serviceRpc).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+  it('permits SIE-only migration without the register encryption key', async () => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    expect((await route('POST', '/migration-jobs/preflight')(request({ resources: [] }), context().ctx)).status).toBe(200)
+  })
+  it('permits configured registers without revealing their key', async () => {
+    const response = await route('POST', '/migration-jobs/preflight')(request({ resources: ['suppliers'] }), context().ctx)
+    expect(await response.json()).toEqual({ data: { ready: true } })
+  })
+  it('also refuses direct job creation before source discovery or enqueueing', async () => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    const { ctx, supabase } = context()
+    expect((await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)).status).toBe(503)
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(ensureIdentity).not.toHaveBeenCalled()
+    expect(serviceRpc).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+  it.each(['run', 'retry'])('refuses %s without a key before changing an existing job', async action => {
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    const { ctx, mockResult } = context()
+    mockResult({ data: { id, state: 'needs_attention' } })
+    expect((await route('POST', `/migration-jobs/${action}`)(request({ jobId: id }), ctx)).status).toBe(503)
+    expect(serviceRpc).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+  it('requires authenticated company context even for preflight', async () => {
+    expect((await route('POST', '/migration-jobs/preflight')(request({ resources: ['customers'] }))).status).toBe(401)
+  })
+  it('rejects unknown resources instead of reporting readiness', async () => {
+    expect((await route('POST', '/migration-jobs/preflight')(request({ resources: ['unknown'] }), context().ctx)).status).toBe(400)
   })
 })

@@ -1,3 +1,4 @@
+import { applyMigrationInvoiceCorrection } from '@/lib/providers/migration-corrections'
 import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -32,6 +33,9 @@ export interface MigrationChunk {
   payload: string
   target_id: string | null
   receipt: {
+    userCorrection?: string
+    correctedBy?: string
+    correctedAt?: string
     link?: Omit<MigratedInvoiceLinkInput, 'invoiceId'> & {
       /** The credited invoice as the provider named it; pairMigratedCreditNotes resolves it. */
       creditedInvoiceRef?: CreditedInvoiceRefDto | null
@@ -93,6 +97,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   connection: ResolvedConsent, deadline: number): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
+  if (c.resource === 'salesInvoices') {
+    const { data: historical, error } = await withinMigrationDeadline(supabase.from('historical_receivable_references')
+      .select('id').eq('company_id', job.company_id).eq('provider', job.provider).eq('account_key', job.account_key)
+      .eq('source_id', c.source_id).eq('decision', 'approved').maybeSingle(), deadline)
+    if (error) throw new Error('Historical source lookup failed')
+    if (historical?.id) return { id: c.id, skip: 'historical_receivable' }
+  }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
@@ -118,7 +129,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // detail failures so healthy records continue; the user can retry them.
     throw new Error(hydrated.hydration.abortedBy === 'auth' ? 'PROVIDER_AUTH_EXPIRED' : 'MIGRATION_DETAIL_RETRY')
   }
-  const invoice = hydrated.invoices[0]
+  const invoice = c.resource === 'supplierInvoices'
+    ? applyMigrationInvoiceCorrection(hydrated.invoices[0] as SupplierInvoiceDto,
+      c.receipt?.userCorrection ? openMigrationPayload(c.receipt.userCorrection) : undefined)
+    : hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
   if (invoice.lines.length > MAX_INVOICE_LINES) return { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
   const fx = await withinMigrationDeadline(buildFxRateIndex(supabase, [invoice]), deadline)
@@ -158,7 +172,7 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
-    link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
+    link: { ...(c.receipt?.userCorrection ? { userCorrection: c.receipt.userCorrection, correctedBy: c.receipt.correctedBy, correctedAt: c.receipt.correctedAt } : {}), ...(provider === 'bokio' && c.resource === 'supplierInvoices'
       ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
         ? { settlement: { sourcePaid: invoice.paymentStatus.paid, userId: job.user_id } } : {}),

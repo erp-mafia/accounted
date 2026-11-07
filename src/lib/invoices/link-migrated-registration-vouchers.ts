@@ -304,7 +304,11 @@ export async function linkMigratedRegistrationVouchers(
       : fetchSourceRefVouchers(supabase, companyId),
     fetchFiscalPeriods(supabase, companyId),
   ])
-  const index = buildVoucherIndex(vouchers)
+  // Historical document attachment still needs reversed entries. Invoice
+  // registration must resolve only active originals, before duplicate indexing.
+  // The authoritative status read below also guards a concurrent reversal.
+  const index = buildVoucherIndex(vouchers.filter(row =>
+    (row.status === undefined || row.status === 'posted') && !row.reversed_by_id))
 
   // 2. Resolve refs in memory. Two inputs landing on one verifikat is a
   //    contest neither side can win without guessing: both stay NULL.
