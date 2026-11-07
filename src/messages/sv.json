@@ -6991,6 +6991,7 @@
     "ext_arcim_historical_confirm_description": "Jag har granskat sambandet. Spara fakturareferensen med hänvisning till den befintliga betalningen. Ingen ny faktura eller bokföringspost skapas. Fakturarader och moms rekonstrueras inte.",
     "ext_arcim_historical_results": "Visa importresultat",
     "ext_arcim_job_error_registration": "Fakturan är importerad, men kopplingen till registreringsverifikatet behöver granskas.",
+    "ext_arcim_job_error_overdue": "Fakturan är importerad och har ett kvarvarande belopp efter förfallodagen. Granska om den ska betalas eller om en betalning saknar registrering.",
     "ext_arcim_job_error_payment": "Fakturan är importerad, men betalningen kunde inte kopplas entydigt till ett betalningsverifikat.",
     "ext_arcim_job_paused": "Importen är pausad för granskning. Redan sparade poster finns kvar.",
     "ext_arcim_job_issues_title": "Kvarvarande importproblem",

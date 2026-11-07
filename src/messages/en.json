@@ -6991,6 +6991,7 @@
     "ext_arcim_historical_confirm_description": "I have reviewed this link. Save the invoice reference against the existing payment. No new invoice or journal entry is created. Invoice lines and VAT are not reconstructed.",
     "ext_arcim_historical_results": "Show import results",
     "ext_arcim_job_error_registration": "The invoice is imported, but its registration voucher link needs review.",
+    "ext_arcim_job_error_overdue": "The invoice is imported and has an outstanding balance past its due date. Review whether it should be paid or a payment has not been recorded.",
     "ext_arcim_job_error_payment": "The invoice is imported, but its payment could not be linked unambiguously to a payment voucher.",
     "ext_arcim_job_paused": "The import is paused for review. Records already saved are preserved.",
     "ext_arcim_job_issues_title": "Remaining import issues",

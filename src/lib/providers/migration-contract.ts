@@ -72,8 +72,9 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'registration' | 'payment' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'registration' | 'payment' | 'overdue' | 'retry' {
   if (code === 'MIGRATION_REGISTRATION_REVIEW') return 'registration'
+  if (code === 'MIGRATION_UNPAID_OVERDUE') return 'overdue'
   if (code === 'MIGRATION_PAYMENT_REVIEW') return 'payment'
   if (code === '23502' || code === 'MIGRATION_INVOICE_NUMBER_REQUIRED') return 'missing'
   if (code === 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED') return 'configuration'

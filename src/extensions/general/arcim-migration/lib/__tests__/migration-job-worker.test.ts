@@ -707,3 +707,44 @@ it('does not recreate an invoice whose provider source was already approved as h
   }))
   expect(mocks.hydrate).not.toHaveBeenCalled()
 })
+
+
+describe('Bokio open-balance reconciliation policy', () => {
+  beforeEach(() => mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } }))
+  it.each([
+    ['explicit unpaid balance', 1499, ['target']],
+    ['missing provider balance', undefined, []],
+    ['settled source', 0, []],
+    ['contradictory balance', 2000, []],
+  ])('passes only confirmed open records to the unpaid policy: %s', async (_label, remaining, expected) => {
+    const db = database({ provider: 'bokio', phase: 'reconcile', resources: ['supplierInvoices'] })
+    const dto = mapBokioToSupplierInvoice({ id: 'telia', invoiceNumber: '20508368261', invoiceDate: '2026-10-27',
+      dueDate: '2026-11-30', totalAmount: 1499, remainingAmount: remaining })
+    db.rows.push({ id: 'chunk', source_id: dto.id, resource: 'supplierInvoices', state: 'linked', target_id: 'target', ...sealMigrationPayload(dto) })
+    mocks.reconcile.mockResolvedValue({ links: [], review: [] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') db.rows[0].state = 'done'
+      return original(name, args)
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.reconcile).toHaveBeenCalledWith(expect.objectContaining({ sourceUnpaidInvoiceIds: expected, dryRun: true }))
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({ p_records: [{ id: 'chunk', payment: null }] }))
+  })
+  it.each([
+    ['overdue_unpaid', 'MIGRATION_UNPAID_OVERDUE'],
+    ['low_confidence', 'MIGRATION_PAYMENT_REVIEW'],
+  ])('retains the reason %s in the durable review', async (reason, error) => {
+    const db = database({ provider: 'bokio', phase: 'reconcile', resources: ['supplierInvoices'] })
+    const dto = mapBokioToSupplierInvoice({ id: 'telia', totalAmount: 1499, remainingAmount: 1499 })
+    db.rows.push({ id: 'chunk', source_id: dto.id, resource: 'supplierInvoices', state: 'linked', target_id: 'target', ...sealMigrationPayload(dto) })
+    mocks.reconcile.mockResolvedValue({ links: [], review: [{ supplier_invoice_id: 'target', reason }] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') db.rows[0].state = 'needs_attention'
+      return original(name, args)
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({ p_records: [{ id: 'chunk', payment: null, error }] }))
+  })
+})

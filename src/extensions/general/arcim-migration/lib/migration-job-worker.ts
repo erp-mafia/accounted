@@ -13,6 +13,7 @@ import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
+import { readNumber } from '@/lib/providers/amounts'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
@@ -365,10 +366,24 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
         ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW' } : {}) }
     })
   } else if (job.phase === 'reconcile') {
+    const sourceUnpaidInvoiceIds = job.provider === 'bokio' ? chunks.filter(c => {
+      const dto = openMigrationPayload<SupplierInvoiceDto>(c.payload)
+      // The mapper falls back to the total when remainingAmount is absent.
+      // Only an explicit provider balance establishes that payment is not due
+      // to be matched; unknown snapshots retain the existing matching flow.
+      const remaining = readNumber(dto._raw ?? {}, ['remainingAmount'])
+      const total = dto.legalMonetaryTotal.payableAmount.value
+      return dto.invoiceTypeCode !== '381' && dto.paymentStatus.paid === false
+        && remaining !== undefined && remaining > ORE_TOLERANCE && remaining <= total + ORE_TOLERANCE
+        && Math.abs(dto.paymentStatus.balance.value - remaining) <= ORE_TOLERANCE
+    }).map(c => c.target_id!) : []
     const result = await reconcileSupplierInvoiceVouchers({ supabase, companyId: job.company_id, userId: job.user_id,
-      dryRun: true, invoiceIds: chunks.map(c => c.target_id!), maxInvoices: BATCH_SIZE })
-    records = chunks.map(c => ({ id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
-      ...(result.review.some(review => review.supplier_invoice_id === c.target_id) ? { error: 'MIGRATION_PAYMENT_REVIEW' } : {}) }))
+      dryRun: true, invoiceIds: chunks.map(c => c.target_id!), sourceUnpaidInvoiceIds, maxInvoices: BATCH_SIZE })
+    records = chunks.map(c => {
+      const review = result.review.find(item => item.supplier_invoice_id === c.target_id)
+      return { id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
+        ...(review ? { error: review.reason === 'overdue_unpaid' ? 'MIGRATION_UNPAID_OVERDUE' : 'MIGRATION_PAYMENT_REVIEW' } : {}) }
+    })
   } else records = chunks.map(c => ({ id: c.id }))
   await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
 }
