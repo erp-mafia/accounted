@@ -9,8 +9,10 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import { createTranslator } from 'next-intl'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
+import { looksSwedish } from '@/scripts/checks/swedish-ui-literal.mjs'
 import { getRiskLevel, OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import {
   complianceWarningOf,
@@ -20,17 +22,34 @@ import {
   rowConsentSentence,
   SINGLE_ACTION_WARNING_KEYS,
   singleActionWarning,
-  singleActionWarnings,
 } from '../vocabulary'
+
+/**
+ * The "pending" translator as the page gets it from next-intl. A missing key
+ * or a broken ICU message throws instead of rendering the key path.
+ */
+const pendingTranslator = (locale: 'sv' | 'en') =>
+  createTranslator({
+    locale,
+    messages: locale === 'sv' ? sv : en,
+    namespace: 'pending',
+    onError: (error) => {
+      throw error
+    },
+  }) as unknown as (key: string) => string
+const tSv = pendingTranslator('sv')
+const svPending = sv.pending as unknown as Record<string, string>
+/** The Swedish sentence of a type's own key. */
+const svWarning = (type: string) => svPending[SINGLE_ACTION_WARNING_KEYS[type]]
 
 describe('singleActionWarning: rules for automatic booking', () => {
   it("says what a supplier's rule lets through, and keeps the bank-line sentence for a bank-line rule", () => {
-    const supplier = singleActionWarning('create_grant', { operation_type: 'create_supplier_invoice_from_inbox', supplier_id: 's-1' })
+    const supplier = singleActionWarning('create_grant', { operation_type: 'create_supplier_invoice_from_inbox', supplier_id: 's-1' }, tSv)
     expect(supplier).toContain('leverantörens fakturor från inkorgen')
     expect(supplier).toContain('en agent kan aldrig godkänna en regel')
     expect(supplier).not.toMatch(/[\u2013\u2014]/)
-    expect(singleActionWarning('create_grant', { operation_type: 'categorize_transaction' })).toBe(singleActionWarnings.create_grant)
-    expect(rowConsentSentence({ operation_type: 'create_grant', status: 'pending', risk_level: 'high', params: { operation_type: 'create_supplier_invoice_from_inbox' } }))
+    expect(singleActionWarning('create_grant', { operation_type: 'categorize_transaction' }, tSv)).toBe(svWarning('create_grant'))
+    expect(rowConsentSentence({ operation_type: 'create_grant', status: 'pending', risk_level: 'high', params: { operation_type: 'create_supplier_invoice_from_inbox' } }, tSv))
       .toBe(supplier)
   })
 })
@@ -39,21 +58,21 @@ describe('singleActionWarning', () => {
   // crm#1281: a kontantfaktura staged by gnubok_mark_invoice_as_sent ends
   // paid, with one cash verifikat; the plain mark-sent keeps its sentence.
   it('says a mark_invoice_sent with paid_at_issue issues the invoice already paid', () => {
-    const sentence = singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1', paid_at_issue: { account_number: '1930' } })
+    const sentence = singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1', paid_at_issue: { account_number: '1930' } }, tSv)
     expect(sentence).toContain('redan betald')
     expect(sentence).toContain('utan kundfordran')
     expect(sentence).not.toMatch(/[\u2013\u2014]/)
-    expect(singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1' })).toBe(singleActionWarnings.mark_invoice_sent)
+    expect(singleActionWarning('mark_invoice_sent', { invoice_id: 'i-1' }, tSv)).toBe(svWarning('mark_invoice_sent'))
   })
 
   it('promises a faktura with F-number for convert_invoice without a target (and with target invoice)', () => {
-    expect(singleActionWarning('convert_invoice')).toContain('F-nummer')
-    expect(singleActionWarning('convert_invoice', { invoice_id: 'q-1' })).toContain('F-nummer')
-    expect(singleActionWarning('convert_invoice', { invoice_id: 'q-1', target: 'invoice' })).toContain('F-nummer')
+    expect(singleActionWarning('convert_invoice', undefined, tSv)).toContain('F-nummer')
+    expect(singleActionWarning('convert_invoice', { invoice_id: 'q-1' }, tSv)).toContain('F-nummer')
+    expect(singleActionWarning('convert_invoice', { invoice_id: 'q-1', target: 'invoice' }, tSv)).toContain('F-nummer')
   })
 
   it('describes a draft kundorder and no booking for convert_invoice with target order', () => {
-    const sentence = singleActionWarning('convert_invoice', { invoice_id: 'q-1', target: 'order' })
+    const sentence = singleActionWarning('convert_invoice', { invoice_id: 'q-1', target: 'order' }, tSv)
     expect(sentence).toContain('kundorder')
     expect(sentence).toContain('Ingen faktura')
     expect(sentence).not.toContain('F-nummer')
@@ -61,25 +80,25 @@ describe('singleActionWarning', () => {
 
   it('names a part of the quote for convert_invoice with percent or amount (crm#1196)', () => {
     for (const params of [{ invoice_id: 'q-1', percent: 50 }, { invoice_id: 'q-1', amount: 12500 }]) {
-      const sentence = singleActionWarning('convert_invoice', params)
+      const sentence = singleActionWarning('convert_invoice', params, tSv)
       expect(sentence).toContain('F-nummer')
       expect(sentence).toContain('delen av offerten')
     }
   })
 
   it('ignores params for every other operation type', () => {
-    expect(singleActionWarning('credit_invoice', { target: 'order' })).toBe(singleActionWarnings.credit_invoice)
-    expect(singleActionWarning('unknown_type', { target: 'order' })).toBe('')
+    expect(singleActionWarning('credit_invoice', { target: 'order' }, tSv)).toBe(svWarning('credit_invoice'))
+    expect(singleActionWarning('unknown_type', { target: 'order' }, tSv)).toBe('')
   })
 
   it('describes a registration of an already-booked invoice, not a draft, for create_invoice in register mode (crm#1094)', () => {
-    const sentence = singleActionWarning('create_invoice', { mode: 'register_booked', invoice_number: '1023' })
+    const sentence = singleActionWarning('create_invoice', { mode: 'register_booked', invoice_number: '1023' }, tSv)
     expect(sentence).toContain('kundreskontran')
     expect(sentence).toContain('där den redan är bokförd')
     expect(sentence).toContain('Ingen verifikation bokförs')
     expect(sentence).toContain('Registreringen kan inte ångras')
     expect(sentence).not.toContain('utkast')
-    expect(singleActionWarning('create_invoice', { customer_id: 'c-1' })).toBe(singleActionWarnings.create_invoice)
+    expect(singleActionWarning('create_invoice', { customer_id: 'c-1' }, tSv)).toBe(svWarning('create_invoice'))
   })
 })
 
@@ -89,25 +108,24 @@ describe('singleActionWarning', () => {
  * changed. The clause is said only when a payee field changes.
  */
 describe('singleActionWarning: company settings (crm#1605)', () => {
-  const t = (key: string) => (sv.pending as unknown as Record<string, string>)[key]
   const PAYMENT_CLAUSE = 'Betalningsuppgifterna styr vart kunderna betalar kommande fakturor.'
 
   it('leaves the payment clause out of a change without payment details', () => {
-    const sentence = singleActionWarning('update_company_settings', { invoice_footer_text: 'Tack', invoice_late_fee_text: 'Ränta' }, t)
+    const sentence = singleActionWarning('update_company_settings', { invoice_footer_text: 'Tack', invoice_late_fee_text: 'Ränta' }, tSv)
     expect(sentence).toBe('Genom att klicka godkänn så ändras företagsinställningarna.')
-    expect(singleActionWarning('update_company_settings', { invoice_show_bankgiro: false, invoice_qr_mode: 'none' }, t)).not.toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', { invoice_show_bankgiro: false, invoice_qr_mode: 'none' }, tSv)).not.toContain(PAYMENT_CLAUSE)
   })
 
   it('says it for every field of the invoice payment account and for the per-currency map', () => {
     for (const field of ['bank_name', 'clearing_number', 'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'invoice_payment_accounts']) {
-      expect(singleActionWarning('update_company_settings', { [field]: null }, t), field).toContain(PAYMENT_CLAUSE)
+      expect(singleActionWarning('update_company_settings', { [field]: null }, tSv), field).toContain(PAYMENT_CLAUSE)
     }
   })
 
   it('reads a row staged before settings.update under its changes, and keeps the clause when the params are unknown', () => {
-    expect(singleActionWarning('update_company_settings', { changes: { bankgiro: '991-2346' } }, t)).toContain(PAYMENT_CLAUSE)
-    expect(singleActionWarning('update_company_settings', { changes: { email: 'a@b.se' } }, t)).not.toContain(PAYMENT_CLAUSE)
-    expect(singleActionWarning('update_company_settings', null, t)).toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', { changes: { bankgiro: '991-2346' } }, tSv)).toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', { changes: { email: 'a@b.se' } }, tSv)).not.toContain(PAYMENT_CLAUSE)
+    expect(singleActionWarning('update_company_settings', null, tSv)).toContain(PAYMENT_CLAUSE)
   })
 
   it('has both sentences in English too', () => {
@@ -130,15 +148,15 @@ describe('rowConsentSentence and the bulk line', () => {
   })
 
   it('shows the registration\'s sentence on its pending row although it is medium risk', () => {
-    const sentence = rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: registration })
-    expect(sentence).toBe(singleActionWarning('create_invoice', registration))
+    const sentence = rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: registration }, tSv)
+    expect(sentence).toBe(singleActionWarning('create_invoice', registration, tSv))
     expect(sentence).toContain('Registreringen kan inte ångras')
   })
 
   it('keeps the rest of the rule: high risk shows its sentence, an ordinary medium draft and a resolved row do not', () => {
-    expect(rowConsentSentence({ operation_type: 'close_period', status: 'pending', risk_level: 'high', params: {} })).toBe(singleActionWarnings.close_period)
-    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: { customer_id: 'c-1' } })).toBe('')
-    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'committed', risk_level: 'medium', params: registration })).toBe('')
+    expect(rowConsentSentence({ operation_type: 'close_period', status: 'pending', risk_level: 'high', params: {} }, tSv)).toBe(svWarning('close_period'))
+    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'pending', risk_level: 'medium', params: { customer_id: 'c-1' } }, tSv)).toBe('')
+    expect(rowConsentSentence({ operation_type: 'create_invoice', status: 'committed', risk_level: 'medium', params: registration }, tSv)).toBe('')
   })
 
   it('says in the bulk confirmation that registrations cannot be undone', () => {
@@ -158,8 +176,8 @@ describe('a registration of an already-booked supplier invoice', () => {
 
   it('stays bulk-approvable at the inbox type\'s medium tier, and its row says it cannot be undone', () => {
     expect(getRiskLevel('create_supplier_invoice_from_inbox', registration)).toBe('medium')
-    const sentence = rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: registration })
-    expect(sentence).toBe(singleActionWarning('create_supplier_invoice_from_inbox', registration))
+    const sentence = rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: registration }, tSv)
+    expect(sentence).toBe(singleActionWarning('create_supplier_invoice_from_inbox', registration, tSv))
     expect(sentence).toContain('leverantörsreskontran')
     expect(sentence).toContain('där den redan är bokförd')
     expect(sentence).toContain('fakturans rader hämtas från verifikationen')
@@ -170,8 +188,8 @@ describe('a registration of an already-booked supplier invoice', () => {
 
   it('leaves an ordinary inbox conversion as it was', () => {
     const inbox = { inbox_item_id: 'item-1', supplier_id: 's-1' }
-    expect(rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: inbox })).toBe('')
-    expect(singleActionWarning('create_supplier_invoice_from_inbox', inbox)).toBe('')
+    expect(rowConsentSentence({ operation_type: 'create_supplier_invoice_from_inbox', status: 'pending', risk_level: 'medium', params: inbox }, tSv)).toBe('')
+    expect(singleActionWarning('create_supplier_invoice_from_inbox', inbox, tSv)).toBe('')
     expect(operationLabel('create_supplier_invoice_from_inbox', t, inbox)).toBe('t:type_create_supplier_invoice_from_inbox')
   })
 
@@ -343,13 +361,12 @@ describe('keyed consequence sentences (crm#1367)', () => {
     expect(rowConsentSentence({ operation_type: 'book_counterparty_setoff', status: 'pending', risk_level: 'high', params: {} }, t)).toBe(sentence)
   })
 
-  it('has every keyed sentence in both languages and no literal beside it', () => {
+  it('has every keyed sentence in both languages', () => {
     const sv = messages('sv').pending
     const en = messages('en').pending
-    for (const [type, key] of Object.entries(SINGLE_ACTION_WARNING_KEYS)) {
+    for (const key of Object.values(SINGLE_ACTION_WARNING_KEYS)) {
       expect(sv[key], `sv pending.${key}`).toBeTruthy()
       expect(en[key], `en pending.${key}`).toBeTruthy()
-      expect(singleActionWarnings[type], `${type} literal`).toBeUndefined()
     }
   })
 })
@@ -422,5 +439,51 @@ describe('a consent sentence for every high-tier operation (accounted#22)', () =
       }
     }
     expect(messages('sv').pending.warning_recurring_schedule_auto_send).toContain('mejlas till kunden')
+  })
+})
+
+/**
+ * crm#1356: an English-locale approver read the consent sentence of nearly
+ * every operation in Swedish: the sentences were Swedish literals in this
+ * file, and only the newer ones were message keys. Now every sentence the
+ * dialog and the Granskning row can show is read through the page's
+ * translator, the way next-intl renders it.
+ */
+describe("consent sentences in the user's language (crm#1356)", () => {
+  // Every type with its plain params, and every params shape that picks a sentence of its own.
+  const CASES: Array<[string, Record<string, unknown> | undefined]> = [
+    ...PENDING_OPERATION_TYPES.map((type): [string, Record<string, unknown>] => [type, {}]),
+    ['convert_invoice', { target: 'order' }],
+    ['convert_invoice', { percent: 50 }],
+    ['create_invoice', { mode: 'register_booked' }],
+    ['create_supplier_invoice_from_inbox', { mode: 'register_booked' }],
+    ['mark_invoice_sent', { paid_at_issue: { account_number: '1930' } }],
+    ['create_grant', { operation_type: 'create_supplier_invoice_from_inbox' }],
+    ['create_recurring_schedule', { auto_send: true }],
+    ['update_company_settings', { invoice_footer_text: 'x' }],
+  ]
+
+  it('says every sentence in English under the English catalogue', () => {
+    const t = pendingTranslator('en')
+    const sentences = CASES.map(([type, params]) => [type, singleActionWarning(type, params, t)] as const)
+    expect(sentences.filter(([, sentence]) => sentence).length).toBeGreaterThan(150)
+    expect(sentences.filter(([, sentence]) => looksSwedish(sentence))).toEqual([])
+  })
+
+  it('says the Swedish sentences as they were written, in Swedish', () => {
+    for (const [type, params] of CASES) {
+      const sentence = singleActionWarning(type, params, tSv)
+      if (!sentence) continue
+      expect(sentence, type).toMatch(/^Genom att klicka godkänn( så)? /)
+      // Rendered through ICU exactly as stored: no apostrophe or brace is read as syntax.
+      expect(Object.values(svPending), type).toContain(sentence)
+    }
+  })
+
+  it('has an English sentence wherever there is a Swedish one', () => {
+    const tEn = pendingTranslator('en')
+    for (const [type, params] of CASES) {
+      expect(Boolean(singleActionWarning(type, params, tEn)), type).toBe(Boolean(singleActionWarning(type, params, tSv)))
+    }
   })
 })

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { type ConversationRow, type DateBucket, groupConversations } from './conversation-display'
 import {
@@ -59,6 +60,7 @@ export function useConversationList(initial: ConversationRow[], now?: number): C
   const [conversations, setConversations] = useState<ConversationRow[]>(initial)
   const [query, setQuery] = useState('')
   const { toast } = useToast()
+  const t = useTranslations('agent_chat')
   const guard = useRef(createRevisionGuard()).current
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -89,10 +91,10 @@ export function useConversationList(initial: ConversationRow[], now?: number): C
         revert: (list) => setPinned(list, id, current),
         setList: setConversations,
         guard,
-        onError: () => toast({ variant: 'destructive', title: 'Kunde inte ändra fästningen.' }),
+        onError: () => toast({ variant: 'destructive', title: t('list_pin_failed') }),
       })
     },
-    [guard, toast],
+    [guard, toast, t],
   )
 
   /** Resolves true when the row is really archived, so callers can navigate. */
@@ -108,10 +110,10 @@ export function useConversationList(initial: ConversationRow[], now?: number): C
         revert: (list) => (row ? restoreRow(list, row) : list),
         setList: setConversations,
         guard,
-        onError: () => toast({ variant: 'destructive', title: 'Kunde inte arkivera konversationen.' }),
+        onError: () => toast({ variant: 'destructive', title: t('list_archive_failed') }),
       })
     },
-    [conversations, guard, toast],
+    [conversations, guard, toast, t],
   )
 
   const rename = useCallback(
@@ -124,11 +126,10 @@ export function useConversationList(initial: ConversationRow[], now?: number): C
         revert: (list) => setTitle(list, id, previousTitle),
         setList: setConversations,
         guard,
-        onError: () =>
-          toast({ variant: 'destructive', title: 'Kunde inte byta namn på konversationen.' }),
+        onError: () => toast({ variant: 'destructive', title: t('list_rename_failed') }),
       })
     },
-    [conversations, guard, toast],
+    [conversations, guard, toast, t],
   )
 
   const startEdit = useCallback((c: ConversationRow) => {

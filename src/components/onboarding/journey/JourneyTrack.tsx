@@ -1,6 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
+import { useTranslations } from 'next-intl'
 import { InkText } from './ink'
 
 /**
@@ -35,8 +36,9 @@ function stationLeft(i: number, count: number): string {
 }
 
 export default function JourneyTrack({ stations, active, onJump, children, orbLabel }: JourneyTrackProps) {
+  const t = useTranslations('onboarding')
   return (
-    <div className="jny-journey" aria-label="Steg i onboardingen">
+    <div className="jny-journey" aria-label={t('journey_track_label')}>
       {stations.map((st, i) => {
         const done = i < active
         return (
@@ -46,7 +48,7 @@ export default function JourneyTrack({ stations, active, onJump, children, orbLa
             style={{ left: stationLeft(i, stations.length) }}
             role={done && onJump ? 'button' : undefined}
             tabIndex={done && onJump ? 0 : -1}
-            title={done && onJump ? 'Ändra' : undefined}
+            title={done && onJump ? t('journey_track_edit') : undefined}
             onClick={done && onJump ? () => onJump(i) : undefined}
             onKeyDown={
               done && onJump

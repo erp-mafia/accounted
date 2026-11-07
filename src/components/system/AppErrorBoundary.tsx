@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
 
@@ -75,6 +76,9 @@ export function AppErrorBoundary({
   scope: string
 }) {
   const [phase] = useState<'reloading' | 'fallback'>(decideInitialPhase)
+  // 'common' is a root namespace (src/i18n/root-client-namespaces.ts): this
+  // boundary renders under the root provider only.
+  const t = useTranslations('common')
 
   useEffect(() => {
     console.error(
@@ -92,15 +96,17 @@ export function AppErrorBoundary({
 
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-6 text-center">
-      <h2 className="text-xl">Något gick fel</h2>
+      <h2 className="text-xl">{t('error_boundary_title')}</h2>
       <p className="max-w-md text-sm text-muted-foreground">
-        Ett oväntat fel uppstod. Försök igen eller{' '}
-        <SupportLink variant="inline" subject="Oväntat fel">
-          kontakta support
-        </SupportLink>{' '}
-        om problemet kvarstår.
+        {t.rich('error_boundary_body', {
+          support: (chunks) => (
+            <SupportLink variant="inline" subject={t('error_boundary_support_subject')}>
+              {chunks}
+            </SupportLink>
+          ),
+        })}
       </p>
-      <Button onClick={() => window.location.reload()}>Försök igen</Button>
+      <Button onClick={() => window.location.reload()}>{t('retry')}</Button>
     </div>
   )
 }

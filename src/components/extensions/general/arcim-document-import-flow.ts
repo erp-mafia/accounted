@@ -204,19 +204,20 @@ export interface ArcimDocumentImportProblem {
   providerMessage?: string
 }
 
+/**
+ * What a provider's OAuth reason names, in its words or ours (Fortnox and
+ * Bokio answer in Swedish): a missing scope (invalid_scope, behörighet) or a
+ * refused consent (access_denied, nekad, avbröt).
+ */
+const SCOPE_FAILURE_REASON = /scope|behörighet/
+const CONSENT_DENIED_REASON = /denied|nekad|avbröt/
+
 export function documentOAuthProblemFromReason(
   reason: string,
 ): ArcimDocumentImportProblem {
   const normalized = reason.toLowerCase()
-  const scopeFailure =
-    normalized.includes('invalid_scope') ||
-    normalized.includes('scope') ||
-    normalized.includes('behörighet')
-  const consentDenied =
-    normalized.includes('access_denied') ||
-    normalized.includes('denied') ||
-    normalized.includes('nekad') ||
-    normalized.includes('avbröt')
+  const scopeFailure = SCOPE_FAILURE_REASON.test(normalized)
+  const consentDenied = CONSENT_DENIED_REASON.test(normalized)
 
   return {
     code: scopeFailure ? PROVIDER_DOCUMENT_SCOPES_REQUIRED : null,

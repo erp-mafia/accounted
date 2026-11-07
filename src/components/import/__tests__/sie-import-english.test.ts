@@ -8,12 +8,11 @@
  * content inline here, so the help text behind every "?" is read too.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createElement, type ComponentProps, type ReactElement, type ReactNode } from 'react'
-import { renderToString } from 'react-dom/server'
-import { NextIntlClientProvider } from 'next-intl'
+import { createElement, type ReactElement, type ReactNode } from 'react'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { looksSwedish } from '@/scripts/checks/swedish-ui-literal.mjs'
+import { renderInLocale as render, visibleText } from '@/tests/i18n-render'
 import type { AccountMapping, ImportPreview, ImportResult, ParseIssue } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
 
@@ -73,41 +72,6 @@ import SIEPreviewStep from '../SIEPreviewStep'
 import AccountMappingStep from '../AccountMappingStep'
 import ImportReviewStep from '../ImportReviewStep'
 import ImportResultStep from '../ImportResultStep'
-
-const IntlProvider = NextIntlClientProvider as (
-  props: Omit<ComponentProps<typeof NextIntlClientProvider>, 'children'>,
-) => ReturnType<typeof NextIntlClientProvider>
-
-const CATALOGUES = { sv, en } as const
-
-function render(element: ReactElement, locale: 'sv' | 'en'): string {
-  return renderToString(
-    createElement(
-      IntlProvider,
-      {
-        locale,
-        messages: CATALOGUES[locale],
-        timeZone: 'Europe/Stockholm',
-        // A missing key or a broken ICU argument fails the test instead of
-        // rendering the key path.
-        onError: (error) => {
-          throw error
-        },
-      },
-      element,
-    ),
-  )
-}
-
-const ENTITIES: Record<string, string> = { amp: '&', quot: '"', '#x27': "'", '#39': "'", lt: '<', gt: '>', nbsp: ' ' }
-
-/** Every text node and every placeholder, title, aria-label and alt in the HTML. */
-function visibleText(html: string): string[] {
-  const decode = (s: string) => s.replace(/&(#x27|#39|amp|quot|lt|gt|nbsp);/g, (_, e: string) => ENTITIES[e])
-  const attributes = [...html.matchAll(/\s(?:placeholder|title|aria-label|alt)="([^"]*)"/g)].map((m) => m[1])
-  const text = html.replace(/<[^>]*>/g, '\n').split('\n')
-  return [...text, ...attributes].map((s) => decode(s).replace(/\s+/g, ' ').trim()).filter(Boolean)
-}
 
 /**
  * Swedish on purpose in the English text: a BAS account name (BAS names stay

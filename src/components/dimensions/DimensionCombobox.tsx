@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { PlusIcon, SpinnerIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
@@ -55,9 +56,9 @@ type DimensionComboboxProps = DimensionComboboxBaseProps & ArchivedValues
  * lists are small). Only active values are offered: archived codes stay
  * pickable in history but are never suggested.
  *
- * Strings are hardcoded Swedish per the AccountCombobox convention: the
- * component mounts on the voucher editor (PR3), a stays-Swedish surface per
- * .claude/rules/i18n.md.
+ * Its chrome follows the user's language: besides the voucher form it mounts
+ * on invoices, supplier invoices, budgets, report filters and the account
+ * dialog. The values are the company's own codes and names.
  */
 export default function DimensionCombobox({
   sieDimNo,
@@ -69,6 +70,8 @@ export default function DimensionCombobox({
   disabled,
   className,
 }: DimensionComboboxProps) {
+  const t = useTranslations('dimensions')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   const [search, setSearch] = useState(value ?? '')
   const [isOpen, setIsOpen] = useState(false)
   // Registry from the session cache (lib/reference-data): every combobox on
@@ -165,7 +168,7 @@ export default function DimensionCombobox({
         })
         const json = await res.json().catch(() => null)
         if (!res.ok) {
-          setCreateError(getErrorMessage(json, { locale: 'sv' }))
+          setCreateError(getErrorMessage(json, { locale }))
           return
         }
         const created: DimensionValueDto = json?.data ?? {
@@ -183,7 +186,7 @@ export default function DimensionCombobox({
         setIsCreating(false)
       }
     },
-    [dimensionId, isCreating, selectValue],
+    [dimensionId, isCreating, selectValue, locale],
   )
 
   const activateOption = useCallback(
@@ -260,7 +263,7 @@ export default function DimensionCombobox({
         onFocus={openDropdown}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        placeholder="Sök värde…"
+        placeholder={t('combobox_search')}
         disabled={disabled}
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
@@ -290,17 +293,17 @@ export default function DimensionCombobox({
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
               <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-              Laddar…
+              {t('combobox_loading')}
             </div>
           )}
           {loadState === 'error' && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Kunde inte hämta värden.
+              {t('combobox_load_failed')}
             </p>
           )}
           {loadState === 'loaded' && optionCount === 0 && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Hittade inget värde som matchar.
+              {t('combobox_no_match')}
             </p>
           )}
           {loadState === 'loaded' &&
@@ -352,7 +355,7 @@ export default function DimensionCombobox({
               ) : (
                 <PlusIcon className="h-3.5 w-3.5 shrink-0" />
               )}
-              <span className="truncate">Skapa ny &quot;{createCandidate}&quot;</span>
+              <span className="truncate">{t('combobox_create', { code: createCandidate })}</span>
             </button>
           )}
           {createError && (

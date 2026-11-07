@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
 import { DIRECT_WRITE_SCOPES, STAGING_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
-import { OPERATION_LABEL_KEYS, SINGLE_ACTION_WARNING_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
+import { OPERATION_LABEL_KEYS, SINGLE_ACTION_WARNING_KEYS } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
 import '@/lib/api/v1/load-routes'
 import { ALL_OPERATIONS as OPERATIONS } from '../registry'
@@ -114,15 +114,11 @@ describe('operation registry contract', () => {
       expect(sv[labelKey], `${type}: messages/sv.json pending.${labelKey}`).toBeTruthy()
       expect(en[labelKey], `${type}: messages/en.json pending.${labelKey}`).toBeTruthy()
       if (op.risk !== 'low') {
-        // A consequence sentence: a message key in both languages, or a
-        // legacy literal in singleActionWarnings.
+        // A consequence sentence: a message key in both languages.
         const warningKey = SINGLE_ACTION_WARNING_KEYS[type]
-        if (warningKey) {
-          expect(sv[warningKey], `${type}: messages/sv.json pending.${warningKey}`).toBeTruthy()
-          expect(en[warningKey], `${type}: messages/en.json pending.${warningKey}`).toBeTruthy()
-        } else {
-          expect(singleActionWarnings[type], `${type}: singleActionWarnings (risk ${op.risk})`).toBeTruthy()
-        }
+        expect(warningKey, `${type}: SINGLE_ACTION_WARNING_KEYS (risk ${op.risk})`).toBeDefined()
+        expect(sv[warningKey], `${type}: messages/sv.json pending.${warningKey}`).toBeTruthy()
+        expect(en[warningKey], `${type}: messages/en.json pending.${warningKey}`).toBeTruthy()
       }
     }
   })
