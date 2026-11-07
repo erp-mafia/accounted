@@ -53,7 +53,7 @@ import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { ATTESTABLE_SUPPLIER_INVOICE_STATUSES, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
-import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
+import { loadToPayQueue } from '@/lib/supplier-invoices/attest-queues'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
@@ -392,15 +392,17 @@ export async function listSupplierInvoiceAttestsDue(
 }
 
 /**
- * The attested supplier invoices still to pay (attested_to_pay): the ready
- * queue of lib/supplier-invoices/attest-queues.ts, the same one the byrå
- * client list counts, less the invoices the payment_failed row shows
- * (listPaymentsFailedDue, the very list it renders): one payment is one row.
- * An invoice that row does not show stays here, so none falls between the
- * two. Hem passes the failed list it already reads; otherwise it is read
- * only when an attested invoice could be ready. Null when there is nothing
- * ready, the policy is off or the company keeps kontantmetoden. Soft-fails
- * to null, like every count here.
+ * The supplier invoices still to pay (attested_to_pay): loadToPayQueue of
+ * lib/supplier-invoices/attest-queues.ts. Where the attest policy governs the
+ * company, the ready queue the byrå client list counts ("Betala N attesterade
+ * fakturor"); elsewhere, kontantmetoden included, every unpaid invoice whose
+ * approval is done or not part of the method ("Betala N
+ * leverantörsfakturor", crm#1631). Less the invoices the payment_failed row
+ * shows (listPaymentsFailedDue, the very list it renders): one payment is
+ * one row. An invoice that row does not show stays here, so none falls
+ * between the two. Hem passes the failed list it already reads; otherwise it
+ * is read only when an invoice could be ready. Null when there is nothing to
+ * pay. Soft-fails to null, like every count here.
  */
 export async function listAttestedToPayDue(
   supabase: SupabaseClient,
@@ -410,17 +412,16 @@ export async function listAttestedToPayDue(
   try {
     const leaveOut = async () =>
       new Set((await (options.paymentsFailed ?? listPaymentsFailedDue(supabase, companyId))).map((p) => p.supplier_invoice_id))
-    const queues = await loadAttestQueues(supabase, [companyId], options.today ?? todayIsoStockholm(), { leaveOut })
-    const ready = queues.get(companyId)?.ready
-    if (!ready || ready.count === 0 || !ready.next_due) return null
-    return { count: ready.count, next_due: ready.next_due, overdue: ready.overdue }
+    const { attested, queue } = await loadToPayQueue(supabase, companyId, options.today ?? todayIsoStockholm(), { leaveOut })
+    if (queue.count === 0 || !queue.next_due) return null
+    return { count: queue.count, next_due: queue.next_due, overdue: queue.overdue, attested }
   } catch (error) {
     logAndZero('attested_to_pay', companyId, error)
     return null
   }
 }
 
-/** How many attested supplier invoices wait to be paid (listAttestedToPayDue's count). */
+/** How many supplier invoices wait to be paid (listAttestedToPayDue's count). */
 export async function countAttestedToPayDue(supabase: SupabaseClient, companyId: string): Promise<number> {
   return (await listAttestedToPayDue(supabase, companyId))?.count ?? 0
 }

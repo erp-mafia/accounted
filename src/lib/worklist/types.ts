@@ -389,10 +389,12 @@ export const WORKLIST_CATEGORIES = [
    *           invoice the policy governs, attested (approved_at set), still
    *           owed (registered, approved or overdue with remaining_amount
    *           above zero), not debited by the supplier itself (auto_debit)
-   *           and without an open bank payment. Only with the policy on and
-   *           faktureringsmetoden: without a policy nobody waits on attest.
-   * Done:     paid (a bank payment opens, or the invoice is settled), or the
-   *           policy is switched off.
+   *           and without an open bank payment. A company the policy does
+   *           not govern (no policy, policy off, kontantmetoden) gets the
+   *           same row over every unpaid invoice whose approval is done or
+   *           not part of the method ("Betala N leverantörsfakturor",
+   *           loadToPayQueue, crm#1631).
+   * Done:     paid (a bank payment opens, or the invoice is settled).
    * Counts INVOICES, but the total takes the row as one thing to do (one
    * payment run), like overdue_invoice.
    */
@@ -531,11 +533,15 @@ export interface SupplierInvoiceAttestDue {
 }
 
 /**
- * The attested supplier invoices waiting to be paid: the Att göra row "Betala
- * N attesterade fakturor" (attested_to_pay). Null when there are none.
+ * The supplier invoices waiting to be paid: the Att göra row "Betala N
+ * attesterade fakturor" (attested_to_pay), or "Betala N
+ * leverantörsfakturor" where no attest policy governs the company. Null when
+ * there are none.
  */
 export interface AttestedToPayDue {
   count: number
+  /** True when the attest policy put them there (the attested ready queue); false without an attest queue (crm#1631). */
+  attested: boolean
   /** The earliest due date among them (ISO yyyy-MM-dd). */
   next_due: string
   /** How many have passed their due date. */

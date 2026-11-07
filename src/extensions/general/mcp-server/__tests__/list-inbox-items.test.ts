@@ -154,6 +154,33 @@ describe('gnubok_list_inbox_items', () => {
     ])
   })
 
+  // A paper invoice photographed a page at a time (agent feedback
+  // 2026-11-06): each page names the other, so the agent registers it once.
+  it('names the other pages of the same supplier invoice, only on the rows that have one', async () => {
+    const read = (total: number | null) => ({
+      documentKind: 'supplier_invoice',
+      supplier: { name: 'Bygg AB' },
+      invoice: { invoiceNumber: 'F1001', invoiceDate: '2026-09-15', currency: 'SEK' },
+      totals: { total },
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'page-2', created_at: '2026-11-01T09:00:02Z', extracted_data: read(1250) }),
+        makeInboxItem({ id: 'page-1', created_at: '2026-11-01T09:00:00Z', extracted_data: read(null) }),
+        makeInboxItem({ id: 'other', created_at: '2026-10-31T10:00:00Z' }),
+      ],
+      error: null,
+    })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; same_invoice_as?: string[] }>
+    }
+    const byId = Object.fromEntries(result.items.map((i) => [i.id, i]))
+    expect(byId['page-1'].same_invoice_as).toEqual(['page-2'])
+    expect(byId['page-2'].same_invoice_as).toEqual(['page-1'])
+    expect('same_invoice_as' in byId.other).toBe(false)
+  })
+
   it('leaves an item whose document a verifikat holds out of unprocessed_only', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

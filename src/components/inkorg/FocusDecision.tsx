@@ -564,6 +564,15 @@ export function FocusDecision({
 
       {bookingLine}
 
+      {/* Another item reads as this same supplier invoice (lib/inkorg/same-invoice.ts): its other page or a copy. */}
+      {item.same_invoice && (
+        <p className="text-[12.5px] text-muted-foreground">
+          {item.same_invoice.handled_item_id
+            ? t('same_invoice_handled')
+            : t('same_invoice_open', { count: item.same_invoice.item_ids.length })}
+        </p>
+      )}
+
       {decision.actions.includes('credit') && (
         <InboxCreditNotePanel
           itemId={item.id}

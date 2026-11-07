@@ -47,6 +47,7 @@ import {
 import {
   AdjustmentsHorizontalIcon,
   BookOpenIcon,
+  ChatBubbleLeftIcon,
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   ChevronLeftIcon,
@@ -1761,6 +1762,18 @@ export default function JournalEntryList({
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right', controlCellPad)}>
                         <span className="inline-flex items-center justify-end gap-2">
+                          {/* The internal note, readable on hover; the row's
+                              foldout shows it in full (accounted#183). */}
+                          {entry.notes?.trim() && (
+                            <span
+                              role="img"
+                              aria-label={t('note_indicator_aria')}
+                              title={entry.notes}
+                              className="inline-flex text-muted-foreground"
+                            >
+                              <ChatBubbleLeftIcon className="h-3.5 w-3.5" />
+                            </span>
+                          )}
                           {attachmentCounts[entry.id] ? (
                             <button
                               type="button"

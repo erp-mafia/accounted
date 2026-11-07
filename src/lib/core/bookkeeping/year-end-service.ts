@@ -35,6 +35,7 @@ import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import {
   assessKontantmetodCutoff,
   legacyKontantmetodVandningWarning,
+  rowlessSupplierInvoicesMessage,
   undatedSettlementsNote,
   type KontantmetodCutoffAssessment,
 } from './kontantmetod-cutoff'
@@ -130,6 +131,9 @@ export function kontantmetodCutoffBlockers(
       `${assessment.plans.length} fakturor var obetalda vid periodens slut och ska årsomföras: kontantmetodens bokslutsavgränsning bokför en verifikation per faktura på räkenskapsårets sista dag (BFL 5 kap 2 §). ` +
         'Förhandsgranska och bokför avgränsningen innan bokslut.',
     )
+  }
+  if (collection.rowlessSupplierInvoices.length > 0) {
+    push(rowlessSupplierInvoicesMessage(collection.rowlessSupplierInvoices))
   }
   if (collection.paidBeforePosting.length > 0) {
     const refs = [...new Set(collection.paidBeforePosting.map((p) => p.reference))]

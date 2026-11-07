@@ -114,6 +114,7 @@ const EMPTY_COLLECTION: CutoffCollection = {
   unknownVatTreatment: [],
   strayVatOnZeroRate: [],
   undatedSettlements: [],
+  rowlessSupplierInvoices: [],
   carries: [],
   rotPartialManual: [],
   rotPartialManualInvoices: [],
@@ -402,6 +403,15 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce(assessed({ collection: { unknownVatTreatment: ['F-9'] } }))
     await expect(stage()).rejects.toThrow(/saknar momsinställning/i)
+
+    // crm#1712: named, with what clears it, instead of "balanserar inte".
+    vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce(assessed({
+      plans: [plan('inv-1')], collection: { rowlessSupplierInvoices: ['ankomstnr 12'] },
+    }))
+    await expect(stage()).rejects.toMatchObject({
+      code: 'KONTANTMETOD_CUTOFF_ROWLESS_SUPPLIER_INVOICE',
+      message: expect.stringMatching(/^1 supplier invoice\(s\) unpaid at the year end have no rows.*: ankomstnr 12\. Add their rows, or link the verifikat/),
+    })
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce(assessed({ mode: 'legacy', plans: [] }))
     await expect(stage()).rejects.toThrow(/äldre bokslutsavgränsning med vändning/)

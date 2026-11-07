@@ -122,6 +122,24 @@ export function resolvePaymentAccount(
 }
 
 /**
+ * The payment methods a store's orders carry, each with a display title, in
+ * first-seen order (the mapping form's rows). A needs_review row's title says
+ * why the order is held (Zettle: "Dricks ingår: bokför manuellt"), not what
+ * the method is, so it never names the method.
+ */
+export function paymentMethodsSeen(
+  rows: ReadonlyArray<Pick<WebshopOrder, 'payment_method' | 'payment_method_title' | 'status'>>,
+): Array<{ method: string; title: string | null }> {
+  const seen = new Map<string, string | null>()
+  for (const row of rows) {
+    if (!row.payment_method) continue
+    const title = row.status === 'needs_review' ? null : row.payment_method_title
+    if (!seen.get(row.payment_method)) seen.set(row.payment_method, title)
+  }
+  return Array.from(seen.entries()).map(([method, title]) => ({ method, title }))
+}
+
+/**
  * When the sync could not build a per-rate breakdown (blocked tax endpoints,
  * plugin-mangled orders), fall back to one bucket whose rate is inferred
  * from the tax/net ratio; null rate when nothing matches, so the dialog

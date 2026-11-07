@@ -739,6 +739,20 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_correct_entry',
     },
   },
+  // A supplier invoice that is only a header (a provider migration's, crm#1712):
+  // its carry has no cost account or moms to book (CutoffCollection.rowlessSupplierInvoices).
+  KONTANTMETOD_CUTOFF_ROWLESS_SUPPLIER_INVOICE: {
+    httpStatus: 409,
+    message_sv:
+      'En leverantörsfaktura som var obetald vid bokslutet saknar fakturarader, så årsomföringen kan inte avgöra kostnadskonto och moms. Lägg till raderna på fakturan, eller koppla den till den befintliga verifikation som redan bokförde den, och kör avgränsningen igen.',
+    message_en:
+      'A supplier invoice unpaid at the year end has no rows, only a header (as a provider migration imports one), so its carry has no cost account or moms to book. Nothing is guessed.',
+    remediation: {
+      description:
+        'For each invoice named: if a verifikat already books it (its registration, or the payment that settled it), link it with gnubok_link_supplier_invoice_to_voucher; otherwise ask the user to add its rows (account, amount, moms) on the supplier invoice in Accounted. Then stage the cut-off again.',
+      tool: 'gnubok_link_supplier_invoice_to_voucher',
+    },
+  },
   KONTANTMETOD_LEGACY_COVERED: {
     httpStatus: 409,
     message_sv:

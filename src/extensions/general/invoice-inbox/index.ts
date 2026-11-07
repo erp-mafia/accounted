@@ -28,6 +28,7 @@ import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from
 import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
 import { readingRetryOf } from './lib/provider-retry'
 import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
+import { sameInvoiceItems, type SameInvoiceItem } from '@/lib/inkorg/same-invoice'
 import { readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import { readCardKnown, readCardOf, readKnownCards } from '@/lib/documents/bank-match/known-cards'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
@@ -719,10 +720,16 @@ export const invoiceInboxExtension: Extension = {
           extensionLog.warn('inbox list known cards read failed', { err: err instanceof Error ? err.message : String(err) })
         }
 
+        // A multi-page paper invoice photographed a page at a time is one
+        // item per page: each open row names the others read as the same
+        // supplier invoice, so it is registered once (lib/inkorg/same-invoice.ts).
+        const sameInvoice = sameInvoiceItems(items as unknown as SameInvoiceItem[])
+
         const withLogos = items.map((i) => ({
           ...i,
           logo_url: logos.get(i.id) ?? null,
           pairing: pairings.get(i.id) ?? null,
+          same_invoice: sameInvoice.get(i.id) ?? null,
           payment_card_known: readCardKnown(i.extracted_data, knownCards),
         }))
 

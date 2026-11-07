@@ -67,6 +67,8 @@ interface PreviewBody {
   sieAvailable: boolean
   sieError: { code: string; reason?: string } | null
   companyInfo: { company_name: string | null } | null
+  importedFiscalYears: number[]
+  hasSieData: boolean
 }
 
 const CY = new Date().getFullYear()
@@ -87,10 +89,10 @@ function connect(provider: 'fortnox' | 'briox' | 'visma') {
   })
 }
 
-async function preview() {
+async function preview(imports: { fiscal_year_start: string | null }[] = []) {
   const { supabase, mockResult } = createMockSupabase()
-  // The handler counts completed SIE imports at the end: none.
-  mockResult({ count: 0 })
+  // The handler reads the completed SIE imports at the end: none by default.
+  mockResult({ data: imports, count: imports.length })
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
@@ -250,5 +252,30 @@ describe('GET /preview: no sieError without a failure', () => {
 
     expect(body.sieAvailable).toBe(false)
     expect(body.sieError).toBeNull()
+  })
+})
+
+describe('GET /preview: the fiscal years already imported (crm#1686)', () => {
+  it('names the start years of the completed imports, oldest first, once each', async () => {
+    connect('visma')
+
+    const { body } = await preview([
+      { fiscal_year_start: '2016-01-01' },
+      { fiscal_year_start: '2014-07-01' },
+      { fiscal_year_start: '2016-01-01' },
+      { fiscal_year_start: null },
+    ])
+
+    expect(body.importedFiscalYears).toEqual([2014, 2016])
+    expect(body.hasSieData).toBe(true)
+  })
+
+  it('is empty for a company without imports', async () => {
+    connect('visma')
+
+    const { body } = await preview()
+
+    expect(body.importedFiscalYears).toEqual([])
+    expect(body.hasSieData).toBe(false)
   })
 })

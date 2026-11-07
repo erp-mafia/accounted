@@ -10,7 +10,7 @@ import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { previewCountsForSelection } from '@/lib/providers/preview-counts'
 import { missingTokenCredential, tokenCredentials } from '@/lib/providers/catalog'
-import { fiscalYearSelectionProblem, toggleFiscalYear } from '@/lib/providers/year-selection'
+import { defaultFiscalYearSelection, fiscalYearSelectionProblem, needsSeveralRuns, toggleFiscalYear } from '@/lib/providers/year-selection'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -125,7 +125,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     try {
       const p = await providerPreview(cId)
       setPreview(p)
-      setYears((p.sourceYears ?? []).filter((y) => y.inDefaultSelection).map((y) => y.year))
+      setYears(defaultFiscalYearSelection(p.sourceYears ?? [], p.maxSelectedYears ?? 6, p.importedFiscalYears))
       setPhase('preview')
     } catch (err) {
       setError(getErrorMessage(err, { locale }))
@@ -603,6 +603,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 })}
               </Pills>
               {tooManyYears ? <p className="jny-attn" role="status">{tx('ext_arcim_year_select_too_many', { max: maxYears })}</p> : null}
+              {!tooManyYears && needsSeveralRuns(sourceYears, maxYears) ? <p className="mt-2.5 text-center text-[12.5px] text-muted-foreground">{tx('ext_arcim_year_select_oldest_first', { max: maxYears })}</p> : null}
             </div>
           ) : null}
           <Sentence open={optsOpen} onToggle={() => setOptsOpen((v) => !v)} changeLabel={t('change')} closeLabel={t('close')}>

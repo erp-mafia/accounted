@@ -12,7 +12,7 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 This call confirms your key works and returns the \`companyId\` you'll use throughout. Both live and test keys resolve to the companies the key's user can access.
 
 \`\`\`bash
-curl https://app.gnubok.se/api/v1/companies \\
+curl https://app.accounted.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
@@ -32,7 +32,7 @@ Save the \`id\` as \`COMPANY_ID\` for the next steps.
 Most writes support \`?dry_run=true\`: the response shows the would-be record without committing. (Bank/SIE imports are the exception: they run for real or not at all.) Use it in agent test loops to validate inputs before paying the side-effect cost.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -73,7 +73,7 @@ Invoices are typed (B2B, EU-business, individual) and support mixed-rate VAT (pe
 
 \`\`\`bash
 INVOICE_IDEMP=$(uuidgen)
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $INVOICE_IDEMP" \\
   -H "Content-Type: application/json" \\
@@ -116,7 +116,7 @@ A fresh draft has \`invoice_number: null\`: the F-series löpnummer is allocated
 # Generate the key ONCE and reuse it on every retry of this same send, so a
 # timeout-then-retry replays the original result instead of sending twice.
 SEND_IDEMP=$(uuidgen)
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/send" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $SEND_IDEMP"
 \`\`\`
@@ -148,7 +148,7 @@ When the customer pays, mark the invoice paid. The engine generates the payment 
 \`\`\`bash
 # One key per logical payment; reuse it across retries of this mark-paid.
 PAY_IDEMP=$(uuidgen)
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $PAY_IDEMP" \\
   -H "Content-Type: application/json" \\
@@ -175,7 +175,7 @@ The summary fields in the JSON response (\`subtotal\`, \`vat_amount\`, \`total\`
 ## Common pitfalls
 
 - **Use one idempotency key per logical action.** The key is treated as an opaque string (UUIDs are recommended, but any unique value works). Generate one per logical action and reuse it across retries of that same action: never on a fresh attempt. Reusing a key with a different request body is rejected with \`IDEMPOTENCY_KEY_REUSE\`.
-- **Test keys never send or post.** \`gnubok_sk_test_*\` keys are simulation-only: every write is forced to dry-run, so \`/send\` never emails the customer, never allocates an F-series number, and never posts a voucher. On top of that the sandbox company they're bound to blocks outbound email outright (403 \`sandbox_blocked\`). Use a live key on a real company to actually deliver an invoice.
+- **Test keys never send or post.** \`gnubok_sk_test_*\` keys are simulation-only: every write is forced to dry-run, so \`/send\` never emails the customer, never allocates an F-series number, and never posts a voucher. They reach the same real companies a live key does, not a separate sandbox company, so use a live key to actually deliver an invoice.
 - **Period locks block writes.** If you try to invoice into a closed period (\`invoice_date\` falls inside a locked fiscal period), the response is \`PERIOD_LOCKED\` (400). Use \`GET /fiscal-periods\` to check before backdating.
 - **VIES VAT validation runs on commit only.** It only fires when you create an \`eu_business\` customer with a \`vat_number\` (Swedish customers like the one above never trigger it). Dry-run skips the external VIES call; the real commit blocks on slow VIES responses (we time out after 10s, but that's still up to 10s added to the request). There is no v1 pre-validation endpoint today: rely on dry-run to check the rest of the payload first.
 `

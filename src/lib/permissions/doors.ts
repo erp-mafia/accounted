@@ -705,6 +705,7 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/import/customers/parse': READ,
     'POST /api/import/suppliers/parse': READ,
     'POST /api/import/articles/parse': READ,
+    'POST /api/import/articles/match': READ,
     'POST /api/import/customers/execute': INVOICING_RECORD,
     'POST /api/import/articles/execute': INVOICING_RECORD,
     'POST /api/import/suppliers/execute': BOOK_RECORD,

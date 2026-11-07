@@ -47,7 +47,7 @@ import {
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { previewCountsForSelection, type ProviderPreviewCounts } from '@/lib/providers/preview-counts'
-import { fiscalYearSelectionProblem, toggleFiscalYear } from '@/lib/providers/year-selection'
+import { defaultFiscalYearSelection, fiscalYearSelectionProblem, needsSeveralRuns, toggleFiscalYear } from '@/lib/providers/year-selection'
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -439,6 +439,9 @@ interface PreviewData {
   // The most years one run may select: /sie-data refuses more. Read from
   // the server so the picker never drifts from the route.
   maxSelectedYears?: number
+  // Start years the company's completed SIE imports hold: a history longer
+  // than one run starts from the oldest year not among them (crm#1686).
+  importedFiscalYears?: number[]
   assetStats: {
     total: number
     importable: number
@@ -1525,11 +1528,17 @@ export function PreviewStep({
           Every fiscal year the source has, as hairline rows with a checkbox.
           The three latest are ticked by default (the limit that used to be a
           silent cap); older years are the user's own choice and their own
-          wait: each one is another SIE export fetched in the next step. */}
+          wait: each one is another SIE export fetched in the next step. A
+          history longer than one run starts from the oldest years instead
+          (defaultFiscalYearSelection, crm#1686). */}
       {showYearPicker && (
         <section className="space-y-3">
           <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
-          <p className="text-[13px] text-muted-foreground">{t('ext_arcim_year_select_lede')}</p>
+          <p className="text-[13px] text-muted-foreground">
+            {needsSeveralRuns(sourceYears, maxSelectable)
+              ? t('ext_arcim_year_select_oldest_first', { max: maxSelectable ?? 0 })
+              : t('ext_arcim_year_select_lede')}
+          </p>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {sourceYears.map((fy) => {
               const id = `arcim-year-${fy.year}-${fy.fromDate ?? ''}`
@@ -3676,7 +3685,7 @@ export default function ArcimMigrationWorkspace({
       const data = await res.json() as PreviewData
       setPreview(data)
       setSelectedYears(
-        (data.sourceYears ?? []).filter((fy) => fy.inDefaultSelection).map((fy) => fy.year),
+        defaultFiscalYearSelection(data.sourceYears ?? [], data.maxSelectedYears, data.importedFiscalYears),
       )
       const previewProvider = data?.consent?.provider
       if (ARCIM_PROVIDERS.some((provider) => provider.id === previewProvider)) {

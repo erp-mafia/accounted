@@ -14,6 +14,7 @@ import {
   ArrowLeftIcon,
   ArrowUturnLeftIcon,
   CalendarDaysIcon,
+  ChatBubbleLeftIcon,
   CpuChipIcon,
   DocumentTextIcon,
   EllipsisHorizontalIcon,
@@ -811,7 +812,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         <DetailSection
           kicker={t('field_note')}
           aside={
-            !editingNotes && canWrite && !noteLock ? (
+            !editingNotes && canWrite && !noteLock && entry.notes ? (
               <button
                 type="button"
                 onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
@@ -854,6 +855,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             </div>
           ) : entry.notes ? (
             <p className="py-2 text-sm whitespace-pre-wrap">{entry.notes}</p>
+          ) : canWrite && !noteLock ? (
+            // An empty, editable note is an action, not a muted "Ingen
+            // anteckning" next to a quiet Ändra (accounted#183).
+            <div className="py-2">
+              <Button variant="outline" onClick={() => { setNotesValue(''); setEditingNotes(true) }}>
+                <ChatBubbleLeftIcon className="mr-2 h-4 w-4" />
+                {t('add_note')}
+              </Button>
+            </div>
           ) : (
             <p className="py-2 text-sm text-muted-foreground">{t('no_note')}</p>
           )}

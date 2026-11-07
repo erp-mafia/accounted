@@ -13,7 +13,7 @@ This is the operator-side companion to [Run payroll and generate the AGI XML](/d
 ## 1. Create the company
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies" \\
+curl "https://app.accounted.se/api/v1/companies" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -25,7 +25,7 @@ The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS
 ## 2. Payroll settings, once, before the first run
 
 \`\`\`bash
-curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
+curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -50,7 +50,7 @@ Read it back with \`GET /salary/settings\`. There is no separate "avtal" to conf
 The law fixes what is paid (sjuklön at 80 %, one karensavdrag per sjuklöneperiod, semesterlön); how a monthly salary is turned into a day, an hour or a partial month follows the employment contract and the kollektivavtal, and every payroll system has its conventions. \`salary_calculation_policy\` on the same endpoint makes them explicit per company. Every key defaults to the calculation Accounted has always done; the other value of each is what Fortnox does, so a customer you take over from Fortnox keeps the öre on their payslips. Send only the keys you change; they are merged into the stored policy and the response always shows all seven.
 
 \`\`\`bash
-curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
+curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -72,7 +72,7 @@ The conventions are read at \`:calculate\` and frozen into the run's \`calculati
 ## 3. Employees
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -93,7 +93,7 @@ Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_s
 ## 4. Cutover balances (only when you take over mid-year)
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/opening-balances" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/opening-balances" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -142,7 +142,7 @@ Register deviations on the dates they happened. The run reads them from its avvi
 **Absence** (sick, vab, parental, unpaid leave and so on), weekends skipped unless \`include_weekends\`:
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/absence" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/absence" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Content-Type: application/json" \\
   -d '{ "from": "2026-08-10", "to": "2026-08-12", "absence_type": "sick" }'
 \`\`\`
@@ -152,7 +152,7 @@ Karensavdrag, sjuklön dag 2-14, day 15+ (Försäkringskassan), återinsjuknande
 **Worked days** for hourly staff, and for OB/shift premiums on anyone:
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/worked-days" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/worked-days" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Content-Type: application/json" \\
   -d '{ "days": [
     { "work_date": "2026-08-03", "hours": 8, "start_time": "07:00", "end_time": "15:30" },
@@ -164,12 +164,12 @@ curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLO
 
 \`\`\`bash
 # A text row on every payslip that explains how the salary is built up (words only, no amount)
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/recurring-lines" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/recurring-lines" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "item_type": "text", "description": "Månadslön 32 000 kr, varav personligt tillägg 2 000 kr", "valid_from": "2026-09-01" }'
 
 # Bilförmån at the Skatteverket schablon value
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/benefits" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/benefits" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "benefit_type": "car", "description": "Volvo XC40 2025", "monthly_value": 4210, "valid_from": "2026-09-01" }'
 \`\`\`
@@ -183,7 +183,7 @@ A recurring line is a deduction with a negative amount (the API rejects the wron
 ## 6. Run payroll
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "period_year": 2026, "period_month": 9, "payment_date": "2026-09-25", "voucher_series": "L" }'
 \`\`\`
@@ -193,7 +193,7 @@ The response echoes \`deviation_period_start\` / \`deviation_period_end\` (here 
 ## 7. Pay
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$RUN_ID/payment-file" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$RUN_ID/payment-file" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "format": "pain001" }'
 \`\`\`

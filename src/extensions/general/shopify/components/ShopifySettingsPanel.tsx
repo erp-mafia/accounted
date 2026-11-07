@@ -12,6 +12,7 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { FeedConnectorPanel } from '@/components/extensions/shared/FeedConnectorPanel'
 import { CountryAccountRulesForm } from '@/components/orders/CountryAccountRulesForm'
+import { PaymentMethodMappingForm } from '@/components/orders/PaymentMethodMappingForm'
 import {
   shippingCountryWithheld as shippingCountryWithheldIn,
   shopifyRequest,
@@ -70,7 +71,10 @@ export default function ShopifySettingsPanel() {
       // shopifyShopScope(), which is the identity).
       renderExtras={(c) =>
         c.status === 'active' && c.shop_domain ? (
-          <CountryAccountRulesForm platform="shopify" storeScope={c.shop_domain} />
+          <>
+            <PaymentMethodMappingForm platform="shopify" storeScope={c.shop_domain} />
+            <CountryAccountRulesForm platform="shopify" storeScope={c.shop_domain} />
+          </>
         ) : null
       }
       renderConnect={({ reload, failureCopy }) => {

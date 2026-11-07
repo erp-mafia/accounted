@@ -75,19 +75,39 @@ const NOT_RESTORED = new Set(['id', 'company_id', 'user_id', 'created_at', 'upda
  * the undo can put back what it changed. Nothing is read when duplicates are
  * skipped: the import then only creates. Throws on a read error, before the
  * import has written anything.
+ *
+ * With `ids` (the rows the import is about to update), only those are read,
+ * in slices that keep the id list well inside a request URL: a large
+ * register sent in batches would otherwise read every row of the register
+ * once per batch.
  */
 export async function snapshotRowsForUndo(
   supabase: SupabaseClient,
   companyId: string,
   kind: RegisterKind,
   updateDuplicates: boolean,
+  ids?: readonly string[],
 ): Promise<Map<string, Row>> {
   if (!updateDuplicates) return new Map()
+  if (ids) {
+    const out = new Map<string, Row>()
+    for (let i = 0; i < ids.length; i += SNAPSHOT_ID_SLICE) {
+      const slice = ids.slice(i, i + SNAPSHOT_ID_SLICE)
+      const rows = await fetchAllRows<Row>(({ from, to }) =>
+        supabase.from(kind).select('*').eq('company_id', companyId).in('id', slice).order('id').range(from, to),
+      )
+      for (const row of rows) out.set(String(row.id), row)
+    }
+    return out
+  }
   const rows = await fetchAllRows<Row>(({ from, to }) =>
     supabase.from(kind).select('*').eq('company_id', companyId).order('id').range(from, to),
   )
   return new Map(rows.map((row) => [String(row.id), row]))
 }
+
+/** Ids per snapshot read: 200 uuids is about 7.5 kB of query string. */
+const SNAPSHOT_ID_SLICE = 200
 
 const sameValue = (a: unknown, b: unknown): boolean =>
   JSON.stringify(a ?? null) === JSON.stringify(b ?? null)

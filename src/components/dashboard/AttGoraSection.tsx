@@ -111,8 +111,9 @@ interface AttGoraSectionProps {
   /** The next skattekonto charge the balance does not cover: one Betala row. */
   skattekontoPayment?: SkattekontoPaymentDue | null
   /**
-   * Supplier invoices the attesters released for payment (lib/worklist
-   * attested_to_pay): one Betala row, "Betala N attesterade fakturor".
+   * Supplier invoices to pay (lib/worklist attested_to_pay): one Betala row,
+   * "Betala N attesterade fakturor", or "Betala N leverantörsfakturor" where
+   * no attest policy governs the company (crm#1631).
    */
   attestedToPay?: AttestedToPayDue | null
   /**
@@ -707,7 +708,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/supplier-invoices?tab=to_pay"
                         icon={BanknotesIcon}
-                        label={t('row_attested_to_pay', { count: attestedToPay.count })}
+                        label={t(attestedToPay.attested ? 'row_attested_to_pay' : 'row_supplier_invoices_to_pay', { count: attestedToPay.count })}
                         detail={
                           attestedToPay.overdue > 0
                             ? t('row_attested_to_pay_detail_overdue', {

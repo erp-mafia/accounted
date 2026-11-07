@@ -15,7 +15,7 @@ This is the operational companion to the [Reports reference](/docs/api/reference
 \`GET /reports/vat-declaration\` returns all the rutor plus supporting counts and a per-source breakdown. The period is selected with three **required** params — \`period_type\` (monthly|quarterly|yearly), \`year\`, and \`period\` (monthly 1-12, quarterly 1-4, yearly 1) — plus an optional \`accounting_method\` (accrual|cash, default accrual):
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/vat-declaration?period_type=monthly&year=2026&period=4" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/vat-declaration?period_type=monthly&year=2026&period=4" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -107,7 +107,7 @@ The VAT declaration for April 2026 onwards will show split balances on rutor 11/
 BFNAR 2013:2 kap 6-7 §§ requires every voucher gap to have a documented explanation. Skatteverket may ask why \`F-2026-0042\` exists when no \`F-2026-0041\` is on the books. Check before declaring:
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$FISCAL_PERIOD_ID" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$FISCAL_PERIOD_ID" \\
   -H "Authorization: Bearer gnubok_sk_test_..."
 \`\`\`
 
@@ -118,7 +118,7 @@ The check takes the period's UUID as \`fiscal_period_id\` (not a \`YYYY-MM\` str
 The declaration is computed from posted entries in the period. If the period is still open and you have draft entries that should be in this declaration, commit them before declaring. After declaring, lock the period:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
   -H "Authorization: Bearer gnubok_sk_test_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`

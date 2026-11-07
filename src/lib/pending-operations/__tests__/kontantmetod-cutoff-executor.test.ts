@@ -46,6 +46,7 @@ const collection: CutoffCollection = {
   unknownVatTreatment: [],
   strayVatOnZeroRate: [],
   undatedSettlements: [],
+  rowlessSupplierInvoices: [],
   carries: [],
   rotPartialManual: [],
   rotPartialManualInvoices: [],

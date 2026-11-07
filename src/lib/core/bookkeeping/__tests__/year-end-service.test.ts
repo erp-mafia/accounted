@@ -1970,7 +1970,7 @@ describe('previewYearEndClosing: the omföring it discloses', () => {
 describe('kontantmetodCutoffBlockers (year-end readiness texts, #3440)', () => {
   const EMPTY: CutoffCollection = {
     receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [],
-    undatedSettlements: [], carries: [], rotPartialManual: [], rotPartialManualInvoices: [], paidBeforePosting: [],
+    undatedSettlements: [], rowlessSupplierInvoices: [], carries: [], rotPartialManual: [], rotPartialManualInvoices: [], paidBeforePosting: [],
     paidBeforePostingManual: [], legacyCovered: [],
   }
   const plan = { side: 'customer', invoiceId: 'inv-1' } as KontantmetodCarryPlan
@@ -2019,6 +2019,23 @@ describe('kontantmetodCutoffBlockers (year-end readiness texts, #3440)', () => {
     expect(blockers[1]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_PAID_BEFORE_POSTING_MANUAL')!.message_sv} Fakturor: L-9.`)
     expect(blockers[2]!.message).toBe(`${getErrorEntry('KONTANTMETOD_CUTOFF_ROT_PARTIAL_MANUAL')!.message_sv} Fakturor: F-ROT.`)
     expect(blockers[3]!.message).toBe(`${getErrorEntry('KONTANTMETOD_LEGACY_COVERED')!.message_sv} Fakturor: F-OLD.`)
+  })
+
+  // crm#1712: a header-only supplier invoice (a provider migration's) is
+  // named with what clears it, beside the carries that can be posted.
+  it('names a supplier invoice with no rows and what clears it', () => {
+    const blockers = kontantmetodCutoffBlockers(assessment({
+      plans: [plan], collection: { rowlessSupplierInvoices: ['ankomstnr 12'] },
+    }), open)
+    expect(blockers).toHaveLength(2)
+    expect(blockers[1]).toEqual({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+      message: expect.stringMatching(/^1 leverantörsfaktura som var obetald vid periodens slut saknar fakturarader.*ankomstnr 12\. Lägg till raderna.*befintliga verifikation/),
+    })
+    const many = kontantmetodCutoffBlockers(assessment({
+      collection: { rowlessSupplierInvoices: Array.from({ length: 12 }, (_, i) => `ankomstnr ${i + 1}`) },
+    }), open)
+    expect(many[0]!.message).toMatch(/^12 leverantörsfakturor .*ankomstnr 10 och 2 till\./)
   })
 
   it('names at most ten invoices', () => {

@@ -210,6 +210,31 @@ describe('PreviewStep, a provider that serves no SIE over the API', () => {
   })
 })
 
+describe('PreviewStep, a history longer than one run (crm#1686)', () => {
+  const years = (count: number) =>
+    Array.from({ length: count }, (_, i) => {
+      const year = 2025 - count + 1 + i
+      return { year, fromDate: `${year}-01-01`, toDate: `${year}-12-31`, inDefaultSelection: year >= 2023 }
+    })
+  const oldestFirst = (locale: 'sv' | 'en') =>
+    text('ext_arcim_year_select_oldest_first', locale).replace('{max}', '6').split(',')[0]
+
+  it('says the oldest years are ticked and the rest come in the next run', () => {
+    const html = render(preview({ sieAvailable: true, sourceYears: years(15) }), 'sv', { selectedYears: [2011, 2012, 2013, 2014, 2015, 2016] })
+
+    expect(html).toContain(oldestFirst('sv'))
+    expect(html).not.toContain(text('ext_arcim_year_select_lede'))
+    expect(render(preview({ sieAvailable: true, sourceYears: years(15) }), 'en')).toContain(oldestFirst('en'))
+  })
+
+  it('keeps the newest-three lede when the history fits in one run', () => {
+    const html = render(preview({ sieAvailable: true, sourceYears: years(6) }), 'sv', { selectedYears: [2023, 2024, 2025] })
+
+    expect(html).toContain(text('ext_arcim_year_select_lede'))
+    expect(html).not.toContain(oldestFirst('sv'))
+  })
+})
+
 describe('sieErrorRemedy', () => {
   it.each<[SieError, SieErrorRemedy]>([
     [{ code: 'PROVIDER_AUTH_EXPIRED' }, { kind: 'reconnect', action: 'reconnect', file: null }],

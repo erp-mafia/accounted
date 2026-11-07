@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { PaymentMethodMappingForm } from '@/components/orders/PaymentMethodMappingForm'
 import { FeedConnectorPanel } from '@/components/extensions/shared/FeedConnectorPanel'
 import {
   zettleRequest,
@@ -42,6 +43,13 @@ export default function ZettleSettingsPanel() {
         detail: c.organization_name ? c.organization_uuid : null,
       })}
       lastSyncedAt={(c) => c.last_order_synced_at}
+      // The store scope is the organization UUID (client twin of
+      // zettleStoreScope(), which is the identity).
+      renderExtras={(c) =>
+        c.status === 'active' && c.organization_uuid ? (
+          <PaymentMethodMappingForm platform="zettle" storeScope={c.organization_uuid} />
+        ) : null
+      }
       renderConnect={({ failureCopy }) => {
         async function handleConnect() {
           if (connecting) return

@@ -8,6 +8,10 @@ import {
   registerImportEndpoint,
   registerSteps,
   rowsForExecute,
+  executeBatches,
+  mergeExecuteResults,
+  reviewRowsToRender,
+  MERGED_ERRORS_SHOWN,
 } from '../register-import-flow'
 import type { DetectedCustomerColumns } from '../customers/types'
 import type { DetectedSupplierColumns } from '../suppliers/types'
@@ -220,5 +224,104 @@ describe('invalidRowsNoticeParams', () => {
       { is_valid: false, validation_errors: ['Fel'] },
     ]
     expect(invalidRowsNoticeParams(rows)?.row).toBe(3)
+  })
+})
+
+describe('executeBatches (crm#1383)', () => {
+  it('sends a file that fits one request as one batch, unchanged', () => {
+    const rows = [{ name: 'A' }, { name: 'B' }]
+    expect(executeBatches(rows)).toEqual([rows])
+  })
+
+  it('splits by row count, in file order', () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ i }))
+    const batches = executeBatches(rows, 10)
+    expect(batches.map((b) => b.length)).toEqual([10, 10, 5])
+    expect(batches.flat()).toEqual(rows)
+  })
+
+  it('splits by encoded size, counting å/ä/ö as the two bytes they are', () => {
+    const row = { name: 'Åäö'.repeat(10) }
+    // {"name":"..."} is 11 bytes of frame + 60 bytes of text, +1 for the comma.
+    const size = 11 + 60 + 1
+    const batches = executeBatches([row, row, row], 100, size * 2)
+    expect(batches.map((b) => b.length)).toEqual([2, 1])
+  })
+
+  it('a 165 000-row price list goes in batches under the hosted body limit', () => {
+    const rows = Array.from({ length: 165_000 }, (_, i) => ({
+      row_index: i + 2,
+      name: `Kopparrör 15 mm, längd ${i}`,
+      name_en: null,
+      article_number: `AH-${1_000_000 + i}`,
+      type: 'vara',
+      unit: 'st',
+      price_excl_vat: 123.45,
+      currency: null,
+      vat_rate: 25,
+      revenue_account: null,
+      cost_price: 98.7,
+      ean: '7310000000000',
+      housework_type: null,
+      notes: null,
+    }))
+    const batches = executeBatches(rows)
+    expect(batches.flat()).toHaveLength(165_000)
+    for (const b of batches) {
+      expect(new TextEncoder().encode(JSON.stringify({ rows: b, update_duplicates: false })).length).toBeLessThan(4.5 * 1024 * 1024)
+    }
+  })
+})
+
+describe('mergeExecuteResults', () => {
+  const result = (over: Partial<Parameters<typeof mergeExecuteResults>[0][number]> = {}) => ({
+    success: true,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [] as { row_index: number; name: string; reason: string }[],
+    warnings: [] as string[],
+    notices: [] as unknown[],
+    ...over,
+  })
+
+  it('adds up the counts and keeps a failure', () => {
+    const merged = mergeExecuteResults([
+      result({ created: 3, skipped: 1 }),
+      result({ created: 2, updated: 4, failed: 1, success: false, errors: [{ row_index: 9, name: 'X', reason: 'r' }] }),
+    ])
+    expect(merged).toMatchObject({ created: 5, updated: 4, skipped: 1, failed: 1, success: false })
+    expect(merged.errors).toEqual([{ row_index: 9, name: 'X', reason: 'r' }])
+  })
+
+  it('shows a warning or notice every batch repeats once', () => {
+    const notice = { key: 'articles_account_invalid', tone: 'notice', params: { account: '3999' } }
+    const merged = mergeExecuteResults([
+      result({ warnings: ['Konto 3999'], notices: [notice] }),
+      result({ warnings: ['Konto 3999'], notices: [{ ...notice }] }),
+    ])
+    expect(merged.warnings).toEqual(['Konto 3999'])
+    expect(merged.notices).toHaveLength(1)
+  })
+
+  it('keeps the failed count exact but the error list readable', () => {
+    const errors = Array.from({ length: 300 }, (_, i) => ({ row_index: i, name: 'X', reason: 'r' }))
+    const merged = mergeExecuteResults([result({ failed: 300, errors }), result({ failed: 1, errors: [errors[0]] })])
+    expect(merged.failed).toBe(301)
+    expect(merged.errors).toHaveLength(MERGED_ERRORS_SHOWN)
+  })
+})
+
+describe('reviewRowsToRender', () => {
+  it('draws a normal file whole', () => {
+    const rows = Array.from({ length: 30 }, () => ({ is_valid: true }))
+    expect(reviewRowsToRender(rows, 500)).toBe(rows)
+  })
+
+  it('draws a large file invalid rows first, then the start of the file, up to the limit', () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => ({ i, is_valid: i !== 700 }))
+    const shown = reviewRowsToRender(rows, 5)
+    expect(shown.map((r) => r.i)).toEqual([700, 0, 1, 2, 3])
   })
 })

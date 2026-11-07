@@ -85,7 +85,7 @@ export function buildErrorReferenceMd(): string {
   lines.push('    "message_en": "The selected period is locked.",')
   lines.push('    "details": { "fiscal_period_id": "..." },')
   lines.push('    "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",')
-  lines.push('    "docs_url": "https://app.gnubok.se/docs/api/errors/PERIOD_LOCKED",')
+  lines.push('    "docs_url": "https://app.accounted.se/docs/api/errors/PERIOD_LOCKED",')
   lines.push('    "request_id": "req_..."')
   lines.push('  }')
   lines.push('}')

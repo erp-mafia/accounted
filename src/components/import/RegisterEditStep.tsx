@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { PossibleDuplicateChoice } from '@/components/import/PossibleDuplicateChoice'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
-import { countMatchedRows, invalidRowsNoticeParams } from '@/lib/import/register-import-flow'
+import { countMatchedRows, invalidRowsNoticeParams, reviewRowsToRender } from '@/lib/import/register-import-flow'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -31,6 +31,8 @@ interface RegisterEditStepProps {
   onExecute: (rows: ReviewRow[], updateDuplicates: boolean) => void
   onBack: () => void
   isLoading: boolean
+  /** Rows written so far while a large file goes in batches. */
+  progress?: { done: number; total: number } | null
   error: string | null
   /** What the parser noticed about the file (lib/import/notices.ts). */
   notices?: ImportNotice[]
@@ -51,6 +53,7 @@ export default function RegisterEditStep({
   onExecute,
   onBack,
   isLoading,
+  progress = null,
   error,
   notices = [],
   headers,
@@ -73,6 +76,7 @@ export default function RegisterEditStep({
     [rows, possibleDuplicate],
   )
   const newCount = rows.length - matchedCount
+  const shownRows = useMemo(() => reviewRowsToRender(rows), [rows])
   const invalidNotice = useMemo(() => invalidRowsNoticeParams(rows), [rows])
   const hasErrors = invalidNotice !== null
   const canContinue = rows.length > 0 && !hasErrors && !isLoading
@@ -157,7 +161,7 @@ export default function RegisterEditStep({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {shownRows.map((row) => {
                 const existingId = possibleDuplicate?.existingId(row) ?? null
                 return [
                   <tr
@@ -243,6 +247,12 @@ export default function RegisterEditStep({
           </table>
         </div>
 
+        {shownRows.length < rows.length && (
+          <p className="text-xs text-muted-foreground">
+            {t('rows_shown', { shown: shownRows.length, total: rows.length })}
+          </p>
+        )}
+
         <ImportNotices notices={allNotices} />
 
         {error && (
@@ -257,7 +267,11 @@ export default function RegisterEditStep({
             {tCommon('back')}
           </Button>
           <Button onClick={handleExecute} disabled={!canContinue} loading={isLoading}>
-            {isLoading ? t('importing') : t('import_rows', { count: rows.length })}
+            {isLoading
+              ? progress
+                ? t('importing_progress', { done: progress.done, total: progress.total })
+                : t('importing')
+              : t('import_rows', { count: rows.length })}
           </Button>
         </div>
       </CardContent>
