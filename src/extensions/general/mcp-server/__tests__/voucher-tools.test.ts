@@ -1745,14 +1745,17 @@ describe('gnubok_set_opening_balances: one IB per year at staging', () => {
 
 describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', () => {
   const listGaps = tools.find((t) => t.name === 'gnubok_list_voucher_gaps')!
+  const PERIOD_ID = '7b3a1c2d-0000-4000-8000-0000000000aa'
+  const PERIOD = { id: PERIOD_ID, name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }
 
   it('checks series A when the year has no sequence row (it answered 0 gaps unchecked)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null }) // fiscal_periods: the company's
     enqueue({ data: [], error: null }) // voucher_sequences: none
     enqueue({ data: [{ gap_start: 4, gap_end: 4 }], error: null }) // detect_voucher_gaps('A')
     enqueue({ data: [], error: null }) // explanations
 
-    const result = (await listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)) as {
+    const result = (await listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never)) as {
       gaps: Array<{ series: string; explanation: unknown }>
       total_gaps: number
       unexplained_gaps: number
@@ -1765,6 +1768,7 @@ describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', (
 
   it('keeps the explanation row shape it always returned', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null })
     enqueue({ data: [{ voucher_series: 'A' }], error: null })
     enqueue({ data: [{ gap_start: 4, gap_end: 4 }], error: null })
     enqueue({
@@ -1772,7 +1776,7 @@ describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', (
       error: null,
     })
 
-    const result = (await listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)) as {
+    const result = (await listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never)) as {
       gaps: Array<{ explanation: unknown }>
       unexplained_gaps: number
     }
@@ -1790,12 +1794,72 @@ describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', (
 
   it('throws when gap detection fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null })
     enqueue({ data: [{ voucher_series: 'A' }], error: null })
     enqueue({ data: null, error: { message: 'statement timeout' } })
 
     await expect(
-      listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never),
+      listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/Voucher gap check failed at detect_voucher_gaps/)
+  })
+
+  // An omitted id reached SQL as the string "undefined" (supabase-js
+  // stringifies it) and answered UNKNOWN_ERROR "try again".
+  it('checks the year containing today when fiscal_period_id is omitted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD, error: null }) // fiscal_periods: the period containing today
+    enqueue({ data: [{ voucher_series: 'A' }], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = (await listGaps.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      fiscal_period: { id: string; name: string }
+      total_gaps: number
+    }
+
+    expect(result.fiscal_period).toEqual({ id: PERIOD_ID, name: '2026' })
+    expect(result.total_gaps).toBe(0)
+    expect(findCalls('voucher_sequences', 'eq')).toContainEqual(['fiscal_period_id', PERIOD_ID])
+    for (const call of findCalls('voucher_sequences', 'eq')) expect(call[1]).not.toBe(undefined)
+  })
+
+  it('falls back to the most recent year when none contains today', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // fiscal_periods: none contains today
+    enqueue({ data: { id: PERIOD_ID }, error: null }) // most recent
+    enqueue({ data: PERIOD, error: null }) // re-read in the company
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = (await listGaps.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      fiscal_period: { id: string }
+    }
+    expect(result.fiscal_period.id).toBe(PERIOD_ID)
+  })
+
+  it.each([['undefined'], ['placeholder'], ['unknown']])(
+    'refuses fiscal_period_id "%s" as a VALIDATION_ERROR naming the field, before any query',
+    async (bad) => {
+      const { supabase, findCall } = createQueuedMockSupabase()
+      const err = await listGaps
+        .execute({ fiscal_period_id: bad }, 'company-1', 'user-1', supabase as never)
+        .catch((e: unknown) => e)
+
+      expect(err).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'fiscal_period_id' }] })
+      expect((err as Error).message).toMatch(/gnubok_list_fiscal_periods/)
+      expect(toToolError(err).error.code).toBe('VALIDATION_ERROR')
+      expect(findCall('voucher_sequences', 'select')).toBeUndefined()
+      expect(findCall('fiscal_periods', 'select')).toBeUndefined()
+    },
+  )
+
+  it('refuses another company\'s year as PERIOD_NOT_FOUND instead of answering 0 gaps', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // fiscal_periods: not this company's
+
+    await expect(
+      listGaps.execute({ fiscal_period_id: PERIOD_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'PERIOD_NOT_FOUND' })
+    expect(findCall('voucher_sequences', 'select')).toBeUndefined()
   })
 })
 
