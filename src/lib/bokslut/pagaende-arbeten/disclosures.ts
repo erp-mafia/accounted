@@ -1,5 +1,5 @@
 import { roundOre } from '@/lib/money'
-import type { ContractInput, ContractRevenueResult } from './calculator'
+import type { ContractInput, ContractRevenueMethod, ContractRevenueResult } from './calculator'
 
 /**
  * The note facts of pågående arbeten, as the K3 disclosure matrix (P1) reads
@@ -15,7 +15,7 @@ import type { ContractInput, ContractRevenueResult } from './calculator'
 
 export interface ContractRevenueDisclosures {
   /** 23.29 a. */
-  principle: 'successiv_vinstavrakning' | 'fardigstallandemetoden'
+  principle: ContractRevenueMethod
   /** 23.29 b: the methods in use, each once, in a fixed order. */
   completionMethods: Array<'utgifter' | 'undersokning' | 'fysisk'>
   /** 23.30 a-c, summed over the contracts in progress on balansdagen. */
@@ -52,7 +52,7 @@ export function contractRevenueDisclosures(
   const liabilities = inProgress.filter((position) => position.netto < 0)
   const invoiced = (id: string) => byId.get(id)?.fakturerat ?? 0
   return {
-    principle: result.method === 'successiv' ? 'successiv_vinstavrakning' : 'fardigstallandemetoden',
+    principle: result.method,
     completionMethods: (['utgifter', 'undersokning', 'fysisk'] as const).filter((method) => methods.has(method)),
     inProgress: {
       upparbetade_intakter: sum(inProgress.map((position) => position.upparbetad_intakt)),

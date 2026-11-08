@@ -145,7 +145,7 @@ describe('contractRevenueDisclosures (K3 23.29-23.30)', () => {
   it('states the principle, the methods and the amounts in progress', async () => {
     const { result } = await bookContractRevenueAdjustment(args('3090'))
     expect(contractRevenueDisclosures(result, [contract])).toEqual({
-      principle: 'successiv_vinstavrakning',
+      principle: 'successiv',
       completionMethods: ['utgifter'],
       inProgress: { upparbetade_intakter: 500_000, fakturerade_belopp: 300_000, innehallna_belopp: 30_000 },
       nettedGross: {

@@ -106,23 +106,56 @@ describe('the K3 disclosure matrix', () => {
     expect(evaluateRequirement(r, ctx({ facts: withContracts })).status).toBe('missing')
     const chosen = evaluateRequirement(
       r,
-      ctx({ facts: withContracts, answers: { 'pr.intakter_uppdrag': { choice: 'fardigstallandemetoden' } } }),
+      ctx({ facts: withContracts, answers: { 'pr.intakter_uppdrag': { choice: 'successiv' } } }),
     )
     expect(chosen.status).toBe('missing')
     const described = evaluateRequirement(
       r,
       ctx({
         facts: withContracts,
-        answers: { 'pr.intakter_uppdrag': { choice: 'fardigstallandemetoden', text: 'Graden fastställs utifrån nedlagda kostnader.' } },
+        answers: { 'pr.intakter_uppdrag': { choice: 'successiv', text: 'Graden fastställs utifrån nedlagda kostnader.' } },
       }),
     )
     expect(described.status).toBe('met')
     expect(described.content).toContain('Graden fastställs utifrån nedlagda kostnader.')
-    const alternative = evaluateRequirement(
+    const fardigstallande = evaluateRequirement(
       r,
-      ctx({ facts: withContracts, answers: { 'pr.intakter_uppdrag': { choice: 'alternativregeln' } } }),
+      ctx({ facts: withContracts, answers: { 'pr.intakter_uppdrag': { choice: 'fardigstallande' } } }),
     )
-    expect(alternative.content).toContain('alternativregeln i K3 punkt 23.31')
+    expect(fardigstallande.status).toBe('met')
+  })
+
+  // K3 names its two methods successiv vinstavräkning (23.17-23.27) and,
+  // for a juridisk person, färdigställandemetoden (23.31-23.37);
+  // huvudregeln and alternativregeln are K2's names (6.15-6.25).
+  it('names each pågående uppdrag choice as K3 names the method it prints', () => {
+    const r = requirement('pr.intakter_uppdrag')
+    expect(r.choices?.map((c) => [c.value, c.label])).toEqual([
+      ['successiv', 'Successiv vinstavräkning'],
+      ['fardigstallande', 'Färdigställandemetoden'],
+    ])
+    const withContracts = facts({ contractsInProgress: 12000 })
+    const printed = (answer: { choice: string; text?: string }) =>
+      evaluateRequirement(r, ctx({ facts: withContracts, answers: { 'pr.intakter_uppdrag': answer } })).content ?? ''
+    const successiv = printed({ choice: 'successiv', text: 'Graden fastställs utifrån nedlagda kostnader.' })
+    expect(successiv).toContain('enligt successiv vinstavräkning, i takt med färdigställandegraden')
+    expect(successiv).not.toContain('färdigställandemetod')
+    const fardigstallande = printed({ choice: 'fardigstallande' })
+    expect(fardigstallande).toContain('enligt färdigställandemetoden (K3 punkt 23.31)')
+    expect(fardigstallande).toContain('när uppdraget i allt väsentligt har slutförts')
+    expect(fardigstallande).not.toContain('successiv vinstavräkning')
+    for (const choice of r.choices ?? []) {
+      expect(`${choice.label} ${choice.text ?? ''}`).not.toMatch(/alternativregel|huvudregel/i)
+    }
+  })
+
+  it('asks again when the stored answer is one of the old, mislabelled choices', () => {
+    const r = requirement('pr.intakter_uppdrag')
+    const withContracts = facts({ contractsInProgress: 12000 })
+    for (const choice of ['alternativregeln', 'fardigstallandemetoden']) {
+      const stored = { 'pr.intakter_uppdrag': { choice, text: 'Graden fastställs utifrån nedlagda kostnader.' } }
+      expect(evaluateRequirement(r, ctx({ facts: withContracts, answers: stored })).status).toBe('missing')
+    }
   })
 
   it('is not applicable when the books hold nothing it concerns', () => {
