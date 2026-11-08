@@ -9,6 +9,8 @@
  * entries (ÅRL 5 kap. 25-48 §§, K3 3.12-3.13, 8.4-8.5, 2.2, ...) are P4's
  * list, added in index.ts with `sizes: ['larger']`.
  */
+import type { ContractRevenueMethod } from '@/lib/bokslut/pagaende-arbeten/calculator'
+import { CONTRACT_REVENUE_METHOD_NAMES, contractRevenueMethodInText } from '@/lib/bokslut/pagaende-arbeten/methods'
 import type { DisclosureContext, DisclosureRequirement } from './types'
 
 const K3 = ['k3'] as const
@@ -245,16 +247,19 @@ export const K3_MINDRE_REQUIREMENTS: readonly DisclosureRequirement[] = [
     producer: 'typed',
     question: 'Hur redovisas pågående uppdrag (pågående arbete för annans räkning)?',
     textLabel: 'Beskriv hur färdigställandegraden fastställs.',
+    // The values are the register's ContractRevenueMethod. Answers stored
+    // under the earlier values ('alternativregeln', 'fardigstallandemetoden',
+    // whose label named the other method) match no choice and are asked again.
     choices: [
       {
-        value: 'alternativregeln',
-        label: 'Uppdrag till fast pris: alternativregeln i K3 23.31',
-        text: 'Pågående uppdrag till fast pris redovisas enligt alternativregeln i K3 punkt 23.31: intäkten redovisas när uppdraget i allt väsentligt har slutförts. Uppdrag på löpande räkning intäktsredovisas i takt med att arbetet utförs.',
+        value: 'successiv' satisfies ContractRevenueMethod,
+        label: CONTRACT_REVENUE_METHOD_NAMES.successiv,
+        text: null,
       },
       {
-        value: 'fardigstallandemetoden',
-        label: 'Färdigställandemetoden',
-        text: null,
+        value: 'fardigstallande' satisfies ContractRevenueMethod,
+        label: CONTRACT_REVENUE_METHOD_NAMES.fardigstallande,
+        text: `Pågående uppdrag till fast pris redovisas enligt ${contractRevenueMethodInText('fardigstallande')} (K3 punkt 23.31): intäkten redovisas när uppdraget i allt väsentligt har slutförts. Uppdrag på löpande räkning intäktsredovisas i takt med att arbetet utförs.`,
       },
     ],
     applicability: (ctx) => (ctx.facts.contractsInProgress !== 0 ? 'applies' : 'not_applicable'),
@@ -265,7 +270,7 @@ export const K3_MINDRE_REQUIREMENTS: readonly DisclosureRequirement[] = [
       if (choice.text) return `Pågående uppdrag: ${choice.text}`
       const how = text(answer)
       return how
-        ? `Pågående uppdrag: Inkomster från uppdrag redovisas i takt med färdigställandegraden. ${how}`
+        ? `Pågående uppdrag: Inkomster från uppdrag redovisas enligt ${contractRevenueMethodInText('successiv')}, i takt med färdigställandegraden. ${how}`
         : null
     },
     missingMessage: 'Ange hur pågående uppdrag redovisas och hur färdigställandegraden fastställs (K3 23.29 b).',

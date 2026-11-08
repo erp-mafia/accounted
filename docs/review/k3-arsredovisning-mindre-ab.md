@@ -100,7 +100,7 @@ anskaffningsvärde. The matrix appends the paragraphs below when they apply.
 | Id | Title | Source | When | How |
 |---|---|---|---|---|
 | `pr.ramverk` | Tillämpat regelverk | ÅRL 5 kap. 4 §, K3 1.6, 8.3 | Always | Generated (first paragraph of note 1) |
-| `pr.intakter_uppdrag` | Pågående uppdrag | K3 23.29 b, 23.31 | 1470-1479 or 2430-2439 have a balance | Choice: alternativregeln (printed text) or färdigställandemetoden with how the degree is measured (typed) |
+| `pr.intakter_uppdrag` | Pågående uppdrag | K3 23.29 b, 23.31 | 1470-1479 or 2430-2439 have a balance | Choice: successiv vinstavräkning with how the färdigställandegrad is measured (typed) or färdigställandemetoden, 23.31 (printed text) |
 | `pr.varulager` | Varulager | ÅRL 4 kap. 9 §, K3 13, 13.14, 8.3 | 1400-1469 or 1490-1499 have a balance | Choice: lowest value FIFO, lowest value weighted average, or the inkomstskattelagen rule (13.14) |
 | `pr.utveckling` | Internt upparbetade immateriella tillgångar | K3 18.7, 18.28 | Asked; applies when 1010-1019 has a balance | Choice: aktiveringsmodellen or kostnadsföringsmodellen |
 | `pr.goodwill` | Goodwill | ÅRL 5 kap. 9 §, K3 18.20 | 1070-1079 has a balance | Typed: period and reasons |

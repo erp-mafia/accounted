@@ -58,8 +58,8 @@ describe('contentApplies and takesText', () => {
     expect(takesText(asked, { applies: true })).toBe(true)
     const contracts = evaluate('pr.intakter_uppdrag')
     expect(contentApplies(contracts, undefined)).toBe(true)
-    expect(takesText(contracts, { choice: 'alternativregeln' })).toBe(false)
-    expect(takesText(contracts, { choice: 'fardigstallandemetoden' })).toBe(true)
+    expect(takesText(contracts, { choice: 'fardigstallande' })).toBe(false)
+    expect(takesText(contracts, { choice: 'successiv' })).toBe(true)
   })
 })
 

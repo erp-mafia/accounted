@@ -16,6 +16,7 @@ import {
   type ContractRevenueMethod,
   type ContractRevenueResult,
 } from './calculator'
+import { contractRevenueMethodInText } from './methods'
 
 /**
  * Books the pågående-arbeten adjustment on balansdagen: a year_end draft
@@ -173,9 +174,7 @@ export async function bookContractRevenueAdjustment(args: BookContractRevenueArg
     input: {
       fiscal_period_id: fiscalPeriodId,
       entry_date: args.periodEnd,
-      description: args.method === 'successiv'
-        ? `Successiv vinstavräkning pågående arbeten ${args.periodEnd}`
-        : `Pågående arbeten enligt färdigställandemetoden ${args.periodEnd}`,
+      description: `Pågående arbeten enligt ${contractRevenueMethodInText(args.method)} ${args.periodEnd}`,
       source_type: 'year_end',
       lines: result.lines,
     },
