@@ -3393,6 +3393,65 @@ function lockedPeriodLinkError(total: number, periods: LockedLinkPeriod[], other
   })
 }
 
+/**
+ * The refusal for a gnubok_link_documents_to_vouchers call where no row
+ * resolved. It was a plain Error, so the agent read UNKNOWN_ERROR, "Något gick
+ * fel. Försök igen.", for a call no retry fixes: 16 calls in 30 days, 10 with
+ * every document already on another verifikat, 6 naming a document or
+ * verifikat that does not exist. The code names what the caller must change,
+ * ids that resolve to nothing first; the message counts every status and
+ * shows the first row of each.
+ */
+const UNRESOLVED_LINK_CLASSES: ReadonlyArray<{ code: string; statuses: readonly string[]; hint: string }> = [
+  {
+    code: 'NOT_FOUND',
+    statuses: ['document_not_found', 'voucher_not_found', 'unknown_fiscal_year'],
+    hint:
+      'document_not_found: the id is no document or inbox item of this company (gnubok_list_unmatched_documents lists them). ' +
+      'voucher_not_found, unknown_fiscal_year: no verifikat with that number in that fiscal year; name it by journal_entry_id ' +
+      '(gnubok_list_verifikat_without_documents).',
+  },
+  {
+    code: 'DOC_LINK_ALREADY_LINKED',
+    statuses: ['already_linked'],
+    hint:
+      'already_linked: the document is on the verifikat in linked_journal_entry_id and a link never moves (BFL 5 kap 6 §). ' +
+      'If this verifikat needs the same underlag too, send the row again with copy: true: approval archives a byte-identical ' +
+      'copy. Do not re-upload or alter the file.',
+  },
+  {
+    code: 'DOC_LINK_PROPOSED_ELSEWHERE',
+    statuses: ['proposed_elsewhere'],
+    hint:
+      'proposed_elsewhere: the waiting operation in conflicting_operation_id links the document to another verifikat; ' +
+      'reject it first, or send the row with copy: true if both verifikat need it.',
+  },
+  {
+    code: 'VALIDATION_ERROR',
+    statuses: ['ambiguous_fiscal_year', 'duplicate_in_batch'],
+    hint:
+      'ambiguous_fiscal_year: more than one fiscal period starts that year; name the verifikat by journal_entry_id. ' +
+      'duplicate_in_batch: the same document twice without copy: true.',
+  },
+]
+
+function noLinksResolvedError(total: number, results: ReadonlyArray<{ status: string }>): Error {
+  const firstByStatus = new Map<string, { row: unknown; count: number }>()
+  for (const r of results) {
+    const seen = firstByStatus.get(r.status)
+    if (seen) seen.count += 1
+    else firstByStatus.set(r.status, { row: r, count: 1 })
+  }
+  const present = UNRESOLVED_LINK_CLASSES.filter((c) => c.statuses.some((s) => firstByStatus.has(s)))
+  const counts = [...firstByStatus].map(([status, { count }]) => `${status} ${count}`).join(', ')
+  const firsts = [...firstByStatus.values()].map(({ row }) => JSON.stringify(row)).join('; ')
+  return codedRefusal(
+    present[0]?.code ?? 'VALIDATION_ERROR',
+    `No links resolved: 0/${total} rows matched a document and a verifikat that can take it (${counts}). First of each: ${firsts}`,
+    { description: present.map((c) => c.hint).join(' ') || 'Check each row against its status.' },
+  )
+}
+
 // ── Shared categorization logic ──────────────────────────────
 
 // ── Lock-period staging guard ────────────────────────────────────────────────
@@ -19321,6 +19380,8 @@ export const tools: McpTool[] = [
         document_file_name?: string
         /** For proposed_elsewhere: the waiting operation that links the document to another verifikat. */
         conflicting_operation_id?: string
+        /** For already_linked: the verifikat that holds the document. */
+        linked_journal_entry_id?: string
         /** The inbox item id the row sent, when document_id is the document that item holds. */
         resolved_from_inbox_item_id?: string
         voucher_label?: string
@@ -19419,7 +19480,12 @@ export const tools: McpTool[] = [
         let copy = false
         if (!asCopy) {
           if (existingJeId && existingJeId !== je.id) {
-            results.push({ ...rowKey(l), status: 'already_linked', document_file_name: doc.file_name })
+            results.push({
+              ...rowKey(l),
+              status: 'already_linked',
+              document_file_name: doc.file_name,
+              linked_journal_entry_id: existingJeId,
+            })
             continue
           }
           if (proposedElsewhere) {
@@ -19479,10 +19545,7 @@ export const tools: McpTool[] = [
         if (lockedCount > 0) {
           throw lockedPeriodLinkError(rawLinks.length, lockedPeriods, results.filter((r) => r.status !== 'period_locked'))
         }
-        throw new Error(
-          `No links resolved: 0/${rawLinks.length} matched a real document + voucher. ` +
-          `First miss: ${JSON.stringify(results[0])}`
-        )
+        throw noLinksResolvedError(rawLinks.length, results)
       }
 
       // The title is what /pending lists and the approver reads first: it
