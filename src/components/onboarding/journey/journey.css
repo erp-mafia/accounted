@@ -136,6 +136,8 @@
 }
 .jny-qsub { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 0 0 26px; }
 .jny-attn { font-size: 12.5px; color: hsl(var(--warning)); margin: -14px 0 20px; }
+/* The pull-up above is for a note under a sub line; straight under the title it overlapped the title. */
+.jny-qtitle + .jny-attn { margin-top: 0; }
 .jny-qhelp {
   display: inline-flex; align-items: center; justify-content: center;
   width: 17px; height: 17px; border-radius: 99px;

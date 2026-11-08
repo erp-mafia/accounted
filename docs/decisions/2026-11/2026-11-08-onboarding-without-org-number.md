@@ -1,0 +1,1 @@
+[2026-11-08] The onboarding journey lets a company start without an organisationsnummer (Fortsätt utan), and a VAT-registered company still needs one, checked in createCompanyCore for every door: the rule only ever required the number for VAT, and a byrå could not add a test client.

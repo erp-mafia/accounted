@@ -229,6 +229,64 @@ describe('createCompanyFromOnboarding: org_number validation', () => {
     const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')
     expect(rpcCreate).toBeUndefined()
   })
+
+  it('refuses a VAT-registered company without an org number before any write', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_with_owner: { data: 'x' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Testbolaget AB',
+        vat_registered: true,
+        moms_period: 'quarterly',
+        // No org_number: the momsregistreringsnummer would have nothing to derive from.
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(result.error).toBe('Ett momsregistrerat företag behöver organisationsnummer.')
+    expect(supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')).toBeUndefined()
+    expect(calls.some((c) => c.method === 'upsert' || c.method === 'insert')).toBe(false)
+  })
+
+  it('creates a company without an org number when it is not VAT-registered', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Testbolaget AB',
+        vat_registered: false,
+        vat_number: null,
+        moms_period: null,
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.companyId).toBe('new-company-id')
+  })
 })
 
 describe('createCompanyFromOnboarding: byrå team gating (WL-15)', () => {

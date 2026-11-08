@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import {
+  normalizeVatNumber,
+  isValidSwedishVatNumber,
+  deriveSwedishVatNumber,
+  vatRegisteredWithoutOrgNumber,
+} from '@/lib/vat/vat-number'
 import { regenerateTaxDeadlinesForUser, toDeadlineSettings } from '@/lib/tax/deadline-generator'
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
@@ -66,6 +71,7 @@ export const COMPANY_CREATION_ERRORS = {
   settings_failed: 'Kunde inte spara inställningar. Försök igen.',
   period_failed: 'Kunde inte skapa räkenskapsår. Försök igen.',
   deadlines_failed: 'Kunde inte skapa skattedeadlines. Försök igen.',
+  vat_needs_org_number: 'Ett momsregistrerat företag behöver organisationsnummer.',
 } as const
 
 export async function createCompanyCore(
@@ -94,6 +100,11 @@ export async function createCompanyCore(
   const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
   if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
     return { error: COMPANY_CREATION_ERRORS.org_number_invalid }
+  }
+  // Every door checks this before it writes anything: the API and MCP schema
+  // say so field by field, but the web journey sends its settings as they are.
+  if (vatRegisteredWithoutOrgNumber(input.settings.vat_registered as boolean | null | undefined, rawOrgNumber)) {
+    return { error: COMPANY_CREATION_ERRORS.vat_needs_org_number }
   }
 
   // Säte comes from the register (SCB Säteskommun), never from the postal

@@ -4,7 +4,7 @@ import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { fiscalYearStartMonthFor } from '@/lib/company/fiscal-year'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import { deriveSwedishVatNumber, vatRegisteredWithoutOrgNumber } from '@/lib/vat/vat-number'
 import {
   ENTITY_TYPES,
   defaultAccountingMethod,
@@ -89,7 +89,7 @@ export const CompanySetupSchema = z
         message: 'moms_period must be omitted when the company is not VAT-registered.',
       })
     }
-    if (value.vat_registered && !value.org_number) {
+    if (vatRegisteredWithoutOrgNumber(value.vat_registered, value.org_number)) {
       ctx.addIssue({
         code: 'custom',
         path: ['org_number'],

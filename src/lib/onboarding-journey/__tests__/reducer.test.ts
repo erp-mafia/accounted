@@ -855,3 +855,119 @@ describe('registry hint after a TIC miss (SCB knew the org number)', () => {
     expect(s.step).toBe('notfound')
   })
 })
+
+describe('journeyReducer: a company without an org number', () => {
+  /** A byrå adding a test client: no number, the manual path to the VAT question. */
+  function withoutOrgAtMomsyn(): JourneyState {
+    return run(
+      initJourney({ mode: 'add' }),
+      { type: 'NO_ORG_CONTINUE' },
+      { type: 'ENTITY_PICKED', entityType: 'aktiebolag' },
+      { type: 'NAME_SUBMITTED', name: 'Testbolaget AB' },
+      { type: 'ADDRESS_SUBMITTED', addressLine1: 'Gatan 1', postalCode: '123 45', city: 'Lund' },
+      { type: 'FSKATT_ANSWERED', fskatt: true },
+      { type: 'FY_CALENDAR_CONFIRMED' },
+    )
+  }
+
+  it('leaves the orgnr step for the form picker with no number and no lookup', () => {
+    const s = journeyReducer(initJourney({ mode: 'add' }), { type: 'NO_ORG_CONTINUE' })
+    expect(s.step).toBe('form')
+    expect(s.settings.org_number).toBeUndefined()
+    expect(s.lookupRan).toBe(false)
+    expect(s.lookupPending).toBe(false)
+    expect(journeyReducer(s, { type: 'BACK' }).step).toBe('orgnr')
+  })
+
+  it('reaches the create step with vat_registered false and no org number', () => {
+    const s = run(
+      withoutOrgAtMomsyn(),
+      { type: 'VAT_ANSWERED', registered: false },
+      { type: 'METHOD_PICKED', method: 'accrual' },
+    )
+    expect(s.submitting).toBe(true)
+    expect(s.settings).toMatchObject({
+      entity_type: 'aktiebolag',
+      company_name: 'Testbolaget AB',
+      f_skatt: true,
+      vat_registered: false,
+      vat_number: null,
+      moms_period: null,
+      accounting_method: 'accrual',
+    })
+    expect(s.settings.org_number).toBeUndefined()
+  })
+
+  it('a VAT-registered answer goes back to the orgnr step instead of a company with no momsregistreringsnummer', () => {
+    const before = withoutOrgAtMomsyn()
+    expect(before.step).toBe('momsyn')
+    const s = journeyReducer(before, { type: 'VAT_ANSWERED', registered: true })
+    expect(s.step).toBe('orgnr')
+    expect(s.serverError).toBe('vat_needs_org_number')
+    expect(s.settings.vat_registered).toBeUndefined()
+    expect(s.settings.company_name).toBe('Testbolaget AB')
+    // Entering the number clears the note and runs the lookup as usual.
+    const typed = journeyReducer(s, { type: 'ORG_SUBMITTED', orgNumber: '559999-9999' })
+    expect(typed.serverError).toBeNull()
+    expect(typed.lookupPending).toBe(true)
+  })
+
+  it('drops a BankID prefill: the name and form belonged to a number', () => {
+    const s = journeyReducer(
+      initJourney({ initialOrgNumber: '556677-8899', initialEntityType: 'aktiebolag', initialLegalName: 'Nordvik Bygg & Konsult AB' }),
+      { type: 'NO_ORG_CONTINUE' },
+    )
+    expect(s.step).toBe('form')
+    expect(s.settings).toEqual({})
+    expect(s.viaPrefill).toBe(false)
+  })
+
+  it('drops the answers a refused number left on the orgnr step', () => {
+    const refused = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
+      { type: 'FY_CALENDAR_CONFIRMED' },
+      { type: 'MOMS_PERIOD_PICKED', period: 'quarterly' },
+      { type: 'METHOD_PICKED', method: 'accrual' },
+      { type: 'SUBMIT_FAILED', code: 'org_number_invalid' },
+    )
+    expect(refused.step).toBe('orgnr')
+    expect(refused.settings.company_name).toBe('Nordvik Bygg & Konsult AB')
+    const s = journeyReducer(refused, { type: 'NO_ORG_CONTINUE' })
+    expect(s.step).toBe('form')
+    expect(s.settings).toEqual({})
+    expect(s.ticLookup).toBeNull()
+  })
+
+  it('is ignored off the orgnr step and while a lookup runs', () => {
+    const atForm = journeyReducer(initJourney(), { type: 'NO_ORG_CONTINUE' })
+    expect(journeyReducer(atForm, { type: 'NO_ORG_CONTINUE' })).toBe(atForm)
+    const looking = journeyReducer(initJourney(), { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' })
+    expect(journeyReducer(looking, { type: 'NO_ORG_CONTINUE' })).toBe(looking)
+  })
+
+  it('a personnummer typed after the VAT bounce settles enskild firma over the aktiebolag picked without it', () => {
+    const s = run(
+      withoutOrgAtMomsyn(),
+      { type: 'VAT_ANSWERED', registered: true },
+      { type: 'ORG_SUBMITTED', orgNumber: '19900101-0017' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+    )
+    expect(s.settings.entity_type).toBe('enskild_firma')
+    expect(s.settings.org_number).toBe('19900101-0017')
+    // The name and the answers the aktiebolag shaped are asked again.
+    expect(s.settings.company_name).toBeUndefined()
+    expect(s.settings.fiscal_year_start_month).toBeUndefined()
+    expect(s.settings.vat_registered).toBeUndefined()
+    expect(s.step).toBe('name')
+  })
+
+  it('a typed number still asks for VAT normally', () => {
+    const s = run(manualAbAtFy(), { type: 'FY_CALENDAR_CONFIRMED' }, { type: 'VAT_ANSWERED', registered: true })
+    expect(s.step).toBe('moms')
+    expect(s.serverError).toBeNull()
+    expect(s.settings.vat_registered).toBe(true)
+  })
+})
