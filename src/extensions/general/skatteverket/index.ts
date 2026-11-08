@@ -65,7 +65,7 @@ import { formatRedovisare } from '@/lib/skatteverket/format'
 import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
-import { createUtseOmbudDeepLink, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
+import { createUtseOmbudDeepLink, OMBUD_COMPANY_GUIDE_URL, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
   SkvSubmitResult,
@@ -1024,7 +1024,7 @@ export const skatteverketExtension: Extension = {
           environment: currentSkvEnvironment(),
           // What the user grants the behorigheter to, plus where.
           ombud_org_number: getOmbudOrgNumber(),
-          grant_url: 'https://skatteverket.se/ombud',
+          grant_url: OMBUD_COMPANY_GUIDE_URL,
           behorigheter: [
             { key: 'lasombud', label: 'Skattekonto, bara läsbehörighet' },
             { key: 'moms_ombud', label: 'Momsdeklaration, ombud' },
