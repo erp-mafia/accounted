@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 462 endpoints.
+  pagination, scopes), and all 465 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 462 operations. Paths are shown without
+API version `2026-05-12`, 465 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -362,7 +362,7 @@ POST /companies/{companyId}/tax-loss-carryforwards : Save one fiscal year of the
 GET /companies/{companyId}/tax-loss-carryforwards/{id} : One fiscal year of the underskottsregister, checked against the year before it [scope:reports:read risk:low idempotent]
 ```
 
-### Invoices (AR) (28)
+### Invoices (AR) (31)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -390,6 +390,9 @@ GET /companies/{companyId}/invoices/{id}/peppol/deliveries : List an invoice's P
 POST /companies/{companyId}/invoices/{id}/quote-status : Record the customer decision on a quote (offert) [scope:invoices:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/invoices/{id}/send : Send a draft invoice to the customer by email [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/send-peppol : Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point [scope:invoices:write risk:high idempotent dry-run]
+GET /companies/{companyId}/invoices/{id}/underlag : List the archived documents a customer invoice rests on (its underlag), oldest link first [scope:invoices:read risk:low idempotent]
+POST /companies/{companyId}/invoices/{id}/underlag : Link archived documents to a customer invoice as its underlag [scope:invoices:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/invoices/{id}/underlag/{documentId} : Remove one document from a customer invoice's underlag [scope:invoices:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:draft risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/invoices/late-payment-interest : Dröjsmålsränta per customer invoice: interest earned by invoices paid late, and interest accrued on overdue unpaid ones [scope:invoices:read risk:low idempotent]

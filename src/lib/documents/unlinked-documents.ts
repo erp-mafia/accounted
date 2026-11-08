@@ -1,11 +1,11 @@
 /**
  * Documents in the archive that are attached to nothing.
  *
- * A `document_attachments` row is reachable from ten places: a journal
+ * A `document_attachments` row is reachable from eleven places: a journal
  * entry (its own `journal_entry_id`), a bank transaction, a receipt, an
  * inbox item, a supplier invoice, an invoice delivery, an invoice attachment,
- * an inbound Peppol document, an årsredovisning submission, and a ROT/RUT
- * payout request. A
+ * an invoice's underlag, an inbound Peppol document, an årsredovisning
+ * submission, and a ROT/RUT payout request. A
  * row referenced by none of them is stored, retained for seven years under
  * BFL, and connected to no bookkeeping at all. Nothing surfaces those today,
  * so they accumulate silently: 4 497 of them across 210 companies as of
@@ -48,10 +48,10 @@ export const UNDERLAG_MIME_TYPES = [
  * The candidate scan is bounded, and the bound is set by URL length rather
  * than by table size.
  *
- * Every candidate id is sent back through nine `.in(column, ids)` lookups,
+ * Every candidate id is sent back through ten `.in(column, ids)` lookups,
  * and a UUID costs ~38 bytes in a PostgREST query string, so 300 ids is
  * already a ~12 KB URL per lookup. A cap in the thousands would exceed what
- * the gateway accepts and the nine lookups would start failing, which the
+ * the gateway accepts and the ten lookups would start failing, which the
  * error handling below would read as "nothing claims these" and would turn
  * every candidate into a false positive. Small and honest beats large and
  * silently wrong.
@@ -88,7 +88,7 @@ export interface UnlinkedDocumentsResult {
 const COLUMNS = 'id, file_name, mime_type, file_size_bytes, upload_source, created_at'
 
 /**
- * The nine tables that can claim a document, as [table, column] pairs.
+ * The ten tables that can claim a document, as [table, column] pairs.
  *
  * `journal_entry_id` is deliberately absent: it lives on the document row
  * itself and is already excluded by the column filter below.
@@ -100,6 +100,8 @@ const REFERENCING_COLUMNS: ReadonlyArray<readonly [table: string, column: string
   ['supplier_invoices', 'document_id'],
   ['invoice_deliveries', 'document_attachment_id'],
   ['invoice_attachments', 'document_id'],
+  // Underlag a customer invoice rests on (accounted#42): filed, not waiting for a verifikat.
+  ['invoice_underlag', 'document_id'],
   ['peppol_inbound_documents', 'xml_document_id'],
   ['arsredovisning_submissions', 'dokument_id'],
   ['rot_rut_payout_requests', 'file_document_id'],
@@ -109,7 +111,7 @@ const REFERENCING_COLUMNS: ReadonlyArray<readonly [table: string, column: string
  * Underlag-shaped documents in this company's archive that nothing references.
  *
  * Two passes, the same shape as `fetchPurchasesWithoutUnderlag`: the column
- * filter is the cheap part the database can index, and the nine reference
+ * filter is the cheap part the database can index, and the ten reference
  * lookups settle it afterwards for the candidates that survived. They run only
  * when there are candidates, so the common case (a company with none) costs
  * exactly one query.

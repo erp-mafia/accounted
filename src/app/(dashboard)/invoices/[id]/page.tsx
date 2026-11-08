@@ -99,6 +99,7 @@ import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import RefundCreditNoteDialog from '@/components/invoices/RefundCreditNoteDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
+import { InvoiceUnderlagSection } from '@/components/invoices/InvoiceUnderlagSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import QuotePartDialog from '@/components/invoices/QuotePartDialog'
 import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
@@ -3267,6 +3268,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
         </DetailSection>
       )}
+
+      {/* Underlag (accounted#42): the documents the invoice rests on, in
+          every state, since the question usually comes after it went out. */}
+      {isRealInvoice && <InvoiceUnderlagSection invoiceId={invoice.id} canWrite={canWrite} />}
 
       {/* Payment: shown for paid and partially paid alike, so a partly paid
           invoice always exposes paid / remaining and the payment events. */}

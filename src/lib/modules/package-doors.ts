@@ -269,6 +269,9 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'DELETE /api/invoices/:id/attachments/:documentId',
     'PATCH /api/invoices/:id',
     'POST /api/invoices/:id/attachments',
+    // Underlag behind an invoice already there (accounted#42).
+    'POST /api/invoices/:id/underlag',
+    'DELETE /api/invoices/:id/underlag/:documentId',
     'POST /api/invoices/:id/book',
     'POST /api/invoices/:id/cancel',
     'POST /api/invoices/:id/collection',
@@ -340,6 +343,8 @@ const CUSTOMER_INVOICES: PackageDoors = {
     // A set-off of two invoices already issued and registered.
     'op:invoices.setoff.book',
     'op:invoices.send-peppol',
+    'op:invoices.underlag.attach',
+    'op:invoices.underlag.detach',
     'op:peppol.register',
     'op:peppol.request-access',
     'mcp:gnubok_create_article',

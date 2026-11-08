@@ -57,7 +57,7 @@ export const HANDLE_RESOURCES = [
   { type: 'customer', prefix: 'cus', label: 'customer', segments: ['customers'], fields: ['customer'] },
   { type: 'supplier', prefix: 'sup', label: 'supplier', segments: ['suppliers'], fields: ['supplier'] },
   { type: 'transaction', prefix: 'txn', label: 'bank transaction', segments: ['transactions'], fields: ['transaction'] },
-  { type: 'document', prefix: 'doc', label: 'document', segments: ['documents'], fields: ['document'] },
+  { type: 'document', prefix: 'doc', label: 'document', segments: ['documents', 'underlag'], fields: ['document'] },
   { type: 'pending_operation', prefix: 'pop', label: 'pending operation', segments: ['pending-operations'], fields: ['pending_operation'] },
   { type: 'fiscal_period', prefix: 'fp', label: 'fiscal period', segments: ['fiscal-periods'], fields: ['fiscal_period', 'period'] },
   { type: 'employee', prefix: 'emp', label: 'employee', segments: ['employees', 'payslips'], fields: ['employee'] },
