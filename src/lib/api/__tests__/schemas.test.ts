@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { HouseworkTypeSchema } from '../schemas'
 import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-resolver'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
@@ -2539,6 +2540,47 @@ describe('UpdateSettingsSchema', () => {
         expect(result.success, `${field}=${value}`).toBe(false)
         if (!result.success) expect(result.error.issues[0].message).toContain(format)
       }
+    })
+
+    // Swedbank gives a new company 06 + organisationsnummer + B001 (payments)
+    // and R001 (reporting) for its ISO 20022 1.0 file service and tells it to
+    // enter them in the business system (agent feedback seq 2321961). The
+    // files here follow ISO 2.0, so the number is refused by name.
+    it('refuses Swedbank\'s ISO 1.0 agreement number by name in both fields, as typed', () => {
+      for (const field of ['swedbank_signer_id', 'swedbank_corporate_pay_id'] as const) {
+        for (const typed of ['065566778899B001', '06 556677-8899 b001', '065566778899R001']) {
+          const result = UpdateSettingsSchema.safeParse({ [field]: typed })
+          expect(result.success, `${field}=${typed}`).toBe(false)
+          if (result.success) continue
+          expect(result.error.issues).toHaveLength(1)
+          const [issue] = result.error.issues
+          expect(issue.path).toEqual([field])
+          expect(issue.message).toContain('avtalsnummer för ISO 20022 1.0')
+          expect(issue.message).toContain('Betala via banken behövs inget filavtal')
+          expect(issue.message).toContain('123456789ORI0001')
+          expect(issue.message).toContain('123456789CPO0001')
+          expect((issue as { params?: { en?: string } }).params?.en).toContain('ISO 20022 1.0 agreement number')
+        }
+      }
+    })
+
+    it('keeps the format refusal for a 16-character id that is not the ISO 1.0 shape', () => {
+      for (const typed of ['075566778899B001', '065566778899C001', '0655667788B001']) {
+        const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: typed })
+        expect(result.success, typed).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toBe('SignerID ska ha formatet 123456789ORI0001 (9 siffror, ORI, 4 siffror)')
+      }
+    })
+
+    it('answers the ISO 1.0 refusal to an agent in English and Swedish', () => {
+      const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: '065566778899B001' })
+      expect(result.success).toBe(false)
+      if (result.success) return
+      const error = getStructuredError(result.error)
+      expect(error.code).toBe('VALIDATION_ERROR')
+      expect(error.message_en).toContain('swedbank_signer_id: This is Swedbank\'s ISO 20022 1.0 agreement number')
+      expect(error.message_en).toContain('Pay through the bank needs no file agreement')
+      expect(error.message_sv).toContain('Det här är Swedbanks avtalsnummer för ISO 20022 1.0')
     })
   })
 

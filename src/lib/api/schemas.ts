@@ -7,6 +7,7 @@ import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import {
   normalizeSwedbankId,
   SWEDBANK_CORPORATE_PAY_ID_PATTERN,
+  SWEDBANK_ISO1_AGREEMENT_PATTERN,
   SWEDBANK_SIGNER_ID_PATTERN,
 } from '@/lib/payments/swedbank'
 import { NORDEA_AGREEMENT_ID_PATTERN, NORDEA_SIGNER_ID_PATTERN } from '@/lib/payments/nordea'
@@ -3762,16 +3763,40 @@ const InvoicePaymentAccountsSchema = z
 /**
  * A bank-assigned file id as typed in Settings (lib/payments/swedbank.ts,
  * lib/payments/nordea.ts): spaces and hyphens dropped and upper case, then
- * the bank's documented format. An emptied field clears the id.
+ * the bank's documented format. An emptied field clears the id. `refused` is
+ * a number the bank also assigns that belongs to another service: it is
+ * refused by name (Swedish message, English in params.en for message_en)
+ * before the format check, which would only say "wrong format".
  */
-function bankFileIdSchema(pattern: RegExp, message: string) {
-  return z
-    .string()
-    .transform(normalizeSwedbankId)
+function bankFileIdSchema(pattern: RegExp, message: string, refused?: { pattern: RegExp; sv: string; en: string }) {
+  const normalized = z.string().transform(normalizeSwedbankId)
+  const checked = refused
+    ? normalized.refine((id) => !refused.pattern.test(id), { message: refused.sv, params: { en: refused.en }, abort: true })
+    : normalized
+  return checked
     .pipe(z.union([z.literal(''), z.string().regex(pattern, message)]))
     .transform((id) => id || null)
     .nullable()
     .optional()
+}
+
+/**
+ * Swedbank's ISO 20022 1.0 agreement number (06 + organisationsnummer +
+ * B001/R001) typed into a 2.0 id field: what it is, that paying through the
+ * bank connection needs no file agreement, and which ids a file needs.
+ */
+function swedbankIso1Agreement(notSv: string, notEn: string) {
+  return {
+    pattern: SWEDBANK_ISO1_AGREEMENT_PATTERN,
+    sv:
+      `Det här är Swedbanks avtalsnummer för ISO 20022 1.0 (06 + organisationsnummer + B001 eller R001), inte ${notSv}. ` +
+      'Betalar du med Betala via banken behövs inget filavtal. Betalfiler härifrån följer Swedbanks ISO 2.0 och kräver ' +
+      'SignerID (123456789ORI0001) och avtals-id för Corporate Pay (123456789CPO0001): be Swedbank om dem.',
+    en:
+      `This is Swedbank's ISO 20022 1.0 agreement number (06 + organisation number + B001 or R001), not ${notEn}. ` +
+      'Paying with Pay through the bank needs no file agreement. Payment files from here follow Swedbank ISO 2.0 and need ' +
+      'the SignerID (123456789ORI0001) and the Corporate Pay agreement id (123456789CPO0001): ask Swedbank for them.',
+  }
 }
 
 /**
@@ -3856,10 +3881,12 @@ export const UpdateSettingsSchema = z.object({
   swedbank_signer_id: bankFileIdSchema(
     SWEDBANK_SIGNER_ID_PATTERN,
     'SignerID ska ha formatet 123456789ORI0001 (9 siffror, ORI, 4 siffror)',
+    swedbankIso1Agreement('ett SignerID', 'a SignerID'),
   ),
   swedbank_corporate_pay_id: bankFileIdSchema(
     SWEDBANK_CORPORATE_PAY_ID_PATTERN,
     'Avtals-id ska ha formatet 123456789CPO0001 (9 siffror, CPO, 4 siffror)',
+    swedbankIso1Agreement('ett avtals-id för Corporate Pay', 'a Corporate Pay agreement id'),
   ),
   // Nordea's Signer ID for pain.001 files, InitgPty with SchmeNm CUST (lib/payments/nordea.ts).
   nordea_signer_id: bankFileIdSchema(

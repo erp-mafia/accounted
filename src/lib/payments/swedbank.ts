@@ -52,6 +52,17 @@ export const SWEDBANK_SIGNER_ID_PATTERN = /^\d{9}ORI\d{4}$/
 /** MIG 2.0: "Swedbank Corporate Pay ID format: nnnnnnnnnCPOnnnn (E.g. 123456789CPO0001)". */
 export const SWEDBANK_CORPORATE_PAY_ID_PATTERN = /^\d{9}CPO\d{4}$/
 
+/**
+ * The agreement number of Swedbank's ISO 20022 1.0 file service, which the
+ * bank hands a company for "Filöverföring via internetbanken": "06", the
+ * 10-digit organisationsnummer, then B001 (payments) or R001 (reporting), 16
+ * characters (MIG 1.0's nnnnnnnnnnnnAnnn, docs/decisions/2026-10.md
+ * 2026-10-13). The files here follow 2.0 (see above), so both id fields refuse
+ * it by name instead of as a wrong format: Swedbank tells the customer to
+ * enter it in the business system (agent feedback seq 2321961).
+ */
+export const SWEDBANK_ISO1_AGREEMENT_PATTERN = /^06\d{10}[BR]\d{3}$/
+
 /** An id as typed, spaces and hyphens removed, upper case: "123456789-ori-0001" is "123456789ORI0001". */
 export function normalizeSwedbankId(raw: string): string {
   return raw.replace(/[\s-]/g, '').toUpperCase()

@@ -3651,11 +3651,11 @@
   },
   "settings_swedbank_file_ids": {
     "heading": "Betalfiler till Swedbank",
-    "help": "Swedbank kräver två id i varje betalfil som banken själv tilldelar: ditt SignerID och avtals-id:t för filbetalningar (Corporate Pay). Utan dem nekar Swedbank filen. Har du dem inte, fråga Swedbank.",
+    "help": "Bara för betalfiler som du laddar upp i Swedbanks internetbank: med Betala via banken behövs inget filavtal. Filerna följer Swedbanks ISO 2.0 och kräver två id som Swedbank tilldelar: SignerID och avtals-id för Corporate Pay. Utan dem nekar Swedbank filen. Avtalsnumret för ISO 1.0 (06 + organisationsnummer + B001) fungerar inte här. Har du inga ISO 2.0-id, fråga Swedbank.",
     "signer_id_label": "SignerID",
-    "signer_id_help": "Format 123456789ORI0001. Tilldelas av Swedbank och skrivs in som avsändare i betalfilen.",
+    "signer_id_help": "Format 123456789ORI0001, från Swedbanks ISO 2.0-avtal. Skrivs in som avsändare i betalfilen.",
     "corporate_pay_id_label": "Avtals-id (Corporate Pay)",
-    "corporate_pay_id_help": "Format 123456789CPO0001. Tilldelas av Swedbank och anger avtalet som betalningarna görs under."
+    "corporate_pay_id_help": "Format 123456789CPO0001, från Swedbanks ISO 2.0-avtal. Anger avtalet som betalningarna görs under."
   },
   "settings_nordea_signer_id": {
     "heading": "Betalfiler till Nordea",

@@ -94,6 +94,8 @@ describe('settings operations: field split', () => {
       const schema = shape[field] as z.ZodType
       expect(schema.safeParse(valid).success, field).toBe(true)
       expect(schema.safeParse(invalid).success, field).toBe(false)
+      // Swedbank's ISO 1.0 agreement number is refused by name (agent feedback seq 2321961).
+      expect(schema.safeParse('065566778899B001').error?.issues[0].message, field).toContain('ISO 20022 1.0')
       expect(schema.description, field).toMatch(/assigned by Swedbank/)
       expect(toSettingsResource('c1', { [field]: valid } as never)[field]).toBe(valid)
       expect(toSettingsResource('c1', {} as never)[field]).toBeNull()
