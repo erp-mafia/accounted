@@ -24,6 +24,7 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/typ
 import type { SIEPreparedEntry } from './sie-job-contract'
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { isResultatkonto } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { getMappingStats } from './account-mapper'
 import {
   calculateFileHash,
@@ -1247,6 +1248,64 @@ export function computeVoucherNumberRanges(
   return [...bySeries.entries()].map(([series, range]) => ({ series, ...range }))
 }
 
+type ClosingLineLike = { account_number: string; debit_amount: number; credit_amount: number }
+
+/**
+ * Net (debit - credit) per target account of the file's resultatavslut among
+ * the vouchers the import books: dated on the fiscal year's last day, every
+ * line on a result account (BAS class 3-8) or on the form's årets resultat
+ * account, at least one of each. The shape result_closing_entry_ids reads in
+ * the books.
+ */
+export function resultClosingMovementsOf(
+  entries: ReadonlyArray<{ date: string; lines: ReadonlyArray<ClosingLineLike> }>,
+  fiscalYearEnd: string | null,
+  resultAccount: string,
+): Map<string, number> {
+  const net = new Map<string, number>()
+  if (!fiscalYearEnd) return net
+  for (const entry of entries) {
+    if (entry.date !== fiscalYearEnd) continue
+    const accounts = entry.lines.map((line) => line.account_number)
+    const closingShaped = accounts.every((a) => a === resultAccount || isResultatkonto(a))
+      && accounts.some((a) => a === resultAccount) && accounts.some(isResultatkonto)
+    if (!closingShaped) continue
+    for (const line of entry.lines) {
+      const amount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+      net.set(line.account_number, roundOre((net.get(line.account_number) ?? 0) + amount))
+    }
+  }
+  return net
+}
+
+/**
+ * The imported movements to compare with #RES: less the resultatavslut's
+ * result lines when the file's #RES is the result before it, which is when
+ * #RES plus the closing line is zero on every result account the closing
+ * touches. A #RES written after the closing (0 on those accounts), or a
+ * closing through 8999 that #RES already contains, fails that test and the
+ * movements are compared as they are.
+ */
+export function movementsBeforeResultClosing(
+  expected: ReadonlyMap<string, number>,
+  imported: Map<string, number>,
+  resultClosing: ReadonlyMap<string, number>,
+): Map<string, number> {
+  const closingLines = [...resultClosing].filter(
+    ([account, amount]) => !isBalanceSheetAccount(account) && Math.abs(amount) >= 0.005,
+  )
+  if (closingLines.length === 0) return imported
+  const resBeforeClosing = closingLines.every(
+    ([account, amount]) => Math.abs(roundOre((expected.get(account) ?? 0) + amount)) < 0.005,
+  )
+  if (!resBeforeClosing) return imported
+  const adjusted = new Map(imported)
+  for (const [account, amount] of closingLines) {
+    adjusted.set(account, roundOre((adjusted.get(account) ?? 0) - amount))
+  }
+  return adjusted
+}
+
 /**
  * Create a migration adjustment entry (omföringsverifikation) to reconcile
  * imported voucher movements against the SIE file's closing balances.
@@ -1273,6 +1332,8 @@ export function buildSIEMigrationAdjustmentEntry(
     reason: string
   }[],
   skippedCount = skippedDetails.length,
+  /** Net per target account of the file's resultatavslut among the imported vouchers (resultClosingMovementsOf). */
+  resultClosing: Map<string, number> = new Map(),
 ): { input: CreateJournalEntryInput | null; deltaAccounts: number; warnings: string[] } {
   const warnings: string[] = []
   const hasUB = parsed.closingBalances.some((b) => b.yearIndex === 0)
@@ -1324,14 +1385,21 @@ export function buildSIEMigrationAdjustmentEntry(
     expectedMovements.set(target, (expectedMovements.get(target) || 0) + res.amount)
   }
 
+  // A #RES written before the resultatavslut (Accounted's own export, and the
+  // SIE convention for a closing that zeroes the result accounts into årets
+  // resultat) is compared with the imported movements less that closing:
+  // otherwise every result account's delta is the whole year's result and the
+  // adjustment books it a second time (crm#1727).
+  const comparedMovements = movementsBeforeResultClosing(expectedMovements, importedMovements, resultClosing)
+
   // Compute per-account delta: expected - imported
   const lines: CreateJournalEntryLineInput[] = []
-  const allAccounts = new Set([...expectedMovements.keys(), ...importedMovements.keys()])
+  const allAccounts = new Set([...expectedMovements.keys(), ...comparedMovements.keys()])
   let deltaAccountCount = 0
 
   for (const account of allAccounts) {
     const expected = expectedMovements.get(account) || 0
-    const imported = importedMovements.get(account) || 0
+    const imported = comparedMovements.get(account) || 0
     const delta = roundOre(expected - imported)
 
     if (Math.abs(delta) < 0.01) continue
