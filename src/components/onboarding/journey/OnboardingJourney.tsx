@@ -717,7 +717,9 @@ export default function OnboardingJourney({
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
-                : state.lookupNote === 'error'
+                : state.serverError === 'vat_needs_org_number'
+                  ? t('journey_err_vat_needs_orgnr')
+                  : state.lookupNote === 'error'
                   ? t('journey_lookup_error')
                   : state.lookupNote === 'nomatch'
                     ? t('journey_search_nomatch')
@@ -828,6 +830,29 @@ export default function OnboardingJourney({
                 {state.lookupNote === 'nomatch' ? (
                   <p className="jny-more">{t('journey_search_nomatch_joint')}</p>
                 ) : null}
+                {/* The org number is optional until the company is VAT
+                    registered: one not registered yet, or a test company,
+                    takes the manual path without it. Not offered right
+                    after a VAT yes sent the user here for the number. */}
+                {state.serverError === 'vat_needs_org_number' ? null : (
+                  <p className="jny-more">
+                    {t('journey_no_orgnr_pre')}{' '}
+                    <button
+                      type="button"
+                      className="jny-link"
+                      disabled={state.lookupPending}
+                      onClick={() => {
+                        // A duplicate found for an earlier number is not this company's.
+                        setDupName(null)
+                        setDupMatch(null)
+                        dispatch({ type: 'NO_ORG_CONTINUE' })
+                      }}
+                    >
+                      {t('journey_no_orgnr_link')}
+                    </button>
+                    .
+                  </p>
+                )}
               </>
             )}
           </Question>
@@ -1135,6 +1160,7 @@ export default function OnboardingJourney({
         return (
           <Question
             title={personOwned ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
+            sub={s.org_number ? undefined : t('journey_momsyn_no_orgnr_sub')}
             info={t('journey_momsyn_info')}
           >
             <ChipRow
