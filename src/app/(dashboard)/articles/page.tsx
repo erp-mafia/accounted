@@ -71,6 +71,7 @@ function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
 }
 
+/** Manage the company-cached article register, including its inactive articles. */
 function ArticlesPageInner() {
   const { canWrite } = useCanWrite()
   const { articles, isLoading, error: articlesError } = useArticles({ includeInactive: true })

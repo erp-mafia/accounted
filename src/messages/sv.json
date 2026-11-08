@@ -6317,6 +6317,7 @@
     "no_doc_required_reason_add": "Lägg till skäl (frivilligt)",
     "no_doc_required_reason_placeholder": "T.ex. bankavgift, ränta, intern överföring",
     "no_doc_required_save_reason": "Spara",
+    "no_doc_required_load_failed": "Kunde inte läsa uppgifter om underlag.",
     "no_doc_required_save_failed": "Kunde inte spara",
     "no_doc_required_suggestion_bank_fee": "Bankavgift",
     "no_doc_required_suggestion_interest": "Ränta",

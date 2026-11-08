@@ -52,6 +52,7 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
   return null
 }
 
+/** Manage the company-cached supplier register and refresh it after creating a supplier. */
 export default function SuppliersPage() {
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')

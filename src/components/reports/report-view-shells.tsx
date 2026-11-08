@@ -35,6 +35,7 @@ export function ReportEmptyState({ title, description }: { title: string; descri
   return <EmptyState icon={FileText} title={title} description={description} />
 }
 
+/** Encode the shared period, date and dimension filters for report requests and exports. */
 export function reportQuery(
   periodId: string,
   range?: DateRangeValue,

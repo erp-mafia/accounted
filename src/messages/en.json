@@ -6317,6 +6317,7 @@
     "no_doc_required_reason_add": "Add reason (optional)",
     "no_doc_required_reason_placeholder": "E.g. bank fee, interest, internal transfer",
     "no_doc_required_save_reason": "Save",
+    "no_doc_required_load_failed": "Could not load supporting-document information.",
     "no_doc_required_save_failed": "Could not save",
     "no_doc_required_suggestion_bank_fee": "Bank fee",
     "no_doc_required_suggestion_interest": "Interest",

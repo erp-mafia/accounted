@@ -104,6 +104,7 @@ function UsageCount({ accountNumber, count }: { accountNumber: string; count: nu
 // Component
 // ---------------------------------------------------------------------------
 
+/** Search and select the full cached chart while mounting its visible accounts in batches. */
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
   const t = useTranslations('chart_of_accounts')

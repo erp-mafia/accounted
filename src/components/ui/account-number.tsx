@@ -37,6 +37,7 @@ interface AccountNumberProps {
   className?: string
 }
 
+/** Resolve a missing display name from the shared chart and show the BAS reference tooltip. */
 export function AccountNumber({
   number,
   name,

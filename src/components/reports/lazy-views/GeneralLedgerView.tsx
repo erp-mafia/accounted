@@ -47,6 +47,7 @@ interface GeneralLedgerData {
 // re-trigger the fetch effect for callers that omit the prop.
 const EMPTY_DATE_RANGE: DateRangeValue = {}
 
+/** Display the filtered ledger with on-demand account details and matching export bounds. */
 export default function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
   const t = useTranslations('reports')
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set())

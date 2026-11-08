@@ -114,6 +114,7 @@ export function useCashAccounts(
   return { cashAccounts, ...state }
 }
 
+/** Subscribe to the company chart variant, or disable reads when the caller already has its data. */
 export function useAccounts(activeOnly = true, options: { enabled?: boolean } = {}): ReferenceListState & { accounts: BASAccount[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(options.enabled === false ? null : refKeys.accounts(companyId, activeOnly), ([, , active]) =>
