@@ -143,7 +143,12 @@ function outcomeOfError(err: unknown, trace: SkvCallTrace): CallRecord {
   }
 }
 
-async function recordCall(audit: SkvAudit, trace: SkvCallTrace, record: CallRecord): Promise<void> {
+async function recordCall(
+  audit: SkvAudit,
+  authMode: SkvAuth['mode'],
+  trace: SkvCallTrace,
+  record: CallRecord,
+): Promise<void> {
   if ('unaudited' in audit) {
     log.info('ombud register call (no company, not in the audit table)', {
       operation: audit.operation,
@@ -157,6 +162,7 @@ async function recordCall(audit: SkvAudit, trace: SkvCallTrace, record: CallReco
     { companyId: audit.companyId, userId: audit.userId },
     {
       endpoint: audit.endpoint,
+      authMode,
       agRegistreradId: audit.agRegistreradId ?? null,
       redovisningsperiod: audit.redovisningsperiod ?? null,
       outcome: record.outcome,
@@ -624,10 +630,10 @@ export async function skvRequestWithAuth(
   try {
     response = await sendSkvRequest(auth, method, path, body, options, trace)
   } catch (err) {
-    if (trace.sent) await recordCall(audit, trace, outcomeOfError(err, trace))
+    if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(err, trace))
     throw err
   }
-  await recordCall(audit, trace, await outcomeOfResponse(response, audit))
+  await recordCall(audit, auth.mode, trace, await outcomeOfResponse(response, audit))
   return response
 }
 

@@ -29,6 +29,12 @@ export function getSkattekontoBaseUrl(): string {
 
 const NO_SKATTEKONTO_MESSAGE = 'Inget skattekonto är registrerat hos Skatteverket.'
 
+/** The audit labels of the two skattekonto reads; also the ownership proof's (connection-store.ts). */
+export const SKATTEKONTO_AUDIT_ENDPOINTS = {
+  saldo: 'skattekonto/saldo',
+  transaktioner: 'skattekonto/transaktioner',
+} as const
+
 /**
  * Map Skatteverket error codes (felkod 1-5) to Swedish user messages.
  */
@@ -134,7 +140,7 @@ export async function getSaldo(
     auth,
     'GET',
     `/skattekonton/${omfragad}/saldo${qs}`,
-    { endpoint: 'skattekonto/saldo', ...actor, agRegistreradId: omfragad, expectJson: true },
+    { endpoint: SKATTEKONTO_AUDIT_ENDPOINTS.saldo, ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )
@@ -165,7 +171,7 @@ export async function getTransaktioner(
     auth,
     'GET',
     `/skattekonton/${omfragad}/transaktioner${qs}`,
-    { endpoint: 'skattekonto/transaktioner', ...actor, agRegistreradId: omfragad, expectJson: true },
+    { endpoint: SKATTEKONTO_AUDIT_ENDPOINTS.transaktioner, ...actor, agRegistreradId: omfragad, expectJson: true },
     undefined,
     { baseUrl: getSkattekontoBaseUrl() },
   )

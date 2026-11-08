@@ -2,7 +2,9 @@
  * connection-store: a connection row is the opt-in for ONE org number.
  * Changing the org number starts the opt-in over (nothing recorded for the
  * old number carries across), and a grant only serves reads while the
- * company still answers for the number it was verified on.
+ * company still answers for the number it was verified on. On an org number
+ * several live companies claim, only the one proven with BankID may hold the
+ * ombud connection.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -13,8 +15,11 @@ vi.mock('@/lib/supabase/service-client', () => ({
 }))
 
 import {
+  getOmbudClaimStanding,
+  getOmbudClaimStandings,
   keepRowsOnCurrentOrgNumber,
   listVerifiedCompanies,
+  ombudClaimStanding,
   recordProbeResult,
 } from '../lib/connection-store'
 
@@ -180,5 +185,130 @@ describe('listVerifiedCompanies', () => {
     expect(queued.findCalls('skatteverket_company_connections', 'eq')).toEqual(
       expect.arrayContaining([['lasombud_status', 'granted']])
     )
+  })
+})
+
+describe('ombudClaimStanding: who may hold the ombud connection on an org number', () => {
+  const none = new Set<string>()
+
+  it('a sole claimant is clear without proof, as before', () => {
+    expect(ombudClaimStanding('a', ['a'], none)).toBe('clear')
+  })
+
+  it('among several claimants only the one proven company is clear', () => {
+    const proven = new Set(['a'])
+    expect(ombudClaimStanding('a', ['a', 'b', 'c'], proven)).toBe('clear')
+    expect(ombudClaimStanding('b', ['a', 'b', 'c'], proven)).toBe('unproven')
+  })
+
+  it('nobody proven: every claimant is held back', () => {
+    expect(ombudClaimStanding('a', ['a', 'b'], none)).toBe('unproven')
+  })
+
+  it('two proven claimants are both held back', () => {
+    const proven = new Set(['a', 'b'])
+    expect(ombudClaimStanding('a', ['a', 'b', 'c'], proven)).toBe('proven_twice')
+    expect(ombudClaimStanding('b', ['a', 'b', 'c'], proven)).toBe('proven_twice')
+    expect(ombudClaimStanding('c', ['a', 'b', 'c'], proven)).toBe('unproven')
+  })
+
+  it('proof a company holds for some other number does not count here', () => {
+    // 'x' answers for another number now; its proof was read for that one.
+    expect(ombudClaimStanding('x', ['a', 'b'], new Set(['x']))).toBe('unproven')
+  })
+
+  it('a company that no longer claims the number is held back even when one company does, or none', () => {
+    // A row left on the number before the company moved: the number's sole
+    // claimant now is someone else, whose grant it must not pick up.
+    expect(ombudClaimStanding('left', ['owner'], none)).toBe('unproven')
+    expect(ombudClaimStanding('left', [], none)).toBe('unproven')
+  })
+})
+
+describe('getOmbudClaimStandings', () => {
+  const settings = (rows: Array<[string, string]>) =>
+    rows.map(([company_id, org_number]) => ({ company_id, org_number, entity_type: 'aktiebolag' }))
+
+  it('a sole claimant needs no proof read', async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['z', '559999-9999']]) })
+    queued.enqueue({ data: [] })
+
+    expect(await getOmbudClaimStanding('a', ORG)).toBe('clear')
+    expect(queued.findCall('skatteverket_api_audit_log', 'select')).toBeUndefined()
+    expect(queued.findCall('company_members', 'select')).toBeUndefined()
+  })
+
+  it("an archived copy does not contest the live company's number", async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['copy', '5560000000']]) })
+    queued.enqueue({ data: [{ id: 'copy' }] })
+
+    expect(await getOmbudClaimStanding('a', ORG)).toBe('clear')
+  })
+
+  it('reads proof per claimant: an own-BankID skattekonto read for that number, by a current member', async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
+    queued.enqueue({ data: [] })
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }, { company_id: 'b', user_id: 'stranger' }] })
+    queued.enqueue({ data: [{ id: 'audit-1' }] })
+    queued.enqueue({ data: [] })
+
+    const result = await getOmbudClaimStandings([
+      { companyId: 'a', orgNumber: ORG },
+      { companyId: 'b', orgNumber: ORG },
+    ])
+
+    expect(Object.fromEntries(result)).toEqual({ a: 'clear', b: 'unproven' })
+    const eqs = queued.findCalls('skatteverket_api_audit_log', 'eq')
+    expect(eqs).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'a'],
+        ['company_id', 'b'],
+        ['ag_registered_id', ORG],
+        ['auth_mode', 'user'],
+        ['outcome', 'ok'],
+      ])
+    )
+    expect(queued.findCalls('skatteverket_api_audit_log', 'in')).toEqual(
+      expect.arrayContaining([
+        ['endpoint', ['skattekonto/saldo', 'skattekonto/transaktioner']],
+        ['user_id', ['owner']],
+        ['user_id', ['stranger']],
+      ])
+    )
+    expect(queued.findCall('skatteverket_api_audit_log', 'gte')).toEqual(['response_status', 200])
+    expect(queued.findCall('skatteverket_api_audit_log', 'lt')).toEqual(['response_status', 300])
+  })
+
+  it('a claimant without members is never proven and costs no audit read', async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
+    queued.enqueue({ data: [] })
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }] })
+    queued.enqueue({ data: [{ id: 'audit-1' }] })
+
+    expect(await getOmbudClaimStanding('a', ORG)).toBe('clear')
+    expect(queued.findCalls('skatteverket_api_audit_log', 'select')).toHaveLength(1)
+  })
+
+  it('before the auth_mode column exists there is no proof: contested claims stay held back, nothing throws', async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
+    queued.enqueue({ data: [] })
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }] })
+    queued.enqueue({ error: { code: '42703', message: 'column skatteverket_api_audit_log.auth_mode does not exist' } })
+
+    expect(await getOmbudClaimStanding('a', ORG)).toBe('unproven')
+  })
+
+  it('a failed proof read throws, never reads as clear', async () => {
+    queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
+    queued.enqueue({ data: [] })
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }] })
+    queued.enqueue({ error: { message: 'timeout' } })
+
+    await expect(getOmbudClaimStanding('a', ORG)).rejects.toThrow(/ownership proof read failed/)
+  })
+
+  it('no claims: nothing is read', async () => {
+    expect((await getOmbudClaimStandings([])).size).toBe(0)
+    expect(queued.findCall('company_settings', 'select')).toBeUndefined()
   })
 })

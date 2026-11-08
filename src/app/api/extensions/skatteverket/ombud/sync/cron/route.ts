@@ -3,7 +3,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import {
-  findContestedOrgNumbers,
+  getOmbudClaimStandings,
   listConnections,
   recordProbeResult,
   type GrantStatus,
@@ -52,10 +52,10 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  *   - only rows that already exist are touched. A row exists because a
  *     member of that company pressed Verifiera or minted the deep link: the
  *     tenant's explicit opt-in. Rows are never created here,
- *   - an org number claimed by more than one live company is contested:
- *     no row on it is granted or changed (org-number reuse is allowed and
- *     org numbers are public, so a tenant that typed a victim's number must
- *     not inherit the victim's grant; see findContestedOrgNumbers),
+ *   - a row whose company may not hold the connection on its org number
+ *     (ombudClaimStanding: another live company claims it and this one is
+ *     not the single claimant proven with BankID) is never granted, and a
+ *     grant it holds is withdrawn,
  *   - rows marked 'revoked' by the tenant's own "Koppla från" stay revoked
  *     until a member re-verifies; a still-standing grant at Skatteverket is
  *     not permission to switch the row back on,
@@ -102,8 +102,13 @@ export const GET = withCronContext('cron.skatteverket_ombud_sync', async (_reque
   }
 
   const rows = (await listConnections(environment)).filter((row) => row.status !== 'revoked')
-  const contested = await findContestedOrgNumbers()
-  const decisions = planDecisions(rows, grants, today, contested)
+  const standings = await getOmbudClaimStandings(
+    rows.map((row) => ({ companyId: row.company_id, orgNumber: row.org_number }))
+  )
+  const heldBack = new Set(
+    [...standings].filter(([, standing]) => standing !== 'clear').map(([companyId]) => companyId)
+  )
+  const decisions = planDecisions(rows, grants, today, heldBack)
 
   const grantedNow = rows.filter(isAnyGranted).length
   const fullDowngrades = decisions.filter((d) => d.kind === 'downgrade').length
@@ -197,9 +202,10 @@ function isAnyGranted(row: SkvCompanyConnection): boolean {
 type Decision =
   | { kind: 'unchanged'; row: SkvCompanyConnection }
   /**
-   * More than one live company claims this org number: nobody gets granted
-   * on it, and a row that already holds a grant has it withdrawn (the
-   * denied statuses are present exactly then).
+   * More than one live company claims this org number and this one is not
+   * the single claimant proven with BankID: it is not granted, and a row that
+   * already holds a grant has it withdrawn (the denied statuses are present
+   * exactly then).
    */
   | {
       kind: 'contested'
@@ -229,17 +235,18 @@ export function planDecisions(
   rows: SkvCompanyConnection[],
   grants: Map<string, HuvudmanGrantSummary>,
   today: string,
-  contested: Set<string> = new Set()
+  /** Company ids whose claim on their row's org number is not clear (ombudClaimStanding). */
+  heldBack: Set<string> = new Set()
 ): Decision[] {
   const decisions: Decision[] = []
   for (const row of rows) {
-    if (contested.has(row.org_number)) {
-      // A contested number is frozen in both directions: never granted, and
-      // any grant already recorded on it is withdrawn until support settles
-      // which tenant the org number belongs to. Withdrawn outside the
-      // downgrade guards on purpose: this is the guard.
+    if (heldBack.has(row.company_id)) {
+      // A held-back row is frozen in both directions: never granted, and any
+      // grant already recorded on it is withdrawn until it is the one claimant
+      // proven with BankID. Withdrawn outside the downgrade guards on purpose:
+      // this is the guard.
       if (isAnyGranted(row)) {
-        const detail = `ombudsregister ${today}: organisationsnumret används av fler än ett företag`
+        const detail = `ombudsregister ${today}: organisationsnumret används av fler än ett företag och är inte bekräftat med BankID i bara det här`
         decisions.push({ kind: 'contested', row, lasombud: 'denied', momsOmbud: 'denied', detail })
       } else {
         decisions.push({ kind: 'contested', row })

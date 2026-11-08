@@ -55,10 +55,11 @@ import { vatPeriodTaxLabel } from '@/lib/vat/filing-record-store'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
 import {
   getConnection,
-  isOrgNumberContested,
+  getOmbudClaimStanding,
   markConnectionRevoked,
   recordProbeResult,
 } from './lib/connection-store'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
@@ -348,22 +349,16 @@ function withQueryParam(path: string, key: string, value: string): string {
 }
 
 /**
- * The ombud path binds Skatteverket system-credential access to an org
- * number, and org numbers are public and tenant-editable. While more than
- * one live company claims the same one, no company may verify a grant or
- * mint a deep link on it: a tenant that typed a victim's number must never
- * inherit the victim's grant. Returns the 409 to send, or null when clear.
+ * Whether this company may verify a grant or mint a deep link on its org
+ * number (ombudClaimStanding in connection-store.ts). Returns the 409 to
+ * send, or null when clear.
  */
-async function contestedOrgNumberResponse(orgNumber: string): Promise<NextResponse | null> {
-  if (!(await isOrgNumberContested(orgNumber))) return null
-  return NextResponse.json(
-    {
-      error:
-        'Organisationsnumret används av fler än ett företag i Accounted. ' +
-        'Kontakta support för att aktivera ombudsanslutningen.',
-      code: 'ORG_NUMBER_CONTESTED',
-    },
-    { status: 409 }
+async function ombudClaimRefusal(companyId: string, orgNumber: string): Promise<NextResponse | null> {
+  const standing = await getOmbudClaimStanding(companyId, orgNumber)
+  if (standing === 'clear') return null
+  return errorResponseFromCode(
+    standing === 'proven_twice' ? 'ORG_NUMBER_PROVEN_TWICE' : 'ORG_NUMBER_CONTESTED',
+    log
   )
 }
 
@@ -1083,8 +1078,8 @@ export const skatteverketExtension: Extension = {
             parseEntityType(settings.entity_type)
           )
 
-          const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
-          if (contestedForVerify) return contestedForVerify
+          const refusedForVerify = await ombudClaimRefusal(ctx.companyId, orgNumber)
+          if (refusedForVerify) return refusedForVerify
 
           // Each probe call is audited by the transport.
           const result = await probeCompanyGrants(ctx.companyId, orgNumber, ctx.userId)
@@ -1142,8 +1137,8 @@ export const skatteverketExtension: Extension = {
             parseEntityType(settings.entity_type)
           )
 
-          const contestedForLink = await contestedOrgNumberResponse(orgNumber)
-          if (contestedForLink) return contestedForLink
+          const refusedForLink = await ombudClaimRefusal(ctx.companyId, orgNumber)
+          if (refusedForLink) return refusedForLink
 
           const link = await createUtseOmbudDeepLink(
             orgNumber,

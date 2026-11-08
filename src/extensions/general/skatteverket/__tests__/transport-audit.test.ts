@@ -184,6 +184,7 @@ describe('transport: one audit row per outbound call', () => {
       expect.objectContaining({
         actor: { companyId: 'company-1', userId: 'user-1' },
         endpoint: 'probe',
+        authMode: 'user',
         agRegistreradId: REDOVISARE,
         redovisningsperiod: PERIOD,
         outcome: 'ok',
@@ -256,7 +257,20 @@ describe('transport: one audit row per outbound call', () => {
     answers = [json(200, {})]
     await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', { endpoint: 'kvittenser', companyId: 'company-1', userId: null })
     expect(rows()).toEqual([
-      expect.objectContaining({ actor: { companyId: 'company-1', userId: null }, endpoint: 'kvittenser', outcome: 'ok' }),
+      expect.objectContaining({ actor: { companyId: 'company-1', userId: null }, endpoint: 'kvittenser', authMode: 'system', outcome: 'ok' }),
+    ])
+  })
+
+  it("names the system credentials even when a person asked: the row's user is no proof of whose session ran it", async () => {
+    answers = [json(200, {})]
+    await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', {
+      endpoint: 'skattekonto/saldo',
+      companyId: 'company-1',
+      userId: 'user-1',
+      agRegistreradId: REDOVISARE,
+    })
+    expect(rows()).toEqual([
+      expect.objectContaining({ actor: { companyId: 'company-1', userId: 'user-1' }, authMode: 'system', outcome: 'ok' }),
     ])
   })
 
