@@ -302,7 +302,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left: outside rows, multi-select. */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_external_skv' : 'bucket_unmatched_external_bank')}>
           <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
@@ -312,6 +312,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {external.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_left')}</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
@@ -358,6 +359,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </section>
 
@@ -377,6 +379,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {ledger.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_right')}</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
@@ -441,6 +444,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </section>
       </div>
@@ -493,7 +497,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               </Button>
             </span>
           ) : (
-            <span className="flex items-center gap-2 text-[12.5px]">
+            <span className="flex flex-wrap items-center gap-2 text-[12.5px]">
               <label htmlFor="residual-kind" className="text-muted-foreground">{t('match_residual_label')}</label>
               <select
                 id="residual-kind"

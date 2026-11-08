@@ -167,9 +167,9 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
 
       <Card>
         <CardContent className="p-6">
-          <div className={`grid gap-x-6 items-baseline ${hasBudget ? 'grid-cols-[1fr_auto_auto_auto]' : 'grid-cols-[1fr_auto_auto]'}`}>
+          <div className={`grid gap-x-3 sm:gap-x-6 items-baseline ${hasBudget ? 'grid-cols-[1fr_auto_auto_auto]' : 'grid-cols-[1fr_auto_auto]'}`}>
             <span className="text-sm font-medium">Beräknat resultat</span>
-            <span className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
+            <span className={`font-display text-xl tabular-nums sm:w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
               {formatAmount(data.net_result_current)} kr
             </span>
             {hasBudget && data.net_result_budget && (
@@ -180,7 +180,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                 })}
               </span>
             )}
-            <span className="tabular-nums text-sm text-muted-foreground w-32 text-right">
+            <span className="tabular-nums text-sm text-muted-foreground sm:w-32 text-right">
               {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>
           </div>

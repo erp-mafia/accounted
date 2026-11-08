@@ -145,7 +145,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
         )}
       </div>
       {attachments === null || attachments.length === 0 ? null : (
-        <ul className="max-w-[560px] divide-y divide-border/60 text-[13px]">
+        <ul className="max-w-[560px] divide-y divide-border text-[13px]">
           {attachments.map((a) => (
             <li key={a.id} className="group flex items-center gap-3 py-1.5">
               <a

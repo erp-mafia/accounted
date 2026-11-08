@@ -630,7 +630,10 @@ export default function BulkBookDialog({
                     {t('manual_add_line')}
                   </Button>
                 </div>
-                <div className="rounded-lg border bg-card overflow-hidden">
+                {/* overflow-x-auto, not overflow-hidden: the fixed columns
+                    need ~350px, so on a phone the Kredit field and the
+                    remove button were clipped instead of scrollable. */}
+                <div className="rounded-lg border bg-card overflow-x-auto">
                   <table className="w-full text-xs tabular-nums">
                     <thead>
                       <tr className="border-b text-muted-foreground bg-muted/30">

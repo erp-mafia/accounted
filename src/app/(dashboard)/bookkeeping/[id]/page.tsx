@@ -854,7 +854,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               </div>
             </div>
           ) : entry.notes ? (
-            <p className="py-2 text-sm whitespace-pre-wrap">{entry.notes}</p>
+            // break-words: a pasted link or reference has no break point and
+            // ran past a phone's edge.
+            <p className="py-2 text-sm whitespace-pre-wrap break-words">{entry.notes}</p>
           ) : canWrite && !noteLock ? (
             // An empty, editable note is an action, not a muted "Ingen
             // anteckning" next to a quiet Ändra (accounted#183).

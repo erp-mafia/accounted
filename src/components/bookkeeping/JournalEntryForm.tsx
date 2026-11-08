@@ -1939,7 +1939,10 @@ export default function JournalEntryForm({
       )}
 
       <div className="flex flex-col items-end gap-1">
-        <div className="flex gap-2">
+        {/* flex-wrap: Rensa + Spara som utkast + Granska & skapa need ~380px,
+            wider than the dialog on a phone, and the items-end column pushed
+            the overflow off the left edge where it cannot be scrolled to. */}
+        <div className="flex flex-wrap justify-end gap-2">
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}

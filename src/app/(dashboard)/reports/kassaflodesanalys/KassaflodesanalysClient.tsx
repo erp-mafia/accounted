@@ -244,12 +244,12 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
       key={key}
       className={
         emphasis
-          ? 'flex items-center justify-between gap-4 border-t border-border pt-3 mt-2 text-sm font-medium'
-          : 'flex items-center justify-between gap-4 py-1 text-sm'
+          ? 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3 mt-2 text-sm font-medium'
+          : 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-1 text-sm'
       }
     >
       <span className="text-foreground">{label}</span>
-      <span className="flex shrink-0 gap-6">
+      <span className="ml-auto flex shrink-0 gap-6">
         <span className="w-28 tabular-nums text-right">{formatAmount(pick(current))}</span>
         {previous && (
           <span className="w-28 tabular-nums text-right text-muted-foreground">{formatAmount(pick(previous))}</span>
@@ -258,7 +258,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
     </div>
   )
   const yearHeader = (
-    <div className="flex justify-end gap-6 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="ml-auto flex justify-end gap-6 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
       <span className="w-28 text-right">{yearLabel(current)}</span>
       {previous && <span className="w-28 text-right">{yearLabel(previous)}</span>}
     </div>
@@ -268,7 +268,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
     <div className="space-y-6 stagger-enter">
       {(['lopande', 'investering', 'finansiering'] as const).map((section) => (
         <Card key={section}>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
             <CardTitle className="text-base">{t(SECTION_TITLE_KEYS[section])}</CardTitle>
             {yearHeader}
           </CardHeader>
@@ -281,7 +281,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
       ))}
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
           <CardTitle className="text-base">{t('cash_flow_section_liquidity')}</CardTitle>
           {yearHeader}
         </CardHeader>
