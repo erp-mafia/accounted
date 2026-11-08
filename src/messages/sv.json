@@ -2162,7 +2162,8 @@
     "security_key_or": "eller",
     "security_key_failed_title": "Säkerhetsnyckeln godkändes inte",
     "security_key_failed_description": "Försök igen.",
-    "security_key_cancelled": "Ingen nyckel användes. Försök igen när nyckeln är ansluten."
+    "security_key_cancelled": "Ingen nyckel användes. Försök igen när nyckeln är ansluten.",
+    "copy_secret": "Kopiera nyckeln"
   },
   "reset_password": {
     "title": "Välj nytt lösenord",

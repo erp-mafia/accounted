@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -127,6 +128,7 @@ export default function OpeningBalanceRowEditor({
   const [activeAutocomplete, setActiveAutocomplete] = useState<string | null>(null)
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
   const autocompleteRef = useRef<HTMLDivElement>(null)
+  const tCommon = useTranslations('common')
 
   // Hold onChange in a ref so an unstable (inline) callback identity can't
   // retrigger the notifying effect below. Synced after each commit rather than
@@ -360,6 +362,7 @@ export default function OpeningBalanceRowEditor({
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => deleteRow(row.id)}
+                    aria-label={tCommon('delete')}
                   >
                     <TrashIcon className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>

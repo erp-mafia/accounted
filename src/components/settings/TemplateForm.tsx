@@ -42,6 +42,7 @@ export function TemplateForm({
   onSaved: () => void
 }) {
   const t = useTranslations('settings_booking_templates')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -253,6 +254,7 @@ export function TemplateForm({
                   size="icon-sm"
                   onClick={() => removeLine(i)}
                   disabled={lines.length <= 2}
+                  aria-label={tCommon('delete')}
                   className="shrink-0"
                 >
                   <TrashIcon className="h-3.5 w-3.5" />

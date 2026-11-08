@@ -381,7 +381,7 @@ function ConnectionSettings({
       </SettingsGroup>
 
       {dirty ? (
-        <div className="sticky bottom-0 flex items-center gap-4 border-t border-border bg-background px-1 pb-3 pt-4">
+        <div className="sticky bottom-[var(--bottom-nav-h)] flex items-center gap-4 border-t border-border bg-background px-1 pb-3 pt-4">
           <Button size="sm" loading={saving} disabled={!canWrite} onClick={() => void save()}>
             {t('save')}
           </Button>

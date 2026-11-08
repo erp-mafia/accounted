@@ -306,7 +306,7 @@ export default function SalaryRunEmployeeDetailPage({
           quiet arrow before the name instead of a row of its own; the run's
           status is the one status element, the meta line stays inline, and
           the next step sits on the right. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <Link

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { enrollTotp, fetchSessionUser, verifyTotp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,6 +32,7 @@ function MfaEnrollContent() {
   const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+  const t = useTranslations('mfa')
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -259,6 +261,7 @@ function MfaEnrollContent() {
                 size="icon"
                 className="shrink-0"
                 onClick={copySecret}
+                aria-label={t('copy_secret')}
               >
                 {copied ? (
                   <CheckIcon className="h-4 w-4 text-foreground" />

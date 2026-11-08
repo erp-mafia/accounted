@@ -378,7 +378,7 @@ export function AttestSettingsContent() {
       {/* Sticky save bar, the Fönster convention: invisible until something changed. */}
       <div
         className={cn(
-          'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
+          'sticky bottom-[var(--bottom-nav-h)] flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
           barVisible ? 'mt-2 pb-3 pt-6 opacity-100' : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
         )}
         aria-hidden={!barVisible}

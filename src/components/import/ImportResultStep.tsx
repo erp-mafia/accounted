@@ -430,7 +430,7 @@ export default function ImportResultStep({
       )}
 
       {/* Actions */}
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:flex-wrap sm:justify-between">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
             <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
