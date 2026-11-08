@@ -9,6 +9,7 @@ import {
   readCapabilityAxes,
 } from '../has-capability'
 import { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
+import { createRowsMockSupabase } from '@/tests/helpers'
 
 // A grants read failure must reach error tracking (accounted#115): only
 // `error` is swapped, every other level stays the real logger.
@@ -378,11 +379,13 @@ describe('getCompanyIdsWithCapability', () => {
 
   it('returns every valid requested company when the paywall is bypassed (self-hosted, local capability)', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
-    const supabase = makeSupabase({})
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ companies: { data: [{ id: directCompanyId, team_id: null }] } }, calls)
 
-    // A local capability: self-hosted is all-on without touching the DB. The
-    // connector capabilities (e.g. skatteverket) are covered in the
-    // self-hosted connector block below: they need a grant even here.
+    // A local capability: self-hosted is all-on, so only the live companies
+    // are read, never a grant or a config row. The connector capabilities
+    // (e.g. skatteverket) are covered in the self-hosted connector block
+    // below: they need a grant even here.
     const result = await getCompanyIdsWithCapability(
       supabase,
       [directCompanyId, directCompanyId, 'not-a-uuid'],
@@ -390,6 +393,7 @@ describe('getCompanyIdsWithCapability', () => {
     )
 
     expect([...result]).toEqual([directCompanyId])
+    expect([...new Set(calls.map((c) => c.table))]).toEqual(['companies'])
   })
 
   it('throws on a database error so a cron run cannot silently skip every payer', async () => {
@@ -401,6 +405,54 @@ describe('getCompanyIdsWithCapability', () => {
     await expect(
       getCompanyIdsWithCapability(supabase, [directCompanyId], CAPABILITY.bank_sync),
     ).rejects.toThrow('Failed to resolve capability company scopes: connection reset')
+  })
+
+  // accounted#198: the bank-sync, Open Payments and skattekonto crons take
+  // this list as their work list, so a deleted company still covered by a
+  // grant kept being synced. Answered from rows, so the filters decide.
+  describe('a deleted company (archived_at set)', () => {
+    const liveId = '66666666-6666-4666-8666-666666666666'
+    const liveClientId = '77777777-7777-4777-8777-777777777777'
+    const deletedOwnGrantId = '88888888-8888-4888-8888-888888888888'
+    const deletedTrialId = '99999999-9999-4999-8999-999999999999'
+    const deletedClientId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const byraTeamId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const archivedAt = iso(-86_400_000)
+    const allIds = [liveId, liveClientId, deletedOwnGrantId, deletedTrialId, deletedClientId]
+
+    function rows(): SupabaseClient {
+      return createRowsMockSupabase({
+        companies: [
+          { id: liveId, team_id: null, archived_at: null },
+          { id: liveClientId, team_id: byraTeamId, archived_at: null },
+          { id: deletedOwnGrantId, team_id: null, archived_at: archivedAt },
+          { id: deletedTrialId, team_id: null, archived_at: archivedAt },
+          { id: deletedClientId, team_id: byraTeamId, archived_at: archivedAt },
+        ],
+        capability_grants: [
+          { company_id: liveId, team_id: null, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+          { company_id: deletedOwnGrantId, team_id: null, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+          { company_id: deletedTrialId, team_id: null, capability_key: 'bank_sync', expires_at: iso(86_400_000), source: 'trial' },
+          // A byrå agreement never expires and covers every client on the team.
+          { company_id: null, team_id: byraTeamId, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+        ],
+        company_capability_config: [],
+      }).supabase as unknown as SupabaseClient
+    }
+
+    it('is entitled to nothing, whether its own grant, the trial or a byrå team grant covers it', async () => {
+      const result = await getCompanyIdsWithCapability(rows(), allIds, CAPABILITY.bank_sync)
+
+      expect([...result].sort()).toEqual([liveId, liveClientId].sort())
+    })
+
+    it('is entitled to nothing when the paywall is bypassed, too', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+
+      const result = await getCompanyIdsWithCapability(rows(), allIds, CAPABILITY.ai)
+
+      expect([...result].sort()).toEqual([liveId, liveClientId].sort())
+    })
   })
 })
 
