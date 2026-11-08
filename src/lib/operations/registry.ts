@@ -92,6 +92,7 @@ import {
   supplierInvoicesBook,
 } from './invoice-booking'
 import { invoicesCancel } from './invoice-cancel'
+import { invoicesUnderlagAttach, invoicesUnderlagDetach, invoicesUnderlagList } from './invoice-underlag'
 import { invoicesLatePaymentInterestGet } from './late-payment-interest'
 import {
   invoicesPeppolDeliveries,
@@ -359,6 +360,10 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   invoicesCancel,
   // late-payment-interest (dröjsmålsränta per invoice; the dashboard route calls the same service)
   invoicesLatePaymentInterestGet,
+  // underlag behind an invoice (accounted#42): a reference, never sent
+  invoicesUnderlagList,
+  invoicesUnderlagAttach,
+  invoicesUnderlagDetach,
   // peppol
   invoicesPeppolReadiness,
   invoicesSendPeppol,

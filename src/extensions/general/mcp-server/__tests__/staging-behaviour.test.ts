@@ -1405,6 +1405,10 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_detach_document_from_transaction: {
     rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
   },
+  // The invoice already rests on the document the call names.
+  gnubok_detach_invoice_underlag: {
+    rows: { invoice_underlag: { document_id: SOME_UUID } },
+  },
   gnubok_delete_inbox_item: {
     rows: { invoice_inbox_items: { document_id: SOME_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null } },
   },

@@ -509,6 +509,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     'attachment_document_ids attaches at send time',
   ),
   'DELETE /api/invoices/:id/attachments/:documentId': gap('P3', 'take a file off a draft before it is sent'),
+  'POST /api/invoices/:id/underlag': covered([`POST ${V}/invoices/:id/underlag`, 'gnubok_attach_invoice_underlag']),
+  'DELETE /api/invoices/:id/underlag/:documentId': covered([
+    `DELETE ${V}/invoices/:id/underlag/:documentId`,
+    'gnubok_detach_invoice_underlag',
+  ]),
   'POST /api/invoices/:id/mark-sent': covered([`POST ${V}/invoices/:id/mark-sent`, 'gnubok_mark_invoice_as_sent']),
   'POST /api/invoices/:id/mark-paid': covered([`POST ${V}/invoices/:id/mark-paid`, 'gnubok_mark_invoice_as_paid']),
   'POST /api/invoices/:id/link-to-voucher': covered(['gnubok_link_invoice_to_voucher']),

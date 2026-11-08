@@ -1940,6 +1940,209 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/invoices/{id}/underlag`
+
+**List the archived documents a customer invoice rests on (its underlag), oldest link first.**
+`scope:invoices:read · risk:low · idempotent`
+
+Each row names the document, its own verifikat (journal_entry_id, voucher) when it has one, and when it was linked. Underlag is internal: it is never sent with the invoice. Files that go out with the invoice are its Bilagor (attachment_document_ids on the send endpoints).
+
+**Use when:** The end customer asks what an invoiced line rests on, or you need the documents filed behind an invoice.
+**Do not use for:** The files emailed with the invoice (attachment_document_ids on POST /invoices/{id}/send) or a verifikat's own underlag (GET /documents?journal_entry_id=).
+
+**Pitfalls:**
+- Works in every state of the invoice, drafts included.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    underlag: { document_id: string, file_name: string, mime_type: string | null, file_size_bytes: number | null, journal_entry_id: string | null, voucher: string | null, document_created_at: string | null, attached_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "1d2e…",
+    "underlag": [
+      {
+        "document_id": "4f1c…",
+        "file_name": "dahl-faktura-88412.pdf",
+        "mime_type": "application/pdf",
+        "file_size_bytes": 61204,
+        "journal_entry_id": "9a7e…",
+        "voucher": "B14",
+        "document_created_at": "2026-10-02T08:12:44Z",
+        "attached_at": "2026-11-06T13:05:10Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/{id}/underlag`
+
+**Link archived documents to a customer invoice as its underlag.**
+`scope:invoices:write · risk:low · idempotent · dry-run · reversible`
+
+Links each document by reference, in any state of the invoice (sent and paid included). The document keeps its own verifikat link: a supplier invoice's underlag stays on the supplier invoice's verifikat. A document already linked stays linked once, so a repeat is harmless. Answers the invoice's whole underlag list. Underlag is internal: it is never sent with the invoice. Files that go out with the invoice are its Bilagor (attachment_document_ids on the send endpoints). Dry-runnable.
+
+**Use when:** An invoice rests on documents already in the archive: the wholesaler invoices behind invoiced material, a time report, a delivery note. Upload a new file first (POST /documents) and link its id.
+**Do not use for:** Sending files with the invoice (attachment_document_ids on the send endpoints) or making a document a verifikat's underlag (POST /documents/{id}/link).
+
+**Pitfalls:**
+- Every document must be a current version in the same company: anything else is 404 INVOICE_ATTACHMENT_DOCUMENT_NOT_FOUND with the ids in details.document_ids, and nothing is linked.
+- At most 25 documents per call and 100 per invoice (400 INVOICE_UNDERLAG_TOO_MANY).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ document_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "document_ids": [
+    "4f1c…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    attached_document_ids: string[],
+    underlag: { document_id: string, file_name: string, mime_type: string | null, file_size_bytes: number | null, journal_entry_id: string | null, voucher: string | null, document_created_at: string | null, attached_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "1d2e…",
+    "attached_document_ids": [
+      "4f1c…"
+    ],
+    "underlag": [
+      {
+        "document_id": "4f1c…",
+        "file_name": "dahl-faktura-88412.pdf",
+        "mime_type": "application/pdf",
+        "file_size_bytes": 61204,
+        "journal_entry_id": "9a7e…",
+        "voucher": "B14",
+        "document_created_at": "2026-10-02T08:12:44Z",
+        "attached_at": "2026-11-06T13:05:10Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/invoices/{id}/underlag/{documentId}`
+
+**Remove one document from a customer invoice's underlag.**
+`scope:invoices:write · risk:low · idempotent · dry-run · reversible`
+
+Removes only the link, in any state of the invoice: the document stays in the archive and keeps its own verifikat link. Dry-runnable.
+
+**Use when:** A document was linked to the wrong invoice.
+**Do not use for:** Deleting the document (DELETE /documents/{id}) or removing a file the invoice was sent with (fixed once sent).
+
+**Pitfalls:**
+- A document that is not underlag of the invoice is 404 INVOICE_UNDERLAG_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `documentId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: { invoice_id: string, document_id: string, detached: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "1d2e…",
+    "document_id": "4f1c…",
+    "detached": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/bulk-book`
 
 **Book many customer invoices in one call, each with its own outcome.**

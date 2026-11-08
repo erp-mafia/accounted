@@ -330,12 +330,15 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_invoice:                     'invoices:read',
   gnubok_get_invoice_deliveries:          'invoices:read',
   gnubok_get_invoice_pdf:                 'invoices:read',
+  gnubok_list_invoice_underlag:           'invoices:read',
   // Drafts only (the update refuses anything past draft): invoices:draft,
   // which invoices:write includes. Every door out of draft stays on write.
   gnubok_create_invoice:                  'invoices:draft',
   gnubok_update_invoice:                  'invoices:draft',
   gnubok_delete_draft_invoice:            'invoices:write',
   gnubok_send_invoice:                    'invoices:write',
+  gnubok_attach_invoice_underlag:         'invoices:write',
+  gnubok_detach_invoice_underlag:         'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
   gnubok_mark_invoice_as_sent:            'invoices:write',
   // An invoice already booked elsewhere (SIE) into the kundreskontra: stages, books nothing

@@ -21,6 +21,7 @@ import type { CompanyRole } from '@/types'
  */
 export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
   'DELETE /api/invoices/:id/attachments/:documentId',
+  'DELETE /api/invoices/:id/underlag/:documentId',
   'DELETE /api/invoices/recurring/:id',
   'PATCH /api/customers/:id/collections-exclusion',
   'PATCH /api/customers/:id/reminders-exclusion',
@@ -49,6 +50,7 @@ export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
   'POST /api/invoices/:id/refresh-exchange-rate',
   'POST /api/invoices/:id/resend',
   'POST /api/invoices/:id/send-payment-confirmation',
+  'POST /api/invoices/:id/underlag',
   'POST /api/invoices/autogiro/debit-files',
   'POST /api/invoices/autogiro/debit-files/:id/withdraw',
   'POST /api/invoices/autogiro/mandates',

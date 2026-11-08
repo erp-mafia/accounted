@@ -1130,6 +1130,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // The documents emailed with an invoice after its PDF (crm#1269): which
   // archived files the customer received with which invoice.
   { name: 'invoice_attachments', file: 'invoice_attachments.json', orderBy: 'created_at' },
+  // The documents a customer invoice rests on, linked by reference (accounted#42).
+  { name: 'invoice_underlag', file: 'invoice_underlag.json', orderBy: 'created_at' },
   // Peppol archive evidence is split so the exact staged UBL, every verified
   // asynchronous event, and provider evidence stay independently auditable.
   { name: 'peppol_deliveries', file: 'peppol_deliveries.json', orderBy: 'created_at' },

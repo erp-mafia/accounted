@@ -47,6 +47,8 @@ export interface ArchivedAttachmentPick {
  * Each row is checked like a picked file (archivedAttachmentRefusal: type,
  * PDF only over Peppol, per-file and total size, count), so the picker never
  * offers what the upload path would refuse. The caller links the picks.
+ * With channel 'underlag' (the invoice page's Underlag section) nothing is
+ * sent, so no send limit applies: every document can be picked.
  */
 export function InvoiceArchivePicker({
   open,
@@ -59,7 +61,8 @@ export function InvoiceArchivePicker({
 }: {
   open: boolean
   onClose: () => void
-  channel: 'email' | 'peppol'
+  /** The send that carries the picks, or 'underlag': linked as the invoice's underlag, never sent. */
+  channel: 'email' | 'peppol' | 'underlag'
   /** Documents the invoice already carries: listed as attached, not offered again. */
   attachedIds: string[]
   /** Files the invoice carries or is uploading now, and their bytes: they count toward the limits. */
@@ -164,11 +167,10 @@ export function InvoiceArchivePicker({
       setSelected((current) => current.filter((r) => r.document_id !== row.document_id))
       return
     }
-    const refusal = archivedAttachmentRefusal(
-      row,
-      { count: usedCount + selected.length, bytes: usedBytes + selectedBytes },
-      channel,
-    )
+    const refusal =
+      channel === 'underlag'
+        ? null
+        : archivedAttachmentRefusal(row, { count: usedCount + selected.length, bytes: usedBytes + selectedBytes }, channel)
     if (refusal) {
       setError(refusalMessage(refusal, row))
       return
@@ -197,7 +199,11 @@ export function InvoiceArchivePicker({
           <DialogHeader>
             <DialogTitle>{t('picker_title')}</DialogTitle>
             <DialogDescription>
-              {channel === 'peppol' ? t('picker_description_peppol') : t('picker_description')}
+              {channel === 'peppol'
+                ? t('picker_description_peppol')
+                : channel === 'underlag'
+                  ? t('picker_description_underlag')
+                  : t('picker_description')}
             </DialogDescription>
           </DialogHeader>
 
@@ -229,7 +235,8 @@ export function InvoiceArchivePicker({
             ) : (
               visible.map((row) => {
                 const isAttached = attachedSet.has(row.document_id)
-                const refusal = isAttached ? null : archivedAttachmentRefusal(row, { count: 0, bytes: 0 }, channel)
+                const refusal =
+                  isAttached || channel === 'underlag' ? null : archivedAttachmentRefusal(row, { count: 0, bytes: 0 }, channel)
                 const isSelected = selected.some((r) => r.document_id === row.document_id)
                 const unavailable = isAttached || refusal !== null
                 const id = `invoice-archive-pick-${row.document_id}`
@@ -310,7 +317,9 @@ export function InvoiceArchivePicker({
               {t('picker_cancel')}
             </Button>
             <Button type="button" onClick={confirm} disabled={selected.length === 0}>
-              {t('picker_attach', { count: selected.length })}
+              {channel === 'underlag'
+                ? t('picker_add_underlag', { count: selected.length })
+                : t('picker_attach', { count: selected.length })}
             </Button>
           </DialogFooter>
         </DialogContent>

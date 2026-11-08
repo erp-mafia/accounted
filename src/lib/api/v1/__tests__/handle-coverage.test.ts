@@ -202,6 +202,7 @@ describe('path parameter typing', () => {
       'suppliers/:id': 'supplier',
       'tax-loss-carryforwards/:id': null,
       'transactions/:id': 'transaction',
+      'underlag/:documentId': 'document',
       'values/:valueId': 'dimension_value',
       'webhook-deliveries/:id': 'webhook_delivery',
       'webhooks/:id': 'webhook',

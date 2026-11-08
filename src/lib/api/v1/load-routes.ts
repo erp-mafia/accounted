@@ -72,6 +72,9 @@ import '@/app/api/v1/companies/[companyId]/invoices/[id]/cancel/route'
 import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
 // Phase 2 PR-B-3: invoice PDF + customer bulk-create.
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route'
+// Underlag behind an invoice (accounted#42, lib/operations/invoice-underlag.ts).
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/underlag/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/underlag/[documentId]/route'
 // Dröjsmålsränta per invoice: lib/operations/late-payment-interest.ts
 import '@/app/api/v1/companies/[companyId]/invoices/late-payment-interest/route'
 import '@/app/api/v1/companies/[companyId]/customers/bulk-create/route'

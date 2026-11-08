@@ -3006,6 +3006,24 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'An attachment could not be read from the archive. The invoice was not sent; try again shortly.',
     retryable: true,
   },
+  // Underlag behind an invoice (accounted#42, lib/invoices/invoice-underlag.ts):
+  // archived documents the invoice rests on, linked by reference and never sent.
+  INVOICE_UNDERLAG_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dokumentet är inte underlag till fakturan.',
+    message_en: 'The document is not underlag of this invoice.',
+  },
+  INVOICE_UNDERLAG_TOO_MANY: {
+    httpStatus: 400,
+    message_sv: 'En faktura kan ha högst 100 underlag.',
+    message_en: 'An invoice can rest on at most 100 documents.',
+  },
+  INVOICE_UNDERLAG_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Underlag till fakturor går inte att ändra just nu. Försök igen om en stund.',
+    message_en: 'Invoice underlag cannot be changed right now. Try again shortly.',
+    retryable: true,
+  },
   // POST /api/invoices/{id}/refresh-exchange-rate: the repair path for a
   // foreign-currency invoice whose SEK conversion is missing or was stamped
   // from the wrong day's rate. It works on sent invoices (PATCH does not), but

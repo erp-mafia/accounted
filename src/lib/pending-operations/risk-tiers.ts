@@ -106,6 +106,10 @@ const RISK_TIERS = {
   delete_document: 'medium',
   delete_inbox_item: 'medium',
   detach_document_from_transaction: 'low',
+  // Underlag behind a customer invoice (accounted#42): a reference to an
+  // archived document, no verifikat, nothing sent; undone by the other one.
+  attach_invoice_underlag: 'low',
+  detach_invoice_underlag: 'low',
   unmatch_inbox_item_transaction: 'low',
   // What an underlag bought (its purchase category), and with every_time the
   // matched supplier's instruction: a label beside the kontering, no
