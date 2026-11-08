@@ -182,7 +182,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
 
   /* ── preview: the facts, the years, the sentence ─────────────────── */
   const sourceYears = useMemo(() => preview?.sourceYears ?? [], [preview])
-  const maxYears = preview?.maxSelectedYears ?? 6
+  const maxYears = preview?.maxSelectedYears === null ? Infinity : preview?.maxSelectedYears ?? 6
   const companyName = preview?.companyInfo?.company_name || preview?.consent.companyName || ''
   const scopeParts = useMemo(() => {
     const parts: string[] = []

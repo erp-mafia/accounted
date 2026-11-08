@@ -1,4 +1,4 @@
-import { sourceHashBaselines } from './migration-source-hashes'
+import { SOURCE_HASH_BATCH_SIZE, sourceHashBaselines } from './migration-source-hashes'
 import { applyMigrationInvoiceCorrection } from '@/lib/providers/migration-corrections'
 import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -462,7 +462,11 @@ export async function runProviderMigrationWorker(options: {
             () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
               connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
           const baselines = await withinMigrationDeadline(sourceHashBaselines(supabase,job,resource,page.items.flatMap(dto=>dto.id ? [dto.id] : [])),deadline-5000)
-          if (baselines.length) await migrationRpc(supabase,job,'initialize_provider_source_hashes',{p_rows:baselines},deadline - 5000)
+          for (let offset = 0; offset < baselines.length; offset += SOURCE_HASH_BATCH_SIZE) {
+            await migrationRpc(supabase, job, 'initialize_provider_source_hashes', {
+              p_rows: baselines.slice(offset, offset + SOURCE_HASH_BATCH_SIZE),
+            }, deadline - 5000)
+          }
           const records = page.items.map((dto, i) => ({ source_hash:migrationSourceHash(dto), source_id: dto.id || `missing:${job.next_page}:${i}`,
             ...(['salesInvoices','supplierInvoices'].includes(resource) && !invoiceWithinScope(dto as InvoiceDto,job.fiscal_year_scope) ? {skip:'outsideFiscalYears'} : {}),
             ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2

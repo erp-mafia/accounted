@@ -281,6 +281,7 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   const incremental = input.options.onExistingPeriod === 'incremental'
   if (incremental && !job.manifest.incrementalPlan) {
     const fullSource = parseSIEFile(await readSIEJobSource(supabase,job))
+    applySIEFiscalYear(fullSource, input.fiscalYear)
     const plan = await planSIEResync(supabase,job.company_id,job.execution_actor_id ?? job.user_id,
       fullSource,input.mappings,input.options.voucherSeries)
     if (!plan) throw new SIEJobValidationError('Tidigare import kunde inte verifieras för omsynkningen.')

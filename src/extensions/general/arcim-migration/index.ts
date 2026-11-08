@@ -6,7 +6,7 @@ import { BokioApiError } from '@/lib/providers/bokio/client'
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { readSIEIntakeFile } from '@/lib/import/sie-intake'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { resolveSIEFiscalYear, submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { after, NextResponse } from 'next/server'
@@ -1141,8 +1141,8 @@ export const arcimMigrationExtension: Extension = {
             sieAvailable,
             sieStats,
             sourceYears,
-            // The picker enforces the same cap as /sie-data, read from here
-            // rather than duplicated in the client.
+            // Null explicitly allows every available year. Numeric limits
+            // remain supported by older provider previews and their pickers.
             maxSelectedYears: null,
             assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
@@ -1525,6 +1525,7 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
+          await resolveSIEFiscalYear(supabase, companyId, parsed)
           const delta = await planSIEResync(supabase,companyId,user.id,parsed,mappings,options.voucherSeries)
           // A comparison with no new vouchers never needs a write or an open
           // period. Return current reviews even for an identical archived file.

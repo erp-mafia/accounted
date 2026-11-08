@@ -101,6 +101,7 @@ const RETAINED = new Set([
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
   'bokio_supplier_completion_work.user_id', // Company supplier recovery and attribution.
   'migration_source_records.user_id', // Stable provider identities.
+  'historical_receivable_references.user_id', // Who reviewed company-owned historical payment provenance.
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.
   'skattekonto_file_imports.user_id',

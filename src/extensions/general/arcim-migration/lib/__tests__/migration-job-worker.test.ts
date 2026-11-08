@@ -28,7 +28,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
   const rows: Row[] = []
-  const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown>): Promise<{ data: unknown; error?: unknown }> => {
     if (name === 'claim_provider_migration_job') {
       if (job.state === 'completed' || job.state === 'needs_attention') return { data: null }
       Object.assign(job, { worker_id: args.p_worker_id, state: 'running', attempt: job.attempt + 1 })
@@ -79,6 +79,31 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 describe('bounded durable worker', () => {
+  it('initializes source hash baselines in RPC-sized batches before saving a large page', async () => {
+    const db = database()
+    const items = Array.from({ length: 1001 }, (_, index) => customer(index))
+    mocks.page.mockResolvedValue({ items, nextPage: null })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'read_provider_source_hash_baselines') {
+        return { data: (args.p_ids as string[]).map(id => ({
+          record_id: id, chunk_id: `chunk-${id}`, payload_hash: 'original-hash',
+          payload: sealMigrationPayload({ id }).payload,
+        })), error: null }
+      }
+      return original(name, args)
+    })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    const reads = db.rpc.mock.calls.filter(([name]) => name === 'read_provider_source_hash_baselines')
+    const writes = db.rpc.mock.calls.filter(([name]) => name === 'initialize_provider_source_hashes')
+    expect(reads.map(([, args]) => (args.p_ids as string[]).length)).toEqual([1000, 1])
+    expect(writes.map(([, args]) => (args.p_rows as unknown[]).length)).toEqual([1000, 1])
+    expect(db.rows).toHaveLength(1001)
+    expect(db.job.state).toBe('completed')
+  })
+
   it.each(['worker_id', 'attempt'] as const)('stops when the lease %s changes after a checkpoint', async token => {
     const db = database()
     const originalRpc = db.rpc.getMockImplementation()!

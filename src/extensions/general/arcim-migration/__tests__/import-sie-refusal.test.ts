@@ -156,6 +156,34 @@ describe('POST /import-sie: job refusals', () => {
       expect.objectContaining({onExistingPeriod:'incremental',importOpeningBalances:false,importTransactions:true,supersedesImportId:undefined}),undefined)
   })
 
+  it('resolves a SIE4I file without RAR before planning its incremental comparison', async () => {
+    const period = { period_start: '2026-01-01', period_end: '2026-12-31' }
+    const bounds = { select: vi.fn(), eq: vi.fn(), lte: vi.fn(), gte: vi.fn(), limit: vi.fn() }
+    bounds.select.mockReturnValue(bounds)
+    bounds.eq.mockReturnValue(bounds)
+    bounds.lte.mockReturnValue(bounds)
+    bounds.gte.mockReturnValue(bounds)
+    bounds.limit.mockResolvedValue({ data: [period], error: null })
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+      from: vi.fn().mockReturnValue(bounds),
+    } as never)
+    vi.mocked(planSIEResync).mockResolvedValueOnce({ periodId: 'period', added: 0, unchanged: 1,
+      reviewCount: 0, reviews: [], metadataChanged: false, newOrdinals: [] })
+
+    const { status, body } = await parseJsonResponse<{ result: { details: { fiscalYear: { start: string; end: string } } } }>(
+      await post({ ...BODY, rawContent: SIE.replace('#RAR 0 20260101 20261231\n', '') }),
+    )
+
+    expect(status).toBe(200)
+    expect(bounds.eq).toHaveBeenCalledWith('company_id', 'company-1')
+    expect(vi.mocked(planSIEResync).mock.calls[0][3].stats).toMatchObject({
+      fiscalYearStart: period.period_start, fiscalYearEnd: period.period_end,
+    })
+    expect(body.result.details.fiscalYear).toEqual({ start: period.period_start, end: period.period_end })
+    expect(submitSIEJob).not.toHaveBeenCalled()
+  })
+
   it('returns current reviews without admitting a job when there are no additions', async () => {
     vi.mocked(planSIEResync).mockResolvedValueOnce({periodId:'closed-period',added:0,unchanged:12,reviewCount:1,
       reviews:[{sourceId:'A2',kind:'changed',entryId:'posted'}],metadataChanged:false,newOrdinals:[]})

@@ -35,7 +35,7 @@ export interface ProviderPreview {
   sieAvailable: boolean
   sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null
   sourceYears?: SourceFiscalYear[]
-  maxSelectedYears?: number
+  maxSelectedYears?: number | null
   hasSieData: boolean
 }
 
