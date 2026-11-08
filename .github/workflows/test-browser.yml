@@ -32,6 +32,9 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Seed ten years, build and test latency
         run: npm run test:e2e
+      - name: Show isolated service diagnostics
+        if: failure()
+        run: node scripts/e2e/diagnostics.mjs
       - name: Remove owned test services
         if: always()
         run: npm run test:e2e:down

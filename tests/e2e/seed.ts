@@ -55,7 +55,13 @@ async function main() {
     const email = 'browser@example.invalid'
     const password = `${randomBytes(24).toString('hex')}Aa1!`
     const created = await db.auth.admin.createUser({ email, password, email_confirm: true })
-    if (created.error || !created.data.user) throw new Error('Unable to create the synthetic browser user')
+    if (created.error || !created.data.user) {
+      let reason = created.error?.message ?? 'Auth response omitted the user'
+      for (const secret of [state.anonKey, state.serviceKey, state.encryptionKey, state.cronSecret, password]) {
+        reason = reason.replaceAll(secret, '[redacted]')
+      }
+      throw new Error(`Synthetic user creation failed (${created.error?.code ?? 'unknown'}): ${reason}`)
+    }
     fixture = {
       company: randomUUID(), user: created.data.user.id, email, password,
       year: new Date().getFullYear(), jobs: {}, complete: false, initialized: false, version: FIXTURE_VERSION,
