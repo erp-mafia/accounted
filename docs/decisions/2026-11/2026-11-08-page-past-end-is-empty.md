@@ -1,0 +1,1 @@
+[2026-11-08] A counted offset page past the last row is an empty page with its total: the server clients' fetch turns PostgREST's 416 PGRST103 out-of-bounds refusal into 200 [], once, instead of each offset list catching it; other range refusals still fail.
