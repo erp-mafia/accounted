@@ -18,13 +18,22 @@
  *   - a value is created under a dimension of the same company, may be
  *     created archived (is_active=false), carries start/end dates only on an
  *     accumulating dimension (resets_annually=false, e.g. projekt), and its
- *     code is unique within the dimension (the DB UNIQUE is the arbiter).
+ *     code is unique within the dimension (the DB UNIQUE is the arbiter);
+ *   - a value is renamed, archived or dated, never recoded (the code is on
+ *     posted lines);
+ *   - every value write emits its events (./value-events.ts, accounted#193).
  */
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { z } from 'zod'
-import type { CreateDimensionSchema, CreateDimensionValueSchema, UpdateDimensionSchema } from '@/lib/api/schemas'
+import type {
+  CreateDimensionSchema,
+  CreateDimensionValueSchema,
+  UpdateDimensionSchema,
+  UpdateDimensionValueSchema,
+} from '@/lib/api/schemas'
+import { dimensionValueSnapshot, emitDimensionValueEvents, type DimensionValueRow } from './value-events'
 
 export interface DimensionRow {
   id: string
@@ -264,7 +273,7 @@ export async function createDimensionValue(
   const { supabase, companyId, log } = ctx
   const { data: dimension, error: dimError } = await supabase
     .from('dimensions')
-    .select('id, resets_annually')
+    .select('id, sie_dim_no, name, resets_annually')
     .eq('id', dimensionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -315,7 +324,92 @@ export async function createDimensionValue(
     log.error('dimension value insert failed', error)
     return { ok: false, code: 'DIMENSION_VALUE_CREATE_FAILED', details: { reason: getUserErrorMessage(error) } }
   }
-  return { ok: true, data: data as CreatedDimensionValue, created: true }
+  const created = data as CreatedDimensionValue
+  await emitDimensionValueEvents({
+    companyId,
+    userId: ctx.userId,
+    before: null,
+    after: dimensionValueSnapshot(created, dimension),
+  })
+  return { ok: true, data: created, created: true }
+}
+
+/** The request every door validates (UpdateDimensionValueSchema). */
+export type UpdateDimensionValueInput = z.output<typeof UpdateDimensionValueSchema>
+
+export type UpdatedDimensionValue = DimensionValueEntry & { dimension_id: string }
+
+const VALUE_COLUMNS = 'id, dimension_id, code, name, is_active, start_date, end_date'
+
+/**
+ * Rename, archive or unarchive a value, or set its dates: a sparse update of
+ * what the caller sent (the code is immutable: it is on posted lines). The
+ * value must be the company's and the dimension's; dates only on an
+ * accumulating dimension. A dry run answers the value as it would be and
+ * writes nothing. The write emits its events (renamed, archived,
+ * unarchived), so the dashboard and v1 cannot differ in what they announce.
+ */
+export async function updateDimensionValue(
+  ctx: OperationContext,
+  dimensionId: string,
+  valueId: string,
+  input: UpdateDimensionValueInput,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<UpdatedDimensionValue>> {
+  const { supabase, companyId, log } = ctx
+  const { data: current, error: fetchError } = await supabase
+    .from('dimension_values')
+    .select(`${VALUE_COLUMNS}, dimension:dimensions(sie_dim_no, name, resets_annually)`)
+    .eq('id', valueId)
+    .eq('dimension_id', dimensionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (fetchError) {
+    log.error('dimension value fetch failed', fetchError)
+    return { ok: false, code: 'UNKNOWN_ERROR', error: fetchError }
+  }
+  const row = current as (DimensionValueRow & { dimension: { sie_dim_no: number; name: string; resets_annually: boolean } | null }) | null
+  if (!row || !row.dimension) return { ok: false, code: 'DIMENSION_VALUE_NOT_FOUND' }
+  const { dimension, ...before } = row
+
+  // Value dates only make sense on accumulating dimensions (projekt-style
+  // ranges). An explicit null (clear) is always allowed.
+  if (dimension.resets_annually && (input.start_date != null || input.end_date != null)) {
+    return { ok: false, code: 'DIMENSION_VALUE_DATES_NOT_ALLOWED' }
+  }
+
+  // Sparse update: only the fields the caller actually sent.
+  const changes: Record<string, unknown> = {}
+  for (const key of ['name', 'is_active', 'start_date', 'end_date'] as const) {
+    if (input[key] !== undefined) changes[key] = input[key]
+  }
+
+  if (options.dryRun) {
+    return { ok: true, dryRun: true, preview: { ...before, ...changes } }
+  }
+
+  const { data, error } = await supabase
+    .from('dimension_values')
+    .update(changes)
+    .eq('id', valueId)
+    .eq('dimension_id', dimensionId)
+    .eq('company_id', companyId)
+    .select(VALUE_COLUMNS)
+    .single()
+  if (error) {
+    // Gone between the read and the write.
+    if (error.code === 'PGRST116') return { ok: false, code: 'DIMENSION_VALUE_NOT_FOUND' }
+    log.error('dimension value update failed', error)
+    return { ok: false, code: 'DIMENSION_VALUE_UPDATE_FAILED', details: { reason: getUserErrorMessage(error) } }
+  }
+  const updated = data as UpdatedDimensionValue
+  await emitDimensionValueEvents({
+    companyId,
+    userId: ctx.userId,
+    before,
+    after: dimensionValueSnapshot(updated, dimension),
+  })
+  return { ok: true, data: updated }
 }
 
 /** The request every door validates (UpdateDimensionSchema). */

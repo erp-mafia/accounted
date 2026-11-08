@@ -33,7 +33,14 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+import { eventBus } from '@/lib/events/bus'
 import { PATCH, DELETE } from '../[id]/values/[valueId]/route'
+
+const CURRENT = {
+  id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
+  is_active: true, start_date: null, end_date: null,
+}
+const PROJEKT = { sie_dim_no: 6, name: 'Projekt', resets_annually: false }
 
 const params = () => createMockRouteParams({ id: 'dim-1', valueId: 'v1' })
 const URL_PATH = '/api/dimensions/dim-1/values/v1'
@@ -42,6 +49,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
   })
 
@@ -64,7 +72,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
   })
 
   it('returns 404 when the value does not exist in the company', async () => {
-    enqueue({ error: { code: 'PGRST116', message: 'No rows found' } })
+    enqueue({ data: null })
 
     const request = createMockRequest(URL_PATH, { method: 'PATCH', body: { name: 'Nytt namn' } })
     const response = await PATCH(request, params())
@@ -74,16 +82,11 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     expect(body.error.code).toBe('DIMENSION_VALUE_NOT_FOUND')
   })
 
-  it('archives a value via is_active=false (happy path)', async () => {
-    // The request carries end_date, so the route first checks the parent
-    // dimension's resets_annually flag (accumulating → dates allowed).
-    enqueue({ data: { id: 'dim-1', resets_annually: false } })
-    enqueue({
-      data: {
-        id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
-        is_active: false, start_date: null, end_date: '2026-06-30',
-      },
-    })
+  it('archives a value via is_active=false (happy path) and emits dimension_value.archived', async () => {
+    const archived = vi.fn()
+    eventBus.on('dimension_value.archived', archived)
+    enqueue({ data: { ...CURRENT, dimension: PROJEKT } })
+    enqueue({ data: { ...CURRENT, is_active: false, end_date: '2026-06-30' } })
 
     const request = createMockRequest(URL_PATH, {
       method: 'PATCH',
@@ -96,10 +99,37 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     expect(body.data.is_active).toBe(false)
     // Code untouched: immutable in v1.
     expect(body.data.code).toBe('BUTIK')
+    expect(archived).toHaveBeenCalledTimes(1)
+    expect(archived.mock.calls[0][0]).toMatchObject({
+      dimensionValue: { id: 'v1', sie_dim_no: 6, dimension_name: 'Projekt', code: 'BUTIK', is_active: false },
+      previousName: null,
+      companyId: 'company-1',
+      userId: 'user-1',
+    })
   })
 
-  it('rejects start/end dates on a resets-annually dimension with 400', async () => {
-    enqueue({ data: { id: 'dim-1', resets_annually: true } })
+  it('a rename emits dimension_value.renamed with the old name', async () => {
+    const renamed = vi.fn()
+    eventBus.on('dimension_value.renamed', renamed)
+    enqueue({ data: { ...CURRENT, dimension: PROJEKT } })
+    enqueue({ data: { ...CURRENT, name: 'Butiken Södermalm' } })
+
+    const request = createMockRequest(URL_PATH, { method: 'PATCH', body: { name: 'Butiken Södermalm' } })
+    const response = await PATCH(request, params())
+
+    expect(response.status).toBe(200)
+    expect(renamed.mock.calls[0][0]).toMatchObject({
+      dimensionValue: { name: 'Butiken Södermalm' },
+      previousName: 'Butiken',
+    })
+  })
+
+  it('rejects start/end dates on a resets-annually dimension with 400, writing and emitting nothing', async () => {
+    const any = vi.fn()
+    for (const type of ['dimension_value.renamed', 'dimension_value.archived', 'dimension_value.unarchived'] as const) {
+      eventBus.on(type, any)
+    }
+    enqueue({ data: { ...CURRENT, dimension: { sie_dim_no: 1, name: 'Kostnadsställe', resets_annually: true } } })
 
     const request = createMockRequest(URL_PATH, {
       method: 'PATCH',
@@ -113,18 +143,16 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     expect(body.error.message).toBe(
       'Datum kan bara sättas på ackumulerande dimensioner (t.ex. projekt).',
     )
+    expect(any).not.toHaveBeenCalled()
   })
 
-  it('allows clearing dates (explicit null) without checking the dimension', async () => {
-    // start_date: null clears the field, a harmless no-op on any dimension,
-    // so the route must not spend a dimension fetch on it. The single queued
-    // result feeds the update itself.
-    enqueue({
-      data: {
-        id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
-        is_active: true, start_date: null, end_date: null,
-      },
-    })
+  it('allows clearing dates (explicit null) on any dimension, emitting nothing', async () => {
+    const any = vi.fn()
+    for (const type of ['dimension_value.renamed', 'dimension_value.archived', 'dimension_value.unarchived'] as const) {
+      eventBus.on(type, any)
+    }
+    enqueue({ data: { ...CURRENT, dimension: { sie_dim_no: 1, name: 'Kostnadsställe', resets_annually: true } } })
+    enqueue({ data: CURRENT })
 
     const request = createMockRequest(URL_PATH, {
       method: 'PATCH',
@@ -134,6 +162,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
+    expect(any).not.toHaveBeenCalled()
   })
 })
 

@@ -23,9 +23,9 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 export const POST = withRouteContext(
   'dimension.import_existing',
   async (_request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
-    const outcome = await importExistingDimensionCodes({ supabase, companyId, log })
+    const outcome = await importExistingDimensionCodes({ supabase, companyId, userId: user.id, log })
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json(outcome.preview)
     return NextResponse.json({ created: outcome.data.created })

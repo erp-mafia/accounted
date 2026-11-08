@@ -1636,7 +1636,7 @@ Example response `200`:
 **Create a dimension value (kostnadsställe/projekt code).**
 `scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
 
-Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE.
+Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code under dimension 6. Requires Idempotency-Key (UUID). Supports ?dry_run=true to validate the code format without committing. The `:id` path segment is the dimension row id (from GET …/dimensions), not the sie_dim_no. Send is_active=false to create the value archived. start_date/end_date are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt). Duplicate codes within the dimension return 409 DIMENSION_VALUE_DUPLICATE_CODE. Emits the webhook event dimension_value.created.
 
 **Use when:** A voucher or invoice references a cost centre / project code that does not exist yet and the user has confirmed it should be created.
 **Do not use for:** Renaming or archiving an existing value (PATCH …/dimensions/{id}/values/{valueId}). Tagging lines: pass the dimensions map on the journal-entry line instead.
@@ -1726,7 +1726,7 @@ Example response `200`:
 **Update a dimension value (rename, archive, set start/end date).**
 `scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
 
-Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. Idempotent (mandatory Idempotency-Key) and dry-runnable.
+Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archive), start_date, end_date. `code` is immutable: renaming a code would orphan every journal line tagged with it; create a new value and archive the old one instead. Dates are only allowed on accumulating dimensions (resets_annually=false, e.g. dim 6 Projekt): use end_date to close a finished project. A rename emits the webhook event dimension_value.renamed (with previousName), archiving dimension_value.archived and reactivating dimension_value.unarchived. Idempotent (mandatory Idempotency-Key) and dry-runnable.
 
 **Use when:** You need to rename a project/cost-centre, mark a finished project with an end date, or archive (is_active=false) a value that should no longer be used on new lines.
 **Do not use for:** Changing the code (immutable: create + archive instead). Removing an unused value entirely (use DELETE). Tagging lines (pass dimensions on the journal-entry line or invoice).

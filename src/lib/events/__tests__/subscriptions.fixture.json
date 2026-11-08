@@ -43,6 +43,22 @@
     "event-log",
     "webhooks"
   ],
+  "dimension_value.archived": [
+    "event-log",
+    "webhooks"
+  ],
+  "dimension_value.created": [
+    "event-log",
+    "webhooks"
+  ],
+  "dimension_value.renamed": [
+    "event-log",
+    "webhooks"
+  ],
+  "dimension_value.unarchived": [
+    "event-log",
+    "webhooks"
+  ],
   "document.accessed": [
     "event-log"
   ],

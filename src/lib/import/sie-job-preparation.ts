@@ -10,6 +10,7 @@ import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareS
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
 import { dimensionBagKey } from '@/lib/bookkeeping/dimension-carry'
+import { dimensionValueSnapshot, emitDimensionValuesCreated, type DimensionValueRow } from '@/lib/dimensions/value-events'
 import { validateEntryDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { DimensionValidationError } from '@/lib/bookkeeping/dimension-errors'
 import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
@@ -229,8 +230,41 @@ async function createMetadata(supabase: SupabaseClient, job: SIEJob, snapshot: S
     await checkpointProgress(supabase,job,{...job.manifest,dimensionsGroup:group+1,dimensionKind:0,dimensionRows:0,
       taggedLines:Number(job.manifest.taggedLines ?? 0)+usage.taggedLines},job.prepared_through)
   }
+  if (!await announceCreatedDimensionValues(supabase,job,deadline)) return false
   await checkpointProgress(supabase,job,{...job.manifest,metadataComplete:true},job.prepared_through)
   return true
+}
+
+/** Values announced per page; the manifest records how far the announcement got. */
+const ANNOUNCE_PAGE = 200
+
+/**
+ * dimension_value.created for each value this import inserted
+ * (created_by_import_id), once the registry step is done (accounted#193):
+ * the RPC skips codes the company already has, so these are exactly the new
+ * ones. A page at a time inside the invocation's budget, the position kept in
+ * the manifest (dimensionValuesAnnounced), so a migration with thousands of
+ * projects resumes where it stopped instead of announcing them again. Answers
+ * false when the budget ran out first. A crash between a page's events and
+ * its checkpoint repeats that page: at least once, like every event.
+ */
+export async function announceCreatedDimensionValues(supabase: SupabaseClient, job: SIEJob, deadline: number): Promise<boolean> {
+  for (let from = Number(job.manifest.dimensionValuesAnnounced ?? 0); ; from += ANNOUNCE_PAGE) {
+    if (Date.now() > deadline) return false
+    const { data, error } = await supabase.from('dimension_values').select('id,dimension_id,code,name,is_active,start_date,end_date')
+      .eq('company_id',job.company_id).eq('created_by_import_id',job.id).order('id').range(from,from+ANNOUNCE_PAGE-1)
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as DimensionValueRow[]
+    if (rows.length === 0) return true
+    const { data: dims, error: dimsError } = await supabase.from('dimensions').select('id,sie_dim_no,name')
+      .eq('company_id',job.company_id).in('id',[...new Set(rows.map(row => row.dimension_id))])
+    if (dimsError) throw new Error(dimsError.message)
+    const dimById = new Map(((dims ?? []) as Array<{ id: string; sie_dim_no: number; name: string }>).map(d => [d.id,d]))
+    await emitDimensionValuesCreated({ companyId: job.company_id, userId: job.execution_actor_id ?? job.user_id,
+      values: rows.flatMap(row => { const dimension = dimById.get(row.dimension_id); return dimension ? [dimensionValueSnapshot(row,dimension)] : [] }) })
+    await checkpointProgress(supabase,job,{...job.manifest,dimensionValuesAnnounced:from+rows.length},job.prepared_through)
+    if (rows.length < ANNOUNCE_PAGE) return true
+  }
 }
 
 export async function jobAccountIds(supabase: SupabaseClient, job: SIEJob): Promise<Map<string,string>> {

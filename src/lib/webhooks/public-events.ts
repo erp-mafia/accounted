@@ -73,6 +73,23 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     events: [{ type: 'customer.created' }],
   },
   {
+    title: 'Dimensions',
+    note: 'projects, cost centres and other dimension values (SIE #OBJEKT); every door fires them: the app, the API, MCP and imports. Deleting a value no line uses is not announced',
+    events: [
+      {
+        type: 'dimension_value.created',
+        description:
+          'a value was created under a dimension (sie_dim_no 6 is Projekt, 1 Kostnadsställe). Carries `dimensionValue` (`id`, `dimension_id`, `sie_dim_no`, `dimension_name`, `code`, `name`, `is_active`, `start_date`, `end_date`; `is_active` false means archived, as for a code registered from history)',
+      },
+      {
+        type: 'dimension_value.renamed',
+        description: 'a value got a new name; `previousName` holds the old one. The code never changes',
+      },
+      { type: 'dimension_value.archived', description: 'a value was archived (`is_active` false): kept on history, refused on new lines' },
+      { type: 'dimension_value.unarchived', description: 'an archived value was made active again' },
+    ],
+  },
+  {
     title: 'Bookkeeping',
     events: [
       { type: 'journal_entry.committed', description: 'voucher posted (immutable from this point)' },

@@ -96,7 +96,7 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   // Try common entity shapes in priority order
   const entityKeys = [
     'entry', 'invoice', 'transaction', 'customer', 'supplier', 'receipt',
-    'supplierInvoice', 'creditNote', 'period', 'document', 'inboxItem',
+    'supplierInvoice', 'creditNote', 'period', 'document', 'inboxItem', 'dimensionValue',
   ] as const
 
   for (const key of entityKeys) {
