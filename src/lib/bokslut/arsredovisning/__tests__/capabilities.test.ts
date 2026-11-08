@@ -72,12 +72,15 @@ describe('getAnnualReportCapabilities', () => {
     expect(result.ixbrl_preview.enabled).toBe(false)
   })
 
-  it('keeps K3 off paper for a form whose K3 document is not finished, flag or not', () => {
-    vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
-    const result = getAnnualReportCapabilities('ekonomisk_forening', 'k3', eligible)
-    expect(result.paper.enabled).toBe(false)
-    expect(result.paper.reason).toMatch(/företagsformen/)
-  })
+  it.each(['ekonomisk_forening', 'bostadsrattsforening'] as const)(
+    'keeps K3 off paper for %s, whose K3 document is not finished, flag or not',
+    (entityType) => {
+      vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
+      const result = getAnnualReportCapabilities(entityType, 'k3', eligible)
+      expect(result.paper.enabled).toBe(false)
+      expect(result.paper.reason).toMatch(/företagsformen/)
+    },
+  )
 
   // The form gate: the document model is AB-shaped, so a form whose profile
   // does not prepare an årsredovisning gets no PDF and no iXBRL, whatever

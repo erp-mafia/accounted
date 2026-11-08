@@ -269,6 +269,11 @@ export function supportsAccountingFramework(
   return legalFormProfile(entityType).filings.frameworks.includes(framework)
 }
 
+/** Whether the product's K3 årsredovisning document is built for the form (the aktiebolag today). */
+export function hasK3ArsredovisningDocument(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.k3Document
+}
+
 /** Whether a Bolagsverket iXBRL taxonomy covers the form (the K2 taxonomy is aktiebolag-only). */
 export function supportsIxbrl(entityType: EntityType): boolean {
   return legalFormProfile(entityType).filings.ixbrl

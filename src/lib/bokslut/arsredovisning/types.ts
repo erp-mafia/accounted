@@ -65,6 +65,9 @@ export interface CashFlowOmissionState {
   /** K3 mindre företag: left out by the product whatever the choice, until
    *  the statement meets K3 kapitel 7 (model.ts applyCashFlowOmission). */
   withheld?: boolean
+  /** The form always carries the statement whatever its size (a
+   *  bostadsrättsförening, ÅRL 2 kap. 1 §): never withheld, never omitted. */
+  required_by_form?: boolean
 }
 
 /**

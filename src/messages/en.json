@@ -13225,6 +13225,7 @@
     "cashflow_allowed": "Based on the figures in Accounted and the regulated-market answer, the company is not a larger company, so the cash flow statement may be omitted.",
     "cashflow_needs_confirmation": "Accounted cannot determine the company size: a comparative year is missing or the regulated-market question is unanswered. To omit the cash flow statement, confirm that the company is not a larger company.",
     "cashflow_forbidden": "According to the data in Accounted the company is a larger company, so the cash flow statement must be included.",
+    "cashflow_required_by_form": "A housing cooperative must always include a cash flow statement in its annual report (ÅRL 2 kap. 1 §), so it must be included.",
     "cashflow_omit": "Omit cash flow statement",
     "cashflow_confirm": "I confirm that the company is not a larger company under ÅRL 1 kap. 3 §.",
     "cashflow_omitted_notice": "The document follows the K3 template: changes in equity as a separate statement and notes under K3. The cash flow statement is omitted as you chose.",

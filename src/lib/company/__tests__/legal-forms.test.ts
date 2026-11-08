@@ -10,6 +10,7 @@ import {
   cashFlowStatementRequirement,
   creationFlagReader,
   filesIncomeReturn,
+  hasK3ArsredovisningDocument,
   hasOwners,
   isEntityTypeCreatable,
   legalFormGlossary,
@@ -49,6 +50,7 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'filings.arsredovisning': profile.filings.arsredovisning,
     'filings.frameworks': JSON.stringify(profile.filings.frameworks),
     'filings.ixbrl': profile.filings.ixbrl,
+    'filings.k3Document': profile.filings.k3Document,
     'filings.auditorAlwaysRequired': profile.filings.auditorAlwaysRequired,
     'filings.forenklatArsbokslut': profile.filings.forenklatArsbokslut,
     'filings.revisorspateckningLagrum': profile.filings.revisorspateckningLagrum,
@@ -137,6 +139,10 @@ describe('legal forms: capability readers', () => {
     expect(cashFlowStatementRequirement('aktiebolag')).toBe('larger')
     expect(cashFlowStatementRequirement('enskild_firma')).toBeNull()
     expect(requiresHousingKeyRatios('bostadsrattsforening')).toBe(true)
+    // The K3 document is the aktiebolag's: kapitel 38 is not in it yet.
+    expect(hasK3ArsredovisningDocument('bostadsrattsforening')).toBe(false)
+    expect(hasK3ArsredovisningDocument('ekonomisk_forening')).toBe(false)
+    expect(hasK3ArsredovisningDocument('aktiebolag')).toBe(true)
     expect(requiresHousingKeyRatios('ekonomisk_forening')).toBe(false)
     expect(maintenanceFundAccount('bostadsrattsforening')).toBe('2088')
     expect(maintenanceFundAccount('aktiebolag')).toBeNull()

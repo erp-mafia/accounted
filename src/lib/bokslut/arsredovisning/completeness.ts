@@ -12,9 +12,9 @@ import type {
 } from './compliance-types'
 import { cashFlowOmissionIssues } from './cash-flow-omission'
 import { disclosureIssues } from './disclosures'
-import { k3ArsredovisningEnabled } from './k3-release'
+import { k3ArsredovisningEnabled, k3DocumentCoversForm } from './k3-release'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
+import { isEntityType, requiresAuditorRegardlessOfSize, requiresHousingKeyRatios } from '@/lib/company/entity-type'
 import { dividendExceedsFreeEquity } from './dividend-equity'
 import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
 
@@ -437,7 +437,22 @@ export function validateAnnualReportCompleteness(
         'Skapa om årsredovisningen.',
       )
     }
-    if (!k3ArsredovisningEnabled()) {
+    // The K3 document is released only for the form it is built for (the
+    // aktiebolag, k3-release.ts): for any other form it stays a
+    // granskningsutkast whatever the flag says.
+    const entityType = report.company.entity_type
+    if (!k3DocumentCoversForm(entityType)) {
+      push(
+        issues,
+        'AR-K3-DRAFT-ONLY',
+        'error',
+        'scope',
+        isEntityType(entityType) && requiresHousingKeyRatios(entityType)
+          ? 'Accounteds K3-dokument är byggt för aktiebolag och ett granskningsutkast för en bostadsrättsförening: K3 kapitel 38 (nyckeltalen i förvaltningsberättelsen och kapitel 38-upplysningarna) finns ännu inte i dokumentet.'
+          : 'Accounteds K3-dokument är byggt för aktiebolag och ett granskningsutkast för den här företagsformen.',
+        'Upprätta den slutliga årsredovisningen med redovisningskonsult eller revisor.',
+      )
+    } else if (!k3ArsredovisningEnabled()) {
       push(
         issues,
         'AR-K3-DRAFT-ONLY',

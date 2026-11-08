@@ -1,0 +1,1 @@
+[2026-11-08] The K3 årsredovisning is released only for a form whose profile has filings.k3Document (aktiebolag today): any other form's K3 report stays a granskningsutkast, and a bostadsrättsförening's kassaflödesanalys is never withheld, since the document has no kapitel 38 or EF equity yet.

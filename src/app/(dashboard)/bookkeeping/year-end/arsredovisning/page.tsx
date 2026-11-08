@@ -1450,7 +1450,13 @@ export default function ArsredovisningPage() {
                   </div>
                   {data.kassaflodesanalys_omission.rule === 'forbidden' ? (
                     <>
-                      <p className="text-sm">{tNotes('cashflow_forbidden')}</p>
+                      <p className="text-sm">
+                        {tNotes(
+                          data.kassaflodesanalys_omission.required_by_form
+                            ? 'cashflow_required_by_form'
+                            : 'cashflow_forbidden',
+                        )}
+                      </p>
                       {/* A choice saved before the company became a större
                           företag is not honoured; let the user clear it. */}
                       {savedOmitCashFlow && (

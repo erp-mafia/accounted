@@ -1,4 +1,6 @@
 import type { NoteEntry } from './types'
+import type { DeferredTaxMovement } from '@/lib/bokslut/tax-provision/deferred-tax-service'
+import { roundOre } from '@/lib/money'
 import { MARK_NOT_DEPRECIATED } from './anlaggningstillgangar-note'
 import { formatPdfKronor } from './pdf-format'
 
@@ -9,7 +11,8 @@ import { formatPdfKronor } from './pdf-format'
  *   - Verbose redovisningsprinciper covering komponentavskrivning (when used),
  *     uppskjuten skatt, intäktsredovisning, leasing och finansiella instrument.
  *   - A separate "Uppskjutna skatter" note showing the latent-tax balance
- *     movement (2240 ingående/utgående saldo + årets förändring posted to 8940).
+ *     movement (2240 and 1370 ingående saldo, årets förändring and utgående
+ *     saldo, and the year's uppskjuten skatt on 8940).
  *   - (Förändring av eget kapital is no longer built here: the one
  *     specification for K2 and K3 is equity-specification.ts.)
  *   - When component depreciation is used, the materiella anläggnings-not must
@@ -35,7 +38,7 @@ import { formatPdfKronor } from './pdf-format'
  *   paragraph. K3 ch.17.4 makes component depreciation mandatory when the
  *   components have meaningfully different useful lives; otherwise the
  *   paragraph would be misleading and is omitted.
- * @param deferredTax: what the trial balance says about 2240/8940.
+ * @param deferredTax: what the trial balance says about 2240, 1370 and 8940.
  *   'recognized' is exactly when buildUppskjutenSkattNot is emitted; the two
  *   notes MUST be driven by the same signal, since a policy paragraph denying
  *   any separately recognized deferred tax cannot sit in the same document as
@@ -53,11 +56,14 @@ import { formatPdfKronor } from './pdf-format'
 export function buildK3RedovisningsPrinciper(params: {
   hasComponents: boolean
   deferredTax: 'none' | 'recognized' | 'unknown'
+  /** With 'recognized': which deferred tax posts the balansräkning carries (default: the liability only). */
+  deferredTaxSides?: { liability: boolean; asset: boolean }
   hasCapitalizedLease: boolean
   /** Mark is on the books: it has no useful life and is not depreciated. */
   holdsLand?: boolean
 }): NoteEntry {
   const { hasComponents, deferredTax, hasCapitalizedLease, holdsLand = false } = params
+  const sides = params.deferredTaxSides ?? { liability: true, asset: false }
   const paragraphs: string[] = [
     'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen (1995:1554) och Bokföringsnämndens allmänna råd BFNAR 2012:1 Årsredovisning och koncernredovisning (K3).',
     'Värderingsprinciper: Tillgångar och skulder värderas till anskaffningsvärde om inget annat anges. Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar och eventuella nedskrivningar. Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod.' +
@@ -79,12 +85,14 @@ export function buildK3RedovisningsPrinciper(params: {
   //
   // Deferred tax has three cases, decided by the same signal that decides
   // whether buildUppskjutenSkattNot is emitted:
-  //   - 'none': no 2240/8940 activity. The reserves are carried gross, which
-  //     is what K3 29.37 permits in juridisk person, and the paragraph says so.
-  //   - 'recognized': a 2240 balance exists (legacy postings or imported
-  //     history). Denying the split would contradict both the balansrakning
-  //     and the "Uppskjutna skatter" note, so the paragraph discloses the
-  //     recognized liability and points at that note.
+  //   - 'none': no 2240, 1370 or 8940 activity. The reserves are carried
+  //     gross, which is what K3 29.37 permits in juridisk person, and the
+  //     paragraph says so.
+  //   - 'recognized': a 2240 or 1370 balance exists (the K3 deferred tax
+  //     posting, legacy postings or imported history). Denying it would
+  //     contradict both the balansrakning and the "Uppskjutna skatter" note,
+  //     so the paragraph names the posts the books carry and points at that
+  //     note.
   //   - 'unknown': the figures could not be read, so NO paragraph is emitted.
   //     Both of the other wordings state how this document reports the
   //     reserves, which is a claim about books we just failed to read: the
@@ -95,13 +103,22 @@ export function buildK3RedovisningsPrinciper(params: {
   // No branch claims HOW the balance was measured or WHERE it came from:
   // under K3 the 2240 account carries deferred tax on ALL temporary
   // differences (.claude/skills/swedish-year-end-closing/references/
-  // k2-vs-k3.md:11-13), and deriveLatentTaxMovement reads only the 2240/8940
-  // balances, so an attribution to obeskattade reserver is not something this
-  // builder can establish. An imported provision may also have been booked at
-  // 22 or 21.4 percent by another system.
+  // k2-vs-k3.md:11-13), and deriveLatentTaxMovement reads only the 2240,
+  // 1370 and 8940 balances, so an attribution to obeskattade reserver is not
+  // something this builder can establish. An imported provision may also have
+  // been booked at 22 or 21.4 percent by another system.
+  const movementNote = 'Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
+  const recognizedParagraph =
+    sides.liability && sides.asset
+      ? `Uppskjuten skatt: Uppskjuten skatteskuld redovisas på konto 2240 och uppskjuten skattefordran på konto 1370. ${movementNote}`
+      : sides.asset
+        ? `Uppskjuten skatt: Uppskjuten skattefordran redovisas på konto 1370. ${movementNote}`
+        : sides.liability
+          ? `Uppskjuten skatt: Uppskjuten skatteskuld redovisas på konto 2240. ${movementNote}`
+          : 'Uppskjuten skatt: Årets uppskjutna skatt redovisas i resultaträkningen och framgår av noten Uppskjutna skatter.'
   const deferredTaxParagraph =
     deferredTax === 'recognized'
-      ? 'Uppskjuten skatt: Uppskjuten skatteskuld redovisas på konto 2240. Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
+      ? recognizedParagraph
       : deferredTax === 'unknown'
         ? null
         : 'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.'
@@ -130,47 +147,76 @@ export function buildK3RedovisningsPrinciper(params: {
 // ─── Uppskjutna skatter ──────────────────────────────────────────────────
 
 /**
- * "Uppskjutna skatter" note required for K3 (ch.29). Shows the latent-tax
- * balance movement during the year:
- *   - Opening balance on 2240 (start of period)
- *   - Change posted to 8940 (year-end provision adjustment)
- *   - Closing balance on 2240 (end of period)
+ * "Uppskjutna skatter" note required for K3 (ch.29). Shows, for each
+ * deferred tax post the balansräkning carries, its movement during the year:
+ *   - the uppskjuten skatteskuld (2240): ingående saldo, årets förändring,
+ *     utgående saldo;
+ *   - the uppskjuten skattefordran (1370, a deductible temporary difference
+ *     or a recognised loss carried forward): the same three figures;
+ * and the year's uppskjuten skatt in the resultaträkning (8940). Each post's
+ * closing equals its opening plus its change; the 8940 figure is the two
+ * posts' net change (liability up, or asset down, is a cost) as far as it
+ * went through the resultaträkning. What did not (the K3 transition
+ * voucher books the opening deferred tax against equity on the first day of
+ * the first K3 year, 35.11; a correction against equity) is its own line, so
+ * the note ties.
  *
- * The closing must equal opening + change. Caller passes raw figures; the
- * note formats them with thousand-separators and the appropriate sign.
- *
- * Emitted only when such a balance actually exists (K3 bokslutsdisposition,
- * legacy postings or imported history). The body reports the figures and
- * does NOT claim they were measured at the current 20.6 percent rate: an
- * imported provision may have been booked at 21.4 or 22 percent by another
- * system, and the balance is disclosed here exactly as it stands. It also
- * does not attribute the balance to obeskattade reserver: under K3 the 2240
- * account holds deferred tax on every temporary difference
- * (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:11-13) and
- * the caller derives these figures from the 2240/8940 balances alone.
+ * Emitted only when such a balance actually exists (the K3 deferred tax
+ * posting, legacy postings or imported history). The body reports the
+ * figures and does NOT claim they were measured at the current 20.6 percent
+ * rate: an imported provision may have been booked at 21.4 or 22 percent by
+ * another system, and the balance is disclosed here exactly as it stands. It
+ * also does not attribute the balance to obeskattade reserver: under K3 the
+ * posts hold deferred tax on every temporary difference
+ * (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:11-13).
  *
  * Whenever this note is emitted, buildK3RedovisningsPrinciper MUST be built
- * with hasRecognizedDeferredTax: true, or note 1 would deny the very split
- * this note discloses. build-data.ts derives both from one call to
- * deriveLatentTaxMovement so the pair cannot drift.
+ * with deferredTax 'recognized' and the same posts, or note 1 would deny the
+ * very balances this note discloses. build-data.ts derives both from one
+ * call to deriveLatentTaxMovement so the pair cannot drift.
  */
 export function buildUppskjutenSkattNot(params: {
   noteNumber: number
-  latentTaxOpening: number
-  latentTaxChange: number
-  latentTaxClosing: number
+  /** The uppskjuten skatteskuld, credit-positive; null when the balansräkning carries none. */
+  liability: DeferredTaxMovement | null
+  /** The uppskjuten skattefordran, debit-positive; null when the balansräkning carries none. */
+  asset: DeferredTaxMovement | null
+  /** The year's uppskjuten skatt (8940), a cost positive. */
+  expense: number
 }): NoteEntry {
-  const { noteNumber, latentTaxOpening, latentTaxChange, latentTaxClosing } =
-    params
+  const { noteNumber, liability, asset, expense } = params
   // sv-SE thousand separator, no decimals: typical for ÅR notes.
   // ASCII hyphen for negatives: PDF Helvetica/WinAnsi has no U+2212 glyph.
   const fmt = (n: number) => formatPdfKronor(n)
-  const lines: string[] = [
-    'Posten avser uppskjuten skatteskuld redovisad på konto 2240.',
+  const intro =
+    liability && asset
+      ? 'Posterna avser uppskjuten skatteskuld redovisad på konto 2240 och uppskjuten skattefordran redovisad på konto 1370.'
+      : asset
+        ? 'Posten avser uppskjuten skattefordran redovisad på konto 1370.'
+        : liability
+          ? 'Posten avser uppskjuten skatteskuld redovisad på konto 2240.'
+          : 'Balansräkningen har ingen uppskjuten skatteskuld eller skattefordran vid årets början eller slut.'
+  // The posts' net change (a growing skuld or a shrinking fordran is a
+  // cost) less what went through 8940: booked against another account.
+  const outsideIncomeStatement = roundOre(
+    (liability?.change ?? 0) - (asset?.change ?? 0) - expense,
+  )
+  const post = (label: string, account: string, movement: DeferredTaxMovement) => [
     '',
-    `Ingående saldo (2240): ${fmt(latentTaxOpening)} kr`,
-    `Årets förändring (8940): ${fmt(latentTaxChange)} kr`,
-    `Utgående saldo (2240): ${fmt(latentTaxClosing)} kr`,
+    label,
+    `Ingående saldo (${account}): ${fmt(movement.opening)} kr`,
+    `Årets förändring: ${fmt(movement.change)} kr`,
+    `Utgående saldo (${account}): ${fmt(movement.closing)} kr`,
+  ]
+  const lines: string[] = [
+    intro,
+    ...(liability ? post('Uppskjuten skatteskuld', '2240', liability) : []),
+    ...(asset ? post('Uppskjuten skattefordran', '1370', asset) : []),
+    '',
+    `Årets uppskjutna skatt i resultaträkningen (8940): ${fmt(expense)} kr`,
+    ...(Math.abs(outsideIncomeStatement) >= 0.5
+      ? [`Förändring som inte redovisats i resultaträkningen (till exempel mot eget kapital vid övergången till K3): ${fmt(outsideIncomeStatement)} kr`]
+      : []),
   ]
   return {
     number: noteNumber,

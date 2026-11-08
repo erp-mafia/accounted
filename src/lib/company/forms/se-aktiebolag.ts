@@ -33,6 +33,7 @@ export const SE_AKTIEBOLAG: LegalFormProfile = {
     arsredovisning: true,
     frameworks: ['K2', 'K3'],
     ixbrl: true,
+    k3Document: true,
     auditorAlwaysRequired: false,
     forenklatArsbokslut: null,
     revisorspateckningLagrum: 'ABL 9 kap. 28 §',

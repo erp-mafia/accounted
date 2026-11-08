@@ -45,6 +45,27 @@ describe('cashFlowOmissionRule', () => {
     ).toBe('forbidden')
   })
 
+  it('forbids omission for a form that must always have one (bostadsrättsförening), whatever the size', () => {
+    expect(
+      cashFlowOmissionRule({
+        framework: 'k3',
+        sizeClassification: 'smaller',
+        metrics: twoYears,
+        securitiesTradedOnRegulatedMarket: false,
+        formRequirement: 'always',
+      }),
+    ).toBe('forbidden')
+    expect(
+      cashFlowOmissionRule({
+        framework: 'k3',
+        sizeClassification: 'smaller',
+        metrics: twoYears,
+        securitiesTradedOnRegulatedMarket: false,
+        formRequirement: 'larger',
+      }),
+    ).toBe('allowed')
+  })
+
   it('forbids omission when securities are traded on a regulated market, whatever the size', () => {
     expect(
       cashFlowOmissionRule({
@@ -102,6 +123,15 @@ describe('cashFlowOmissionIssues', () => {
     expect(issues.map((i) => i.code)).toEqual(['AR-K3-CASHFLOW-REQUIRED'])
   })
 
+  it('names the form, not the size, when the form requires the statement', () => {
+    const issues = cashFlowOmissionIssues(
+      resolveCashFlowOmission({ rule: 'forbidden', requested: true, confirmed: true, requiredByForm: true }),
+    )
+    expect(issues.map((i) => i.code)).toEqual(['AR-K3-CASHFLOW-REQUIRED'])
+    expect(issues[0].message).toContain('bostadsrättsförening')
+    expect(issues[0].message).not.toContain('större företag')
+  })
+
   it('warns when the confirmation is missing', () => {
     const issues = cashFlowOmissionIssues(
       resolveCashFlowOmission({ rule: 'requires_confirmation', requested: true, confirmed: false }),
@@ -123,6 +153,7 @@ describe('cashFlowOmissionIssues', () => {
 function makeReport(framework: 'k2' | 'k3', omit: boolean, confirmed = false): ArsredovisningData {
   return {
     accounting_framework: framework,
+    company: { entity_type: 'aktiebolag' },
     kassaflodesanalys: { total_cash_flow: 1 },
     warnings: [K3_CASH_FLOW_FAILED_WARNING, k3ContentsNotice(true), 'annan varning'],
     disclosures: {

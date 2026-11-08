@@ -106,6 +106,14 @@ export interface LegalFormProfile {
     frameworks: ReadonlyArray<'K1' | 'K2' | 'K3'>
     /** Whether a Bolagsverket iXBRL taxonomy covers the form's årsredovisning (K2 AB only today). */
     ixbrl: boolean
+    /**
+     * Whether the product's K3 årsredovisning document is built for the form
+     * (the mindre aktiebolag's: ABL equity, förvaltningsberättelse and
+     * disclosure matrix). False: a K3 report of the form stays a
+     * granskningsutkast, never locked and never offered on paper
+     * (lib/bokslut/arsredovisning/k3-release.ts).
+     */
+    k3Document: boolean
     /** A revisor is required whatever the size (EFL 8 kap. 1 §); an AB may opt out below ABL 9 kap. 1 §. */
     auditorAlwaysRequired: boolean
     /**

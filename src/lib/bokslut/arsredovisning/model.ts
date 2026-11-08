@@ -7,6 +7,7 @@ import {
   k3ContentsNotice,
 } from './build-data'
 import { cashFlowOmissionRule, resolveCashFlowOmission } from './cash-flow-omission'
+import { cashFlowStatementRequirement, isEntityType } from '@/lib/company/entity-type'
 import type { K3BuildContext } from './build-data'
 import {
   evaluateDisclosures,
@@ -14,7 +15,7 @@ import {
   type DisclosureEvaluation,
   type K3FirstYearStatus,
 } from './disclosures'
-import { k3ArsredovisningEnabled } from './k3-release'
+import { k3ArsredovisningReleasedFor } from './k3-release'
 import type { NoteEntry } from './types'
 import type { PreviousYearFramework } from '@/lib/company/accounting-framework'
 import { listSignatureRequests } from './signature-service'
@@ -124,16 +125,21 @@ export function applyCashFlowOmission(
   profile: AnnualReportProfile,
 ): void {
   if (report.accounting_framework !== 'k3') return
+  const entityType = report.company.entity_type
+  const formRequirement = isEntityType(entityType) ? cashFlowStatementRequirement(entityType) : null
   const rule = cashFlowOmissionRule({
     framework: report.accounting_framework,
     sizeClassification: eligibility.size_classification,
     metrics,
     securitiesTradedOnRegulatedMarket: profile.securities_traded_on_regulated_market,
+    formRequirement,
   })
   // A mindre företag's K3 document carries no kassaflödesanalys: the
   // statement is voluntary for it (ÅRL 2 kap. 1 §) and the generated one
   // does not yet meet K3 kapitel 7, so it is left out rather than offered.
-  // Only a större företag (blocked as AR-K3-STORRE-UNSUPPORTED) keeps it.
+  // A större företag (blocked as AR-K3-STORRE-UNSUPPORTED) keeps it, and so
+  // does a form that must always have one (a bostadsrättsförening, ÅRL 2 kap.
+  // 1 §): the rule is then 'forbidden' and the statement is never withheld.
   const withheld = rule !== 'forbidden'
   const omission = withheld
     ? {
@@ -147,6 +153,7 @@ export function applyCashFlowOmission(
         rule,
         requested: report.disclosures.omit_kassaflodesanalys,
         confirmed: report.disclosures.kassaflodesanalys_omission_confirmed,
+        requiredByForm: formRequirement === 'always',
       })
   report.kassaflodesanalys_omission = omission
   if (omission.omitted) {
@@ -298,7 +305,9 @@ export async function buildCanonicalAnnualReport(
   })
   applyCashFlowOmission(report, eligibility, metrics, profile)
   if (report.accounting_framework === 'k3') {
-    report.k3_release = k3ArsredovisningEnabled() ? 'final' : 'review_draft'
+    // Released only for the form the K3 document is built for (the
+    // aktiebolag): any other form's K3 document stays watermarked.
+    report.k3_release = k3ArsredovisningReleasedFor(report.company.entity_type) ? 'final' : 'review_draft'
     if (k3 && firstYear) applyK3Disclosures(report, k3, eligibility, profile, firstYear)
   }
   const disclosures = disclosureState(report)

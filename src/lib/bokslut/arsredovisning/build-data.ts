@@ -7,6 +7,7 @@ import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { registerWriteDownsByAccount, writeDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
+import type { DeferredTaxMovement } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { roundOre } from '@/lib/money'
 import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -38,10 +39,16 @@ import {
   holdsWriteDowns,
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
-import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
+import {
+  computeAssetNoteFigures,
+  hasComponentRows,
+  loadPostedSchedules,
+  loadTransitionSplitOpenings,
+  noteAsset,
+} from './asset-note-figures'
 import { registeredOfficeFallbackWarning, resolveRegisteredOffice } from './registered-office'
 import { k2EquityPosts, loadEquitySpecification } from './equity-specification'
-import { k3EquityPosts, toK3Presentation } from './k3-presentation'
+import { K3_SPLITS, k3EquityPosts, toK3Presentation } from './k3-presentation'
 import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
 import { collectDisclosureFacts, normalizeDisclosureAnswers, type DisclosureAnswers, type DisclosureFacts } from './disclosures'
 import {
@@ -917,15 +924,24 @@ async function buildRollforwardAssets(
   fiscalPeriodId: string,
 ): Promise<AnlaggningAsset[]> {
   if (assets.length === 0) return []
-  const schedules = await loadPostedSchedules(supabase, companyId)
+  // Only an asset with components can have been split at the transition to K3.
+  const [schedules, transitionSplits] = await Promise.all([
+    loadPostedSchedules(supabase, companyId),
+    assets.some(hasComponentRows) ? loadTransitionSplitOpenings(supabase, companyId) : Promise.resolve([]),
+  ])
   const figures = computeAssetNoteFigures({
     assets,
     postedSchedules: schedules,
     fiscalPeriods: allPeriods,
     currentPeriodId: fiscalPeriodId,
+    transitionSplits,
   })
   const period = allPeriods.find((row) => row.id === fiscalPeriodId)
-  return assets.map((a) => ({
+  const splitByAsset = new Map(transitionSplits.map((split) => [split.asset_id, split]))
+  // A year before a K3 transition split reads the plain asset it was then.
+  const asOfPeriod = (asset: Asset) =>
+    period ? noteAsset(asset, splitByAsset.get(asset.id), period.period_start) : asset
+  return assets.map(asOfPeriod).map((a) => ({
     category: a.category,
     acquisition_date: a.acquisition_date,
     acquisition_cost: a.acquisition_cost,
@@ -1211,25 +1227,43 @@ async function buildK2Noter(
 }
 
 interface LatentTaxMovement {
-  /** Opening balance on 2240 (credit-normal, so positive = liability). */
-  opening: number
-  /** Year movement, taken from 8940 when the account was used. */
-  change: number
-  /** Closing balance on 2240. */
-  closing: number
+  /** Uppskjuten skatteskuld (the K3 post on 2240-2249), credit-positive. */
+  liability: DeferredTaxMovement
+  /** Uppskjuten skattefordran (the K3 post on 1370-1379), debit-positive. */
+  asset: DeferredTaxMovement
+  /** The year's uppskjuten skatt in the resultaträkning (8940-8949), a cost positive. */
+  expense: number
+}
+
+/** The balansräkning carries the post at the start or the end of the year. */
+function holdsBalance(post: DeferredTaxMovement): boolean {
+  return post.opening !== 0 || post.closing !== 0
+}
+
+const DEFERRED_TAX_EXPENSE_RANGE = { start: '8940', end: '8949' } as const
+
+/** The BAS ranges of a K3 balance sheet post (k3-presentation.ts K3_SPLITS). */
+function k3PostRanges(concept: string): ReadonlyArray<{ start: string; end: string }> {
+  const split = K3_SPLITS.find((row) => row.concept === concept)
+  if (!split) throw new Error(`Unknown K3 post ${concept}`)
+  return split.ranges
 }
 
 /**
  * Derive the uppskjuten-skatt movement from the current-period full trial
- * balance: 2240 (latent tax liability) and 8940 (latent tax expense).
+ * balance, on the same BAS ranges as the K3 balance sheet's own posts: the
+ * uppskjuten skatteskuld (2240), the uppskjuten skattefordran (1370, a
+ * deductible temporary difference or a recognised loss carried forward, K3
+ * 29.19 and 29.29) and the year's uppskjuten skatt in the resultaträkning
+ * (8940). Each post's change is its own closing less its opening, so the note
+ * ties to the balansräkning whichever side the year's deferred tax moved.
  *
  * Returns `movement: null` when the company has no such activity at all,
- * which is the normal case: a 2240 balance only appears when the K3
- * uppskjuten-skatt disposition was posted, or from legacy postings and
- * imported history. Both the redovisningsprinciper paragraph and the
- * "Uppskjutna skatter" note are driven by this one result, so they can never
- * disagree about whether a deferred tax on obeskattade reserver is
- * separately recognized.
+ * which is the normal case: a balance only appears when the K3 deferred tax
+ * was posted (commit_deferred_tax books 8940 against 2240 and 1370), or from
+ * legacy postings and imported history. Both the redovisningsprinciper
+ * paragraph and the "Uppskjutna skatter" note are driven by this one result,
+ * so they can never disagree about whether deferred tax is recognised.
  *
  * `ok: false` means the figures could not be read at all; the caller warns
  * rather than blocking the document.
@@ -1238,36 +1272,36 @@ function deriveLatentTaxMovement(
   tbFullRows: TrialBalanceRow[],
 ): { ok: true; movement: LatentTaxMovement | null } | { ok: false } {
   try {
-    const row2240 = tbFullRows.find((r) => r.account_number === '2240')
-    const row8940 = tbFullRows.find((r) => r.account_number === '8940')
-    // 2240 is credit-normal liability: opening = opening_credit - opening_debit
-    const opening2240 = row2240
-      ? (row2240.opening_credit || 0) - (row2240.opening_debit || 0)
-      : 0
-    const closing2240 = row2240
-      ? (row2240.closing_credit || 0) - (row2240.closing_debit || 0)
-      : 0
-    // 8940 is an expense (debit-normal): movement = period_debit - period_credit
-    // A positive movement = additional avsättning (cost incurred = liability
-    // grew). The 2240 balance moves by the same magnitude (with opposite
-    // sign convention since 2240 is on the credit side).
-    const change8940 = row8940
-      ? (row8940.period_debit || 0) - (row8940.period_credit || 0)
-      : closing2240 - opening2240
-    if (opening2240 === 0 && closing2240 === 0 && change8940 === 0) {
+    const sum = (
+      ranges: ReadonlyArray<{ start: string; end: string }>,
+      pick: (row: TrialBalanceRow) => number,
+    ) =>
+      roundOre(
+        tbFullRows
+          .filter((row) => ranges.some((range) => row.account_number >= range.start && row.account_number <= range.end))
+          .reduce((total, row) => total + pick(row), 0),
+      )
+    const balance = (ranges: ReadonlyArray<{ start: string; end: string }>, side: 'debit' | 'credit'): DeferredTaxMovement => {
+      const sign = side === 'debit' ? 1 : -1
+      const opening = sum(ranges, (row) => sign * ((row.opening_debit || 0) - (row.opening_credit || 0)))
+      const closing = sum(ranges, (row) => sign * ((row.closing_debit || 0) - (row.closing_credit || 0)))
+      return { opening, change: roundOre(closing - opening), closing }
+    }
+    const liability = balance(k3PostRanges('UppskjutenSkatteskuld'), 'credit')
+    const asset = balance(k3PostRanges('UppskjutenSkattefordran'), 'debit')
+    const expense = sum([DEFERRED_TAX_EXPENSE_RANGE], (row) => (row.period_debit || 0) - (row.period_credit || 0))
+    if (!holdsBalance(liability) && !holdsBalance(asset) && expense === 0) {
       return { ok: true, movement: null }
     }
-    return {
-      ok: true,
-      movement: {
-        opening: opening2240,
-        change: change8940,
-        closing: closing2240,
-      },
-    }
+    return { ok: true, movement: { liability, asset, expense } }
   } catch {
     return { ok: false }
   }
+}
+
+/** Which deferred tax posts the balansräkning carries: none when only 8940 moved. */
+function latentTaxSides(movement: LatentTaxMovement): { liability: boolean; asset: boolean } {
+  return { liability: holdsBalance(movement.liability), asset: holdsBalance(movement.asset) }
 }
 
 /**
@@ -1432,7 +1466,7 @@ async function buildK3Noter(
   const latentTax = deriveLatentTaxMovement(tbFullRows)
   if (!latentTax.ok) {
     warnings.push(
-      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontot 2240 och kör om bokslutet.',
+      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontona 2240, 1370 och 8940 och kör om bokslutet.',
     )
   }
   const latentTaxMovement = latentTax.ok ? latentTax.movement : null
@@ -1450,6 +1484,7 @@ async function buildK3Noter(
         : latentTaxMovement !== null
           ? 'recognized'
           : 'none',
+      deferredTaxSides: latentTaxMovement ? latentTaxSides(latentTaxMovement) : undefined,
       hasCapitalizedLease,
       holdsLand: assets.some((a) => !a.disposed_at && a.category === 'land'),
     }),
@@ -1538,18 +1573,20 @@ async function buildK3Noter(
   const financialNote = buildFinancialFixedAssetsNote(tbFullRows, notes.length + 1)
   if (financialNote) notes.push(financialNote)
 
-  // 4. Uppskjutna skatter. K3 ch.29 requires disclosure of opening,
-  // movement, and closing balance of uppskjuten skatteskuld. The figures
-  // were derived above (deriveLatentTaxMovement) so that note 1 and this
-  // note tell the same story; a null movement means no 2240/8940 activity
-  // exists and the note is omitted.
+  // 4. Uppskjutna skatter. K3 ch.29: the opening, movement and closing of
+  // the uppskjuten skatteskuld and the uppskjuten skattefordran, and the
+  // year's uppskjuten skatt. The figures were derived above
+  // (deriveLatentTaxMovement) so that note 1 and this note tell the same
+  // story; a null movement means no 2240, 1370 or 8940 activity exists and
+  // the note is omitted.
   if (latentTaxMovement) {
+    const sides = latentTaxSides(latentTaxMovement)
     notes.push(
       buildUppskjutenSkattNot({
         noteNumber: notes.length + 1,
-        latentTaxOpening: latentTaxMovement.opening,
-        latentTaxChange: latentTaxMovement.change,
-        latentTaxClosing: latentTaxMovement.closing,
+        liability: sides.liability ? latentTaxMovement.liability : null,
+        asset: sides.asset ? latentTaxMovement.asset : null,
+        expense: latentTaxMovement.expense,
       }),
     )
   }

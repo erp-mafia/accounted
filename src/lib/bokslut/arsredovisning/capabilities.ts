@@ -3,11 +3,10 @@ import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
 import {
   isEntityType,
   preparesArsredovisning,
-  supportsAccountingFramework,
   supportsIxbrl,
 } from '@/lib/company/entity-type'
 import type { AnnualReportEligibilityResult, AnnualReportFramework } from './compliance-types'
-import { k3ArsredovisningEnabled } from './k3-release'
+import { k3ArsredovisningReleasedFor, k3DocumentCoversForm } from './k3-release'
 
 export interface AnnualReportCapabilities {
   paper: {
@@ -55,10 +54,11 @@ export function getAnnualReportCapabilities(
   const frameworkHasDocument = framework === 'k2' || (framework === 'k3' && k3IxbrlEnabled())
   const ixbrlEnabled = formHasTaxonomy && frameworkHasDocument
   const eligible = eligibility?.digital_filing_eligible ?? false
-  // K3 goes on paper once its release flag is on (k3-release.ts) and for a
-  // form whose K3 document is finished (an ekonomisk förening's is not).
-  const k3FormSupported = formPrepared && isEntityType(entityType) && supportsAccountingFramework(entityType, 'K3')
-  const paperEnabled = formPrepared && (framework === 'k2' || (k3FormSupported && k3ArsredovisningEnabled()))
+  // K3 goes on paper once its release flag is on, and only for the form its
+  // document is built for, the aktiebolag (k3-release.ts): a
+  // bostadsrättsförening's or ekonomisk förening's K3 document is not finished.
+  const k3FormSupported = formPrepared && k3DocumentCoversForm(entityType)
+  const paperEnabled = formPrepared && (framework === 'k2' || k3ArsredovisningReleasedFor(entityType))
   return {
     paper: {
       enabled: paperEnabled,
