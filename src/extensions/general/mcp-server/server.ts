@@ -2200,6 +2200,44 @@ function normalizeVoucherNumber(value: unknown, field: string): number | undefin
   )
 }
 
+/**
+ * gnubok_query_journal's date_from / date_to: one calendar date each. They
+ * went to SQL as given, so a day past the month end ("2026-09-31"), a range
+ * in one field ("2022-10-01 2023-09-30") or "0" failed the date cast and
+ * answered UNKNOWN_ERROR "try again" for a call no retry fixes. The forms
+ * the cast took keep working (an unpadded month or day, a trailing time,
+ * YYYYMMDD) and are passed on as YYYY-MM-DD. Empty or null is no bound.
+ */
+const JOURNAL_DATE_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/
+const COMPACT_DATE_RE = /^(\d{4})(\d{2})(\d{2})$/
+
+function normalizeJournalDate(value: unknown, field: 'date_from' | 'date_to'): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const text = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : ''
+  const parts = JOURNAL_DATE_RE.exec(text) ?? COMPACT_DATE_RE.exec(text)
+  if (!parts) {
+    throw badArgument(
+      field,
+      `${field} must be one date, YYYY-MM-DD (got ${JSON.stringify(value)}); a range is date_from plus date_to.`,
+      'Ange ett datum som ÅÅÅÅ-MM-DD.',
+    )
+  }
+  const [year, month, day] = [Number(parts[1]), Number(parts[2]), Number(parts[3])]
+  const iso = `${parts[1]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const monthEnd = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+  if (monthEnd === undefined || day < 1 || day > monthEnd) {
+    throw badArgument(
+      field,
+      monthEnd === undefined
+        ? `${field} ${iso} is not a date: the month must be 01-12.`
+        : `${field} ${iso} does not exist: that month ends on ${iso.slice(0, 8)}${monthEnd}.`,
+      monthEnd === undefined ? 'Datumet finns inte: månaden ska vara 01-12.' : `Datumet finns inte: månaden slutar den ${monthEnd}.`,
+    )
+  }
+  return iso
+}
+
 function autoExtractDateForPeriodCheck(params: Record<string, unknown>): string | undefined {
   for (const key of AUTO_PERIOD_DATE_KEYS) {
     const value = params[key]
@@ -14361,8 +14399,8 @@ export const tools: McpTool[] = [
         throw new Error('accounts list capped at 50: use account_from/account_to for ranges')
       }
 
-      const dateFrom = args.date_from as string | undefined
-      const dateTo = args.date_to as string | undefined
+      const dateFrom = normalizeJournalDate(args.date_from, 'date_from')
+      const dateTo = normalizeJournalDate(args.date_to, 'date_to')
       const voucherSeries = args.voucher_series as string | undefined
       const vnFrom = normalizeVoucherNumber(args.voucher_number_from, 'voucher_number_from')
       const vnTo = normalizeVoucherNumber(args.voucher_number_to, 'voucher_number_to')

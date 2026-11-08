@@ -1173,6 +1173,73 @@ describe('gnubok_query_journal: voucher number arguments', () => {
   })
 })
 
+// date_from/date_to reached SQL as given: a day past the month end, a range in
+// one field or "0" failed the date cast and answered UNKNOWN_ERROR "Database
+// error while running journal query", which tells an agent to retry.
+describe('gnubok_query_journal: date arguments', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+  const dateFilters = (queries: FakeQuery[]) =>
+    queries
+      .filter((q) => q.table === 'journal_entries')
+      .flatMap((q) => q.filters.filter((f) => f.column === 'entry_date'))
+  const rows = [makeLineRow({ id: 'l1' })]
+
+  it.each([
+    ['date_to', '2026-09-31', /date_to 2026-09-31 does not exist: that month ends on 2026-09-30/],
+    ['date_to', '2026-02-29', /that month ends on 2026-02-28/],
+    ['date_from', '2022-10-01 2023-09-30', /date_from must be one date, YYYY-MM-DD .*date_from plus date_to/],
+    ['date_to', '0', /date_to must be one date, YYYY-MM-DD/],
+    ['date_from', '2026-13-01', /the month must be 01-12/],
+    ['date_from', ['2026-01-01'], /date_from must be one date/],
+    ['date_to', '2026-09-30/2026-12-31', /date_to must be one date/],
+  ])('refuses %s %j as a VALIDATION_ERROR naming the field, before querying', async (field, value, message) => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    const err = await tool()
+      .execute({ [field]: value }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e)
+
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(message)
+    expect(err).toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field }] })
+    const structured = getStructuredError(err)
+    expect(structured.code).toBe('VALIDATION_ERROR')
+    expect(structured.retryable).toBe(false)
+    expect(queries).toEqual([])
+  })
+
+  it('filters on a real date, a leap day included, and echoes it', async () => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    const result = (await tool().execute(
+      { date_from: '2024-02-29', date_to: ' 2024-12-31 ' },
+      'company-1', 'user-1', supabase,
+    )) as { applied_filters: { date_from: unknown; date_to: unknown } }
+
+    expect(dateFilters(queries)).toContainEqual({ op: 'gte', column: 'entry_date', value: '2024-02-29' })
+    expect(dateFilters(queries)).toContainEqual({ op: 'lte', column: 'entry_date', value: '2024-12-31' })
+    expect(result.applied_filters).toMatchObject({ date_from: '2024-02-29', date_to: '2024-12-31' })
+  })
+
+  it('keeps the forms the date cast took, passed on as YYYY-MM-DD', async () => {
+    for (const [value, iso] of [
+      ['2026-1-5', '2026-01-05'],
+      ['2026-03-31T00:00:00Z', '2026-03-31'],
+      ['2026-03-31 12:00', '2026-03-31'],
+      [20260101, '2026-01-01'],
+      ['20260101', '2026-01-01'],
+    ] as const) {
+      const { supabase, queries } = makeTwoStepTextMock(rows)
+      await tool().execute({ date_from: value }, 'company-1', 'user-1', supabase)
+      expect(dateFilters(queries), String(value)).toContainEqual({ op: 'gte', column: 'entry_date', value: iso })
+    }
+  })
+
+  it('treats an empty or null date as no bound', async () => {
+    const { supabase, queries } = makeTwoStepTextMock(rows)
+    await tool().execute({ date_from: '', date_to: null }, 'company-1', 'user-1', supabase)
+    expect(dateFilters(queries)).toEqual([])
+  })
+})
+
 // Agent feedback seq 897234: a date range spanning two fiscal years summed the
 // prior year's lines AND the IB verifikat that restates them, with nothing in
 // the result saying so.
