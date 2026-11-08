@@ -1,3 +1,4 @@
+import { readMigrationSkipReasons, readPendingImportPayables } from './migration-result-details'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { SalesInvoiceDto } from '@/lib/providers/dto'
@@ -6,7 +7,7 @@ import { z } from 'zod'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateBody } from '@/lib/api/validate'
-import { MIGRATION_RESOURCES, type ProviderMigrationJob, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import { MIGRATION_RESOURCES, type ProviderMigrationJob, type ProviderMigrationStatus, type MigrationResourceCounts } from '@/lib/providers/migration-contract'
 import { runProviderMigrationWorker, failureCode } from './migration-job-worker'
 import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
@@ -101,7 +102,11 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
     return {id:row.id,resource:row.resource,source_id:row.source_id,targetId:row.target_id,label,
       kind:row.receipt?.reason==='source_changed' ? 'changed' as const : 'new' as const}
   })
-  return { job: job as ProviderMigrationJob, counts: counts ?? [], issues: described, changes:describedChanges }
+  const [skipReasons,paymentsAwaitingDueDate]=job.phase==='completed'
+    ? await Promise.all([readMigrationSkipReasons(ctx.supabase,ctx.companyId,job.id),
+      readPendingImportPayables(ctx.supabase,ctx.companyId,job.id)]) : [{},undefined]
+  return { job: job as ProviderMigrationJob, counts: (counts ?? []).map((row:MigrationResourceCounts)=>({...row,skipReasons:skipReasons[row.resource as keyof typeof skipReasons]})),
+    issues: described, changes:describedChanges,paymentsAwaitingDueDate }
 }
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [

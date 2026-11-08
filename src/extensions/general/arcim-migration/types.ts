@@ -50,6 +50,8 @@ export interface MigrationProgress {
 }
 
 export interface SkipReasons {
+  historicalReceivable?: number
+  creditNoteInOldShape?: number
   duplicate?: number
   inactive?: number
   failed?: number
@@ -110,6 +112,7 @@ export interface MigrationStepError {
  * reach, so a partially hydrated run is visible rather than looking complete.
  */
 export interface InvoiceStepResult {
+  paymentsAwaitingDueDate?: import('@/lib/providers/migration-contract').PendingImportPayables
   unchanged?: number
   total: number
   imported: number

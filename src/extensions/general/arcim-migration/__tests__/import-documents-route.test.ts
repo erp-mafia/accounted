@@ -362,3 +362,14 @@ describe('POST /submit-token Björn Lundén error mapping', () => {
     expect(body.error.message_en).toContain('found no company')
   })
 })
+
+
+describe('streamed document import route',()=>{
+  it('keeps JSON discovery compatible and streams actual import progress on request',async()=>{
+    const result={provider:'bokio',scanned:1,total:2,linked:1,skipped:0,failed:0,unmatched:0,locked:0,lockedPeriods:[],unmatchedSamples:[],dryRun:false,partial:false,nextCursor:null}
+    vi.mocked(importProviderDocuments).mockImplementationOnce(async options=>{options.onProgress?.(result);return result})
+    const response=await handler(createMockRequest('http://localhost/import-documents',{method:'POST',body:{consentId:'consent-1',dryRun:false,progress:true}}),buildContext())
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+    const text=await response.text();expect(text).toContain('"type":"progress"');expect(text).toContain('"type":"complete"')
+  })
+})

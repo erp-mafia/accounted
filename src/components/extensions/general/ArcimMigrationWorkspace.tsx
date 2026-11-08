@@ -1878,9 +1878,7 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
 
-    // Running totals arrive after each server slice of a real import; the
-    // dry-run result that sits in state while the first slice runs is not
-    // progress, so it stays silent.
+    // Streamed counters report completed files; discovery only seeds the total.
     const progress =
       state.phase === 'importing' && state.result && !state.result.dryRun && state.result.total > 0
         ? state.result
@@ -1890,14 +1888,18 @@ function DocumentImportFollowUp({
       <section className="space-y-3" aria-live="polite">
         {title}
         <SpinnerLine>{label}</SpinnerLine>
-        {progress && (
+        {progress && <>
+          <Progress value={Math.min(100,Math.floor(progress.scanned/progress.total*100))} className="h-1" aria-label={label} />
           <p className="text-sm tabular-nums text-muted-foreground">
             {t('ext_arcim_documents_import_progress', {
               done: progress.scanned,
               total: progress.total,
             })}
           </p>
-        )}
+          <p className="text-xs tabular-nums text-muted-foreground">{t('ext_arcim_documents_progress_counts',{
+            imported:progress.linked,skipped:progress.skipped,unmatched:progress.unmatched,failed:progress.failed,locked:progress.locked,
+          })}</p>
+        </>}
       </section>
     )
   }
@@ -2210,7 +2212,7 @@ function ResultStep({
           </p>
         </div>
         <DocumentImportFollowUp
-        consentId={documentConsentId}
+          consentId={documentConsentId}
           state={documentImportState}
           standalone
           onDiscover={onDiscoverDocuments}
@@ -2303,7 +2305,7 @@ function ResultStep({
           ? `${results.customers.imported} importerade, ${results.customers.updated} kompletterade`
           : `${results.customers.imported} importerade`,
         detail: results.customers.skipped > 0
-          ? formatSkipReasons(results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.customers.imported, results.customers.skipReasons) === 'error',
       })
@@ -2313,7 +2315,7 @@ function ResultStep({
         label: 'Leverantörer',
         value: `${results.suppliers.imported} importerade`,
         detail: results.suppliers.skipped > 0
-          ? formatSkipReasons(results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.suppliers.imported, results.suppliers.skipReasons) === 'error',
       })
@@ -2323,7 +2325,7 @@ function ResultStep({
         label: 'Kundfakturor',
         value: `${results.salesInvoices.imported} importerade`,
         detail: results.salesInvoices.skipped > 0
-          ? formatSkipReasons(results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
+          ? formatSkipReasons(t, results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
       })
@@ -2367,7 +2369,7 @@ function ResultStep({
       // as "the supplier invoices were lost" (crm#251). The paid ones are in
       // the ledger as the SIE file's verifikat.
       const skipDetail = results.supplierInvoices.skipped > 0
-        ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+        ? formatSkipReasons(t, results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
         : undefined
       const scopeDetail = provider === 'fortnox' ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
       entityLines.push({
@@ -2421,7 +2423,7 @@ function ResultStep({
         detail: results.assets.scopesMissing
           ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
           : results.assets.skipped > 0
-            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
+            ? formatSkipReasons(t, results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
             : undefined,
         failed: !results.assets.scopesMissing &&
           entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
@@ -2544,6 +2546,15 @@ function ResultStep({
         </section>
       )}
 
+      {!!results?.supplierInvoices?.paymentsAwaitingDueDate?.count && <section className="space-y-3">
+        <SectionKicker>{t('ext_arcim_payment_waiting_title')}</SectionKicker>
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_payment_waiting_detail',{count:results.supplierInvoices.paymentsAwaitingDueDate.count})}</p>
+        <ul className="space-y-2 text-sm" data-ph-mask="">{results.supplierInvoices.paymentsAwaitingDueDate.items.map(invoice=><li key={invoice.id}>
+          <Link className="underline" href={`/supplier-invoices/${invoice.id}`}>{invoice.invoiceNumber}</Link>
+          {' · '}{t('ext_arcim_payment_waiting_due',{date:invoice.dueDate})}
+        </li>)}</ul>
+      </section>}
+
       <DocumentImportFollowUp
         consentId={documentConsentId}
         state={documentImportState}
@@ -2621,12 +2632,15 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
+  t:ReturnType<typeof useTranslations<'extensions'>>,
   reasons?: AssetSkipReasons,
   entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
+  if (reasons.historicalReceivable) parts.push(t('ext_arcim_skip_historical',{count:reasons.historicalReceivable}))
+  if (reasons.creditNoteInOldShape) parts.push(t('ext_arcim_skip_old_credit',{count:reasons.creditNoteInOldShape}))
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
   if (reasons.outsideFiscalYears) {
     parts.push(
@@ -3828,12 +3842,15 @@ export default function ArcimMigrationWorkspace({
       setProviderJobId(null)
       void handleReconnect(status.job.provider as ArcimProvider, status.job.consent_id ?? '')
     }} onResult={status => {
+      setConsentId(status.job.consent_id)
+      setSelectedProvider(status.job.provider as ArcimProvider)
       const results: MigrationResults = {}
       for (const count of status.counts) {
         results[count.resource] = {
           total: count.total, imported: count.imported, skipped: count.skipped, unchanged:count.unchanged,
-          skipReasons: { failed: count.needs_attention },
+          skipReasons: { ...count.skipReasons, failed: count.needs_attention },
           ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
+            ...(count.resource==='supplierInvoices' ? {paymentsAwaitingDueDate:status.paymentsAwaitingDueDate} : {}),
             fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,
             creditNotesLinked: count.credit_notes_linked ?? 0,
           } : {}),
@@ -3845,7 +3862,7 @@ export default function ArcimMigrationWorkspace({
       setMigrationProgress(100)
       setStep('result')
       void fetchStatus()
-      const provider = resolveArcimDocumentFollowUpProvider(preview?.consent.provider, selectedProvider)
+      const provider = resolveArcimDocumentFollowUpProvider(status.job.provider, selectedProvider)
       if (provider && status.job.consent_id) void runDocumentDiscovery(status.job.consent_id, provider, true)
     }} />
   }

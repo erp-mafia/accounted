@@ -271,7 +271,7 @@ export function arcimDocumentImportReducer(
     case 'dismissed':
       return { ...state, phase: 'dismissed', problem: null }
     case 'import-started':
-      return { ...state, phase: 'importing', problem: null }
+      return { ...state, phase: 'importing', problem: null, result:state.result ? {...state.result,dryRun:false,scanned:0,linked:0,skipped:0,unmatched:0,failed:0,locked:0,lockedPeriods:[],unmatchedSamples:[],partial:false,nextCursor:null} : null }
     case 'import-progress':
       // Running totals after each server slice; the phase stays 'importing'
       // so the UI keeps its spinner and shows "x av y".
@@ -378,14 +378,18 @@ export async function requestArcimDocumentImport(
   dryRun: boolean,
   fetcher: typeof fetch = fetch,
   cursor?: string,
+  onProgress?: (result:ArcimDocumentImportResult)=>void,
 ): Promise<ArcimDocumentImportResult> {
   const response = await fetcher(ARCIM_DOCUMENT_IMPORT_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(
-      cursor === undefined ? { consentId, dryRun } : { consentId, dryRun, cursor },
+      {consentId,dryRun,...(cursor===undefined?{}:{cursor}),...(!dryRun && onProgress?{progress:true}:{})},
     ),
   })
+  if(response.ok && response.headers.get('Content-Type')?.includes('text/event-stream')) {
+    return readDocumentImportProgress(response,onProgress)
+  }
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
@@ -402,6 +406,36 @@ export async function requestArcimDocumentImport(
   }
 
   return normalizeDocumentImportResult(result)
+}
+
+/** Read incrementally, including UTF-8 text and events split across chunks. */
+async function readDocumentImportProgress(response:Response,onProgress?: (result:ArcimDocumentImportResult)=>void):Promise<ArcimDocumentImportResult> {
+  if(!response.body)throw new ArcimDocumentImportRequestError({code:null,requestId:null,reconnectRequired:false})
+  const reader=response.body.getReader(), decoder=new TextDecoder()
+  let buffer=''
+  try {
+    while(true){
+      const {done,value}=await reader.read()
+      buffer+=decoder.decode(value,{stream:!done})
+      let separator:RegExpExecArray|null
+      while((separator=/\r?\n\r?\n/.exec(buffer))){
+        const frame=buffer.slice(0,separator.index);buffer=buffer.slice(separator.index+separator[0].length)
+        const data=frame.split(/\r?\n/).filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n')
+        if(!data)continue
+        const event=JSON.parse(data) as {type:string;result?:unknown;payload?:unknown}
+        if(event.type==='error')throw new ArcimDocumentImportRequestError(problemFromPayload(event.payload))
+        if(!isDocumentImportResult(event.result))throw new Error('Invalid document progress')
+        const result=normalizeDocumentImportResult(event.result)
+        if(event.type==='complete')return result
+        if(event.type!=='progress')throw new Error('Unknown document progress event')
+        onProgress?.(result)
+      }
+      if(buffer.length>1_000_000 || done)throw new Error('Document progress ended without a result')
+    }
+  } catch(error) {
+    if(error instanceof ArcimDocumentImportRequestError)throw error
+    throw new ArcimDocumentImportRequestError({code:null,requestId:null,reconnectRequired:false})
+  } finally {await reader.cancel().catch(()=>{});reader.releaseLock()}
 }
 
 /** Far above any real list: a guard against a server that never completes. */
@@ -430,7 +464,8 @@ export async function runArcimDocumentImportToCompletion(
   let cursor: string | undefined
 
   for (let round = 0; round < MAX_IMPORT_ROUNDS; round++) {
-    const slice = await requestArcimDocumentImport(consentId, false, fetcher, cursor)
+    const slice = await requestArcimDocumentImport(consentId, false, fetcher, cursor,
+      options.onProgress ? progress=>options.onProgress!(mergeArcimDocumentImportResults(accumulated,progress)) : undefined)
     accumulated = mergeArcimDocumentImportResults(accumulated, slice)
     if (!slice.partial) {
       return { ...accumulated, partial: false, nextCursor: null }

@@ -1,3 +1,4 @@
+import { streamDocumentImport } from './lib/document-import-progress'
 import { documentReviewRoutes } from './lib/document-review-routes'
 import { planSIEResync, type SIEResyncPlan } from '@/lib/import/sie-resync'
 import { historicalReceivableRoutes } from './lib/historical-receivable-routes'
@@ -2020,15 +2021,18 @@ export const arcimMigrationExtension: Extension = {
 
         let consentId: string | undefined
         let dryRun = false
+        let progress = false
         let cursor: string | null = null
         try {
           const body = (await request.json()) as {
             consentId?: string
             dryRun?: boolean
+            progress?: boolean
             cursor?: string
           }
           consentId = body?.consentId
           dryRun = body?.dryRun === true
+          progress = body?.progress === true
           // Resume point from a previous partial call (the last handled
           // provider attachment id, see import-documents.ts); anything else
           // restarts from the top, which is always safe: already-archived
@@ -2045,31 +2049,7 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
         }
 
-        try {
-          const result = await importProviderDocuments({
-            supabase,
-            companyId,
-            userId: user.id,
-            consentId,
-            dryRun,
-            cursor,
-          })
-          log.info('arcim import-documents completed', {
-            companyId,
-            dryRun,
-            cursor,
-            total: result.total,
-            scanned: result.scanned,
-            linked: result.linked,
-            skipped: result.skipped,
-            unmatched: result.unmatched,
-            failed: result.failed,
-            locked: result.locked,
-            partial: result.partial,
-            nextCursor: result.nextCursor,
-          })
-          return NextResponse.json({ success: true, dryRun, result })
-        } catch (error) {
+        const failure=(error:unknown)=>{
           // "400 Bad Request" alone told us nothing when a live Fortnox
           // discovery failed (2026-08-20): keep status, Fortnox's own
           // message and a body excerpt in the log, and hand the message
@@ -2102,6 +2082,34 @@ export const arcimMigrationExtension: Extension = {
             },
           })
         }
+        if(progress && !dryRun) return streamDocumentImport(onProgress=>importProviderDocuments({
+          supabase,companyId,userId:user.id,consentId,dryRun:false,cursor,onProgress,
+        }),failure)
+        try {
+          const result = await importProviderDocuments({
+            supabase,
+            companyId,
+            userId: user.id,
+            consentId,
+            dryRun,
+            cursor,
+          })
+          log.info('arcim import-documents completed', {
+            companyId,
+            dryRun,
+            cursor,
+            total: result.total,
+            scanned: result.scanned,
+            linked: result.linked,
+            skipped: result.skipped,
+            unmatched: result.unmatched,
+            failed: result.failed,
+            locked: result.locked,
+            partial: result.partial,
+            nextCursor: result.nextCursor,
+          })
+          return NextResponse.json({ success: true, dryRun, result })
+        } catch(error) { return failure(error) }
       },
     },
 

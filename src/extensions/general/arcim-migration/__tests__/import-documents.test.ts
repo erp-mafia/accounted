@@ -925,6 +925,20 @@ describe('importProviderDocuments', () => {
     expect(mockUpload).not.toHaveBeenCalled()
   })
 
+  it('publishes completed-file counters while a later download is still in flight',async()=>{
+    const supabase=wireBokio()
+    mockFetchUploads.mockResolvedValue(Array.from({length:11},(_,i)=>({...UPLOAD,id:`file-${String(i).padStart(2,'0')}`})))
+    let release!:()=>void
+    const waiting=new Promise<void>(resolve=>{release=resolve});let calls=0
+    mockDownload.mockImplementation(async()=>{if(++calls===11)await waiting;return {bytes:bytesOf('PDFBYTES'),contentType:'application/pdf'}})
+    const progress=vi.fn();let finished=false
+    const task=importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',onProgress:progress}).then(value=>{finished=true;return value})
+    await vi.waitFor(()=>expect(progress).toHaveBeenCalledWith(expect.objectContaining({scanned:10,total:11})))
+    expect(finished).toBe(false);release()
+    expect(await task).toMatchObject({scanned:11,linked:1,skipped:10})
+    expect(progress.mock.calls.some(([value])=>value.scanned===10)).toBe(true)
+  })
+
   it('reviews all unmatched files without downloads, writes or the 20-sample limit', async () => {
     mockFetchUploads.mockResolvedValue(Array.from({length:55},(_,i)=>({...UPLOAD,id:`file-${String(i).padStart(2,'0')}`})) as never)
     mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1',VOUCHER_REF]]))

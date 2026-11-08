@@ -438,9 +438,9 @@ describe('resumable import (one server slice per call)', () => {
     expect(fetcher).toHaveBeenCalledTimes(3)
     const bodies = fetcher.mock.calls.map((call) => JSON.parse((call[1] as RequestInit).body as string))
     expect(bodies).toEqual([
-      { consentId: 'consent-1', dryRun: false },
-      { consentId: 'consent-1', dryRun: false, cursor: 'file-17' },
-      { consentId: 'consent-1', dryRun: false, cursor: 'file-34' },
+      { consentId: 'consent-1', dryRun: false, progress:true },
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-17', progress:true },
+      { consentId: 'consent-1', dryRun: false, cursor: 'file-34', progress:true },
     ])
     expect(onProgress).toHaveBeenCalledTimes(2)
     expect(onProgress.mock.calls[1][0]).toMatchObject({ scanned: 34, linked: 33, skipped: 1, total: 40 })
@@ -491,5 +491,49 @@ describe('resumable import (one server slice per call)', () => {
       result: result({ dryRun: false, scanned: 40, linked: 39, skipped: 1, total: 40 }),
     })
     expect(complete).toMatchObject({ phase: 'complete', found: 40, result: { linked: 39, skipped: 1 } })
+  })
+})
+
+describe('live document progress',()=>{
+  const frame=(type:string,value:unknown)=>new TextEncoder().encode(`data: ${JSON.stringify(type==='error'?{type,payload:value}:{type,result:value})}\n\n`)
+  it('reports completed files before the response has finished, with split UTF-8 frames',async()=>{
+    let controller!:ReadableStreamDefaultController<Uint8Array>
+    const body=new ReadableStream<Uint8Array>({start(c){controller=c}})
+    const fetcher=vi.fn().mockResolvedValue(new Response(body,{headers:{'Content-Type':'text/event-stream'}}))
+    const progress=vi.fn();let finished=false
+    const pending=requestArcimDocumentImport('consent',false,fetcher,undefined,progress).then(value=>{finished=true;return value})
+    const live=frame('progress',result({dryRun:false,scanned:10,total:1376,linked:8,skipped:2,unmatchedSamples:[{uploadId:'åäö',voucher:'A1',date:'2026-01-01'}]}))
+    const split=live.findIndex((value,index)=>value===0xc3&&live[index+1]===0xa5)+1
+    controller.enqueue(live.slice(0,split));controller.enqueue(live.slice(split))
+    await vi.waitFor(()=>expect(progress).toHaveBeenCalledWith(expect.objectContaining({scanned:10,total:1376})))
+    expect(finished).toBe(false)
+    expect(progress.mock.calls[0][0].unmatchedSamples[0].uploadId).toBe('åäö')
+    controller.enqueue(frame('complete',result({dryRun:false,scanned:1376,total:1376,linked:1376})));controller.close()
+    expect(await pending).toMatchObject({scanned:1376,total:1376})
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).progress).toBe(true)
+  })
+  it('does not claim completion when a progress stream is truncated',async()=>{
+    const fetcher=vi.fn().mockResolvedValue(new Response(frame('progress',result({dryRun:false,scanned:1,total:10})),{headers:{'Content-Type':'text/event-stream'}}))
+    await expect(requestArcimDocumentImport('consent',false,fetcher,undefined,vi.fn())).rejects.toBeInstanceOf(ArcimDocumentImportRequestError)
+  })
+  it('preserves the structured failure after partial progress',async()=>{
+    const bytes=new Uint8Array([...frame('progress',result({dryRun:false,scanned:5,total:10})),...frame('error',{error:{code:'PROVIDER_AUTH_EXPIRED',requestId:'req-stream'}})])
+    const fetcher=vi.fn().mockResolvedValue(new Response(bytes,{headers:{'Content-Type':'text/event-stream'}}))
+    const error=await requestArcimDocumentImport('consent',false,fetcher,undefined,vi.fn()).catch(e=>e)
+    expect(error.problem).toMatchObject({code:'PROVIDER_AUTH_EXPIRED',requestId:'req-stream'})
+  })
+  it('adds each streamed slice to prior completed slices without counting progress twice',async()=>{
+    const response=(progress:number,partial:boolean)=>new Response(new Uint8Array([
+      ...frame('progress',result({dryRun:false,scanned:progress,linked:progress,total:20})),
+      ...frame('complete',result({dryRun:false,scanned:10,linked:10,total:20,partial,nextCursor:partial?'file-10':null})),
+    ]),{headers:{'Content-Type':'text/event-stream'}})
+    const fetcher=vi.fn().mockResolvedValueOnce(response(5,true)).mockResolvedValueOnce(response(5,false))
+    const progress=vi.fn()
+    expect(await runArcimDocumentImportToCompletion('consent',{fetcher,onProgress:progress})).toMatchObject({scanned:20,linked:20})
+    expect(progress.mock.calls.map(([value])=>value.scanned)).toEqual([5,10,15])
+  })
+  it('starts real import counters at zero while retaining the discovered total',()=>{
+    const state=arcimDocumentImportReducer({phase:'offered',provider:'bokio',found:1376,result:result({dryRun:true,scanned:1376,linked:1376,total:1376}),problem:null},{type:'import-started'})
+    expect(state.result).toMatchObject({dryRun:false,total:1376,scanned:0,linked:0})
   })
 })

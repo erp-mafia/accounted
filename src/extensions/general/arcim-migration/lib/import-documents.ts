@@ -115,6 +115,8 @@ export interface ImportDocumentsOptions {
    * under the hosted 300 s function limit for listing + the final response.
    */
   timeBudgetMs?: number
+  /** Completed-file counters for the live response; no file contents. */
+  onProgress?: (result:ImportDocumentsResult)=>void
   /** Internal read-only diagnostics: never downloads, uploads or records mappings. */
   review?: {offset:number;limit:number;query?:string}
   /** Clock, injectable for tests. */
@@ -450,6 +452,14 @@ export async function importProviderDocuments(
     }
   }
 
+  let lastProgressAt=0
+  const publishProgress=(force=false)=>{
+    if(!opts.onProgress)return
+    if(!force && result.scanned%10!==0 && Date.now()-lastProgressAt<500)return
+    lastProgressAt=Date.now()
+    opts.onProgress({...result,unmatchedSamples:result.unmatchedSamples.slice(),lockedPeriods:result.lockedPeriods.slice()})
+  }
+  publishProgress(true)
   let refreshedAfterUnauthorized = false
 
   let historicalTargets: Set<string> | null = null
@@ -472,142 +482,145 @@ export async function importProviderDocuments(
       break
     }
     const attachment = attachments[index]
-    result.scanned++
-    const ref = attachment.ref
-
-    if (!ref) {
-      recordUnmatched(attachment)
-      continue
-    }
-
-    let journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
-    if (!journalEntryId && provider === 'bokio' && !ref.dateTo) {
-      // An explicit historical review can identify the active replacement
-      // even when the generic document index also retains a reversed original.
-      const approved = await approvedHistoricalTargets()
-      const matches = vouchers.filter(row => approved.has(row.id) && row.status === 'posted' && !row.reversed_by_id
-        && row.source_voucher_series?.toUpperCase() === ref.series.toUpperCase()
-        && row.source_voucher_number === ref.number && row.entry_date.slice(0, 10) === ref.date.slice(0, 10))
-      if (matches.length === 1) journalEntryId = matches[0].id
-    }
-
-    // A source that dates the entry itself (Bokio) must agree with the
-    // verifikat on that date: the number alone is unique only within a
-    // fiscal year, and a wrong link can never be undone.
-    const dateDisagrees =
-      journalEntryId != null &&
-      !ref.dateTo &&
-      entryDateById.get(journalEntryId)?.slice(0, 10) !== ref.date.slice(0, 10)
-
-    if (!journalEntryId || dateDisagrees) {
-      recordUnmatched(attachment,dateDisagrees)
-      continue
-    }
-
-    if (verifikatWithOtherUnderlag.has(journalEntryId)) {
-      result.skipped++
-      continue
-    }
-
-    // A klarmarkerat or locked year refuses every link (the trigger's own
-    // predicate, shared with the filename underlag plan). Checked before the
-    // download: a migration whose earlier years were closed first used to
-    // spend its whole time budget downloading files the database then refused,
-    // and reported them as retryable failures (crm#251).
-    const periodId = periodIdByEntry.get(journalEntryId)
-    if (periodId && isPeriodLocked(periodById.get(periodId))) {
-      result.locked++
-      lockedPeriodIds.add(periodId)
-      continue
-    }
-
-    if (dryRun) {
-      // We can resolve the target without spending a download: count it as a
-      // would-link so the preview reflects the real plan.
-      result.linked++
-      continue
-    }
-
-    const importAttachment = async () => {
-      const { bytes, contentType } = await source().download(attachment.id)
-
-      const sha256 = await computeSHA256(bytes)
-      if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
-        await recordUpload(attachment.id, seenAttachments.get(attachmentKey(sha256, journalEntryId))!)
-        result.skipped++
-        return
-      }
-
-      // Trust the bytes over provider metadata: APIs occasionally declare the
-      // wrong content type (a JPEG stored as image/png), which
-      // would fail magic validation. Sniff the real format first and fall
-      // back to the declared type only when no signature is recognised; if
-      // neither yields an allowed type, store without a declared type so
-      // uploadDocument skips magic validation rather than rejecting.
-      const declaredType = normalizedContentType(
-        attachment.declaredContentType ?? contentType,
-      )
-      const sniffedType = detectFileMagic(new Uint8Array(bytes))
-      const effectiveType =
-        sniffedType ??
-        (declaredType && ALLOWED_DOCUMENT_TYPES.includes(declaredType)
-          ? declaredType
-          : undefined)
-
-      const document = await uploadDocument(
-        supabase,
-        userId,
-        companyId,
-        {
-          name: fileNameFor(attachment, ref, effectiveType ?? declaredType),
-          buffer: bytes,
-          type: effectiveType,
-        },
-        {
-          upload_source: 'api',
-          journal_entry_id: journalEntryId,
-          idempotency_key: journalEntryId,
-          // Already booked: the verifikat is the booking. No model pass.
-          extractionOwner: 'none',
-        },
-      )
-
-      seenAttachments.set(attachmentKey(sha256, journalEntryId), document.id)
-      await recordUpload(attachment.id, document.id)
-      result.linked++
-    }
-
     try {
-      await importAttachment()
-    } catch (error) {
-      let finalError = error
-      if (
-        provider === 'fortnox' &&
-        error instanceof FortnoxApiError &&
-        error.statusCode === 401 &&
-        !refreshedAfterUnauthorized
-      ) {
-        refreshedAfterUnauthorized = true
-        try {
-          resolved = await resolveConsent(companyId, consentId)
-          await importAttachment()
-          continue
-        } catch (retryError) {
-          finalError = retryError
+      result.scanned++
+      const ref = attachment.ref
+
+      if (!ref) {
+        recordUnmatched(attachment)
+        continue
+      }
+
+      let journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
+      if (!journalEntryId && provider === 'bokio' && !ref.dateTo) {
+        // An explicit historical review can identify the active replacement
+        // even when the generic document index also retains a reversed original.
+        const approved = await approvedHistoricalTargets()
+        const matches = vouchers.filter(row => approved.has(row.id) && row.status === 'posted' && !row.reversed_by_id
+          && row.source_voucher_series?.toUpperCase() === ref.series.toUpperCase()
+          && row.source_voucher_number === ref.number && row.entry_date.slice(0, 10) === ref.date.slice(0, 10))
+        if (matches.length === 1) journalEntryId = matches[0].id
+      }
+
+      // A source that dates the entry itself (Bokio) must agree with the
+      // verifikat on that date: the number alone is unique only within a
+      // fiscal year, and a wrong link can never be undone.
+      const dateDisagrees =
+        journalEntryId != null &&
+        !ref.dateTo &&
+        entryDateById.get(journalEntryId)?.slice(0, 10) !== ref.date.slice(0, 10)
+
+      if (!journalEntryId || dateDisagrees) {
+        recordUnmatched(attachment,dateDisagrees)
+        continue
+      }
+
+      if (verifikatWithOtherUnderlag.has(journalEntryId)) {
+        result.skipped++
+        continue
+      }
+
+      // A klarmarkerat or locked year refuses every link (the trigger's own
+      // predicate, shared with the filename underlag plan). Checked before the
+      // download: a migration whose earlier years were closed first used to
+      // spend its whole time budget downloading files the database then refused,
+      // and reported them as retryable failures (crm#251).
+      const periodId = periodIdByEntry.get(journalEntryId)
+      if (periodId && isPeriodLocked(periodById.get(periodId))) {
+        result.locked++
+        lockedPeriodIds.add(periodId)
+        continue
+      }
+
+      if (dryRun) {
+        // We can resolve the target without spending a download: count it as a
+        // would-link so the preview reflects the real plan.
+        result.linked++
+        continue
+      }
+
+      const importAttachment = async () => {
+        const { bytes, contentType } = await source().download(attachment.id)
+
+        const sha256 = await computeSHA256(bytes)
+        if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
+          await recordUpload(attachment.id, seenAttachments.get(attachmentKey(sha256, journalEntryId))!)
+          result.skipped++
+          return
         }
+
+        // Trust the bytes over provider metadata: APIs occasionally declare the
+        // wrong content type (a JPEG stored as image/png), which
+        // would fail magic validation. Sniff the real format first and fall
+        // back to the declared type only when no signature is recognised; if
+        // neither yields an allowed type, store without a declared type so
+        // uploadDocument skips magic validation rather than rejecting.
+        const declaredType = normalizedContentType(
+          attachment.declaredContentType ?? contentType,
+        )
+        const sniffedType = detectFileMagic(new Uint8Array(bytes))
+        const effectiveType =
+          sniffedType ??
+          (declaredType && ALLOWED_DOCUMENT_TYPES.includes(declaredType)
+            ? declaredType
+            : undefined)
+
+        const document = await uploadDocument(
+          supabase,
+          userId,
+          companyId,
+          {
+            name: fileNameFor(attachment, ref, effectiveType ?? declaredType),
+            buffer: bytes,
+            type: effectiveType,
+          },
+          {
+            upload_source: 'api',
+            journal_entry_id: journalEntryId,
+            idempotency_key: journalEntryId,
+            // Already booked: the verifikat is the booking. No model pass.
+            extractionOwner: 'none',
+          },
+        )
+
+        seenAttachments.set(attachmentKey(sha256, journalEntryId), document.id)
+        await recordUpload(attachment.id, document.id)
+        result.linked++
       }
 
-      if (provider === 'fortnox' && isFortnoxPermissionError(finalError)) {
-        throw new FortnoxDocumentScopesRequiredError()
-      }
+      try {
+        await importAttachment()
+      } catch (error) {
+        let finalError = error
+        if (
+          provider === 'fortnox' &&
+          error instanceof FortnoxApiError &&
+          error.statusCode === 401 &&
+          !refreshedAfterUnauthorized
+        ) {
+          refreshedAfterUnauthorized = true
+          try {
+            resolved = await resolveConsent(companyId, consentId)
+            await importAttachment()
+            continue
+          } catch (retryError) {
+            finalError = retryError
+          }
+        }
 
-      result.failed++
-      log.error('failed to import a receipt', finalError as Error, {
-        uploadId: attachment.id,
-        voucher: `${ref.series}${ref.number}`,
-      })
-    }
+        if (provider === 'fortnox' && isFortnoxPermissionError(finalError)) {
+          throw new FortnoxDocumentScopesRequiredError()
+        }
+
+        result.failed++
+        log.error('failed to import a receipt', finalError as Error, {
+          uploadId: attachment.id,
+          voucher: `${ref.series}${ref.number}`,
+        })
+      }
+    } finally { publishProgress() }
   }
+  publishProgress(true)
 
   if (opts.review) result.unmatchedReview = pageUnmatchedDocuments(provider,unmatchedRows,opts.review)
 

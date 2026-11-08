@@ -24,6 +24,7 @@ const request = (body: unknown) => new Request('http://localhost/api/extensions/
 })
 function context() {
   const mock = createMockSupabase()
+  mock.supabase.rpc.mockResolvedValue({data:[],error:null})
   const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() }
   return { ...mock, log, ctx: { supabase: mock.supabase, companyId: 'company', userId: 'user', log } as unknown as ExtensionContext }
 }

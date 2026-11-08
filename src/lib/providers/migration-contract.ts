@@ -28,7 +28,13 @@ export interface ProviderMigrationJob {
   updated_at: string
 }
 
+export interface PendingImportPayables {
+  count:number
+  items:{id:string;invoiceNumber:string;dueDate:string;remaining:number;currency:string}[]
+}
 export interface MigrationResourceCounts {
+  skipReasons?: {historicalReceivable?:number;outsideFiscalYears?:number;inactive?:number;zeroTotal?:number;creditNoteInOldShape?:number}
+
   unchanged?: number
   resource: MigrationResource
   total: number
@@ -51,6 +57,7 @@ export interface MigrationResourceCounts {
 }
 
 export interface ProviderMigrationStatus {
+  paymentsAwaitingDueDate?: PendingImportPayables
   job: ProviderMigrationJob
   counts: MigrationResourceCounts[]
   changes?: {id:string;resource:MigrationResource;source_id:string;targetId:string;label:string;kind:'new'|'changed'}[]
