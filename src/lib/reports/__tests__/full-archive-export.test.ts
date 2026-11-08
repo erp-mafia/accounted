@@ -813,6 +813,10 @@ describe('generateFullArchive', () => {
       const masterDataQueue = buildMasterDataQueue({
         direct: {
           customers: [{ id: 'cust-1', name: 'Acme AB' }],
+          historical_receivable_references: [{
+            id: 'historical-1', company_id: 'company-1', invoice_number: 'H-100',
+            customer_name: 'Historic customer AB', payment_journal_entry_id: 'payment-1', decision: 'approved',
+          }],
           company_settings: [COMPANY_ROW],
         },
         via: {
@@ -859,6 +863,12 @@ describe('generateFullArchive', () => {
 
       const customers = JSON.parse(await zip.file('data/customers.json')!.async('text'))
       expect(customers).toEqual([{ id: 'cust-1', name: 'Acme AB' }])
+
+      const historical = JSON.parse(await zip.file('data/historical_receivable_references.json')!.async('text'))
+      expect(historical).toEqual([{
+        id: 'historical-1', company_id: 'company-1', invoice_number: 'H-100',
+        customer_name: 'Historic customer AB', payment_journal_entry_id: 'payment-1', decision: 'approved',
+      }])
 
       // Child table fetched via parent ids (invoice_items has no company_id).
       // A SEK company's rows are unchanged apart from the appended unit.
