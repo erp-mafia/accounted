@@ -1,3 +1,4 @@
+import { documentReviewRoutes } from './lib/document-review-routes'
 import { planSIEResync, type SIEResyncPlan } from '@/lib/import/sie-resync'
 import { historicalReceivableRoutes } from './lib/historical-receivable-routes'
 import { BokioApiError } from '@/lib/providers/bokio/client'
@@ -335,6 +336,7 @@ export const arcimMigrationExtension: Extension = {
 
   apiRoutes: [
     ...migrationJobRoutes,
+    ...documentReviewRoutes,
     ...historicalReceivableRoutes,
     ...invoiceCompletionRoutes,
     // ── List available providers ───────────────────────────────────

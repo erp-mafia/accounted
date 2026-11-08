@@ -73,6 +73,7 @@ function rangeMockSupabase(byTable: Record<string, unknown[]>): SupabaseClient {
       eq: () => node,
       not: () => node,
       in: () => node,
+      or: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }
@@ -891,6 +892,51 @@ describe('importProviderDocuments', () => {
     expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
     const [, , , file] = mockUpload.mock.calls[0]
     expect(file).toMatchObject({ name: 'Kvitto.jpg', type: 'image/jpeg' })
+  })
+
+  it('resolves the current import without an undone or replaced predecessor blocking the file', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[
+        {...GNUBOK_VOUCHERS[0],id:'old',status:'reversed',reversed_by_id:'storno',import_batch_id:'old-import'},
+        {...GNUBOK_VOUCHERS[0],id:'current',status:'posted',reversed_by_id:null,import_batch_id:'new-import'},
+      ],sie_imports:[{id:'old-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1'})
+    expect(result).toMatchObject({linked:1,unmatched:0})
+    expect(mockUpload).toHaveBeenCalledWith(expect.anything(),USER,COMPANY,expect.anything(),expect.objectContaining({journal_entry_id:'current'}))
+  })
+
+  it('does not select a retired import when there is no current source voucher', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[{...GNUBOK_VOUCHERS[0],import_batch_id:'old-import'}],sie_imports:[{id:'old-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',review:{offset:0,limit:25}})
+    expect(result).toMatchObject({linked:0,unmatched:1,unmatchedReview:{reasonCounts:{missing_voucher:1}}})
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('still refuses multiple current candidates without changing any document', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[{...GNUBOK_VOUCHERS[0],id:'one',import_batch_id:'current-import'},
+        {...GNUBOK_VOUCHERS[0],id:'two',import_batch_id:'another-current-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',review:{offset:0,limit:25}})
+    expect(result).toMatchObject({linked:0,unmatched:1,unmatchedReview:{reasonCounts:{ambiguous:1}}})
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('reviews all unmatched files without downloads, writes or the 20-sample limit', async () => {
+    mockFetchUploads.mockResolvedValue(Array.from({length:55},(_,i)=>({...UPLOAD,id:`file-${String(i).padStart(2,'0')}`})) as never)
+    mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1',VOUCHER_REF]]))
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,journal_entries:[]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',
+      dryRun:false,timeBudgetMs:0,review:{offset:25,limit:25}})
+    expect(result).toMatchObject({dryRun:true,unmatched:55,partial:false,
+      unmatchedReview:{total:55,filteredTotal:55,offset:25,reasonCounts:{missing_voucher:55}}})
+    expect(result.unmatchedReview?.items).toHaveLength(25)
+    expect(result.unmatchedReview?.items[0]).toMatchObject({uploadId:'file-25',fileName:'Kvitto',voucher:'V33',reason:'missing_voucher'})
+    expect(result.unmatchedSamples).toHaveLength(20)
+    expect(mockDownload).not.toHaveBeenCalled();expect(mockUpload).not.toHaveBeenCalled();expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   describe('time budget and cursor (resumable sweep)', () => {

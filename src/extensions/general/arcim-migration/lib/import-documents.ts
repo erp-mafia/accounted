@@ -1,3 +1,4 @@
+import { explainUnmatchedDocument, pageUnmatchedDocuments, type UnmatchedProviderDocument, type ProviderDocumentMatchReview } from '@/lib/providers/document-match-review'
 /**
  * Provider document (underlag) import: best-effort, re-runnable.
  *
@@ -114,6 +115,8 @@ export interface ImportDocumentsOptions {
    * under the hosted 300 s function limit for listing + the final response.
    */
   timeBudgetMs?: number
+  /** Internal read-only diagnostics: never downloads, uploads or records mappings. */
+  review?: {offset:number;limit:number;query?:string}
   /** Clock, injectable for tests. */
   now?: () => number
 }
@@ -121,6 +124,7 @@ export interface ImportDocumentsOptions {
 export const DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS = 200_000
 
 export interface ImportDocumentsResult {
+  unmatchedReview?: ProviderDocumentMatchReview
   provider: string
   /** Provider attachments linked to a voucher that were considered. */
   scanned: number
@@ -303,11 +307,13 @@ export async function importProviderDocuments(
     companyId,
     userId,
     consentId,
-    dryRun = false,
+    dryRun: requestedDryRun = false,
     cursor = null,
     timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
     now = Date.now,
   } = opts
+  const dryRun = opts.review ? true : requestedDryRun
+  const unmatchedRows: UnmatchedProviderDocument[] = []
   const startedAt = now()
 
   let resolved = await resolveConsent(companyId, consentId)
@@ -329,6 +335,8 @@ export async function importProviderDocuments(
     nextCursor: null,
   }
 
+  if (opts.review) result.unmatchedReview = pageUnmatchedDocuments(provider,[],opts.review)
+
   // Unsupported providers are a no-op rather than an error
   // so a mixed-provider caller can invoke this unconditionally. The migration
   // UI offers the import from the same definition.
@@ -345,14 +353,14 @@ export async function importProviderDocuments(
       : fortnoxSource(fortnoxClient as FortnoxClient, resolved.accessToken)
 
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
-  const [listedAttachments, periods, vouchers, existingAttachments] = await Promise.all([
+  const [listedAttachments, periods, sourceVouchers, existingAttachments, retiredImports] = await Promise.all([
     source().list(),
     fetchFiscalPeriods(supabase, companyId),
-    fetchSourceRefVouchers(supabase, companyId),
+    fetchSourceRefVouchers(supabase, companyId, true),
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
     // and PostgREST paging without a deterministic order can skip or repeat
     // rows once a table exceeds one page, which would defeat the hash dedup.
-    fetchAllRows<{
+    opts.review ? Promise.resolve([]) : fetchAllRows<{
       id: string
       sha256_hash: string
       journal_entry_id: string | null
@@ -365,7 +373,16 @@ export async function importProviderDocuments(
         .order('id', { ascending: true })
         .range(from, to),
     ),
+    fetchAllRows<{id:string}>(({from,to})=>supabase.from('sie_imports').select('id')
+      .eq('company_id',companyId).or('status.in.(undone,replaced),job_state.eq.undone')
+      .order('id').range(from,to)),
   ])
+
+  // A completed replacement retains the old ledger as immutable history.
+  // Resolve provider files against current imports; keep genuine accounting
+  // reversals from non-retired imports eligible, as in the shared resolver.
+  const retiredImportIds=new Set(retiredImports.map(row=>row.id))
+  const vouchers=sourceVouchers.filter(row=>!row.import_batch_id || !retiredImportIds.has(row.import_batch_id))
 
   // Stable order across calls: a provider may page its listing differently
   // from one call to the next, and the cursor is "continue after this id".
@@ -374,7 +391,7 @@ export async function importProviderDocuments(
   )
   result.total = attachments.length
   const firstAfterCursor = cursor ? attachments.findIndex((a) => a.id > cursor) : 0
-  const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
+  const startIndex = opts.review ? 0 : firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
   const voucherIndex = buildVoucherIndex(vouchers)
@@ -415,10 +432,21 @@ export async function importProviderDocuments(
     if (error) throw new Error('BOKIO_UPLOAD_MAPPING_FAILED')
   }
 
-  const recordUnmatched = (uploadId: string, voucher: string, date: string) => {
+  const recordUnmatched = (attachment:ProviderAttachment, dateDisagrees=false) => {
     result.unmatched++
+    const ref=attachment.ref
+    const voucher=ref ? `${ref.series}${ref.number}` : '(unresolved)'
     if (result.unmatchedSamples.length < 20) {
-      result.unmatchedSamples.push({ uploadId, voucher, date })
+      result.unmatchedSamples.push({ uploadId:attachment.id, voucher, date:ref?.date ?? '' })
+    }
+    if (opts.review) {
+      const {reason,candidates}=explainUnmatchedDocument(voucherIndex,periods,ref,dateDisagrees)
+      unmatchedRows.push({uploadId:attachment.id,fileName:attachment.fileName,voucher:ref ? voucher : null,
+        date:ref?.date ?? null,dateTo:ref?.dateTo ?? null,reason,candidateCount:candidates.length,
+        candidates:candidates.slice().sort((a,b)=>a.entry_date.localeCompare(b.entry_date)||a.id.localeCompare(b.id)).slice(0,5).map(row=>({
+          id:row.id,label:row.voucher_series && row.voucher_number!=null ? `${row.voucher_series}${row.voucher_number}` : voucher,
+          date:row.entry_date,reversed:row.status==='reversed'||!!row.reversed_by_id,
+        }))})
     }
   }
 
@@ -438,7 +466,7 @@ export async function importProviderDocuments(
     // Always make progress: at least one attachment per call, then stop at
     // the budget so the route answers well inside the function limit and the
     // caller resumes after the last handled id.
-    if (index > startIndex && now() - startedAt >= timeBudgetMs) {
+    if (!opts.review && index > startIndex && now() - startedAt >= timeBudgetMs) {
       result.partial = true
       result.nextCursor = attachments[index - 1].id
       break
@@ -448,7 +476,7 @@ export async function importProviderDocuments(
     const ref = attachment.ref
 
     if (!ref) {
-      recordUnmatched(attachment.id, '(unresolved)', '')
+      recordUnmatched(attachment)
       continue
     }
 
@@ -472,7 +500,7 @@ export async function importProviderDocuments(
       entryDateById.get(journalEntryId)?.slice(0, 10) !== ref.date.slice(0, 10)
 
     if (!journalEntryId || dateDisagrees) {
-      recordUnmatched(attachment.id, `${ref.series}${ref.number}`, ref.date)
+      recordUnmatched(attachment,dateDisagrees)
       continue
     }
 
@@ -580,6 +608,8 @@ export async function importProviderDocuments(
       })
     }
   }
+
+  if (opts.review) result.unmatchedReview = pageUnmatchedDocuments(provider,unmatchedRows,opts.review)
 
   result.lockedPeriods = [...lockedPeriodIds]
     .map((id) => periodById.get(id))

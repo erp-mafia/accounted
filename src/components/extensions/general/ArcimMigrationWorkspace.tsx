@@ -1,5 +1,7 @@
 'use client'
 
+import { UnmatchedProviderDocuments } from './UnmatchedProviderDocuments'
+
 import type { SIEResyncSummary } from '@/lib/import/sie-resync'
 import { findReopenableImportPeriod, type ImportFiscalPeriod } from '@/lib/import/reopen-import-period'
 
@@ -1817,6 +1819,7 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
 }
 
 function DocumentImportFollowUp({
+  consentId,
   state,
   standalone = false,
   onDiscover,
@@ -1824,6 +1827,7 @@ function DocumentImportFollowUp({
   onDismiss,
   onReconnect,
 }: {
+  consentId: string | null
   state: ArcimDocumentImportState
   /** Started from an active connection rather than as the tail of a migration: the copy must not claim a migration just ran. */
   standalone?: boolean
@@ -1848,6 +1852,8 @@ function DocumentImportFollowUp({
   // Underlag whose verifikat sits in a klarmarkerat or locked year: the
   // database refuses those links, so a retry cannot help. Say which years and
   // where to reopen them, before the import (dry run) and after it (crm#251).
+  const unmatchedReview = consentId && (state.result?.unmatched ?? 0) > 0
+    ? <UnmatchedProviderDocuments key={consentId} consentId={consentId} /> : null
   const lockedCount = state.result?.locked ?? 0
   const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
   const lockedYearsLine = (key: 'ext_arcim_documents_locked_offer' | 'ext_arcim_documents_locked_result') =>
@@ -1906,6 +1912,7 @@ function DocumentImportFollowUp({
             : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
         {lockedYearsLine('ext_arcim_documents_locked_offer')}
+        {unmatchedReview}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action', { provider })}
@@ -1991,7 +1998,8 @@ function DocumentImportFollowUp({
             {t('ext_arcim_documents_unmatched_help')}
           </p>
         )}
-        {lockedCount > 0 && (
+        {unmatchedReview}
+        {(lockedCount > 0 || unmatched > 0) && (
           <div className="space-y-3">
             {lockedYearsLine('ext_arcim_documents_locked_result')}
             <Button variant="outline" onClick={onDiscover}>
@@ -2085,6 +2093,7 @@ function ResultStep({
   sieResults,
   omittedYears,
   error,
+  documentConsentId,
   documentImportState,
   documentsOnly,
   theaterModel,
@@ -2105,6 +2114,7 @@ function ResultStep({
   /** Source fiscal years outside the selection: not fetched in this run. */
   omittedYears: SourceFiscalYear[]
   error: string | null
+  documentConsentId: string | null
   documentImportState: ArcimDocumentImportState
   /** Only the underlag import ran, from an active connection: no migration verdict to show. */
   documentsOnly: boolean
@@ -2200,6 +2210,7 @@ function ResultStep({
           </p>
         </div>
         <DocumentImportFollowUp
+        consentId={documentConsentId}
           state={documentImportState}
           standalone
           onDiscover={onDiscoverDocuments}
@@ -2534,6 +2545,7 @@ function ResultStep({
       )}
 
       <DocumentImportFollowUp
+        consentId={documentConsentId}
         state={documentImportState}
         onDiscover={onDiscoverDocuments}
         onImport={onImportDocuments}
@@ -3943,6 +3955,7 @@ export default function ArcimMigrationWorkspace({
           sieResults={sieImportResults}
           omittedYears={sieData?.omittedYears ?? []}
           error={error}
+          documentConsentId={consentId}
           documentImportState={documentImportState}
           documentsOnly={documentsOnly}
           theaterModel={theaterModel}
