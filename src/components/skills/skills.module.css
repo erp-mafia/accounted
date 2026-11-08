@@ -697,6 +697,12 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .featuredLink:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .featuredText, .featuredArt { position: relative; z-index: 1; pointer-events: none; }
 .featuredText a, .featuredText button { pointer-events: auto; }
+/* A hued ground (this banner, an item's stage) takes its saturation and lightness from the theme: a pastel in light
+   mode, a dim tint in dark mode. Its text, buttons and logos are drawn in theme colours, so a ground that stayed
+   light put near-white text on a near-white ground in dark mode. */
+.featured { --hue-ground: 32% 90%; }
+.stage { --hue-ground: 52% 88%; }
+:global(.dark) :is(.featured, .stage) { --hue-ground: 18% 14%; }
 
 .btnLogo { width: 16px; height: 16px; object-fit: contain; border-radius: 4px; }
 .featuredUses { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }

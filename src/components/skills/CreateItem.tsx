@@ -329,7 +329,7 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={edit ? t('edit') : t('create_manual')}>
           {/* One grain for the page: switching kind changes the colour, not the pattern. An edited item keeps its own grain. */}
-          <StrataField seed={seedOf(edit ? `own/${edit.installationId}` : 'ny')} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
+          <StrataField seed={seedOf(edit ? `own/${edit.installationId}` : 'ny')} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
           <div className={styles.stageTile}>
             <span key={kind} className={`${styles.tileSymbol} ${styles.fadeIn}`}><ItemSymbol kind={kind} hue={hue} size={104} open /></span>
             <b className={name.trim() ? undefined : styles.placeholderName} data-ph-mask="">{name.trim() || t('create_untitled')}</b>

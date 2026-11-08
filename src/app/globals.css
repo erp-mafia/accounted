@@ -496,6 +496,28 @@ summary,
   padding-bottom: calc(var(--bottom-nav-h) + 1rem);
 }
 
+/* Markdown (.prose) in dark mode: the typography plugin's palette is a fixed
+   light-theme gray, so headings, inline code and kbd were near-black on the
+   dark panel and rules came out bright. Map it to the theme tokens; light mode
+   keeps the plugin's own palette. */
+.dark .prose {
+  --tw-prose-body: hsl(var(--foreground));
+  --tw-prose-headings: hsl(var(--foreground));
+  --tw-prose-lead: hsl(var(--muted-foreground));
+  --tw-prose-links: hsl(var(--foreground));
+  --tw-prose-bold: hsl(var(--foreground));
+  --tw-prose-counters: hsl(var(--muted-foreground));
+  --tw-prose-bullets: hsl(var(--muted-foreground));
+  --tw-prose-hr: hsl(var(--border));
+  --tw-prose-quotes: hsl(var(--foreground));
+  --tw-prose-quote-borders: hsl(var(--border));
+  --tw-prose-captions: hsl(var(--muted-foreground));
+  --tw-prose-kbd: hsl(var(--foreground));
+  --tw-prose-code: hsl(var(--foreground));
+  --tw-prose-th-borders: hsl(var(--border));
+  --tw-prose-td-borders: hsl(var(--border));
+}
+
 /* Animation Keyframes */
 @keyframes fadeIn {
   from { opacity: 0; }
