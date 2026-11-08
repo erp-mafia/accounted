@@ -26,6 +26,10 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { PATCH as patchValue, DELETE as deleteValue } from '../[id]/values/[valueId]/route'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { toHandle } from '@/lib/handles'
+import { eventBus } from '@/lib/events/bus'
+
+/** The dimension_value.* events emitted during a test, in order. */
+const seen: Array<{ type: string; payload: Record<string, unknown> }> = []
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -48,6 +52,9 @@ const SAMPLE_VALUE = {
   start_date: null,
   end_date: null,
 }
+/** The pre-flight read: the value with its dimension (the dates rule, the event payload). */
+const PROJEKT = { sie_dim_no: 6, name: 'Projekt', resets_annually: false }
+const CURRENT_ROW = { ...SAMPLE_VALUE, dimension: PROJEKT }
 
 function makeRequest(url: string, init?: RequestInit): Request {
   return new Request(url, {
@@ -62,6 +69,13 @@ function makeRequest(url: string, init?: RequestInit): Request {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
+  seen.length = 0
+  for (const type of ['dimension_value.renamed', 'dimension_value.archived', 'dimension_value.unarchived'] as const) {
+    eventBus.on(type, (payload) => {
+      seen.push({ type, payload: payload as unknown as Record<string, unknown> })
+    })
+  }
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -78,7 +92,7 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: [
-          { data: SAMPLE_VALUE, error: null },
+          { data: CURRENT_ROW, error: null },
           { data: { ...SAMPLE_VALUE, name: 'Nytt namn', is_active: false }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
@@ -97,15 +111,21 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
     const body = await res.json()
     expect(body.data.name).toBe('Nytt namn')
     expect(body.data.is_active).toBe(false)
+    // One PATCH, two kinds of change: both are announced, the rename first.
+    expect(seen.map((e) => e.type)).toEqual(['dimension_value.renamed', 'dimension_value.archived'])
+    expect(seen[0].payload).toMatchObject({
+      dimensionValue: { id: VALUE_ID, sie_dim_no: 6, dimension_name: 'Projekt', code: 'P001', name: 'Nytt namn', is_active: false },
+      previousName: 'Villa Almgren tak',
+      companyId: COMPANY_ID,
+    })
   })
 
   it('sets an end_date on a project value (accumulating dimension)', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
         dimension_values: [
-          { data: SAMPLE_VALUE, error: null },
+          { data: CURRENT_ROW, error: null },
           { data: { ...SAMPLE_VALUE, end_date: '2026-08-31' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
@@ -123,13 +143,18 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.end_date).toBe('2026-08-31')
+    // Dates alone are not an event.
+    expect(seen).toEqual([])
   })
 
   it('rejects dates on a resets_annually dimension (kostnadsställe)', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        dimensions: { data: { id: DIMENSION_ID, resets_annually: true }, error: null },
+        dimension_values: {
+          data: { ...SAMPLE_VALUE, dimension: { sie_dim_no: 1, name: 'Kostnadsställe', resets_annually: true } },
+          error: null,
+        },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -199,7 +224,7 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
                 table === 'company_members'
                   ? { company_id: COMPANY_ID, role: 'owner' }
                   : table === 'dimension_values'
-                    ? SAMPLE_VALUE
+                    ? CURRENT_ROW
                     : null
               return (resolve: (v: unknown) => void) => resolve({ data, error: null })
             }
@@ -224,6 +249,9 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.is_active).toBe(false)
+    expect(body.data.preview).not.toHaveProperty('dimension')
+    // A preview announces nothing.
+    expect(seen).toEqual([])
     // Only one read (the pre-flight fetch): no second dimension_values await
     // means no UPDATE was issued through the queue.
     expect(fromSpy.mock.calls.filter(([t]) => t === 'dimension_values')).toHaveLength(1)

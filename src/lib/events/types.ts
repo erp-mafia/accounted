@@ -42,6 +42,32 @@ export type DocumentExtractionOwner = 'invoice-inbox' | 'none'
  */
 export type McpClientSource = 'oauth' | 'client_info' | 'bridge' | 'user_agent' | 'none'
 
+/**
+ * A dimension value as its events carry it: the v1 resource
+ * (GET /dimensions, values[]) plus the dimension's SIE number and name, so a
+ * receiver knows a projekt (6) from a kostnadsställe (1) without a lookup.
+ * is_active false means archived.
+ */
+export interface DimensionValueSnapshot {
+  id: string
+  dimension_id: string
+  sie_dim_no: number
+  dimension_name: string
+  code: string
+  name: string
+  is_active: boolean
+  start_date: string | null
+  end_date: string | null
+}
+
+export interface DimensionValueEventPayload {
+  dimensionValue: DimensionValueSnapshot
+  /** The name before a rename; null on every other event. */
+  previousName: string | null
+  userId: string
+  companyId: string
+}
+
 export type CoreEvent =
   // Bookkeeping
   | { type: 'journal_entry.drafted'; payload: { entry: JournalEntry; userId: string; companyId: string } }
@@ -216,6 +242,14 @@ export type CoreEvent =
   | { type: 'article.deleted'; payload: { articleId: string; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
+  // Dimension values (SIE #OBJEKT: a projekt, kostnadsställe or custom code),
+  // accounted#193. One event per kind of change, whichever door wrote it
+  // (lib/dimensions/value-events.ts): a PATCH that renames and archives
+  // emits both. previousName is set on a rename only.
+  | { type: 'dimension_value.created'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.renamed'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.archived'; payload: DimensionValueEventPayload }
+  | { type: 'dimension_value.unarchived'; payload: DimensionValueEventPayload }
   // Supplier Invoice Lifecycle
   | { type: 'supplier_invoice.registered'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   | { type: 'supplier_invoice.approved'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
