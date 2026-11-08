@@ -8424,6 +8424,10 @@
     "rel_days": "{count} days ago"
   },
   "reports": {
+    "ledger_hide_inactive_help": "An account is inactive when its closing balance is zero and it has no vouchers within the selected reporting interval of the fiscal year.",
+    "ledger_hide_inactive": "Hide inactive",
+    "ledger_no_active_accounts": "No active accounts in the interval",
+    "ledger_show_inactive_hint": "Clear Hide inactive to show accounts with a zero balance and no vouchers in the interval.",
     "ledger_expand_all": "Expand all",
     "ledger_collapse_all": "Collapse all",
     "ledger_expand_account": "Expand account {number}",

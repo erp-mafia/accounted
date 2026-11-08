@@ -1228,3 +1228,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-03] MCP create_invoice staging and commit both build through buildStagedInvoice (the shared buildInvoiceWriteData) instead of adding the 1660-on-a-VAT-line check to the hand copy: one definition, so ROT/RUT, accrual, preview VAT and the reverse-charge notice cannot drift again.
 
 [2026-11-08] Keep full dev compiler eviction after the route audit exhausted its memory budget. Reuse reference caches and load only visible ledger metadata. Render the chart in batches of 100 and the general ledger with collapsed accounts; search and selection still cover the full chart.
+
+[2026-11-08] Huvudbok inactivity means zero closing balance AND no lines in the selected fiscal-year window. The view opts into inactive ledger accounts for instant filtering; exports follow the checkbox and legacy report callers keep their default selection.

@@ -8424,6 +8424,10 @@
     "rel_days": "för {count} dagar sedan"
   },
   "reports": {
+    "ledger_hide_inactive_help": "Kontot räknas som inaktivt när dess utgående saldo är 0 kr och det saknar verifikat inom det valda rapportintervallet för räkenskapsåret.",
+    "ledger_hide_inactive": "Dölj inaktiva",
+    "ledger_no_active_accounts": "Inga aktiva konton i intervallet",
+    "ledger_show_inactive_hint": "Avmarkera Dölj inaktiva för att visa konton som har nollsaldo och saknar verifikat i intervallet.",
     "ledger_expand_all": "Expandera alla",
     "ledger_collapse_all": "Kollapsa alla",
     "ledger_expand_account": "Expandera konto {number}",

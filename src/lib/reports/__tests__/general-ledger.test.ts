@@ -62,6 +62,43 @@ describe('generateGeneralLedger', () => {
     expect(report.period).toEqual({ start: '', end: '' })
   })
 
+  it.each([false, true])('retains inactive range accounts only when includeInactive=%s', async includeInactive => {
+    mockResults = {
+      fiscal_periods: [{ data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null } }],
+      journal_entries: [{ data: [
+        { id: 'before-1', entry_date: '2026-05-01', voucher_number: 1, voucher_series: 'A' },
+        { id: 'before-2', entry_date: '2026-05-02', voucher_number: 2, voucher_series: 'A' },
+        { id: 'inside', entry_date: '2026-06-02', voucher_number: 3, voucher_series: 'A' },
+        { id: 'after', entry_date: '2026-07-01', voucher_number: 4, voucher_series: 'A' },
+      ] }],
+      journal_entry_lines: [{ data: [
+        { journal_entry_id: 'before-1', account_number: '1930', debit_amount: 100, credit_amount: 0 },
+        { journal_entry_id: 'before-2', account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        { journal_entry_id: 'inside', account_number: '1510', debit_amount: 50, credit_amount: 0 },
+        { journal_entry_id: 'inside', account_number: '1510', debit_amount: 0, credit_amount: 50 },
+        { journal_entry_id: 'after', account_number: '1933', debit_amount: 10, credit_amount: 0 },
+      ] }],
+      chart_of_accounts: [{ data: [
+        { account_number: '1510', account_name: 'Receivables' },
+        { account_number: '1930', account_name: 'Bank before range' },
+        { account_number: '1933', account_name: 'Bank after range' },
+      ] }],
+    }
+
+    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01', toDate: '2026-06-30', includeInactive,
+    })
+
+    expect(report.accounts.map(account => account.account_number)).toEqual(includeInactive ? ['1510', '1930', '1933'] : ['1510'])
+    expect(report.accounts.find(account => account.account_number === '1510')).toMatchObject({ closing_balance: 0, lines: expect.any(Array) })
+    expect(report.accounts.find(account => account.account_number === '1510')?.lines).toHaveLength(2)
+    expect(report.accounts.every(account => account.closing_balance === 0)).toBe(true)
+    if (includeInactive) {
+      expect(report.accounts.find(account => account.account_number === '1930')?.lines).toEqual([])
+      expect(report.accounts.find(account => account.account_number === '1933')?.lines).toEqual([])
+    }
+  })
+
   it('returns empty report when no entries in period', async () => {
     mockResults = {
       fiscal_periods: [

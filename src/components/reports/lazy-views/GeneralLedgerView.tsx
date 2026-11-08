@@ -7,6 +7,8 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { Label } from '@/components/ui/label'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
@@ -50,6 +52,7 @@ const EMPTY_DATE_RANGE: DateRangeValue = {}
 /** Display the filtered ledger with on-demand account details and matching export bounds. */
 export default function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
   const t = useTranslations('reports')
+  const [hideInactive, setHideInactive] = useState(true)
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set())
   const toggleAccount = (number: string) => setExpandedAccounts(previous => {
     const next = new Set(previous)
@@ -77,7 +80,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
     setLoading(true)
     setError(null)
     try {
-      const params = new URLSearchParams({ period_id: periodId })
+      const params = new URLSearchParams({ period_id: periodId, include_inactive: 'true' })
       if (from) params.set('account_from', from)
       if (to) params.set('account_to', to)
       if (dateRange.fromDate) params.set('from_date', dateRange.fromDate)
@@ -119,6 +122,10 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
     }
   }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
 
+  const visibleAccounts = (data?.accounts ?? []).filter(
+    account => !hideInactive || account.closing_balance !== 0 || account.lines.length > 0,
+  )
+
   // Keep range controls available to recover from empty results or errors.
   const filterToolbar = (
     <div className="flex flex-wrap items-end gap-3">
@@ -149,10 +156,22 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
       <Button onClick={() => fetchData()} variant="outline">
         Filtrera
       </Button>
+      <div className="flex min-h-10 items-center gap-2">
+        <Checkbox
+          id="gl-hide-inactive"
+          checked={hideInactive}
+          onCheckedChange={checked => setHideInactive(checked === true)}
+        />
+        <Label htmlFor="gl-hide-inactive" className="cursor-pointer text-sm">
+          <InfoTooltip variant="help" content={t('ledger_hide_inactive_help')}>
+            <span>{t('ledger_hide_inactive')}</span>
+          </InfoTooltip>
+        </Label>
+      </div>
     </div>
   )
 
-  if (loading || error || !data || data.accounts.length === 0) {
+  if (loading || error || !data || visibleAccounts.length === 0) {
     return (
       <div className="space-y-4">
         {filterToolbar}
@@ -162,8 +181,8 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
           <ReportErrorCard message={error} />
         ) : (
           <ReportEmptyState
-            title="Inga verifikationer i perioden"
-            description="Det finns inga bokförda verifikationer i den valda perioden."
+            title={data && data.accounts.length > 0 ? t('ledger_no_active_accounts') : 'Inga verifikationer i perioden'}
+            description={data && data.accounts.length > 0 ? t('ledger_show_inactive_hint') : 'Det finns inga bokförda verifikationer i den valda perioden.'}
           />
         )}
       </div>
@@ -171,6 +190,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   }
 
   const exportParams = new URLSearchParams(reportQuery(periodId, dateRange, dimensionFilter))
+  exportParams.set('hide_inactive', String(hideInactive))
   if (appliedAccountRange.from) exportParams.set('account_from', appliedAccountRange.from)
   if (appliedAccountRange.to) exportParams.set('account_to', appliedAccountRange.to)
 
@@ -181,12 +201,12 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
 
       {data.period.start && (
         <p className="text-sm text-muted-foreground tabular-nums">
-          Period {data.period.start} till {data.period.end} · {data.accounts.length} konton
+          Period {data.period.start} till {data.period.end} · {visibleAccounts.length} konton
         </p>
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={() => setExpandedAccounts(new Set(data.accounts.map(account => account.account_number)))}>
+        <Button size="sm" variant="outline" onClick={() => setExpandedAccounts(new Set(visibleAccounts.map(account => account.account_number)))}>
           {t('ledger_expand_all')}
         </Button>
         <Button size="sm" variant="outline" onClick={() => setExpandedAccounts(new Set())}>
@@ -194,7 +214,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
         </Button>
       </div>
 
-      {data.accounts.map((account) => (
+      {visibleAccounts.map((account) => (
         <Card key={account.account_number}>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
