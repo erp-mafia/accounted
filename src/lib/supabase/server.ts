@@ -6,6 +6,7 @@ import {
 } from '@/lib/supabase/cookie-options'
 import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 import { withActorHeader } from '@/lib/supabase/actor-header'
+import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // replaced at runtime by docker-entrypoint.sh.
@@ -39,7 +40,9 @@ const safeKey = isBuildPlaceholder ? 'placeholder' : key
  * client gets a short-lived access token from /api/auth/session-token.
  *
  * Its GoTrue calls carry the end user's IP when IP address forwarding is
- * configured (lib/supabase/auth-forwarding.ts); off, the default fetch.
+ * configured (lib/supabase/auth-forwarding.ts); off, the default fetch. A
+ * counted page past the last row reads as an empty page, not a 416
+ * (lib/supabase/page-past-end.ts).
  */
 export async function createClient() {
   const cookieStore = await cookies()
@@ -51,7 +54,7 @@ export async function createClient() {
     safeUrl,
     safeKey,
     {
-      ...(forwardingFetch ? { global: { fetch: forwardingFetch } } : {}),
+      global: { fetch: withEmptyPagePastEnd(forwardingFetch) },
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
@@ -99,6 +102,6 @@ export function createServiceClient() {
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withActorHeader() } }
+    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withEmptyPagePastEnd(withActorHeader()) } }
   )
 }

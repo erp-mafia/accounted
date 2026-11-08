@@ -94,25 +94,39 @@ describe('createClient (cookie session)', () => {
     expect(options.cookieOptions).toMatchObject({ httpOnly: true, secure: false })
   })
 
+  // The client's fetch is the page-past-end one (lib/supabase/page-past-end.ts)
+  // around the forwarding fetch, or around the default fetch when forwarding is off.
+  const AUTH_URL = 'https://project.supabase.co/auth/v1/token?grant_type=password'
+
   it('gives GoTrue calls the forwarding fetch when a secret key is configured', async () => {
     vi.stubEnv('SUPABASE_SECRET_KEY', 'sb_secret_test-key')
     headersMock.mockResolvedValue(new Headers({ 'x-forwarded-for': '203.0.113.7', 'x-forwarded-proto': 'https' }))
+    const defaultFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', defaultFetch)
     const { createClient } = await import('../server')
 
     await createClient()
 
-    const options = createServerClientMock.mock.calls[0][2] as { global?: { fetch?: unknown } }
-    expect(typeof options.global?.fetch).toBe('function')
+    const options = createServerClientMock.mock.calls[0][2] as { global: { fetch: typeof fetch } }
+    await options.global.fetch(AUTH_URL, { method: 'POST', headers: { apikey: 'anon-key' } })
+    const sent = new Headers(defaultFetch.mock.calls[0][1]?.headers)
+    expect(sent.get('apikey')).toBe('sb_secret_test-key')
+    vi.unstubAllGlobals()
   })
 
-  it('keeps the default fetch without a secret key (local dev, self-hosted, CI)', async () => {
+  it('sends GoTrue calls unchanged without a secret key (local dev, self-hosted, CI)', async () => {
     vi.stubEnv('SUPABASE_SECRET_KEY', '')
     headersMock.mockResolvedValue(new Headers({ 'x-forwarded-for': '203.0.113.7' }))
+    const defaultFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', defaultFetch)
     const { createClient } = await import('../server')
 
     await createClient()
 
-    const options = createServerClientMock.mock.calls[0][2] as { global?: unknown }
-    expect(options.global).toBeUndefined()
+    const options = createServerClientMock.mock.calls[0][2] as { global: { fetch: typeof fetch } }
+    const init = { method: 'POST', headers: { apikey: 'anon-key' } }
+    await options.global.fetch(AUTH_URL, init)
+    expect(defaultFetch).toHaveBeenCalledWith(AUTH_URL, init)
+    vi.unstubAllGlobals()
   })
 })

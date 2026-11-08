@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type SupabaseClientOptions } from '@supabase/supabase-js'
 import { withActorHeader } from '@/lib/supabase/actor-header'
+import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 
 /**
  * Auth options every server-side Supabase client MUST use.
@@ -51,7 +52,9 @@ export const SERVER_AUTH_OPTIONS = {
  * Every PostgREST request names the actor of the scope it runs in (the
  * x-accounted-actor header, lib/supabase/actor-header.ts), around the
  * caller's own fetch when it passes one: a service-role request has no
- * session, and the audit log reads the person from the header instead.
+ * session, and the audit log reads the person from the header instead. A
+ * counted page past the last row reads as an empty page, not a 416
+ * (lib/supabase/page-past-end.ts).
  *
  * Browser clients are a different case and must keep the ticker: a signed-in
  * tab genuinely needs its access token refreshed. Those go through
@@ -64,7 +67,7 @@ export function createServiceRoleClient(
 ): SupabaseClient {
   return createClient(url, key, {
     ...options,
-    global: { ...options?.global, fetch: withActorHeader(options?.global?.fetch) },
+    global: { ...options?.global, fetch: withEmptyPagePastEnd(withActorHeader(options?.global?.fetch)) },
     auth: { ...options?.auth, ...SERVER_AUTH_OPTIONS },
   })
 }
