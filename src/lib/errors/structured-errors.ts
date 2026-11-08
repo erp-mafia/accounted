@@ -3610,6 +3610,27 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'En attestant måste vara medlem i företaget: ägare, administratör, medlem eller med läsbehörighet.',
     message_en: 'An attester must be a member of the company: owner, admin, member or viewer.',
   },
+  // Ordered steps and substitutes (#192).
+  ATTEST_PROJECT_NOT_FOUND: {
+    httpStatus: 400,
+    message_sv: 'Projektet finns inte bland företagets projekt (dimension 6). Lägg upp det under Dimensioner först.',
+    message_en: 'The project is not one of the company\'s projects (dimension 6). Add it under Dimensions first.',
+  },
+  ATTEST_SUBSTITUTE_NOT_MEMBER: {
+    httpStatus: 400,
+    message_sv: 'En ersättare måste vara medlem i företaget: ägare, administratör, medlem eller med läsbehörighet.',
+    message_en: 'A substitute must be a member of the company: owner, admin, member or viewer.',
+  },
+  ATTEST_SUBSTITUTE_NO_POLICY: {
+    httpStatus: 409,
+    message_sv: 'Spara attestreglerna innan du väljer en ersättare.',
+    message_en: 'Save the attest policy before choosing a substitute.',
+  },
+  ATTEST_SUBSTITUTE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ersättaren finns inte, eller har redan tagits bort.',
+    message_en: 'The substitute does not exist, or was already removed.',
+  },
   SI_EDIT_CONFLICT: {
     httpStatus: 409,
     message_sv:

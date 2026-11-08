@@ -2076,7 +2076,7 @@ Example response `200`:
 **Where the attest of one supplier invoice stands: who attested, who is left, every decision.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Answers whether the attest policy requires attest for the invoice, whether it is satisfied, the attesters who approved in the current round and those whose approval would move it on (with their limits), how many approvals it still needs and whether one must come from an attester whose limit covers the amount, the latest rejection with its comment, every decision (approved or rejected, who, when, source app / email_link / api / mcp) and whether the API key's user may approve or reject it now. A rejection starts a new round: approvals before it no longer count.
+Answers whether the attest policy requires attest for the invoice, whether it is satisfied, the attesters who approved in the current round and those whose approval would move it on (with their limits), how many approvals it still needs and whether one must come from an attester whose limit covers the amount, the latest rejection with its comment, every decision (approved or rejected, who, when, source app / email_link / api / mcp) and whether the API key's user may approve or reject it now. A rejection starts a new round: approvals before it no longer count. With förattest, stage and pre_attest say which step the invoice is at.
 
 **Use when:** An invoice is left out of payment with attest_required, or before attesting.
 **Do not use for:** The policy itself (GET /supplier-invoices/attest-policy).
@@ -2100,14 +2100,17 @@ Response `200`:
     approved_at: string | null,
     approved_by: { user_id: string, name: string | null, email: string | null } | null,
     approved: { user_id: string, name: string | null, email: string | null }[],
-    remaining: { user_id: string, name: string | null, email: string | null, limit_sek: number | null }[],
+    remaining: { user_id: string, name: string | null, email: string | null, limit_sek: number | null, stands_in_for: { user_id: string, name: string | null, email: string | null } | null }[],
     amount_sek: number | null,
     steps: 1 | 2,
     approvals_needed: number,
     needs_covering: boolean,
+    stage: "pre" | "final" | null,
+    pre_attest: { project: string | null, project_name: string | null, done: boolean, approved_by: { user_id: string, name: string | null, email: string | null } | null, attesters: { user_id: string, name: string | null, email: string | null }[] }[],
+    acts_for: { user_id: string, name: string | null, email: string | null } | null,
     latest_rejection: { user: { user_id: string, name: string | null, email: string | null }, comment: string | null, decided_at: string } | null,
-    attestations: { attestation_id: string, user: { user_id: string, name: string | null, email: string | null }, decision: "approved" | "rejected", comment: string | null, source: "app" | "email_link" | "api" | "mcp", decided_at: string, step: number | null }[],
-    viewer: { may_approve: boolean, may_reject: boolean, reason: string | null }
+    attestations: { attestation_id: string, user: { user_id: string, name: string | null, email: string | null }, decision: "approved" | "rejected", comment: string | null, source: "app" | "email_link" | "api" | "mcp", decided_at: string, step: number | null, stage: "pre" | "final" | null, on_behalf_of: { user_id: string, name: string | null, email: string | null } | null }[],
+    viewer: { may_approve: boolean, may_reject: boolean, reason: string | null, acts_for?: string }
   },
   meta: {
     request_id: string,
@@ -2137,13 +2140,17 @@ Example response `200`:
         "user_id": "3f0c…",
         "name": "Anna Ek",
         "email": "anna@example.se",
-        "limit_sek": null
+        "limit_sek": null,
+        "stands_in_for": null
       }
     ],
     "amount_sek": 12500,
     "steps": 1,
     "approvals_needed": 1,
     "needs_covering": true,
+    "stage": null,
+    "pre_attest": [],
+    "acts_for": null,
     "latest_rejection": null,
     "attestations": [],
     "viewer": {
@@ -2560,7 +2567,7 @@ Example response `200`:
 **Reject (neka) the attest of a supplier invoice that waits for it, with an optional comment.**
 `scope:suppliers:write · risk:low · idempotent · dry-run`
 
-Records the rejection and its comment in the attest trail as the API key's user. The attest round starts over: approvals given so far no longer count, and the attest mail's links for the invoice stop working. The invoice stays registered (or overdue past its due date); nothing is booked or paid. Whoever may approve may reject: with the attest policy on only its attesters, not the registrant unless the policy allows it. Idempotency-Key is mandatory: a replay answers the first call. Dry-runnable.
+Records the rejection and its comment in the attest trail as the API key's user. The attest round starts over: approvals given so far no longer count, and the attest mail's links for the invoice stop working. The invoice stays registered (or overdue past its due date); nothing is booked or paid. Whoever may approve at some step may reject: with the attest policy on its attesters and förattestants and their substitutes, not the registrant unless the policy allows it. Idempotency-Key is mandatory: a replay answers the first call. Dry-runnable.
 
 **Use when:** An attester does not accept the invoice (wrong amount, not ordered, wrong supplier) and the registrant should look again.
 **Do not use for:** Withdrawing a booked invoice (POST /supplier-invoices/{id}/credit) or deleting an unbooked one.
@@ -2721,7 +2728,7 @@ Example response `200`:
 **Read the company's attest policy for supplier invoices.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Whether the policy is on, the amount in SEK from which attest is required (null = every invoice), the attesters with their limits in SEK (limit_sek, null = no limit), mode any (one attester is enough) or all (every attester who may attest the invoice), whether the person who registered an invoice may attest it, and two_step_from_sek: from that amount two different attesters must approve. Below it one approval by an attester whose limit covers the invoice is enough; at or above it two, at least one with a covering limit, in any order. With the policy on, an invoice that needs attest is left out of bank payments and payment files until the policy is satisfied. Kontantmetoden has no attest step and the policy does not apply there.
+Whether the policy is on, the amount in SEK from which attest is required (null = every invoice), the attesters with their limits in SEK (limit_sek, null = no limit), mode any (one attester is enough) or all (every attester who may attest the invoice), whether the person who registered an invoice may attest it, and two_step_from_sek: from that amount two different attesters must approve. Below it one approval by an attester whose limit covers the invoice is enough; at or above it two, at least one with a covering limit, in any order. Ordered steps: with förattest (pre_attesters, project_attesters per project code of dimension 6) every project on an invoice's lines first needs one approval by its attesters (lines without a project of their own by pre_attesters), and only then do the attesters attest; one person's approval counts once per invoice, so a förattestant does not also attest it. substitutes: while a period runs, the substitute attests wherever the attester may, as them. With the policy on, an invoice that needs attest is left out of bank payments and payment files until the policy is satisfied. Kontantmetoden has no attest step and the policy does not apply there.
 
 **Use when:** Before attesting or preparing payments: who may attest, and why an invoice waits.
 **Do not use for:** Where one invoice's attest stands (GET /supplier-invoices/{id}/attestations).
@@ -2729,6 +2736,7 @@ Whether the policy is on, the amount in SEK from which attest is required (null 
 **Pitfalls:**
 - A company that never saved a policy answers enabled false with no attesters.
 - With levels on (a limit or two_step_from_sek), an attest through an API key is capped by the lower of the key user's limit and the key's unattended ceiling.
+- A company without förattest and substitutes answers pre_attesters [], project_attesters [] and substitutes [].
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2744,6 +2752,167 @@ Response `200`:
     attesters: { user_id: string, name: string | null, email: string | null, limit_sek: number | null }[],
     preparer_may_attest: boolean,
     two_step_from_sek: number | null,
+    pre_attesters: { user_id: string, name: string | null, email: string | null }[],
+    project_attesters: { project: string, project_name: string | null, attesters: { user_id: string, name: string | null, email: string | null }[] }[],
+    substitutes: { substitute_id: string, user: { user_id: string, name: string | null, email: string | null }, substitute: { user_id: string, name: string | null, email: string | null }, starts_on: string, ends_on: string, active: boolean }[],
+    updated_at: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "enabled": true,
+    "threshold_amount": 5000,
+    "mode": "any",
+    "attesters": [
+      {
+        "user_id": "3f0c…",
+        "name": "Anna Ek",
+        "email": "anna@example.se",
+        "limit_sek": 50000
+      },
+      {
+        "user_id": "8b2d…",
+        "name": "Bo Lind",
+        "email": "bo@example.se",
+        "limit_sek": null
+      }
+    ],
+    "preparer_may_attest": false,
+    "two_step_from_sek": 100000,
+    "pre_attesters": [],
+    "project_attesters": [
+      {
+        "project": "P100",
+        "project_name": "Kv. Eken",
+        "attesters": [
+          {
+            "user_id": "5a7e…",
+            "name": "Cecilia Berg",
+            "email": "cecilia@example.se"
+          }
+        ]
+      }
+    ],
+    "substitutes": [
+      {
+        "substitute_id": "1c4f…",
+        "user": {
+          "user_id": "8b2d…",
+          "name": "Bo Lind",
+          "email": "bo@example.se"
+        },
+        "substitute": {
+          "user_id": "3f0c…",
+          "name": "Anna Ek",
+          "email": "anna@example.se"
+        },
+        "starts_on": "2026-12-21",
+        "ends_on": "2027-01-06",
+        "active": false
+      }
+    ],
+    "updated_at": "2026-10-14T09:00:00.000Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/supplier-invoices/attest-policy`
+
+**Save the company's attest policy for supplier invoices.**
+`scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
+
+Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members who may write, or viewers), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; both left as they are when left out), and optionally pre_attesters and project_attesters, the förattest that comes first (left as they are when left out). With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the registrant unless preparer_may_attest) whose approval can count under their limit, approved_at is set when the policy is satisfied, and payments leave an invoice out until then (attest_required). The policy and the limits are saved together. Owners and admins only. Idempotent. Dry-runnable.
+
+**Use when:** Setting up or changing who attests supplier invoices.
+**Do not use for:** Attesting an invoice (POST /supplier-invoices/{id}/approve).
+
+**Pitfalls:**
+- ATTEST_POLICY_NO_ATTESTERS: a policy that is on needs at least one attester.
+- ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write or a viewer; details.user_ids names the others.
+- ATTEST_POLICY_TWO_STEP_NEEDS_TWO: two_step_from_sek with the policy on needs at least two attesters.
+- ATTEST_LIMIT_NOT_ATTESTER: a limit is for an attester; details.user_ids names the others.
+- ATTEST_PROJECT_NOT_FOUND: a project in project_attesters is not a code of dimension 6; details.projects names them.
+- One person approves an invoice once: someone who is both förattestant and attester for an invoice gives one of the two, and the other step needs someone else.
+- Keep at least one attester without a limit (null): an invoice above every limit has nobody whose approval covers it.
+- FORBIDDEN: only an owner or admin saves the policy.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  enabled: boolean,
+  threshold_amount: number | null,
+  mode: "any" | "all",
+  attesters: string[],
+  preparer_may_attest?: boolean,
+  two_step_from_sek?: number | null,
+  limits?: { user_id: string, max_amount_sek: number | null }[],
+  pre_attesters?: string[],
+  project_attesters?: { project: string, attesters: string[] }[]
+}
+```
+
+Example request:
+```json
+{
+  "enabled": true,
+  "threshold_amount": 5000,
+  "mode": "any",
+  "attesters": [
+    "3f0c…",
+    "8b2d…"
+  ],
+  "preparer_may_attest": false,
+  "two_step_from_sek": 100000,
+  "limits": [
+    {
+      "user_id": "3f0c…",
+      "max_amount_sek": 50000
+    },
+    {
+      "user_id": "8b2d…",
+      "max_amount_sek": null
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    enabled: boolean,
+    threshold_amount: number | null,
+    mode: "any" | "all",
+    attesters: { user_id: string, name: string | null, email: string | null, limit_sek: number | null }[],
+    preparer_may_attest: boolean,
+    two_step_from_sek: number | null,
+    pre_attesters: { user_id: string, name: string | null, email: string | null }[],
+    project_attesters: { project: string, project_name: string | null, attesters: { user_id: string, name: string | null, email: string | null }[] }[],
+    substitutes: { substitute_id: string, user: { user_id: string, name: string | null, email: string | null }, substitute: { user_id: string, name: string | null, email: string | null }, starts_on: string, ends_on: string, active: boolean }[],
     updated_at: string | null
   },
   meta: {
@@ -2792,23 +2961,21 @@ Example response `200`:
 
 ---
 
-### `PUT /api/v1/companies/{companyId}/supplier-invoices/attest-policy`
+### `POST /api/v1/companies/{companyId}/supplier-invoices/attest-substitutes`
 
-**Save the company's attest policy for supplier invoices.**
+**Name a substitute for a supplier invoice attester for a period.**
 `scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
 
-Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members who may write, or viewers), preparer_may_attest, and optionally two_step_from_sek and limits (the attest limit per attester in SEK; both left as they are when left out). With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the registrant unless preparer_may_attest) whose approval can count under their limit, approved_at is set when the policy is satisfied, and payments leave an invoice out until then (attest_required). The policy and the limits are saved together. Owners and admins only. Idempotent. Dry-runnable.
+While the period runs (Stockholm dates, both days included, at most a year), substitute_user_id attests supplier invoices wherever user_id may, as them: in their place in the order (förattest or attest), with their limit. The decision is recorded as the substitute's, for the attester (on_behalf_of), and the attest mail and Att göra reach the substitute. An owner or admin names a substitute for anyone; anyone else only for themselves. Dry-runnable.
 
-**Use when:** Setting up or changing who attests supplier invoices.
-**Do not use for:** Attesting an invoice (POST /supplier-invoices/{id}/approve).
+**Use when:** An attester will be away (vacation, leave) and invoices must still be attested.
+**Do not use for:** Making someone an attester for good (PUT /supplier-invoices/attest-policy).
 
 **Pitfalls:**
-- ATTEST_POLICY_NO_ATTESTERS: a policy that is on needs at least one attester.
-- ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write or a viewer; details.user_ids names the others.
-- ATTEST_POLICY_TWO_STEP_NEEDS_TWO: two_step_from_sek with the policy on needs at least two attesters.
-- ATTEST_LIMIT_NOT_ATTESTER: a limit is for an attester; details.user_ids names the others.
-- Keep at least one attester without a limit (null): an invoice above every limit has nobody whose approval covers it.
-- FORBIDDEN: only an owner or admin saves the policy.
+- ATTEST_SUBSTITUTE_NOT_MEMBER: both must be members whose attest can count; details.user_ids names the others.
+- FORBIDDEN: only an owner or admin names a substitute for someone else.
+- ATTEST_SUBSTITUTE_NO_POLICY: the company has never saved an attest policy.
+- One person approves an invoice once: a substitute who already approved it in their own name cannot approve it again for the attester.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2817,39 +2984,16 @@ Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode
 
 Request body:
 ```ts
-{
-  enabled: boolean,
-  threshold_amount: number | null,
-  mode: "any" | "all",
-  attesters: string[],
-  preparer_may_attest?: boolean,
-  two_step_from_sek?: number | null,
-  limits?: { user_id: string, max_amount_sek: number | null }[]
-}
+{ user_id: string, substitute_user_id: string, starts_on: string, ends_on: string }
 ```
 
 Example request:
 ```json
 {
-  "enabled": true,
-  "threshold_amount": 5000,
-  "mode": "any",
-  "attesters": [
-    "3f0c…",
-    "8b2d…"
-  ],
-  "preparer_may_attest": false,
-  "two_step_from_sek": 100000,
-  "limits": [
-    {
-      "user_id": "3f0c…",
-      "max_amount_sek": 50000
-    },
-    {
-      "user_id": "8b2d…",
-      "max_amount_sek": null
-    }
-  ]
+  "user_id": "8b2d…",
+  "substitute_user_id": "3f0c…",
+  "starts_on": "2026-12-21",
+  "ends_on": "2027-01-06"
 }
 ```
 
@@ -2857,13 +3001,11 @@ Response `200`:
 ```ts
 {
   data: {
-    enabled: boolean,
-    threshold_amount: number | null,
-    mode: "any" | "all",
-    attesters: { user_id: string, name: string | null, email: string | null, limit_sek: number | null }[],
-    preparer_may_attest: boolean,
-    two_step_from_sek: number | null,
-    updated_at: string | null
+    substitute_id: string,
+    user_id: string,
+    substitute_user_id: string,
+    starts_on: string,
+    ends_on: string
   },
   meta: {
     request_id: string,
@@ -2881,26 +3023,62 @@ Example response `200`:
 ```json
 {
   "data": {
-    "enabled": true,
-    "threshold_amount": 5000,
-    "mode": "any",
-    "attesters": [
-      {
-        "user_id": "3f0c…",
-        "name": "Anna Ek",
-        "email": "anna@example.se",
-        "limit_sek": 50000
-      },
-      {
-        "user_id": "8b2d…",
-        "name": "Bo Lind",
-        "email": "bo@example.se",
-        "limit_sek": null
-      }
-    ],
-    "preparer_may_attest": false,
-    "two_step_from_sek": 100000,
-    "updated_at": "2026-10-14T09:00:00.000Z"
+    "substitute_id": "1c4f…",
+    "user_id": "8b2d…",
+    "substitute_user_id": "3f0c…",
+    "starts_on": "2026-12-21",
+    "ends_on": "2027-01-06"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/supplier-invoices/attest-substitutes/{id}`
+
+**Remove a substitute for a supplier invoice attester.**
+`scope:suppliers:write · risk:low · idempotent · dry-run`
+
+Ends the substitution at once: the substitute no longer attests in the attester's place. What they attested stays. An owner or admin removes any; the attester who is away removes their own. Dry-runnable.
+
+**Use when:** The attester is back early, or the substitute was named by mistake.
+**Do not use for:** Changing who attests for good (PUT /supplier-invoices/attest-policy).
+
+**Pitfalls:**
+- ATTEST_SUBSTITUTE_NOT_FOUND: no such substitute in this company (or already removed).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { substitute_id: string, removed: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "substitute_id": "1c4f…",
+    "removed": true
   },
   "meta": {
     "request_id": "req_…",

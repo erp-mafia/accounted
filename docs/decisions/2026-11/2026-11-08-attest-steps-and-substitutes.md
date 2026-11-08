@@ -1,0 +1,1 @@
+[2026-11-08] Supplier invoice attest gets an optional förattest before the attest (per project code of dimension 6, a default group for lines without one) and dated substitutes who attest as the attester; a person approves an invoice once, so a förattestant never also attests it (#192, crm#1179).

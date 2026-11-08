@@ -79,7 +79,8 @@ import {
   type AttestMailState,
   type AttestRequestPlan,
 } from './attest-mail-plan'
-import { loadAttestLimits, loadAttestPolicy, loadAttestTrails } from './attest-policy-read'
+import { loadAttestLimits, loadAttestPolicyWithProjects, loadAttestTrails, withProjects } from './attest-policy-read'
+import { attestsAtAnyStep } from './attest-policy'
 
 const log = createLogger('supplier-invoices/attest-mail')
 
@@ -220,8 +221,9 @@ async function loadMailCompany(
   companyId: string,
   invoiceIds: readonly string[],
 ): Promise<{ company: AttestMailCompany; invoices: MailInvoice[] }> {
-  const [policy, limits, { data: settingsRow, error: settingsError }, { data: memberRows, error: memberError }, attestations] = await Promise.all([
-    loadAttestPolicy(service, companyId),
+  const [{ policy, projects }, limits, { data: settingsRow, error: settingsError }, { data: memberRows, error: memberError }, attestations] = await Promise.all([
+    // The förattest routes by the invoices' projects when the policy names project attesters (#192).
+    loadAttestPolicyWithProjects(service, companyId, invoiceIds),
     loadAttestLimits(service, companyId),
     service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
     service.from('company_members').select('user_id, role').eq('company_id', companyId),
@@ -238,24 +240,25 @@ async function loadMailCompany(
       .eq('company_id', companyId)
       .in('id', part)
     if (invoiceError) throw invoiceError
-    for (const row of (invoiceRows ?? []) as unknown as MailInvoice[]) invoices.push({ ...row, total: Number(row.total) })
-  }
-
-  const optedOut = new Set<string>()
-  if (policy.enabled && policy.attesters.length > 0) {
-    const { data: prefRows, error: prefError } = await service
-      .from('notification_settings')
-      .select('user_id, attest_request_email_enabled')
-      .in('user_id', policy.attesters)
-    if (prefError) throw prefError
-    for (const row of (prefRows ?? []) as Array<{ user_id: string; attest_request_email_enabled: boolean | null }>) {
-      if (row.attest_request_email_enabled === false) optedOut.add(row.user_id)
-    }
+    for (const row of (invoiceRows ?? []) as unknown as MailInvoice[]) invoices.push(withProjects({ ...row, total: Number(row.total) }, projects))
   }
 
   const attesters = new Set(
     ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isAttestRole(m.role)).map((m) => m.user_id),
   )
+  // Everyone a mail can ask: the attesters, the förattestants and the substitutes standing in today.
+  const askable = policy.enabled ? [...attesters].filter((id) => attestsAtAnyStep(policy, id)) : []
+  const optedOut = new Set<string>()
+  for (const part of chunk(askable, IN_CHUNK)) {
+    const { data: prefRows, error: prefError } = await service
+      .from('notification_settings')
+      .select('user_id, attest_request_email_enabled')
+      .in('user_id', part)
+    if (prefError) throw prefError
+    for (const row of (prefRows ?? []) as Array<{ user_id: string; attest_request_email_enabled: boolean | null }>) {
+      if (row.attest_request_email_enabled === false) optedOut.add(row.user_id)
+    }
+  }
   const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
   return { company: { policy, accountingMethod, attesters, limits, attestations, optedOut }, invoices }
 }

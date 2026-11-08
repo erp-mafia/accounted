@@ -124,7 +124,9 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
           ? t('state_registrant')
           : invoice.reason === 'limit' || invoice.reason === 'key_limit'
             ? t('state_limit')
-            : t('state_closed')
+            : invoice.reason === 'other_step'
+              ? t('state_other_step')
+              : t('state_closed')
       default:
         return !invoice.may_approve && invoice.may_reject ? t('limit_reject_only') : null
     }
@@ -194,6 +196,18 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
                         <>
                           <span aria-hidden="true">·</span>
                           <span>{t('registered_by', { name: invoice.registered_by })}</span>
+                        </>
+                      )}
+                      {invoice.stage && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{t(invoice.stage === 'pre' ? 'stage_pre' : 'stage_final')}</span>
+                        </>
+                      )}
+                      {invoice.acts_for_name && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{t('acts_for', { name: invoice.acts_for_name })}</span>
                         </>
                       )}
                     </div>

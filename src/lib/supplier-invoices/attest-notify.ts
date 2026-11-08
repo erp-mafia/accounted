@@ -33,7 +33,8 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
 import { queueAttestRequest } from './attest-batches'
 import { attestLinkUrl, markAttestLinkMailed, mintAttestLink } from './attest-links'
-import { attestProgress, invoiceNeedsAttest, type AttestInvoiceFacts } from './attest-policy'
+import { attestAskees, attestProgress, invoiceNeedsAttest, type AttestInvoiceFacts } from './attest-policy'
+import { loadInvoiceProjects, withProjects } from './attest-policy-read'
 import { loadActiveAttestMembers, loadAttestLimits, loadAttestPeople, loadAttestPolicy } from './attest-service'
 
 const log = createLogger('supplier-invoices/attest-notify')
@@ -83,11 +84,16 @@ export async function notifyAttestersOfInvoice(
   } | null
   if (!invoice || invoice.approved_at || !['registered', 'overdue'].includes(invoice.status)) return result
   const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
-  const facts = { ...invoice, total: Number(invoice.total) }
-  if (!invoiceNeedsAttest(policy, accountingMethod, facts)) return result
+  if (!invoiceNeedsAttest(policy, accountingMethod, { ...invoice, total: Number(invoice.total) })) return result
 
-  const [members, limits] = await Promise.all([loadActiveAttestMembers(service, companyId), loadAttestLimits(service, companyId)])
-  const recipients = attestProgress(policy, accountingMethod, facts, [], members, limits).remaining
+  const [members, limits, projects] = await Promise.all([
+    loadActiveAttestMembers(service, companyId),
+    loadAttestLimits(service, companyId),
+    loadInvoiceProjects(service, companyId, policy, [invoice.id]),
+  ])
+  // The step the invoice is at (the förattestants first, #192), and the substitutes standing in for them.
+  const facts = withProjects({ ...invoice, total: Number(invoice.total) }, projects)
+  const recipients = attestAskees(attestProgress(policy, accountingMethod, facts, [], members, limits))
   if (recipients.length === 0) return result
 
   const [people, { data: prefs }] = await Promise.all([
@@ -123,7 +129,7 @@ export async function notifyAttestersOfInvoice(
         supplierName: invoice.supplier?.name?.trim() || 'Leverantören',
         invoiceNumber: invoice.supplier_invoice_number,
         arrivalNumber: invoice.arrival_number,
-        total: facts.total,
+        total: Number(invoice.total),
         currency: invoice.currency,
         dueDate: invoice.due_date,
         registeredBy: registrant?.name ?? registrant?.email ?? null,

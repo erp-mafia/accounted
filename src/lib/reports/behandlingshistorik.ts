@@ -333,6 +333,10 @@ export const AUDITED_TABLES = [
   // and the account the year's adjustment is booked on, chosen, changed and
   // removed (behandlingshistorik since 20261108174501).
   'contract_revenue_settings',
+  // Substitutes for attest (migration 20261108180000, accounted#192): who
+  // stands in for an attester away, for which days. It decides who may
+  // release a payment while the period runs.
+  'company_attest_substitutes',
 ] as const
 
 /**
@@ -1571,7 +1575,10 @@ function attestRuleValue(key: string, value: unknown): string {
     case 'mode':
       return value === 'all' ? 'alla attestanter' : 'en attestant räcker'
     case 'attesters':
+    case 'pre_attesters':
       return `${Array.isArray(value) ? value.length : 0} st`
+    case 'project_attesters':
+      return value && typeof value === 'object' && !Array.isArray(value) ? `${Object.keys(value).length} projekt` : '0 projekt'
     default:
       return fmtValue(value)
   }
@@ -1584,6 +1591,8 @@ const ATTEST_POLICY_RULES: Record<string, string> = {
   attesters: 'Attestanter',
   preparer_may_attest: 'Den som registrerat får attestera',
   two_step_from_sek: 'Två attestanter från',
+  pre_attesters: 'Förattest av fakturor utan projekt',
+  project_attesters: 'Förattest per projekt',
 }
 
 /**
@@ -1597,12 +1606,17 @@ function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent
   for (const [key, label] of Object.entries(ATTEST_POLICY_RULES)) {
     const after = attestRuleValue(key, row.new_state?.[key])
     if (row.action === 'INSERT') {
-      // A rule newer than the row (two_step_from_sek before 20261030140000) is not stated.
-      if (row.new_state && key in row.new_state) details.push(`${label}: ${after}`)
+      // A rule newer than the row (two_step_from_sek before 20261030140000) is not stated,
+      // nor a förattest nobody is named for (#192): a policy without one reads as before.
+      const unused = (key === 'pre_attesters' || key === 'project_attesters') && same(row.new_state?.[key], key === 'pre_attesters' ? [] : {})
+      if (row.new_state && key in row.new_state && !unused) details.push(`${label}: ${after}`)
       continue
     }
     const before = attestRuleValue(key, row.old_state?.[key])
-    const changed = key === 'attesters' ? !same(row.old_state?.[key], row.new_state?.[key]) : before !== after
+    const changed =
+      key === 'attesters' || key === 'pre_attesters' || key === 'project_attesters'
+        ? !same(row.old_state?.[key], row.new_state?.[key])
+        : before !== after
     if (changed) details.push(`${label}: ${before} → ${after}`)
   }
   if (row.action === 'UPDATE' && details.length === 0) return null
@@ -1613,6 +1627,25 @@ function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent
     object: 'Leverantörsfakturor',
     details,
   })
+}
+
+/**
+ * A substitute for attest (migration 20261108180000): who stands in for an
+ * attester away, for which days. The people stay ids in the row, as the
+ * attesters do in the policy's rows; the period is what the report states.
+ */
+function attestSubstituteAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.action === 'DELETE' ? row.old_state : row.new_state
+  const period = `Period: ${fmtValue(state?.starts_on)} till ${fmtValue(state?.ends_on)}`
+  const fields = { category: 'installningar' as const, object: 'Leverantörsfakturor' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, { ...fields, code: 'attest_substitute.added', event: 'Ersättare för attest vald', details: [period] })
+    case 'DELETE':
+      return auditEvent(row, { ...fields, code: 'attest_substitute.removed', event: 'Ersättare för attest borttagen', details: [period] })
+    default:
+      return null
+  }
 }
 
 /** An attest limit as the report states it. */
@@ -2046,6 +2079,8 @@ export function auditRowToEvent(
       return attestPolicyAuditEvent(row)
     case 'company_attest_limits':
       return attestLimitAuditEvent(row)
+    case 'company_attest_substitutes':
+      return attestSubstituteAuditEvent(row)
     case 'booking_review_rules':
       return bookingReviewRuleAuditEvent(row)
     case 'contract_revenue_settings':

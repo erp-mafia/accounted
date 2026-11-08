@@ -121,6 +121,10 @@ export interface AttestLinkPageData {
   approved_names: string[]
   remaining_names: string[]
   mode: 'any' | 'all'
+  /** With förattest (#192): the step the invoice is at, 'pre' or 'final'; null without förattest or once attested. */
+  stage: 'pre' | 'final' | null
+  /** The attester this one would approve for, as their substitute (#192); null in their own name. */
+  acts_for_name: string | null
   expires_at: string
 }
 
@@ -179,6 +183,8 @@ export async function describeAttestLink(service: SupabaseClient, link: AttestLi
     approved_names: attest.approved.map((p) => nameOf(p)).filter((n): n is string => !!n),
     remaining_names: attest.remaining.map((p) => nameOf(p)).filter((n): n is string => !!n),
     mode: attest.policy.mode,
+    stage: attest.stage,
+    acts_for_name: attest.acts_for ? nameOf(attest.acts_for) : null,
     expires_at: link.expires_at,
   }
 }

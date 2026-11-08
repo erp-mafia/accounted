@@ -30,23 +30,56 @@
  * ceiling. The limits read as they stand now, like the attesters: lowering
  * a limit after an approval can make it stop covering.
  *
+ * Ordered steps (#192): the policy may ask for a förattest first. Every
+ * project (dimension 6) on the invoice's lines needs one approval by that
+ * project's attesters (project_attesters), a line without a project of its
+ * own one by pre_attesters; one approval covers every group its giver is in.
+ * Until each group has its förattest the attesters cannot attest; after it,
+ * the attest goes as above. A person's approval counts once per round, in the
+ * step it was given in, so whoever förattested cannot also attest the same
+ * invoice. No limit applies to a förattest.
+ *
+ * Substitutes (#192): while an attester's substitution runs (policy
+ * substitutes, active today), the substitute attests wherever the attester
+ * may, as the attester: their place in the order, their limit. The approval
+ * counts as the attester's (on_behalf_of) and is still one person's: someone
+ * who approved in their own name cannot approve again for someone else.
+ *
+ * A company that names no förattestant, no project attester and no
+ * substitute is ruled exactly as before: every new field is optional, and
+ * the rulings and progress carry nothing new for it.
+ *
  * The database applies the same rules when it records an approval: the
  * attest_supplier_invoice RPC (supplier_invoice_attest_ruling), which locks
  * the invoice and sets the marker only when the policy is met. This module is
  * what the pages, the dry runs and the worklist read;
- * tests/pg/supplier-invoice-attest-levels.pg.test.ts proves the two agree.
+ * tests/pg/supplier-invoice-attest-levels.pg.test.ts and
+ * supplier-invoice-attest-steps.pg.test.ts prove the two agree.
  */
 
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { DIM_PROJECT, mergeDimensionBags, type LineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { roundOre } from '@/lib/money'
 import { companyAttestsSupplierInvoices } from './lifecycle'
 
 export type AttestMode = 'any' | 'all'
 export type AttestDecision = 'approved' | 'rejected'
 export type AttestSource = 'app' | 'email_link' | 'api' | 'mcp'
+/** The step an approval is given in: the förattest, or the attest the policy asks for. */
+export type AttestStage = 'pre' | 'final'
 
 export const ATTEST_COMMENT_MAX = 1000
 export const ATTEST_MAX_ATTESTERS = 50
+/** How many projects may name their own förattestants (attest_project_attesters_valid). */
+export const ATTEST_MAX_PROJECTS = 500
+/** The longest substitution, in days between its first and last day. */
+export const ATTEST_SUBSTITUTE_MAX_DAYS = 366
+
+/** A substitution that runs today: `substitute_user_id` attests in the place of `user_id`. */
+export interface AttestSubstitution {
+  user_id: string
+  substitute_user_id: string
+}
 
 export interface AttestPolicy {
   enabled: boolean
@@ -59,6 +92,12 @@ export interface AttestPolicy {
   preparer_may_attest: boolean
   /** Two different attesters from this amount in SEK; null = one is always enough. */
   two_step_from_sek: number | null
+  /** Förattest for an invoice (or a line) without a project of its own in project_attesters; empty or left out = none. */
+  pre_attesters?: string[]
+  /** Förattest per project: dimension 6 code to its attesters. Empty or left out = no project routing. */
+  project_attesters?: Readonly<Record<string, readonly string[]>>
+  /** The substitutions that run today (company_attest_substitutes). */
+  substitutes?: readonly AttestSubstitution[]
   updated_by: string | null
   updated_at: string | null
 }
@@ -84,6 +123,13 @@ export interface AttestInvoiceFacts {
   total: number
   total_sek?: number | null
   exchange_rate?: number | null
+  /**
+   * The project (dimension 6) of each of its lines, null for a line without
+   * one, distinct (invoiceProjects). Read only where the policy routes
+   * projects (policyRoutesProjects); left out, the invoice reads as having
+   * no project.
+   */
+  projects?: ReadonlyArray<string | null>
 }
 
 export interface AttestationRecord {
@@ -92,6 +138,10 @@ export interface AttestationRecord {
   decided_at: string
   comment?: string | null
   source?: AttestSource
+  /** The step it was given in; null or left out = the attest (rows before #192). */
+  stage?: AttestStage | null
+  /** The attester a substitute acted for: the approval counts as theirs. */
+  on_behalf_of?: string | null
 }
 
 /** The attesters' limits in SEK (company_attest_limits, scope supplier_invoice): user id to limit, null = no limit. A user without an entry has no limit. */
@@ -208,20 +258,111 @@ export function eligibleAttesters(
   invoice: Pick<AttestInvoiceFacts, 'user_id'>,
   activeMembers?: ReadonlySet<string>,
 ): string[] {
-  return [...new Set(policy.attesters)].filter(
+  return eligibleAmong(policy, invoice, policy.attesters, activeMembers)
+}
+
+/** `ids` without the registrant unless the policy lets the registrant attest, and only those still active. */
+function eligibleAmong(
+  policy: Pick<AttestPolicy, 'preparer_may_attest'>,
+  invoice: Pick<AttestInvoiceFacts, 'user_id'>,
+  ids: readonly string[],
+  activeMembers?: ReadonlySet<string>,
+): string[] {
+  return [...new Set(ids)].filter(
     (id) => (policy.preparer_may_attest || id !== invoice.user_id) && (!activeMembers || activeMembers.has(id)),
   )
 }
 
+/** Byte order, as Postgres orders uuids and text under COLLATE "C". */
+export const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/** The same people, in any order. */
+export const sameIdSet = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && [...a].sort(byteOrder).join(',') === [...b].sort(byteOrder).join(',')
+
+const bagOf = (raw: unknown): LineDimensions | null => (raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as LineDimensions) : null)
+
+/**
+ * The projects of an invoice for the förattest: the project each line books
+ * to, the line's dimension 6 merged over the invoice's (mergeDimensionBags,
+ * the rule the registration verifikat uses: an empty line value clears it);
+ * an invoice without lines has its own. Distinct, null for a line without a
+ * project. The twin of the codes in supplier_invoice_pre_attest_groups.
+ */
+export function invoiceProjects(defaultDimensions: unknown, lines: ReadonlyArray<{ dimensions?: unknown }>): Array<string | null> {
+  const projectOf = (line: unknown) => mergeDimensionBags(bagOf(defaultDimensions), bagOf(line))?.[DIM_PROJECT] ?? null
+  if (lines.length === 0) return [projectOf(null)]
+  return [...new Set(lines.map((line) => projectOf(line.dimensions)))]
+}
+
+/** The policy names förattestants per project: an invoice's projects decide its förattest. */
+export function policyRoutesProjects(policy: Pick<AttestPolicy, 'project_attesters'>): boolean {
+  return Object.values(policy.project_attesters ?? {}).some((ids) => ids.length > 0)
+}
+
+/** One förattest the invoice needs: by one of `attesters`, for `project` (null: lines without a project of their own). */
+export interface PreAttestGroup {
+  project: string | null
+  attesters: string[]
+}
+
+/**
+ * The förattest groups of an invoice: one per project on its lines that the
+ * policy names attesters for, then one of pre_attesters when a line has no
+ * project, or a project nobody is named for. Empty: no förattest, the
+ * invoice goes straight to the attesters. The twin of
+ * supplier_invoice_pre_attest_groups.
+ */
+export function preAttestGroups(policy: AttestPolicy, invoice: Pick<AttestInvoiceFacts, 'projects'>): PreAttestGroup[] {
+  const routes = policy.project_attesters ?? {}
+  const fallback = policy.pre_attesters ?? []
+  const codes = invoice.projects && invoice.projects.length > 0 ? new Set(invoice.projects) : new Set<string | null>([null])
+  const groups: PreAttestGroup[] = []
+  let unrouted = false
+  for (const code of codes) {
+    const routed = code !== null && Object.prototype.hasOwnProperty.call(routes, code) ? routes[code] : undefined
+    if (routed && routed.length > 0) groups.push({ project: code, attesters: [...new Set(routed)] })
+    else unrouted = true
+  }
+  groups.sort((a, b) => byteOrder(a.project ?? '', b.project ?? ''))
+  if (unrouted && fallback.length > 0) groups.push({ project: null, attesters: [...new Set(fallback)] })
+  return groups
+}
+
+/** Whoever the user may act for today: themselves, then each attester whose substitute they are, in id order. */
+export function actsFor(policy: Pick<AttestPolicy, 'substitutes'>, userId: string): string[] {
+  const principals = (policy.substitutes ?? [])
+    .filter((s) => s.substitute_user_id === userId && s.user_id !== userId)
+    .map((s) => s.user_id)
+  return [userId, ...[...new Set(principals)].sort(byteOrder)]
+}
+
+/** True when the user (or someone they stand in for today) attests at some step: an attester, a förattestant (default or for any project). */
+export function attestsAtAnyStep(policy: AttestPolicy, userId: string): boolean {
+  const named = new Set([...policy.attesters, ...(policy.pre_attesters ?? []), ...Object.values(policy.project_attesters ?? {}).flat()])
+  return actsFor(policy, userId).some((id) => named.has(id))
+}
+
 export type MayAttestResult = { ok: true } | { ok: false; reason: 'not_attester' | 'registrant' }
 
-/** Whether this user may attest an invoice the policy requires attest for. */
+/** True when `id` attests the invoice at some step: an attester, or a förattestant of one of its groups. */
+function attestsInvoice(policy: AttestPolicy, groups: readonly PreAttestGroup[], id: string): boolean {
+  return policy.attesters.includes(id) || groups.some((g) => g.attesters.includes(id))
+}
+
+/**
+ * Whether this user may attest an invoice the policy requires attest for, at
+ * some step: they (or someone they stand in for today) attest it, and they
+ * did not register it unless the policy allows that. Which step and whose
+ * place is ruleOnApproval's.
+ */
 export function mayAttest(
   policy: AttestPolicy,
-  invoice: Pick<AttestInvoiceFacts, 'user_id'>,
+  invoice: Pick<AttestInvoiceFacts, 'user_id' | 'projects'>,
   userId: string,
+  groups: readonly PreAttestGroup[] = preAttestGroups(policy, invoice),
 ): MayAttestResult {
-  if (!policy.attesters.includes(userId)) return { ok: false, reason: 'not_attester' }
+  if (!actsFor(policy, userId).some((id) => attestsInvoice(policy, groups, id))) return { ok: false, reason: 'not_attester' }
   if (!policy.preparer_may_attest && invoice.user_id === userId) return { ok: false, reason: 'registrant' }
   return { ok: true }
 }
@@ -243,41 +384,75 @@ export function latestRejection(attestations: readonly AttestationRecord[]): Att
   return rejections.reduce((latest, row) => (row.decided_at > latest.decided_at ? row : latest))
 }
 
+/** Whose approval a decision is: the attester a substitute acted for, else who made it. */
+export function attestSlotOf(row: Pick<AttestationRecord, 'user_id' | 'on_behalf_of'>): string {
+  return row.on_behalf_of ?? row.user_id
+}
+
+/** A förattest group as it stands: done once one of its attesters gave a förattest this round. */
+export interface PreAttestGroupProgress extends PreAttestGroup {
+  done: boolean
+  /** Who gave it this round (the attester it counts for); null while missing. */
+  approved_by: string | null
+  /** Its attesters who may give the förattest (eligibleAmong). */
+  eligible: string[]
+}
+
+/** A substitute who may give a missing approval in an attester's place today. */
+export interface AttestStandIn {
+  user_id: string
+  /** The attester they stand in for (one of `remaining`). */
+  for_user_id: string
+}
+
 export interface AttestProgress {
   /** The policy requires attest for this invoice. */
   required: boolean
   mode: AttestMode
   /** The policy is satisfied by the current round (always false when not required). */
   satisfied: boolean
-  /** Eligible attesters who approved in the current round, in order. */
+  /** Eligible attesters whose attest (not förattest) counts in the current round, in order. */
   approved_by: string[]
   /**
-   * Eligible attesters whose approval would move the invoice on: under `all`
-   * every one still missing; under `any` all of them, or only those whose
-   * limit covers the amount when a covering approval is what is left.
+   * Eligible attesters whose approval would move the invoice on, at the step
+   * it is at: while a förattest is missing, the attesters of the groups
+   * without one; then under `all` every attester still missing, under `any`
+   * all of them, or only those whose limit covers the amount when a covering
+   * approval is what is left.
    */
   remaining: string[]
-  /** Everyone who may attest the invoice now. */
+  /** Everyone who may attest the invoice now (the attest step; whoever gave a förattest is no longer among them). */
   eligible: string[]
-  /** Nobody can attest the invoice under the policy: no eligible attester, none whose limit covers it, or fewer than the steps it needs. */
+  /** Nobody can attest the invoice under the policy: a förattest group without an eligible attester, no eligible attester, none whose limit covers it, or fewer than the steps it needs. */
   blocked: boolean
   /** The invoice's total in SEK the levels judge; null when a foreign invoice has no rate. */
   amount_sek: number | null
-  /** How many different attesters the invoice needs (two at or above the two-step amount). */
+  /** How many different attesters the attest needs (two at or above the two-step amount). */
   steps: 1 | 2
-  /** How many more approvals the policy needs; 0 when satisfied or not required. */
+  /** How many more approvals the policy needs, förattests included; 0 when satisfied or not required. */
   approvals_needed: number
   /** One of the missing approvals must come from someone whose limit covers amount_sek. */
   needs_covering: boolean
+  /** Only with förattest groups: 'pre' while one is missing, then 'final'. */
+  stage?: AttestStage
+  /** Only with förattest groups: each group, whether it is done and who may give it. */
+  pre_groups?: PreAttestGroupProgress[]
+  /** Only with förattest groups: whose förattest counts this round, in order. */
+  pre_approved_by?: string[]
+  /** Only with substitutes running: who may give a missing approval in the place of someone in `remaining`. */
+  stand_ins?: AttestStandIn[]
 }
 
 /**
- * Where the attest of an invoice stands under the policy. `any`: one
- * approval by an eligible attester satisfies it, two different ones from the
- * two-step amount, and at least one of them with a limit that covers the
- * amount. `all`: every eligible attester must approve (and one of them must
- * cover the amount). Approvals by people who are not (or no longer) eligible
- * are kept in the trail but do not count.
+ * Where the attest of an invoice stands under the policy. A förattest first
+ * when the invoice has förattest groups (preAttestGroups): every group needs
+ * one approval by its eligible attesters. Then `any`: one approval by an
+ * eligible attester satisfies it, two different ones from the two-step
+ * amount, and at least one of them with a limit that covers the amount.
+ * `all`: every eligible attester must approve (and one of them must cover
+ * the amount). Approvals by people who are not (or no longer) eligible are
+ * kept in the trail but do not count; an approval a substitute gave counts
+ * as the attester's.
  */
 export function attestProgress(
   policy: AttestPolicy,
@@ -288,45 +463,101 @@ export function attestProgress(
   limits?: AttestLimits,
 ): AttestProgress {
   const required = invoiceNeedsAttest(policy, accountingMethod, invoice)
-  const eligible = required ? eligibleAttesters(policy, invoice, activeMembers) : []
+  const groups = required ? preAttestGroups(policy, invoice) : []
+  const round = currentRound(attestations)
+  const approvals = round.filter((row) => row.decision === 'approved')
+
+  // The förattest: whose counts, and which groups it covers.
+  const eligibleIn = groups.map((g) => eligibleAmong(policy, invoice, g.attesters, activeMembers))
+  const preEligible = new Set(eligibleIn.flat())
+  const preApprovedBy: string[] = []
+  for (const row of approvals) {
+    const slot = attestSlotOf(row)
+    if (row.stage === 'pre' && preEligible.has(slot) && !preApprovedBy.includes(slot)) preApprovedBy.push(slot)
+  }
+  const preGroups: PreAttestGroupProgress[] = groups.map((g, i) => {
+    const by = preApprovedBy.find((id) => g.attesters.includes(id)) ?? null
+    return { ...g, eligible: eligibleIn[i]!, approved_by: by, done: by !== null }
+  })
+  const preMet = preGroups.every((g) => g.done)
+
+  // The attest: the attesters, less whoever gave a förattest this round.
+  const eligible = required ? eligibleAttesters(policy, invoice, activeMembers).filter((id) => !preApprovedBy.includes(id)) : []
   const amount = invoiceTotalSek(invoice)
   const steps = required ? attestStepsRequired(policy, amount) : 1
   const covers = (id: string) => limitCovers(attestLimitOf(limits, id), amount)
   const approvedBy: string[] = []
-  for (const row of currentRound(attestations)) {
-    if (row.decision === 'approved' && eligible.includes(row.user_id) && !approvedBy.includes(row.user_id)) {
-      approvedBy.push(row.user_id)
-    }
+  for (const row of approvals) {
+    const slot = attestSlotOf(row)
+    if (row.stage !== 'pre' && eligible.includes(slot) && !approvedBy.includes(slot)) approvedBy.push(slot)
   }
   const covering = approvedBy.some(covers)
   const missing = eligible.filter((id) => !approvedBy.includes(id))
   const modeMet = policy.mode === 'any' ? approvedBy.length >= 1 : missing.length === 0
-  const satisfied = required && eligible.length > 0 && modeMet && approvedBy.length >= steps && covering
+  const satisfied = required && preMet && eligible.length > 0 && modeMet && approvedBy.length >= steps && covering
   // Under `any`, a missing approval can come from anyone while the steps
   // still need more people than the one covering approval they need.
   const openToAnyone = steps - approvedBy.length - (covering ? 0 : 1) > 0
-  const remaining = satisfied ? [] : policy.mode === 'all' || openToAnyone ? missing : missing.filter(covers)
-  return {
+  const finalRemaining = policy.mode === 'all' || openToAnyone ? missing : missing.filter(covers)
+  const preRemaining = [...new Set(preGroups.filter((g) => !g.done).flatMap((g) => g.eligible))].filter((id) => !approvedBy.includes(id))
+  const remaining = satisfied ? [] : preMet ? finalRemaining : preRemaining
+  const finalNeeded = policy.mode === 'all' ? missing.length : Math.max(steps - approvedBy.length, covering ? 0 : 1)
+  const progress: AttestProgress = {
     required,
     mode: policy.mode,
     satisfied,
     approved_by: approvedBy,
     remaining,
     eligible,
-    blocked: required && (eligible.length === 0 || eligible.length < steps || !eligible.some(covers)),
+    blocked:
+      required &&
+      (preGroups.some((g) => !g.done && g.eligible.length === 0) || eligible.length === 0 || eligible.length < steps || !eligible.some(covers)),
     amount_sek: amount,
     steps,
-    approvals_needed:
-      !required || satisfied
-        ? 0
-        : policy.mode === 'all'
-          ? missing.length
-          : Math.max(steps - approvedBy.length, covering ? 0 : 1),
+    approvals_needed: !required || satisfied ? 0 : finalNeeded + preGroups.filter((g) => !g.done).length,
     needs_covering: required && !satisfied && !covering,
   }
+  if (preGroups.length > 0) {
+    progress.stage = preMet ? 'final' : 'pre'
+    progress.pre_groups = preGroups
+    progress.pre_approved_by = preApprovedBy
+  }
+  const standIns = standInsFor(policy, invoice, round, remaining, activeMembers)
+  if (standIns.length > 0) progress.stand_ins = standIns
+  return progress
 }
 
-export type AttestRefusalReason = 'not_attester' | 'registrant' | 'not_member'
+/**
+ * The substitutes who may give a missing approval in the place of someone in
+ * `remaining`: still members whose attest can count, not the registrant
+ * unless allowed, not one of `remaining` themselves, and not someone who
+ * already approved this round.
+ */
+function standInsFor(
+  policy: AttestPolicy,
+  invoice: Pick<AttestInvoiceFacts, 'user_id'>,
+  round: readonly AttestationRecord[],
+  remaining: readonly string[],
+  activeMembers?: ReadonlySet<string>,
+): AttestStandIn[] {
+  const out: AttestStandIn[] = []
+  for (const s of policy.substitutes ?? []) {
+    if (!remaining.includes(s.user_id) || remaining.includes(s.substitute_user_id) || s.substitute_user_id === s.user_id) continue
+    if (activeMembers && !activeMembers.has(s.substitute_user_id)) continue
+    if (!policy.preparer_may_attest && s.substitute_user_id === invoice.user_id) continue
+    if (round.some((row) => row.decision === 'approved' && row.user_id === s.substitute_user_id)) continue
+    if (out.some((o) => o.user_id === s.substitute_user_id && o.for_user_id === s.user_id)) continue
+    out.push({ user_id: s.substitute_user_id, for_user_id: s.user_id })
+  }
+  return out
+}
+
+/** Everyone whose approval would move the invoice on: `remaining` and the substitutes standing in for them. */
+export function attestAskees(progress: Pick<AttestProgress, 'remaining' | 'stand_ins'>): string[] {
+  return [...new Set([...progress.remaining, ...(progress.stand_ins ?? []).map((s) => s.user_id)])]
+}
+
+export type AttestRefusalReason = 'not_attester' | 'registrant' | 'not_member' | 'other_step'
 
 export type AttestRuling =
   /** The policy does not govern the invoice: approval works as it always has. */
@@ -342,9 +573,19 @@ export type AttestRuling =
   /**
    * Record the decision; `satisfies` says whether it completes the policy.
    * `step` is the approval's place in the round, `limitSek` the limit that
-   * applied to it: both go to the trail.
+   * applied to it: both go to the trail. With förattest groups `stage` says
+   * which step it is given in; `onBehalfOf` names the attester a substitute
+   * acts for.
    */
-  | { kind: 'record'; satisfies: boolean; remainingAfter: string[]; step: number; limitSek: number | null }
+  | {
+      kind: 'record'
+      satisfies: boolean
+      remainingAfter: string[]
+      step: number
+      limitSek: number | null
+      stage?: AttestStage
+      onBehalfOf?: string
+    }
 
 /**
  * May this user approve the invoice now, and what does the approval do?
@@ -352,6 +593,10 @@ export type AttestRuling =
  * (isAttestRole, a viewer included): an attester who left the company or
  * became an invoicer is refused like anyone else. `levels` are the
  * attesters' limits and the key the attest comes through, if any.
+ *
+ * The approval takes the place of the first of the user and those they stand
+ * in for today (actsFor) whom the step the invoice is at still needs; at the
+ * attest step that person's limit applies.
  */
 export function ruleOnApproval(
   policy: AttestPolicy,
@@ -364,33 +609,59 @@ export function ruleOnApproval(
 ): AttestRuling {
   if (!invoiceNeedsAttest(policy, accountingMethod, invoice)) return { kind: 'unrestricted' }
   if (activeMembers && !activeMembers.has(userId)) return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: 'not_member' }
-  const may = mayAttest(policy, invoice, userId)
+  const groups = preAttestGroups(policy, invoice)
+  const may = mayAttest(policy, invoice, userId, groups)
   if (!may.ok) return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: may.reason }
+  const candidates = actsFor(policy, userId)
   const round = currentRound(attestations)
   if (round.some((row) => row.decision === 'approved' && row.user_id === userId)) {
     return { kind: 'refused', code: 'ATTEST_ALREADY_GIVEN' }
   }
   const limits = levels?.limits
   const before = attestProgress(policy, accountingMethod, invoice, attestations, activeMembers, limits)
-  const amount = before.amount_sek
-  const applied = effectiveAttestLimit(policy, userId, levels)
-  if (levels?.viaKey && attestLevelsOn(policy, limits) && !limitCovers(applied, amount)) {
-    return { kind: 'refused', code: 'ATTEST_LIMIT_EXCEEDED', reason: 'key_limit', limit_sek: applied, amount_sek: amount }
+  const pre = before.stage === 'pre'
+  const used = [...(before.pre_approved_by ?? []), ...before.approved_by]
+  // Who the step the invoice is at still needs.
+  const stageSet = pre
+    ? new Set((before.pre_groups ?? []).filter((g) => !g.done).flatMap((g) => g.eligible))
+    : new Set(before.eligible)
+  const slot = candidates.find((id) => stageSet.has(id) && !used.includes(id))
+  if (slot === undefined) {
+    if (candidates.some((id) => stageSet.has(id))) return { kind: 'refused', code: 'ATTEST_ALREADY_GIVEN' }
+    return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: 'other_step' }
   }
-  const own = attestLimitOf(limits, userId)
-  if (policy.mode === 'any' && !limitCovers(own, amount)) {
-    // Not covering: the approval counts only while the round has room for
-    // someone besides the covering approver it still needs.
-    const covering = before.approved_by.some((id) => limitCovers(attestLimitOf(limits, id), amount))
-    if (before.steps - before.approved_by.length - (covering ? 0 : 1) <= 0) {
-      return { kind: 'refused', code: 'ATTEST_LIMIT_EXCEEDED', reason: 'limit', limit_sek: own, amount_sek: amount }
+  const amount = before.amount_sek
+  let applied: number | null = null
+  if (!pre) {
+    applied = effectiveAttestLimit(policy, slot, levels)
+    if (levels?.viaKey && attestLevelsOn(policy, limits) && !limitCovers(applied, amount)) {
+      return { kind: 'refused', code: 'ATTEST_LIMIT_EXCEEDED', reason: 'key_limit', limit_sek: applied, amount_sek: amount }
+    }
+    const own = attestLimitOf(limits, slot)
+    if (policy.mode === 'any' && !limitCovers(own, amount)) {
+      // Not covering: the approval counts only while the round has room for
+      // someone besides the covering approver it still needs.
+      const covering = before.approved_by.some((id) => limitCovers(attestLimitOf(limits, id), amount))
+      if (before.steps - before.approved_by.length - (covering ? 0 : 1) <= 0) {
+        return { kind: 'refused', code: 'ATTEST_LIMIT_EXCEEDED', reason: 'limit', limit_sek: own, amount_sek: amount }
+      }
     }
   }
+  const stage: AttestStage = pre ? 'pre' : 'final'
   const after = attestProgress(
     policy,
     accountingMethod,
     invoice,
-    [...attestations, { user_id: userId, decision: 'approved', decided_at: '9999-12-31T23:59:59.999Z' }],
+    [
+      ...attestations,
+      {
+        user_id: userId,
+        decision: 'approved',
+        decided_at: '9999-12-31T23:59:59.999Z',
+        stage,
+        on_behalf_of: slot === userId ? null : slot,
+      },
+    ],
     activeMembers,
     limits,
   )
@@ -398,15 +669,19 @@ export function ruleOnApproval(
     kind: 'record',
     satisfies: after.satisfied,
     remainingAfter: after.remaining,
-    step: before.approved_by.length + 1,
+    step: used.length + 1,
     limitSek: applied,
+    ...(groups.length > 0 ? { stage } : {}),
+    ...(slot === userId ? {} : { onBehalfOf: slot }),
   }
 }
 
 /**
- * May this user reject the invoice? Whoever may approve may reject: under
- * the policy only an eligible attester (and one who already approved in this
- * round may still change their mind), without it anyone with write access.
+ * May this user reject the invoice? Whoever may approve at any step may
+ * reject, at any step: under the policy an eligible attester or förattestant
+ * of the invoice, or a substitute in their place (and one who already
+ * approved in this round may still change their mind), without it anyone
+ * with write access. `onBehalfOf` names the attester a substitute rejects for.
  */
 export function ruleOnRejection(
   policy: AttestPolicy,
@@ -414,12 +689,17 @@ export function ruleOnRejection(
   invoice: AttestInvoiceFacts,
   userId: string,
   activeMembers?: ReadonlySet<string>,
-): { kind: 'unrestricted' } | { kind: 'record' } | Extract<AttestRuling, { code: 'ATTEST_NOT_ALLOWED' }> {
+): { kind: 'unrestricted' } | { kind: 'record'; onBehalfOf?: string } | Extract<AttestRuling, { code: 'ATTEST_NOT_ALLOWED' }> {
   if (!invoiceNeedsAttest(policy, accountingMethod, invoice)) return { kind: 'unrestricted' }
   if (activeMembers && !activeMembers.has(userId)) return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: 'not_member' }
-  const may = mayAttest(policy, invoice, userId)
+  const groups = preAttestGroups(policy, invoice)
+  const may = mayAttest(policy, invoice, userId, groups)
   if (!may.ok) return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: may.reason }
-  return { kind: 'record' }
+  const slot = actsFor(policy, userId).find(
+    (id) => attestsInvoice(policy, groups, id) && (policy.preparer_may_attest || id !== invoice.user_id) && (!activeMembers || activeMembers.has(id)),
+  )
+  if (slot === undefined) return { kind: 'refused', code: 'ATTEST_NOT_ALLOWED', reason: 'not_attester' }
+  return slot === userId ? { kind: 'record' } : { kind: 'record', onBehalfOf: slot }
 }
 
 /**

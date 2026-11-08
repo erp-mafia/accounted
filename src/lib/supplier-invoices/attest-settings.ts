@@ -1,15 +1,18 @@
 /**
  * What the settings section "Attest" reads and writes beside the policy: the
  * members who can be picked as attesters, their attest limits
- * (company_attest_limits), whether the signed-in user may edit the policy,
- * and the user's own switch for the attest mail
- * (notification_settings.attest_request_email_enabled, per person, default on).
+ * (company_attest_limits), the company's projects for the förattest per
+ * project and the substitutes that have not ended (#192), whether the
+ * signed-in user may edit the policy, and the user's own switch for the
+ * attest mail (notification_settings.attest_request_email_enabled, per
+ * person, default on).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isCompanyAdmin } from '@/lib/auth/require-write'
 import { createServiceClient } from '@/lib/supabase/server'
-import { loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { loadAttestLimits, loadAttestPolicy, loadAttestSubstitutes, loadProjectValues, type AttestProjectValue } from './attest-policy-read'
 import type { AttestPolicy } from './attest-policy'
 import { loadAttestPeople } from './attest-service'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
@@ -27,6 +30,12 @@ export interface AttestSettingsView {
   candidates: AttestCandidate[]
   /** The attest limit in SEK per person (null = no limit); someone missing has none. */
   limits: Record<string, number | null>
+  /** The company's projects (dimension 6), for the förattest per project. */
+  projects: AttestProjectValue[]
+  /** Substitutes that run now or later, soonest first. */
+  substitutes: Array<{ id: string; user_id: string; substitute_user_id: string; starts_on: string; ends_on: string; active: boolean }>
+  /** The signed-in user: anyone names their own substitute. */
+  user_id: string
   /** Owners and admins edit the policy; everyone else reads it. */
   can_edit: boolean
   /** The signed-in user's own switch for the attest mail. */
@@ -41,9 +50,12 @@ export async function loadAttestSettingsView(
   userId: string,
 ): Promise<AttestSettingsView> {
   const service = createServiceClient()
-  const [policy, limits, canEdit, { data: members, error: membersError }, { data: prefs }, { data: settings }] = await Promise.all([
-    loadAttestPolicy(supabase, companyId),
+  const today = todayIsoStockholm()
+  const [policy, limits, substitutes, projects, canEdit, { data: members, error: membersError }, { data: prefs }, { data: settings }] = await Promise.all([
+    loadAttestPolicy(supabase, companyId, today),
     loadAttestLimits(supabase, companyId),
+    loadAttestSubstitutes(supabase, companyId, today),
+    loadProjectValues(supabase, companyId),
     isCompanyAdmin(supabase, companyId),
     service.from('company_members').select('user_id, role').eq('company_id', companyId),
     supabase.from('notification_settings').select('attest_request_email_enabled').eq('user_id', userId).maybeSingle(),
@@ -59,6 +71,16 @@ export async function loadAttestSettingsView(
       role: m.role as AttestCandidate['role'],
     })),
     limits: Object.fromEntries(limits),
+    projects,
+    substitutes: substitutes.map((row) => ({
+      id: row.id,
+      user_id: row.user_id,
+      substitute_user_id: row.substitute_user_id,
+      starts_on: row.starts_on,
+      ends_on: row.ends_on,
+      active: row.starts_on <= today,
+    })),
+    user_id: userId,
     can_edit: canEdit,
     mail_enabled: (prefs as { attest_request_email_enabled?: boolean | null } | null)?.attest_request_email_enabled !== false,
     accounting_method: (settings as { accounting_method?: string | null } | null)?.accounting_method ?? null,

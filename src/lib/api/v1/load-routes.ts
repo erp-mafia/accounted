@@ -445,6 +445,8 @@ import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/route'
 import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/[id]/route'
 // The attest policy for supplier invoices and one invoice's attest trail (lib/operations/supplier-invoice-attest.ts).
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/attest-policy/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/attest-substitutes/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/attest-substitutes/[id]/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/attestations/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/reject/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/book/route'

@@ -32,8 +32,8 @@ import { consumeAttestBatch, resolveAttestBatch, type AttestBatchKind, type Atte
 import { createAttestDecisionBatch } from './attest-decision-notify'
 import { attesterCanStillDecide } from './attest-link-route'
 import { isValidAttestTokenFormat } from './attest-links'
-import { ATTEST_COMMENT_MAX, currentRound, latestRejection } from './attest-policy'
-import { loadAttestLimits, loadAttestPolicy, loadAttestTrails } from './attest-policy-read'
+import { ATTEST_COMMENT_MAX, attestProgress, currentRound, latestRejection, type AttestStage } from './attest-policy'
+import { loadAttestLimits, loadAttestPolicyWithProjects, loadAttestTrails, withProjects } from './attest-policy-read'
 import { approveSupplierInvoice, attestViewerOf, loadAttestMembers, loadAttestPeople, rejectSupplierInvoice } from './attest-service'
 import { isOverduePayable } from './lifecycle'
 
@@ -118,6 +118,10 @@ export interface AttestBatchInvoiceView {
   may_reject: boolean
   /** Why the attester may not decide, when they may not (attest-service reasons). */
   reason: string | null
+  /** With förattest (#192): the step the invoice is at, 'pre' or 'final'; null without förattest or once attested. */
+  stage: AttestStage | null
+  /** The attester this one would approve for, as their substitute (#192); null in their own name. */
+  acts_for_name: string | null
 }
 
 export interface AttestBatchPageData {
@@ -166,9 +170,9 @@ export async function describeAttestBatch(
   const companyId = batch.company_id
   const attesterId = batch.attester_user_id
   const ids = batch.invoice_ids
-  const [policy, limits, members, { data: settingsRow, error: settingsError }, { data: companyRow }, { data: invoiceRows, error: invoiceError }, attestations] =
+  const [{ policy, projects }, limits, members, { data: settingsRow, error: settingsError }, { data: companyRow }, { data: invoiceRows, error: invoiceError }, attestations] =
     await Promise.all([
-      loadAttestPolicy(service, companyId),
+      loadAttestPolicyWithProjects(service, companyId, ids),
       loadAttestLimits(service, companyId),
       loadAttestMembers(service, companyId),
       service.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
@@ -185,13 +189,16 @@ export async function describeAttestBatch(
   if (settingsError) throw settingsError
   if (invoiceError) throw invoiceError
   const accountingMethod = (settingsRow as { accounting_method?: string | null } | null)?.accounting_method ?? null
-  const invoices = new Map(
-    ((invoiceRows ?? []) as unknown as BatchInvoiceRow[]).map((row) => [
-      row.id,
-      { ...row, total: Number(row.total), remaining_amount: Number(row.remaining_amount) },
-    ]),
+  const rows = ((invoiceRows ?? []) as unknown as BatchInvoiceRow[]).map((row) =>
+    withProjects({ ...row, total: Number(row.total), remaining_amount: Number(row.remaining_amount) }, projects),
   )
-  const people = await loadAttestPeople(service, [attesterId, ...[...invoices.values()].map((i) => i.user_id)])
+  const invoices = new Map(rows.map((row) => [row.id, row]))
+  const actsFor = new Map<string, string>()
+  const people = await loadAttestPeople(service, [
+    attesterId,
+    ...rows.map((i) => i.user_id),
+    ...(policy.substitutes ?? []).filter((s) => s.substitute_user_id === attesterId).map((s) => s.user_id),
+  ])
   const nameOf = (id: string) => {
     const person = people.get(id)
     return person?.name ?? person?.email ?? null
@@ -204,6 +211,8 @@ export async function describeAttestBatch(
     if (!invoice) continue
     const trail = attestations.get(id) ?? []
     const viewer = attestViewerOf(policy, accountingMethod, invoice, trail, attesterId, members, { limits })
+    if (viewer.acts_for) actsFor.set(id, viewer.acts_for)
+    const progress = attestProgress(policy, accountingMethod, invoice, trail, policy.enabled ? members.attesters : undefined, limits)
     const rejection = latestRejection(trail)
     const rejectedSince = rejection && rejection.decided_at > mailedAt(batch) ? rejection : null
     const approvedThisRound = currentRound(trail).some((row) => row.decision === 'approved' && row.user_id === attesterId)
@@ -234,6 +243,8 @@ export async function describeAttestBatch(
       may_approve: state === 'open' && viewer.may_approve,
       may_reject: state === 'open' && viewer.may_reject,
       reason: state === 'open' || state === 'closed' ? viewer.reason : null,
+      stage: invoice.approved_at ? null : (progress.stage ?? null),
+      acts_for_name: state === 'open' && actsFor.has(id) ? nameOf(actsFor.get(id)!) : null,
     })
   }
   return {
