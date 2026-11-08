@@ -4447,6 +4447,31 @@ async function resolveReportPeriod(
   return period
 }
 
+/**
+ * The fiscal period gnubok_list_voucher_gaps checks: the caller's
+ * fiscal_period_id, re-read in the company; omitted, the period containing
+ * today, else the most recent one. The id used to reach SQL as given, so an
+ * omitted one arrived as the string "undefined" (supabase-js stringifies
+ * it) and a placeholder as itself, each answering UNKNOWN_ERROR "try again"
+ * for a call no retry fixes, and another company's id answered 0 gaps for a
+ * year that was never checked.
+ */
+async function resolveVoucherGapPeriod(supabase: SupabaseClient, companyId: string, periodIdArg: unknown) {
+  if (periodIdArg === undefined || periodIdArg === null || periodIdArg === '') {
+    const current = await findFiscalPeriodContaining(supabase, companyId, todayIsoStockholm())
+    if (current) return current
+    return resolveReportPeriod(supabase, companyId, undefined, 'The company has no fiscal periods yet, so there are no voucher series to check.')
+  }
+  if (!isUuid(periodIdArg)) {
+    throw badArgument(
+      'fiscal_period_id',
+      'fiscal_period_id must be a period_id from gnubok_list_fiscal_periods, or omitted for the current year.',
+      'Ange ett räkenskapsårs id, eller utelämna fältet för innevarande räkenskapsår.',
+    )
+  }
+  return resolveReportPeriod(supabase, companyId, periodIdArg, '')
+}
+
 /** Invoice row plus its customer, scoped to the company; throws when absent. */
 async function fetchInvoiceWithCustomer(supabase: SupabaseClient, companyId: string, invoiceId: string) {
   const { data: invoice, error: invoiceError } = await supabase
@@ -24170,15 +24195,14 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_voucher_gaps',
     keywords: ['nummerlucka', 'verifikationsnummer', 'verifikat', 'luckor'],
     title: 'List Voucher Gaps',
-    description: 'List voucher number gaps in a fiscal period (BFNAR 2013:2 audit requirement). Each gap shows whether it has an explanation.',
+    description: 'List voucher number gaps in a fiscal period (BFNAR 2013:2), each with its explanation or null.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        fiscal_period_id: { type: 'string' },
-        voucher_series: { type: 'string', description: 'Optional series filter (e.g. "A")' },
+        fiscal_period_id: { type: 'string', description: 'Omitted: the current year' },
+        voucher_series: { type: 'string', description: 'Series filter, e.g. "A"' },
       },
-      required: ['fiscal_period_id'],
     },
     outputSchema: {
       type: 'object',
@@ -24191,12 +24215,12 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
-      const fiscalPeriodId = args.fiscal_period_id as string
       const voucherSeries = args.voucher_series as string | undefined
+      const period = await resolveVoucherGapPeriod(supabase, companyId, args.fiscal_period_id)
 
       // The listing every door shares: throws on a failed read (it used to
       // answer 0 gaps), and checks series A when the year has no sequence row.
-      const listing = await listVoucherGaps(supabase, companyId, fiscalPeriodId, { series: voucherSeries })
+      const listing = await listVoucherGaps(supabase, companyId, period.id, { series: voucherSeries })
       const allGaps = listing.gaps.map((g) => ({
         series: g.series,
         gap_start: g.gap_start,
@@ -24214,6 +24238,7 @@ export const tools: McpTool[] = [
       }))
 
       return {
+        fiscal_period: { id: period.id, name: period.name },
         gaps: allGaps,
         total_gaps: allGaps.length,
         unexplained_gaps: allGaps.filter((g) => !g.explanation).length,
