@@ -46,6 +46,18 @@ const log = createLogger('skatteverket-ombud-client')
 export const OMBUD_API_TEST_BASE_URL = 'https://api.test.skatteverket.se/behorighet/ombudshantering/v2'
 export const OMBUD_API_PROD_BASE_URL = 'https://api.skatteverket.se/behorighet/ombudshantering/v2'
 
+/**
+ * The fallback beside the deep link: Skatteverket's guide "Utse ombud för ett
+ * företag", which lists who can use the e-service Ombud och behörigheter
+ * (enskilda firmor, aktiebolag, handelsbolag, kommanditbolag, ekonomiska
+ * föreningar) and links into it. Not
+ * skatteverket.se/ombud: that lands on "Ombud för en privatperson" and reads
+ * as if the ombud were for the person signing, not for the company
+ * (both pages read 2026-11-08).
+ */
+export const OMBUD_COMPANY_GUIDE_URL =
+  'https://www.skatteverket.se/foretag/drivaforetag/ombudforettforetag/utseombudforettforetag.4.5a85666214dbad743ff1158c.html'
+
 /** Deep links from /djuplank/utseombud are valid this long (service description 4.1.1). */
 export const OMBUD_DEEP_LINK_VALIDITY_WEEKS = 3
 
