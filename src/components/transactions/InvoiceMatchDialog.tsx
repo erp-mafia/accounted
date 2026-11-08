@@ -444,7 +444,10 @@ export default function InvoiceMatchDialog({
               <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                 <div className="flex items-start gap-2">
                   <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
-                  <div className="text-sm space-y-1">
+                  {/* min-w-0: lets the truncated description line below
+                      shrink; without it the nowrap line widened the box past
+                      a phone-width dialog. */}
+                  <div className="min-w-0 text-sm space-y-1">
                     <p className="font-medium text-attn">{t('duplicate_title')}</p>
                     {/* candidate.amount is the voucher leg's SEK debit
                         (duplicate-payment-detection.ts), so it is formatted as

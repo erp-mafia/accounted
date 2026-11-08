@@ -98,7 +98,7 @@ export default function TrialBalanceView({
       <TrialBalanceChart rows={data.rows} />
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>Saldobalans</CardTitle>
             <div className="flex items-center gap-3">
               <SegmentedControl
@@ -120,7 +120,7 @@ export default function TrialBalanceView({
         <CardContent>
           <div className="overflow-x-auto -mx-2 px-2">
             {viewMode === 'simplified' ? (
-              <table className="w-full text-sm min-w-[500px]">
+              <table className="w-full text-sm tabular-nums min-w-[500px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
                     <th className="py-2 w-8"></th>
@@ -146,7 +146,7 @@ export default function TrialBalanceView({
                 </tbody>
               </table>
             ) : (
-              <table className="w-full text-sm min-w-[600px]">
+              <table className="w-full text-sm tabular-nums min-w-[600px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
                     <th className="py-2 w-8"></th>

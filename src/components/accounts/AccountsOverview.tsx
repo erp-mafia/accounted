@@ -146,7 +146,9 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
 
   return (
     <div className="stagger-enter">
-      <div className="-mx-5 overflow-x-auto px-5 md:-mx-6 md:px-6">
+      {/* Bleeds exactly the panel padding (MainContainer px-4 md:px-6):
+          -mx-5 overshot a phone's 16px gutter and scrolled the page sideways. */}
+      <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>

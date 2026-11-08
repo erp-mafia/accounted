@@ -91,7 +91,9 @@ export function PaymentsStep({ state, busy, onVerifyNow, onOpenForm, onSendToSig
           <VerificationStateText verification={verification} />
         </p>
       </div>
-      <DialogFooter>
+      {/* sm:flex-wrap: unverified, the row holds four buttons (~690px) in a
+          528px dialog, and the single row pushed Hoppa över off the left edge. */}
+      <DialogFooter className="sm:flex-wrap sm:gap-2 sm:space-x-0">
         <Button variant="ghost" className="text-muted-foreground" onClick={onSkip}>
           {verified || verification.state === 'expiring' ? t('continue') : t('skip')}
         </Button>

@@ -287,8 +287,9 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         {t('back')}
       </Link>
 
-      {/* data-ph-mask: the asset name is user data */}
-      <PageHeader title={t('title')} description={<span data-ph-mask="">{asset.name}</span>} />
+      {/* data-ph-mask: the asset name is user data. meta, not description:
+          the top bar hides a description, so the page never named the asset. */}
+      <PageHeader title={t('title')} meta={<span data-ph-mask="">{asset.name}</span>} />
 
       {/* The asset being disposed: read-only context as plain rows */}
       <DetailSection kicker={t('asset_section')}>

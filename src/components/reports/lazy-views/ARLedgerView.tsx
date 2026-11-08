@@ -262,7 +262,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle>Ålderfördelning per kund</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm tabular-nums min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>

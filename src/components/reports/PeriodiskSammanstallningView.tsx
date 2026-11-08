@@ -361,11 +361,6 @@ export function PeriodiskSammanstallningView() {
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Rader</CardTitle>
                 <div className="flex flex-wrap items-center gap-3">
-                  {hasBlockingErrors && (
-                    <p className="text-xs text-muted-foreground">
-                      Åtgärda felen ovan innan CSV kan laddas ner.
-                    </p>
-                  )}
                   <Button
                     variant="outline"
                     onClick={downloadCsv}
