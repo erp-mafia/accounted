@@ -207,7 +207,7 @@ export default function RulesList() {
         ))}
       </div>
 
-      <div className="-mx-5 overflow-x-auto px-5 md:-mx-6 md:px-6">
+      <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>

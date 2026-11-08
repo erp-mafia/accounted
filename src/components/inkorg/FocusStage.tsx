@@ -451,7 +451,7 @@ function ProposalLines({ lines }: { lines: ReadonlyArray<Pick<SuggestedBooking['
         {lines.map((line, i) => (
           <tr key={`${line.account_number}-${i}`} className="border-b border-border last:border-0">
             <td className="w-12 py-1 pr-2 tabular-nums text-muted-foreground">{line.account_number}</td>
-            <td data-ph-mask="" className="truncate py-1 pr-2">
+            <td data-ph-mask="" className="max-w-0 truncate py-1 pr-2">
               {line.description}
             </td>
             {/* Journal lines are in SEK whatever the document's currency. */}

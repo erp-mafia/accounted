@@ -280,7 +280,7 @@ export default function UserMenu({
                 className={cn(menuRow, companiesOpen && 'bg-secondary/60 text-foreground')}
               >
                 <CompanyMark name={company?.name || tSwitcher('default_company_name')} />
-                <span className="flex-1 truncate">
+                <span className="min-w-0 flex-1 truncate">
                   {cockpitMode
                     ? tSwitcher('choose_company')
                     : company?.name || tSwitcher('default_company_name')}

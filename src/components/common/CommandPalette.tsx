@@ -361,7 +361,7 @@ function Row({
       )}
     >
       <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-      <span className="flex-1 truncate">{entry.label}</span>
+      <span className="min-w-0 flex-1 truncate">{entry.label}</span>
       {entry.hint && <span className="text-xs text-muted-foreground">{entry.hint}</span>}
       {active && <ArrowRightIcon className="h-3.5 w-3.5 text-muted-foreground" />}
     </button>

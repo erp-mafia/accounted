@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { createRefreshCoalescer } from '@/lib/arkiv/refresh-coalescer'
 import { ArkivSearch, SEARCH_MIN } from './ArkivSearch'
 import { ArkivTree } from './ArkivTree'
 import { UploadDrop } from './UploadDrop'
@@ -25,6 +26,9 @@ function ArkivHomeInner() {
   const params = useSearchParams()
   const [uploading, setUploading] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  // Each landed upload asks the tree to reload; a batch of files gives one reload, not one per file (J17).
+  const refresh = useMemo(() => createRefreshCoalescer(() => setRefreshKey((k) => k + 1), { wait: 1500, maxWait: 8000 }), [])
+  useEffect(() => () => refresh.cancel(), [refresh])
   const [query, setQuery] = useState(params.get('q') ?? '')
   const searching = query.trim().length >= SEARCH_MIN
 
@@ -51,7 +55,7 @@ function ArkivHomeInner() {
         }
       />
       <ArkivSearch query={query} onQueryChange={setQuery} />
-      {uploading && <UploadDrop onLanded={() => setRefreshKey((k) => k + 1)} />}
+      {uploading && <UploadDrop onLanded={refresh.trigger} />}
       {!searching && <ArkivTree refreshKey={refreshKey} />}
     </div>
   )

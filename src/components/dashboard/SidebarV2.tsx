@@ -70,7 +70,7 @@ export function SidebarV2({
     const content = (
       <>
         {!opts?.sub && Icon && (renderIcon ? renderIcon(item, iconClass) : <Icon className={iconClass} />)}
-        <span className="flex-1 truncate">{label(item.labelKey)}</span>
+        <span className="min-w-0 flex-1 truncate">{label(item.labelKey)}</span>
         {item.betaBadge ? (
           <span className="ml-auto rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
             {betaLabel}

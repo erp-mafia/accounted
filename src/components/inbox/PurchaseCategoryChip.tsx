@@ -155,7 +155,7 @@ export function PurchaseCategoryChip({
       {current ? (
         <span className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5">
           {/* A code this build does not know (an older or newer list) shows as itself, never as a message key. */}
-          <span className="truncate">{isPurchaseCategoryCode(current.code) ? tc(purchaseCategoryNameKey(current.code)) : current.code}</span>
+          <span className="min-w-0 truncate">{isPurchaseCategoryCode(current.code) ? tc(purchaseCategoryNameKey(current.code)) : current.code}</span>
           <span className="shrink-0 text-[11px] text-muted-foreground">{t(LEVEL_KEY[current.level])}</span>
         </span>
       ) : prompt && !locked ? (

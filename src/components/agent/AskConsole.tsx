@@ -305,7 +305,7 @@ function MessageRow({ message }: { message: AskConsoleMessage }) {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-lg bg-secondary px-4 py-3 text-sm leading-6 text-foreground whitespace-pre-wrap">
+        <div className="max-w-[85%] break-words rounded-lg bg-secondary px-4 py-3 text-sm leading-6 text-foreground whitespace-pre-wrap">
           {message.text}
         </div>
       </div>
@@ -315,7 +315,7 @@ function MessageRow({ message }: { message: AskConsoleMessage }) {
   // Assistant answer: bare prose, no card (the sign-off design).
   return (
     <div className="flex">
-      <div className={cn('max-w-[88%]', ANSWER_PROSE)}>
+      <div className={cn('max-w-[88%] break-words', ANSWER_PROSE)}>
         {markdownLoaded ? (
           <MarkdownMessage text={message.text} />
         ) : (

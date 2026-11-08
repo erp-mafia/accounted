@@ -211,7 +211,7 @@ export function ArkivTree({ refreshKey = 0 }: { refreshKey?: number }) {
                 </summary>
                 <div className="overflow-x-auto pb-2 pl-10">
                   {shown.length > 0 ? (
-                    <table className="w-full table-fixed border-collapse text-[13px]">
+                    <table className="w-full min-w-[46rem] table-fixed border-collapse text-[13px]">
                       <colgroup>
                         <col className="w-[100px]" />
                         <col />

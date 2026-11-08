@@ -164,7 +164,7 @@ export function KvittojaktenButton({
             </span>
           </li>
         </ul>
-        <DialogFooter>
+        <DialogFooter className="sm:flex-wrap sm:gap-2 sm:space-x-0">
           {pendingClient && (
             <Button type="button" variant="outline" asChild>
               <a href={pendingClient.home} target="_blank" rel="noopener noreferrer">
