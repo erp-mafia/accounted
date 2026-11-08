@@ -11667,8 +11667,11 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Den gamla bankkopplingen har två olika historiker för samma konto. Kontakta supporten innan kopplingen byts.',
     message_en: 'The old bank connection holds two different histories for the same account. Contact support before switching.',
   },
+  // A 4xx: the refusal is what the bank answers on every try (a retryable
+  // failure is BANK_PROVIDER_UNAVAILABLE). As a 5xx the consent poll asked
+  // again for 10 polls and then said the bank did not answer.
   BANK_PROVIDER_REFUSED: {
-    httpStatus: 502,
+    httpStatus: 422,
     message_sv: 'Banken tog inte emot begäran. Kontrollera uppgifterna och försök igen.',
     message_en: 'The bank did not accept the request. Check the details and try again.',
   },

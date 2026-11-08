@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { isPermanentPollFailure, startPollLoop } from '../poll-loop'
 
 describe('startPollLoop', () => {
@@ -67,6 +68,20 @@ describe('startPollLoop', () => {
     expect(poll).toHaveBeenCalledTimes(1)
     expect(onGiveUp).toHaveBeenCalledTimes(1)
     expect(onGiveUp).toHaveBeenCalledWith(gone, 'refused')
+  })
+
+  // The bank feed's own answers: a refusal is the bank's answer on every try
+  // (a missing user right was polled 10 times, then shown as no answer), while
+  // a bank that does not answer is asked again.
+  it('ends at once on the bank feed\'s refusal and keeps asking while the bank is unavailable', async () => {
+    const refused = { status: getErrorEntry('BANK_PROVIDER_REFUSED')?.httpStatus }
+    const poll = vi.fn().mockRejectedValue(refused)
+    const onGiveUp = vi.fn()
+    startPollLoop({ poll, onResult: () => true, onGiveUp, intervalMs: 100, immediate: true })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(poll).toHaveBeenCalledTimes(1)
+    expect(onGiveUp).toHaveBeenCalledWith(refused, 'refused')
+    expect(isPermanentPollFailure({ status: getErrorEntry('BANK_PROVIDER_UNAVAILABLE')?.httpStatus })).toBe(false)
   })
 
   it('ends on a refusal even without a give-up handler', async () => {
