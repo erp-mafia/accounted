@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, rmSync, openSync, closeSync } from 'node:fs'
+import { copyFileSync, cpSync, constants as fsConstants, mkdirSync, rmSync, openSync, closeSync } from 'node:fs'
 import path from 'node:path'
 import { root, runtimeDir, appEnv, readRuntime } from './runtime.mjs'
 import { up, down, assertOwnedDatabase } from './stack.mjs'
 
+/** Run a child process and reject failed startup or a nonzero exit. */
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...options })
@@ -13,6 +14,7 @@ function run(command, args, options = {}) {
   })
 }
 
+/** Build a production snapshot containing source and generated test credentials. */
 async function build(state) {
   const snapshot = path.join(runtimeDir, 'app')
   rmSync(snapshot, { recursive: true, force: true })
@@ -26,7 +28,9 @@ async function build(state) {
   }
   // Turbopack rejects a node_modules symlink escaping the project root.
   // Reflinks keep this isolated copy cheap on btrfs and fall back on other FSes.
-  await run('cp', ['-a', '--reflink=auto', path.join(root, 'node_modules'), path.join(snapshot, 'node_modules')])
+  cpSync(path.join(root, 'node_modules'), path.join(snapshot, 'node_modules'), {
+    recursive: true, verbatimSymlinks: true, mode: fsConstants.COPYFILE_FICLONE,
+  })
   // The regular self-hosted extension set is compiled, with synthetic test keys
   // only. Optional external integrations receive no provider credentials.
   copyFileSync(path.join(root, 'docker/extensions.self-hosted.json'), path.join(snapshot, 'extensions.config.json'))

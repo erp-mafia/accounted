@@ -105,6 +105,7 @@ function UsageCount({ accountNumber, count }: { accountNumber: string; count: nu
 // ---------------------------------------------------------------------------
 
 /** Search and select the full cached chart while mounting its visible accounts in batches. */
+/** Manage the company chart with full-chart search, selection and paginated row rendering. */
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
   const t = useTranslations('chart_of_accounts')

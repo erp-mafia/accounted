@@ -42,6 +42,7 @@ export function NavTreeSection({
   const name = label(item.labelKey, item.labelNamespace)
   const panelId = `${id}-children`
 
+  /** Toggle one branch while retaining the route associated with an explicit collapse. */
   function toggle(key: string, branchActive: boolean) {
     setExpansion(previous => ({
       ...previous,
@@ -49,6 +50,7 @@ export function NavTreeSection({
     }))
   }
 
+  /** Render a destination with its visibility gate, selection state and shared link behavior. */
   function row(entry: NavV2Item, rowActive: boolean, sub = false) {
     const enabled = isEnabled(entry.href) && !entry.comingSoon
     const badge = badgeFor(entry.href)

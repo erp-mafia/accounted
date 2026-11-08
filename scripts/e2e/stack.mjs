@@ -14,6 +14,7 @@ const images = {
 }
 const services = ['gateway', 'realtime', 'storage', 'rest', 'auth', 'db']
 
+/** Hash bootstrap and migration contents to reject incompatible cached schemas. */
 function schemaFingerprint() {
   const hash = createHash('sha256')
   for (const file of ['tests/pg/bootstrap.sql', 'supabase/bootstrap.sql',
@@ -23,6 +24,7 @@ function schemaFingerprint() {
   return hash.digest('hex')
 }
 
+/** Run Podman with bounded output and report failures without leaking service logs. */
 function command(args, input) {
   const result = spawnSync('podman', args, { input, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
   if (result.status !== 0) {
@@ -34,6 +36,7 @@ function command(args, input) {
   return result.stdout.trim()
 }
 
+/** Check the resource ownership label before operating on a container or network. */
 function owned(name, kind = 'container') {
   const result = spawnSync('podman', [kind, 'inspect', name], { encoding: 'utf8' })
   if (result.status !== 0) return false
@@ -43,15 +46,18 @@ function owned(name, kind = 'container') {
   return true
 }
 
+/** Require the isolated database to belong to this checkout before seeding or serving. */
 export function assertOwnedDatabase() {
   if (!owned(`${prefix}-db`)) throw new Error('The isolated E2E database is not running')
   if (!owned(`${prefix}-gateway`)) throw new Error('The isolated E2E gateway is not running')
 }
 
+/** Apply SQL through the owned database container using the required bootstrap role. */
 function sql(input, role = 'postgres') {
   return command(['exec', '-i', `${prefix}-db`, 'psql', '-U', role, '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q'], input)
 }
 
+/** Poll an isolated service until healthy, enforcing a bounded startup deadline. */
 async function ready(url, headers = {}) {
   const deadline = Date.now() + 120_000
   while (Date.now() < deadline) {
@@ -64,12 +70,14 @@ async function ready(url, headers = {}) {
   throw new Error(`Isolated service did not become ready at ${new URL(url).pathname}`)
 }
 
+/** Sign a local Supabase role token using the generated fixture secret. */
 function jwt(role, secret) {
   const encoded = value => Buffer.from(JSON.stringify(value)).toString('base64url')
   const payload = `${encoded({ alg: 'HS256', typ: 'JWT' })}.${encoded({ role, iss: 'supabase', iat: 0, exp: 4102444800 })}`
   return `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`
 }
 
+/** Start one labeled service with its generated private environment file. */
 function start(service, env, args = []) {
   const envPath = path.join(runtimeDir, `${service}.env`)
   writeFileSync(envPath, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n'), { mode: 0o600 })
@@ -77,6 +85,7 @@ function start(service, env, args = []) {
     '--network', prefix, '--env-file', envPath, ...args, images[service]])
 }
 
+/** Reuse a compatible owned stack or provision real services and replay the schema. */
 export async function up() {
   if (existsSync(path.join(runtimeDir, 'runtime.json'))) {
     const state = readRuntime()
@@ -203,6 +212,7 @@ export async function up() {
   return state
 }
 
+/** Remove owned test resources and generated credentials while retaining test reports. */
 export function down() {
   for (const service of services) {
     const name = `${prefix}-${service}`

@@ -2,7 +2,7 @@
 import { BAS_REFERENCE } from '../../src/lib/bookkeeping/bas-reference'
 import { roundOre } from '../../src/lib/money'
 
-export const FIXTURE_VERSION = 1
+export const FIXTURE_VERSION = 2
 export const YEAR_ENTRY_COUNTS = [75, 75, 200, 225, 275, 550, 550, 400, 550, 325]
 export const FIXTURE_NAME = 'E2E Ten Year Consulting AB'
 export const DOCUMENT_COUNT = 1400
@@ -18,6 +18,7 @@ export interface SyntheticInvoice {
   payment: string | null
 }
 
+/** Generate balanced SIE inputs with paid, unpaid and inactive-account history. */
 export function buildDataset(lastYear: number) {
   const total = YEAR_ENTRY_COUNTS.reduce((sum, count) => sum + count, 0)
   const expenses = BAS_REFERENCE.filter(account => account.account_type === 'expense' && account.account_class <= 6)
@@ -32,6 +33,7 @@ export function buildDataset(lastYear: number) {
     const year = lastYear - 9 + yearIndex
     const invoices: SyntheticInvoice[] = []
     const entries: string[] = []
+    /** Append one balanced voucher with a stable source number. */
     function add(description: string, date: string, lines: [string, number][]) {
       if (lines.reduce((sum, [, amount]) => sum + Math.round(amount * 100), 0) !== 0) {
         throw new Error('Synthetic voucher must balance to the ore')
@@ -60,6 +62,12 @@ export function buildDataset(lastYear: number) {
           ? [['2440', amount], ['1930', -amount]] : [['1930', amount], ['1510', -amount]])
         invoices.push({ kind, index, date, due, amount, unpaid, registration, payment })
       }
+    }
+    // A historical equity account with net zero and no current-year vouchers
+    // makes the inactive-account filter observable in the real ledger.
+    if (yearIndex === 0) {
+      add('E2E temporary capital', `${year}-01-01`, [['1930', 100], ['2081', -100]])
+      add('E2E capital returned', `${year}-01-02`, [['2081', 100], ['1930', -100]])
     }
     while (entries.length < count) {
       const index = entries.length

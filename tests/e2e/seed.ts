@@ -21,6 +21,7 @@ interface Fixture {
   version: number
 }
 
+/** Derive stable registry identifiers so interrupted fixture setup can resume safely. */
 function fixtureId(company: string, key: string): string {
   const bytes = createHash('sha256').update(`${company}:${key}`).digest().subarray(0, 16)
   bytes[6] = (bytes[6] & 0x0f) | 0x50
@@ -29,6 +30,7 @@ function fixtureId(company: string, key: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+/** Provision and validate the isolated synthetic company, then refresh its browser session. */
 async function main() {
   const state = readRuntime()
   assertOwnedDatabase()
@@ -40,6 +42,7 @@ async function main() {
   const { BAS_REFERENCE } = await import('../../src/lib/bookkeeping/bas-reference')
   const { uploadDocument } = await import('../../src/lib/core/documents/document-service')
   const { fetchAllRows } = await import('../../src/lib/supabase/fetch-all')
+  /** Return query data or fail fixture setup immediately on a database error. */
   async function checked<T>(query: PromiseLike<{ data: T; error: { message: string } | null }>): Promise<T> {
     const result = await query
     if (result.error) throw new Error(result.error.message)

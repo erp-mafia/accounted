@@ -18,7 +18,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Node.js 22 or later and Podman must be available. CI uses Node.js 26, matching
+Linux, Node.js 22 or later and rootless Podman must be available. CI uses Node.js 26, matching
 the self-hosted development runtime. The stack uses loopback ports 54331 and 3101, and a
 checkout-specific resource prefix. Other Supabase installations are independent.
 Image tags are pinned in `scripts/e2e/stack.mjs`.
@@ -47,7 +47,8 @@ creates ten consecutive years ending in the year of the first seed, 3225 posted
 vouchers, the full BAS reference chart, six customers, 50 suppliers, 50 customer
 invoices, 450 supplier invoices, 100 articles, 500 bank transactions and 1400
 real synthetic PDF attachments in Storage. More than 90 accounts have postings
-in the latest year. Two current invoices are unpaid and
+in the latest year. A historical equity account has zero balance and no current-year
+vouchers, exercising the inactive-account filter. Two current invoices are unpaid and
 due the following January. Names and contact addresses are invented and use
 `example.invalid`. The profile approximates a small company's data volume.
 

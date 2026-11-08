@@ -90,10 +90,11 @@ test('general ledger collapses, expands and filters without another report fetch
     await page.getByRole('button', { name: 'Kollapsa alla', exact: true }).click()
     await expect(page.getByRole('button', { name: /^Kollapsa konto / })).toHaveCount(0)
   })
+  const activeCount = await accounts.count()
   await measured(info, 'Show inactive accounts', BUDGET.interaction, async () => {
     await hideInactive.uncheck()
     await expect(hideInactive).not.toBeChecked()
-    await expect(accounts.first()).toBeVisible()
+    await expect.poll(() => accounts.count(), { intervals: [16] }).toBeGreaterThan(activeCount)
   })
   expect(requests).toHaveLength(0)
 })

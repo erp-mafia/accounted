@@ -33,6 +33,14 @@ describe('ten-year synthetic fixture', () => {
     const activeAccounts = new Set([...dataset.years[9].content.matchAll(/#TRANS (\d{4}) /g)].map(match => match[1]))
     expect(activeAccounts.size).toBeGreaterThan(90)
   })
+  it('includes a zero-balance historical account without current-year vouchers', () => {
+    const dataset = buildDataset(2026)
+    const amounts = [...dataset.years[0].content.matchAll(/#TRANS 2081 \{\} (-?\d+)/g)]
+      .map(match => Number(match[1]))
+    expect(amounts).toHaveLength(2)
+    expect(amounts.reduce((sum, amount) => sum + amount, 0)).toBe(0)
+    expect(dataset.years[9].content).not.toContain('#TRANS 2081 ')
+  })
   it('includes paid history and current unpaid invoices due next year', () => {
     const invoices = buildDataset(2030).years.flatMap(year => year.invoices)
     expect(invoices.filter(invoice => invoice.kind === 'supplier')).toHaveLength(450)

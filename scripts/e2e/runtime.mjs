@@ -11,16 +11,19 @@ export const label = `io.accounted.e2e=${owner}`
 export const statePath = path.join(runtimeDir, 'runtime.json')
 export const endpoints = { appUrl: 'http://127.0.0.1:3101', supabaseUrl: 'http://127.0.0.1:54331' }
 
+/** Persist generated credentials in the private checkout-owned runtime directory. */
 export function saveRuntime(state) {
   mkdirSync(runtimeDir, { recursive: true, mode: 0o700 })
   writeFileSync(statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
 }
 
+/** Read runtime state and reject foreign ownership or non-isolated endpoints. */
 export function readRuntime() {
   const state = JSON.parse(readFileSync(statePath, 'utf8'))
   return validateRuntime(state)
 }
 
+/** Require this checkout's fixture and the exact reserved loopback endpoints. */
 export function validateRuntime(state) {
   if (state.owner !== owner || state.kind !== 'synthetic-ten-year-fixture') {
     throw new Error('Expected this checkout\'s isolated E2E runtime. Run npm run test:e2e:prepare.')
@@ -35,7 +38,7 @@ export function validateRuntime(state) {
   return state
 }
 
-// Do not inherit application credentials or load .env.local into the test app.
+/** Construct an explicit test environment containing only generated app credentials. */
 export function appEnv(state) {
   return {
     PATH: process.env.PATH,
