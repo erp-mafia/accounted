@@ -178,6 +178,19 @@ describe('open payments routes map the service answers', () => {
     expect(service.pollBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ personalNumber: null }) }))
   })
 
+  it('POST poll answers a bank refusal as a 4xx with the bank\'s sentence, so the consent poll ends at once', async () => {
+    const sentence = 'Misslyckades på grund av ogiltig eller saknad användar- eller åtkomsträttighet. Ändra användarens rättigheter i internetbanken.'
+    service.pollBankFeedConsent.mockResolvedValue({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'PSU_RIGHTS_MISSING' }, messageSv: sentence })
+    const refused = await parseJsonResponse<ErrorBody>(await poll(post(`/api/bank/open-payments/connections/${ID}/poll`), params(ID)))
+    expect(refused.status).toBe(422)
+    expect(refused.body.error.code).toBe('BANK_PROVIDER_REFUSED')
+    expect(refused.body.error.message).toBe(sentence)
+    // A bank that does not answer stays a 5xx: the poll asks again.
+    service.pollBankFeedConsent.mockResolvedValue({ ok: false, code: 'BANK_PROVIDER_UNAVAILABLE' })
+    const unavailable = await parseJsonResponse<ErrorBody>(await poll(post(`/api/bank/open-payments/connections/${ID}/poll`), params(ID)))
+    expect(unavailable.status).toBe(503)
+  })
+
   it('POST restart works without a body, reads an optional one, and always knows the origin to come back to', async () => {
     await restart(post(`/api/bank/open-payments/connections/${ID}/restart`), params(ID))
     expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), { connectionId: ID, method: null, returnTo: null, returnOrigin: 'https://app.accounted.se', signer: expect.objectContaining({ personalNumber: null }) })
