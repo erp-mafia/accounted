@@ -828,6 +828,19 @@ describe('PUT /api/settings', () => {
     expect(findCall('company_settings', 'update')).toBeUndefined()
   })
 
+  it('rejects Swedbank\'s ISO 1.0 agreement number, saying what it is and what to use instead', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '06 5566778899 B001' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('avtalsnummer för ISO 20022 1.0')
+    expect(JSON.stringify(body)).toContain('Betala via banken')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
   it('rejects Swedbank payment-file id changes from a regular member', async () => {
     enqueueMany([
       { data: { entity_type: 'aktiebolag', onboarding_complete: true } },

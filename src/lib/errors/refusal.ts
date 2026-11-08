@@ -110,9 +110,11 @@ export function zodErrorFieldIssues(error: z.ZodError): FieldIssue[] {
 }
 
 function fieldIssue(issue: z.core.$ZodIssue, value: unknown): FieldIssue {
+  // A refinement worded in Swedish may carry its English in params.en.
+  const en = issue.code === 'custom' && typeof issue.params?.en === 'string' ? issue.params.en : issue.message
   return {
     field: issue.path.map(String).join('.') || 'arguments',
-    en: issue.message,
+    en,
     sv: swedishReason(issue, value),
   }
 }

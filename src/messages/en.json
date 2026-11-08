@@ -3651,11 +3651,11 @@
   },
   "settings_swedbank_file_ids": {
     "heading": "Payment files to Swedbank",
-    "help": "Swedbank requires two ids in every payment file that the bank assigns itself: your SignerID and the agreement id for file payments (Corporate Pay). Without them Swedbank refuses the file. If you don't have them, ask Swedbank.",
+    "help": "Only for payment files you upload in Swedbank's internet bank: Pay through the bank needs no file agreement. The files follow Swedbank ISO 2.0 and need two ids Swedbank assigns: the SignerID and the Corporate Pay agreement id. Without them Swedbank refuses the file. The ISO 1.0 agreement number (06 + organisation number + B001) does not work here. If you have no ISO 2.0 ids, ask Swedbank.",
     "signer_id_label": "SignerID",
-    "signer_id_help": "Format 123456789ORI0001. Assigned by Swedbank and written into the payment file as the sender.",
+    "signer_id_help": "Format 123456789ORI0001, from Swedbank's ISO 2.0 agreement. Written into the payment file as the sender.",
     "corporate_pay_id_label": "Agreement id (Corporate Pay)",
-    "corporate_pay_id_help": "Format 123456789CPO0001. Assigned by Swedbank and names the agreement the payments are made under."
+    "corporate_pay_id_help": "Format 123456789CPO0001, from Swedbank's ISO 2.0 agreement. Names the agreement the payments are made under."
   },
   "settings_nordea_signer_id": {
     "heading": "Payment files to Nordea",
