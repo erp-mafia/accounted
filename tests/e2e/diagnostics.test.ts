@@ -19,7 +19,7 @@ it.each(['postgres://[broken', 'postgres://role:bad%ZZ@localhost/postgres'])(
       // No real container engine is called by this failure-path regression.
       writeFileSync(path.join(directory, 'bin/podman'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
       const result = spawnSync(process.execPath, [path.join(scripts, 'diagnostics.mjs')], {
-        env: { PATH: path.join(directory, 'bin') }, encoding: 'utf8', timeout: 5000,
+        env: { PATH: path.join(directory, 'bin'), NODE_ENV: 'test' }, encoding: 'utf8', timeout: 5000,
       })
       expect(result.error).toBeUndefined()
       expect(result.status).toBe(0)
