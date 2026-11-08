@@ -118,8 +118,10 @@ const nextConfig: NextConfig = {
     // (lib/reference-data) is independent of this and refreshes on its own.
     // Default was 0 (always refetch). Static routes keep the 5 min default.
     staleTimes: { dynamic: 30, static: 300 },
-    // Bound static-generation workers on shared build hosts. Development
-    // keeps Turbopack's default adaptive memory cache for route revisits.
+    // Bound development compiler memory on shared hosts. Adaptive eviction
+    // exhausted the self-hosted 8 GiB service during a broad route audit.
+    turbopackMemoryEviction: 'full',
+    // Bound static-generation workers on shared build hosts.
     cpus: 2,
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:

@@ -968,8 +968,9 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
       })
-      await fetchNoDocRequired(entries.map(entry => entry.id))
-      await fetchEntries()
+      // A bulk request can finish after navigation. Refresh the current page
+      // through its guarded list request, including that page's metadata.
+      await fetchEntriesRef.current()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {

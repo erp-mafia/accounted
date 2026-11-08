@@ -61,6 +61,8 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   const [error, setError] = useState<string | null>(null)
   const [accountFrom, setAccountFrom] = useState('')
   const [accountTo, setAccountTo] = useState('')
+  const [appliedAccountRange, setAppliedAccountRange] = useState({ from: '', to: '' })
+  const previousAccountFilter = React.useRef(initialAccountFilter)
   // Only the newest request may land. The window changes right after mount
   // (the date-range control resolves its preset, or a drill-down's window),
   // and the superseded request must not overwrite the ledger it was
@@ -92,6 +94,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
         setError(getErrorMessage(result))
       } else {
         setData(result.data)
+        setAppliedAccountRange({ from, to })
       }
     } catch {
       if (seq === requestSeq.current) setError('Kunde inte hämta huvudbok')
@@ -103,66 +106,77 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
     setExpandedAccounts(new Set(initialAccountFilter ? [initialAccountFilter] : []))
-    if (initialAccountFilter) {
-      setAccountFrom(initialAccountFilter)
-      setAccountTo(initialAccountFilter)
-      fetchData(initialAccountFilter, initialAccountFilter)
+    const accountFilterChanged = previousAccountFilter.current !== initialAccountFilter
+    previousAccountFilter.current = initialAccountFilter
+    if (initialAccountFilter || accountFilterChanged) {
+      const account = initialAccountFilter ?? ''
+      setAccountFrom(account)
+      setAccountTo(account)
+      fetchData(account, account)
     } else {
       fetchData()
     }
   }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
 
-  if (loading) {
-    return <ReportLoadingCard />
-  }
+  // Keep range controls available to recover from empty results or errors.
+  const filterToolbar = (
+    <div className="flex flex-wrap items-end gap-3">
+      <div>
+        <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
+        <Input
+          id="gl-account-from"
+          type="text"
+          value={accountFrom}
+          onChange={(e) => setAccountFrom(e.target.value)}
+          placeholder="Från konto"
+          aria-label="Konto från"
+          className="mt-1 w-32"
+        />
+      </div>
+      <div>
+        <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
+        <Input
+          id="gl-account-to"
+          type="text"
+          value={accountTo}
+          onChange={(e) => setAccountTo(e.target.value)}
+          placeholder="Till konto"
+          aria-label="Konto till"
+          className="mt-1 w-32"
+        />
+      </div>
+      <Button onClick={() => fetchData()} variant="outline">
+        Filtrera
+      </Button>
+    </div>
+  )
 
-  if (error) {
-    return <ReportErrorCard message={error} />
-  }
-
-  if (!data || data.accounts.length === 0) {
+  if (loading || error || !data || data.accounts.length === 0) {
     return (
-      <ReportEmptyState
-        title="Inga verifikationer i perioden"
-        description="Det finns inga bokförda verifikationer i den valda perioden."
-      />
+      <div className="space-y-4">
+        {filterToolbar}
+        {loading ? (
+          <ReportLoadingCard />
+        ) : error ? (
+          <ReportErrorCard message={error} />
+        ) : (
+          <ReportEmptyState
+            title="Inga verifikationer i perioden"
+            description="Det finns inga bokförda verifikationer i den valda perioden."
+          />
+        )}
+      </div>
     )
   }
 
+  const exportParams = new URLSearchParams(reportQuery(periodId, dateRange, dimensionFilter))
+  if (appliedAccountRange.from) exportParams.set('account_from', appliedAccountRange.from)
+  if (appliedAccountRange.to) exportParams.set('account_to', appliedAccountRange.to)
+
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
-      {/* Account range filter: flat toolbar on the panel, no box. The labels
-          are hidden (field-label) and the placeholders say what the fields are. */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
-          <Input
-            id="gl-account-from"
-            type="text"
-            value={accountFrom}
-            onChange={(e) => setAccountFrom(e.target.value)}
-            placeholder="Från konto"
-            aria-label="Konto från"
-            className="mt-1 w-32"
-          />
-        </div>
-        <div>
-          <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
-          <Input
-            id="gl-account-to"
-            type="text"
-            value={accountTo}
-            onChange={(e) => setAccountTo(e.target.value)}
-            placeholder="Till konto"
-            aria-label="Konto till"
-            className="mt-1 w-32"
-          />
-        </div>
-        <Button onClick={() => fetchData()} variant="outline">
-          Filtrera
-        </Button>
-      </div>
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${exportParams}` }]} />
+      {filterToolbar}
 
       {data.period.start && (
         <p className="text-sm text-muted-foreground tabular-nums">

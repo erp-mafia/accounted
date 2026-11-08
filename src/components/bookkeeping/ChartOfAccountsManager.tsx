@@ -513,7 +513,9 @@ export default function ChartOfAccountsManager() {
   // Render
   // -------------------------------------------
 
-  const shownCount = view === 'my-accounts' ? filteredAccounts.length : filteredReference.length
+  const shownCount = view === 'my-accounts'
+    ? Math.min(filteredAccounts.length, visibleAccountCount)
+    : filteredReference.length
   const totalCount = view === 'my-accounts' ? accounts.length : referenceAccounts.length
 
   // Page header + toolbar render even while loading so the chrome is stable.
@@ -590,14 +592,20 @@ export default function ChartOfAccountsManager() {
         <ToolbarSearch
           placeholder={t('search_placeholder')}
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setVisibleAccountCount(100)
+          }}
           containerClassName="min-w-[190px] max-w-xs flex-1"
         />
         {view === 'my-accounts' && (
           <label className="ml-auto flex items-center gap-2 text-sm">
             <Switch
               checked={showInactive}
-              onCheckedChange={setShowInactive}
+              onCheckedChange={(checked) => {
+                setShowInactive(checked)
+                setVisibleAccountCount(100)
+              }}
               className="scale-75"
             />
             <span className="text-muted-foreground">{t('show_inactive')}</span>
@@ -692,7 +700,10 @@ export default function ChartOfAccountsManager() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuRadioGroup
                           value={usageFilter}
-                          onValueChange={(v) => setUsageFilter(v as UsageFilter)}
+                          onValueChange={(v) => {
+                            setUsageFilter(v as UsageFilter)
+                            setVisibleAccountCount(100)
+                          }}
                         >
                           {(['all', 'unused', 'used'] as const).map((value) => (
                             <DropdownMenuRadioItem key={value} value={value}>
