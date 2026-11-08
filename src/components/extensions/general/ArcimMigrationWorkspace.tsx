@@ -51,8 +51,8 @@ import {
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
-  requestArcimDocumentImport,
   runArcimDocumentImportToCompletion,
+  runArcimDocumentDiscoveryToCompletion,
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
@@ -1913,12 +1913,15 @@ function DocumentImportFollowUp({
             ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
             : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
+        {(state.result?.skipped ?? 0) > 0 && <p className="text-sm text-muted-foreground">
+          {t('ext_arcim_documents_existing', { count: state.result!.skipped })}
+        </p>}
         {lockedYearsLine('ext_arcim_documents_locked_offer')}
         {unmatchedReview}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Button onClick={onImport}>
+          {state.found > 0 && <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action', { provider })}
-          </Button>
+          </Button>}
           <Button variant="ghost" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
           </Button>
@@ -1931,7 +1934,7 @@ function DocumentImportFollowUp({
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
+        <p className="text-sm text-muted-foreground">{t((state.result?.scanned ?? 0) > 0 ? 'ext_arcim_documents_up_to_date' : 'ext_arcim_documents_empty', { provider, count: state.result?.skipped ?? 0 })}</p>
         <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
@@ -3141,7 +3144,7 @@ export default function ArcimMigrationWorkspace({
     if (!supportsUnderlagImport(provider) || !migrationSucceeded) return
 
     try {
-      const result = await requestArcimDocumentImport(currentConsentId, true)
+      const result = await runArcimDocumentDiscoveryToCompletion(currentConsentId)
       dispatchDocumentImport({ type: 'discovery-succeeded', result })
     } catch (documentError) {
       dispatchDocumentImport({

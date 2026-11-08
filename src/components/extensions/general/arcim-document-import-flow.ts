@@ -244,7 +244,10 @@ export function arcimDocumentImportReducer(
       if (!supportsUnderlagImport(action.result.provider)) {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
       }
-      if (action.result.scanned <= 0) {
+      if (action.result.scanned <= 0 || (
+        action.result.linked === 0 && action.result.unmatched === 0 &&
+        action.result.locked === 0 && action.result.failed === 0
+      )) {
         return {
           phase: 'empty',
           provider: action.result.provider,
@@ -256,7 +259,7 @@ export function arcimDocumentImportReducer(
       return {
         phase: 'offered',
         provider: action.result.provider,
-        found: action.result.scanned,
+        found: action.result.linked,
         result: action.result,
         problem: null,
       }
@@ -444,16 +447,34 @@ const MAX_IMPORT_ROUNDS = 500
 export const ARCIM_DOCUMENT_IMPORT_STALLED = 'ARCIM_DOCUMENT_IMPORT_STALLED'
 
 /**
- * Run the real import to completion: the route works through one time-budgeted
+ * Run discovery or import to completion: the route works through one time-budgeted
  * slice per call and hands back a cursor, so this loops until the server says
  * it reached the end, reporting running totals after every slice. A thrown
  * request error aborts the loop; the slices already archived stay linked and
- * the next attempt skips them by hash. A server that keeps answering "partial"
+ * the next attempt skips them by source identity or hash. A server that keeps answering "partial"
  * without advancing (or past the round guard) is reported as a failure, never
  * as a completed import: the retry button resumes safely.
  */
+export async function runArcimDocumentDiscoveryToCompletion(
+  consentId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ArcimDocumentImportResult> {
+  return runDocumentImportToCompletion(consentId, true, { fetcher })
+}
+
 export async function runArcimDocumentImportToCompletion(
   consentId: string,
+  options: {
+    fetcher?: typeof fetch
+    onProgress?: (accumulated: ArcimDocumentImportResult) => void
+  } = {},
+): Promise<ArcimDocumentImportResult> {
+  return runDocumentImportToCompletion(consentId, false, options)
+}
+
+async function runDocumentImportToCompletion(
+  consentId: string,
+  dryRun: boolean,
   options: {
     fetcher?: typeof fetch
     onProgress?: (accumulated: ArcimDocumentImportResult) => void
@@ -464,7 +485,7 @@ export async function runArcimDocumentImportToCompletion(
   let cursor: string | undefined
 
   for (let round = 0; round < MAX_IMPORT_ROUNDS; round++) {
-    const slice = await requestArcimDocumentImport(consentId, false, fetcher, cursor,
+    const slice = await requestArcimDocumentImport(consentId, dryRun, fetcher, cursor,
       options.onProgress ? progress=>options.onProgress!(mergeArcimDocumentImportResults(accumulated,progress)) : undefined)
     accumulated = mergeArcimDocumentImportResults(accumulated, slice)
     if (!slice.partial) {

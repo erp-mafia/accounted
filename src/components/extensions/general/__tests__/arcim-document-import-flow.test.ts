@@ -13,6 +13,7 @@ import {
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
   runArcimDocumentImportToCompletion,
+  runArcimDocumentDiscoveryToCompletion,
   serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
@@ -47,7 +48,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('document follow-up state', () => {
-  it('offers the prompt after a successful Fortnox migration using the honest found count', () => {
+  it('offers the prompt after a successful Fortnox migration using the remaining import count', () => {
     const discovering = arcimDocumentImportReducer(
       INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
       { type: 'discovery-started', provider: 'fortnox', migrationSucceeded: true },
@@ -58,7 +59,7 @@ describe('document follow-up state', () => {
     })
 
     expect(offered.phase).toBe('offered')
-    expect(offered.found).toBe(7)
+    expect(offered.found).toBe(5)
   })
 
   it('offers the prompt after a successful Bokio migration too (crm#190)', () => {
@@ -73,7 +74,28 @@ describe('document follow-up state', () => {
       result: result({ provider: 'bokio', scanned: 12, linked: 10, unmatched: 2 }),
     })
 
-    expect(offered).toMatchObject({ phase: 'offered', provider: 'bokio', found: 12 })
+    expect(offered).toMatchObject({ phase: 'offered', provider: 'bokio', found: 10 })
+  })
+
+  it('does not offer a new import when all source documents are already handled', () => {
+    const state = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
+      type: 'discovery-succeeded', result: result({ scanned: 1376, total: 1376, linked: 0, skipped: 1376, unmatched: 0 }),
+    })
+    expect(state).toMatchObject({ phase: 'empty', found: 0, result: { skipped: 1376 } })
+  })
+
+  it('offers only remaining files while retaining existing and unmatched counts', () => {
+    const state = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
+      type: 'discovery-succeeded', result: result({ scanned: 1376, total: 1376, linked: 2, skipped: 1373, unmatched: 1 }),
+    })
+    expect(state).toMatchObject({ phase: 'offered', found: 2, result: { skipped: 1373, unmatched: 1 } })
+  })
+
+  it.each([{ unmatched: 1 }, { locked: 1 }, { failed: 1 }])('keeps unresolved outcomes visible with no new files: %o', outcome => {
+    const state = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
+      type: 'discovery-succeeded', result: result({ scanned: 2, linked: 0, skipped: 1, unmatched: 0, ...outcome }),
+    })
+    expect(state).toMatchObject({ phase: 'offered', found: 0 })
   })
 
   it('does not start discovery for a provider without an underlag import', () => {
@@ -535,5 +557,20 @@ describe('live document progress',()=>{
   it('starts real import counters at zero while retaining the discovered total',()=>{
     const state=arcimDocumentImportReducer({phase:'offered',provider:'bokio',found:1376,result:result({dryRun:true,scanned:1376,linked:1376,total:1376}),problem:null},{type:'import-started'})
     expect(state.result).toMatchObject({dryRun:false,total:1376,scanned:0,linked:0})
+  })
+})
+
+describe('complete document discovery', () => {
+  it('checks remaining read-only slices before concluding everything is already imported', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(jsonResponse({ result: result({
+      scanned: 1, linked: 0, skipped: 1, unmatched: 0, total: 2, partial: true, nextCursor: 'a',
+    }) })).mockResolvedValueOnce(jsonResponse({ result: result({
+      scanned: 1, linked: 1, skipped: 0, unmatched: 0, total: 2,
+    }) }))
+    const discovery = await runArcimDocumentDiscoveryToCompletion('c1', fetcher)
+    expect(discovery).toMatchObject({ scanned: 2, linked: 1, skipped: 1, dryRun: true, partial: false })
+    expect(fetcher.mock.calls.map(call => JSON.parse(call[1].body))).toEqual([
+      { consentId: 'c1', dryRun: true }, { consentId: 'c1', dryRun: true, cursor: 'a' },
+    ])
   })
 })

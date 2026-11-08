@@ -1231,3 +1231,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-08] Skip mapping/VAT approval for a fully compared zero-addition provider sync with resolved targets, even if metadata changed. Leave new-voucher and unknown-year gates intact; never infer or rewrite VAT choices to suppress an irrelevant prompt.
 [2026-11-08] Suppress archived account-name differences only when an incoming identity mapping already matches the live company chart. Keep SRU, dimension and balance comparisons intact; do not write acknowledgments or rewrite archives to make a no-op sync look unchanged.
 [2026-11-08] Stream underlag progress over the existing POST instead of shortening slices and repeatedly relisting provider files. Keep actual invoice exclusion reasons separate from imported payables that are unpaid but not yet due; derive both from stored/current facts.
+
+[2026-11-08] Reuse retained Bokio upload mappings for discovery and retries: trust an upload ID only when its retained document belongs to the currently resolved dated voucher. Offer remaining files rather than the full provider list.

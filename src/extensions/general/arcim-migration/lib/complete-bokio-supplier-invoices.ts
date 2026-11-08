@@ -1,3 +1,5 @@
+import { bokioAccountKey } from './bokio-source-identity'
+export { bokioAccountKey } from './bokio-source-identity'
 import { createLogger } from '@/lib/logger'
 import { bokioSupplierSource } from './bokio-supplier-source'
 import { withinMigrationDeadline } from './migration-job-worker'
@@ -30,9 +32,6 @@ interface Supplier { id: string; name: string }
 interface Progress { invoice_id: string; next_attempt_at: string }
 interface Receipt { outcome: string; changed: boolean; rows?: number; header_updated?: boolean; settlement?: { code?: string }; event_id?: string }
 
-export function bokioAccountKey(connection: ResolvedConsent, consentId: string): string {
-  return String(connection.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || connection.providerCompanyId || consentId
-}
 export async function loadBokioSupplierSnapshot(companyId: string, consentId: string): Promise<BokioSupplierSnapshot> {
   const connection = await resolveConsent(companyId, consentId)
   if (connection.consent.provider !== 'bokio') throw new Error('BOKIO_CONSENT_REQUIRED')

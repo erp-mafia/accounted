@@ -1,3 +1,4 @@
+import { bokioAccountKey } from './bokio-source-identity'
 import { explainUnmatchedDocument, pageUnmatchedDocuments, type UnmatchedProviderDocument, type ProviderDocumentMatchReview } from '@/lib/providers/document-match-review'
 /**
  * Provider document (underlag) import: best-effort, re-runnable.
@@ -355,7 +356,7 @@ export async function importProviderDocuments(
       : fortnoxSource(fortnoxClient as FortnoxClient, resolved.accessToken)
 
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
-  const [listedAttachments, periods, sourceVouchers, existingAttachments, retiredImports] = await Promise.all([
+  const [listedAttachments, periods, sourceVouchers, existingAttachments, retiredImports, archivedUploads] = await Promise.all([
     source().list(),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId, true),
@@ -378,6 +379,13 @@ export async function importProviderDocuments(
     fetchAllRows<{id:string}>(({from,to})=>supabase.from('sie_imports').select('id')
       .eq('company_id',companyId).or('status.in.(undone,replaced),job_state.eq.undone')
       .order('id').range(from,to)),
+    provider === 'bokio' && !opts.review
+      ? fetchAllRows<{ source_id: string; target_id: string }>(({ from, to }) => supabase
+          .from('migration_source_records').select('source_id,target_id')
+          .eq('company_id', companyId).eq('provider', 'bokio')
+          .eq('account_key', bokioAccountKey(resolved, consentId)).eq('resource', 'uploads')
+          .order('id').range(from, to))
+      : Promise.resolve([]),
   ])
 
   // A completed replacement retains the old ledger as immutable history.
@@ -426,6 +434,11 @@ export async function importProviderDocuments(
       .filter((r) => r.journal_entry_id != null)
       .map((r) => [attachmentKey(r.sha256_hash, r.journal_entry_id as string), r.id]),
   )
+  // A retained source mapping only proves completion for its current, dated
+  // voucher target. Stale/missing documents or a replaced SIE target must still
+  // follow the normal match and content-hash path.
+  const documentEntryById = new Map(existingAttachments.map(row => [row.id, row.journal_entry_id]))
+  const archivedDocumentByUpload = new Map(archivedUploads.map(row => [row.source_id, row.target_id]))
   const recordUpload = async (uploadId: string, documentId: string) => {
     if (provider !== 'bokio') return
     const { error } = await supabase.rpc('record_bokio_upload', {
@@ -512,6 +525,12 @@ export async function importProviderDocuments(
 
       if (!journalEntryId || dateDisagrees) {
         recordUnmatched(attachment,dateDisagrees)
+        continue
+      }
+
+      const archivedDocumentId = archivedDocumentByUpload.get(attachment.id)
+      if (archivedDocumentId && documentEntryById.get(archivedDocumentId) === journalEntryId) {
+        result.skipped++
         continue
       }
 
