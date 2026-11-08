@@ -140,7 +140,7 @@ export function CounterpartList({
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.outSek)}</td>
-                <td className={`${TD_CLASS} whitespace-nowrap text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
+                <td className={`${TD_CLASS} whitespace-nowrap tabular-nums text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
                 <td className={`${TD_CLASS} text-right`}>
                   {canWrite ? (
                     <DropdownMenu>

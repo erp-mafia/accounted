@@ -207,7 +207,7 @@ export default function SupplierDetailPage() {
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
       <div>
-        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
             <p className="page-header-meta mt-1 text-sm text-muted-foreground">
@@ -299,7 +299,7 @@ export default function SupplierDetailPage() {
 
       <DetailSection kicker={t('contact_section_title')}>
         <DefRow label={t('def_email')}>
-          {supplier.email || <DefEmpty />}
+          {supplier.email ? <span className="break-all">{supplier.email}</span> : <DefEmpty />}
         </DefRow>
         <DefRow label={t('def_phone')}>
           {supplier.phone || <DefEmpty />}

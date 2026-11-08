@@ -730,7 +730,7 @@ export default function SupplierInvoiceDetailPage() {
           the next step on the right. Everything else lives in the ⋯ menu.
           The sidebar says where we are, so there is no back link; the
           prev/next pager sits in the bar. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the supplier's invoice number */}
@@ -953,45 +953,49 @@ export default function SupplierInvoiceDetailPage() {
       {/* Invoice lines: the list-page table idiom straight on the panel, with
           the totals as a right-aligned block and the total in the serif. */}
       <DetailSection kicker={t('rows_title')}>
-        <table className="hidden w-full border-collapse text-[13px] md:table">
-          <thead>
-            <tr>
-              <th className={cn(TH_CLASS, 'pl-0')}>{t('col_description')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('col_quantity')}</th>
-              <th className={TH_CLASS}>{t('col_unit')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('col_unit_price')}</th>
-              <th className={TH_CLASS}>{t('col_account')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('col_vat_rate')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
-              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_vat')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr key={item.id}>
-                <td className={cn(TD_CLASS, 'pl-0')}>
-                  {item.description}
-                  {accrualInfo(item)}
-                </td>
-                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
-                <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
-                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                  {formatCurrency(item.unit_price, invoice.currency)}
-                </td>
-                <td className={TD_CLASS}>
-                  <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
-                </td>
-                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
-                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                  {formatCurrency(item.line_total, invoice.currency)}
-                </td>
-                <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                  {formatCurrency(item.vat_amount, invoice.currency)}
-                </td>
+        {/* overflow-x-auto: from md the eight columns can outgrow the panel (768 px
+            with the sidebar leaves ~480 px); the row scrolls instead of the page. */}
+        <div className="hidden overflow-x-auto md:block">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'pl-0')}>{t('col_description')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('col_quantity')}</th>
+                <th className={TH_CLASS}>{t('col_unit')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('col_unit_price')}</th>
+                <th className={TH_CLASS}>{t('col_account')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('col_vat_rate')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
+                <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_vat')}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td className={cn(TD_CLASS, 'pl-0')}>
+                    {item.description}
+                    {accrualInfo(item)}
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
+                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                    {formatCurrency(item.unit_price, invoice.currency)}
+                  </td>
+                  <td className={TD_CLASS}>
+                    <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                    {formatCurrency(item.line_total, invoice.currency)}
+                  </td>
+                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
+                    {formatCurrency(item.vat_amount, invoice.currency)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         {/* Narrow screens: one flat row per line, no numeric columns to cram. */}
         <div className="divide-y divide-border text-sm md:hidden">

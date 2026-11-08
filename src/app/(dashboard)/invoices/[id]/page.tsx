@@ -2821,7 +2821,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               )}
               <DefRow label={t('def_email')}>
                 {customer.email ? (
-                  <a href={`mailto:${customer.email}`} className="hover:underline">
+                  <a href={`mailto:${customer.email}`} className="break-all hover:underline">
                     {customer.email}
                   </a>
                 ) : (
@@ -3767,7 +3767,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : t(issuesByBooking ? 'draft_download_book_desc' : 'draft_download_send_desc')}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter className="sm:flex-wrap sm:gap-2 sm:space-x-0">
             <Button variant="outline" onClick={() => setDraftDownloadPrompt(null)}>
               {tCommon('cancel')}
             </Button>

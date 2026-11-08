@@ -688,9 +688,9 @@ export default function SendInvoiceDialog({
               <div className="space-y-3 rounded-lg border border-border p-3">
                 <div className="space-y-1 text-sm">
                   <div className="flex items-start justify-between gap-2">
-                    <p>
+                    <p className="min-w-0">
                       <span className="font-medium">{t('recipient_to_label')}:</span>{' '}
-                      {invoice.customer?.email}
+                      <span className="break-all">{invoice.customer?.email}</span>
                     </p>
                     {/* Convention 7: the why of fixed CC/BCC and the extra
                         address rules live behind the "?": only the actual

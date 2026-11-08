@@ -107,7 +107,7 @@ export function CounterpartyOpenItems({
             {items.receivables.map((r) => (
               <tr key={r.invoice_id}>
                 <td className={`${VTD_CLASS} w-24 whitespace-nowrap text-muted-foreground tabular-nums`}>{formatDate(r.invoice_date)}</td>
-                <td className={`${VTD_CLASS} truncate`}>
+                <td className={`${VTD_CLASS} w-full max-w-0 truncate`}>
                   {r.number ?? ''}
                   {r.ineligible_reason ? <span className="text-muted-foreground"> · {reasonText(r.ineligible_reason)}</span> : null}
                 </td>
@@ -125,7 +125,7 @@ export function CounterpartyOpenItems({
             {items.payables.map((p) => (
               <tr key={p.supplier_invoice_id}>
                 <td className={`${VTD_CLASS} w-24 whitespace-nowrap text-muted-foreground tabular-nums`}>{formatDate(p.invoice_date)}</td>
-                <td className={`${VTD_CLASS} truncate`}>
+                <td className={`${VTD_CLASS} w-full max-w-0 truncate`}>
                   {payableLabel(p, arrivalWord)}
                   {p.ineligible_reason ? <span className="text-muted-foreground"> · {reasonText(p.ineligible_reason)}</span> : null}
                 </td>
@@ -143,7 +143,7 @@ export function CounterpartyOpenItems({
             {items.setoffs.map((s) => (
               <tr key={s.setoff_id}>
                 <td className={`${VTD_CLASS} w-24 whitespace-nowrap text-muted-foreground tabular-nums`}>{formatDate(s.setoff_date)}</td>
-                <td className={`${VTD_CLASS} truncate`}>
+                <td className={`${VTD_CLASS} w-full max-w-0 truncate`}>
                   {t('setoff_history_row')}
                   {s.status === 'reversed' ? <span className="text-muted-foreground"> · {t('setoff_reversed')}</span> : null}
                 </td>
