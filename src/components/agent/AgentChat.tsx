@@ -1039,7 +1039,7 @@ function MessageBubble({
       {!hideEmptyBubble && (
       <div
         className={cn(
-          'max-w-[85%] rounded-lg px-4 py-3 text-sm leading-6',
+          'max-w-[85%] break-words rounded-lg px-4 py-3 text-sm leading-6',
           isUser
             ? 'bg-secondary text-foreground whitespace-pre-wrap'
             : 'border border-border bg-card',

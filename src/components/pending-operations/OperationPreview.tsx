@@ -203,7 +203,7 @@ function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; cur
     <div className="space-y-1">
       {items.map((item, i) => (
         <div key={i} className="flex justify-between text-xs">
-          <span className="truncate mr-4">
+          <span className="min-w-0 truncate mr-4">
             {item.description}
             {item.line_type === 'text' ? null : ` (${item.quantity} ${item.unit})`}
             {typeof item.vat_rate === 'number' && item.line_type !== 'text' && (

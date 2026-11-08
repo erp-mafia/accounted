@@ -151,7 +151,7 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
         {postings.map((p) => {
           const undone = p.entry_status === 'reversed'
           return (
-            <div key={p.use_id} className="flex items-center gap-3 border-b border-border px-1 py-3 text-[13px]">
+            <div key={p.use_id} className="flex flex-wrap items-center gap-3 border-b border-border px-1 py-3 text-[13px]">
               <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
                 <BoltIcon className="h-[15px] w-[15px]" />
               </span>

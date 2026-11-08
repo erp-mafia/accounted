@@ -28,7 +28,7 @@ export function DefRow({ label, children, source, muted, labelWidth = 150 }: { l
     <div className="grid items-baseline gap-x-4 border-b border-border py-2 last:border-b-0" style={{ gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)` }}>
       <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
       <dd className="m-0 flex items-baseline justify-between gap-3">
-        <span className={cn('min-w-0 tabular-nums', muted && 'text-muted-foreground')}>{children}</span>
+        <span className={cn('min-w-0 break-words tabular-nums', muted && 'text-muted-foreground')}>{children}</span>
         {source}
       </dd>
     </div>

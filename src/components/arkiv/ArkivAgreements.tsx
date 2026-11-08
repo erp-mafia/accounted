@@ -86,6 +86,8 @@ export function ArkivAgreements() {
       )}
       {items && visible.length === 0 && <EmptyState title={t('agreements_empty_title')} description={t('agreements_empty_body')} />}
       {items && visible.length > 0 && (
+        // Six nowrap heads need ~600px: on a phone the table scrolls in place instead of the page.
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -139,6 +141,7 @@ export function ArkivAgreements() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
