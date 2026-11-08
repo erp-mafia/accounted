@@ -1,7 +1,8 @@
 /**
  * POST /system-connection/deeplink: gating (capability, role, system-auth
  * mode), org-number derivation server-side, the opt-in row it records, and
- * the OmbudApiError -> 502 mapping.
+ * the OmbudApiError -> 502 mapping. POST /system-connection/verify: the same
+ * org-number claim gate before any probe.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -17,14 +18,22 @@ vi.mock('../lib/ombud-client', async (importOriginal) => {
   return { ...actual, createUtseOmbudDeepLink: (...a: unknown[]) => mockCreateDeepLink(...a) }
 })
 
+const mockProbeCompanyGrants = vi.fn()
+vi.mock('../lib/grant-probe', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return { ...actual, probeCompanyGrants: (...a: unknown[]) => mockProbeCompanyGrants(...a) }
+})
+
 const mockRecordProbeResult = vi.fn()
-const mockContested = vi.fn(async (_orgNumber: string) => false)
+const mockGetConnection = vi.fn(async () => null)
+const mockStanding = vi.fn(async (_companyId: string, _orgNumber: string): Promise<string> => 'clear')
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
   return {
     ...actual,
     recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
-    isOrgNumberContested: (orgNumber: string) => mockContested(orgNumber),
+    getConnection: () => mockGetConnection(),
+    getOmbudClaimStanding: (companyId: string, orgNumber: string) => mockStanding(companyId, orgNumber),
   }
 })
 
@@ -35,15 +44,14 @@ import { skatteverketExtension } from '../index'
 import { OmbudApiError } from '../lib/ombud-client'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { testRoutes } from '@/tests/helpers'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const ENV_KEYS = ['SKATTEVERKET_SYSTEM_AUTH_MODE', 'SKATTEVERKET_SYSTEM_AUTH_MECHANISM']
 let savedEnv: Record<string, string | undefined>
 
-function findRoute() {
-  const route = testRoutes(skatteverketExtension).find(
-    (r) => r.method === 'POST' && r.path === '/system-connection/deeplink'
-  )
-  if (!route) throw new Error('deeplink route not registered')
+function findRoute(path = '/system-connection/deeplink') {
+  const route = testRoutes(skatteverketExtension).find((r) => r.method === 'POST' && r.path === path)
+  if (!route) throw new Error(`${path} route not registered`)
   return route
 }
 
@@ -98,7 +106,13 @@ beforeEach(() => {
   process.env.SKATTEVERKET_SYSTEM_AUTH_MECHANISM = 'stub'
   mockRequireCapability.mockResolvedValue(null)
   mockRecordProbeResult.mockResolvedValue({ id: 'conn-1', status: 'pending' })
-  mockContested.mockResolvedValue(false)
+  mockStanding.mockResolvedValue('clear')
+  mockGetConnection.mockResolvedValue(null)
+  mockProbeCompanyGrants.mockResolvedValue({
+    connection: { id: 'conn-1', lasombud_status: 'granted' },
+    lasombud: { status: 'granted' },
+    momsOmbud: { status: 'granted' },
+  })
   mockWriteAudit.mockResolvedValue(undefined)
   mockCreateDeepLink.mockResolvedValue({
     djuplank: 'https://sso.skatteverket.se/ombud?x=1',
@@ -178,12 +192,35 @@ describe('POST /system-connection/deeplink', () => {
     expect(mockWriteAudit).not.toHaveBeenCalled()
   })
 
-  it('409 ORG_NUMBER_CONTESTED when another live company claims the same org number: no link, no row', async () => {
-    mockContested.mockResolvedValue(true)
+  it('409 ORG_NUMBER_CONTESTED when other live companies claim the number and no member here proved it: no link, no row, and the way out', async () => {
+    mockStanding.mockResolvedValue('unproven')
     const res = await findRoute().handler(request(), makeContext())
     expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ code: 'ORG_NUMBER_CONTESTED' })
-    expect(mockContested).toHaveBeenCalledWith('165560000000')
+    const body = await res.json()
+    expect(body.error.code).toBe('ORG_NUMBER_CONTESTED')
+    expect(getErrorMessage(body, { locale: 'sv' })).toMatch(/Anslut det här företaget till Skatteverket med BankID.*försök sedan igen/)
+    expect(getErrorMessage(body, { locale: 'sv' })).not.toMatch(/[Kk]ontakta support/)
+    expect(getErrorMessage(body, { locale: 'en' })).toMatch(/Connect this company to Skatteverket with BankID.*then try again/)
+    expect(mockStanding).toHaveBeenCalledWith('company-1', '165560000000')
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('409 ORG_NUMBER_PROVEN_TWICE when another claimant is proven too: no link, no row', async () => {
+    mockStanding.mockResolvedValue('proven_twice')
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('ORG_NUMBER_PROVEN_TWICE')
+    expect(getErrorMessage(body, { locale: 'sv' })).toMatch(/Arkivera de andra företagen/)
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('a failed proof read hands out no link', async () => {
+    mockStanding.mockRejectedValue(new Error('ownership proof read failed: timeout'))
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBeGreaterThanOrEqual(500)
     expect(mockCreateDeepLink).not.toHaveBeenCalled()
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
@@ -200,5 +237,36 @@ describe('POST /system-connection/deeplink', () => {
     expect(res.status).toBe(502)
     expect(await res.json()).toMatchObject({ code: 'OBR_HTTP_ERROR' })
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /system-connection/verify: the org-number claim', () => {
+  const verify = () =>
+    findRoute('/system-connection/verify').handler(
+      new Request('http://localhost/api/extensions/ext/skatteverket/system-connection/verify', { method: 'POST' }),
+      makeContext(),
+    )
+
+  it('409 ORG_NUMBER_CONTESTED for an unproven claimant: the register is never asked', async () => {
+    mockStanding.mockResolvedValue('unproven')
+    const res = await verify()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('ORG_NUMBER_CONTESTED')
+    expect(mockStanding).toHaveBeenCalledWith('company-1', '165560000000')
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
+  })
+
+  it('409 ORG_NUMBER_PROVEN_TWICE when two claimants are proven', async () => {
+    mockStanding.mockResolvedValue('proven_twice')
+    const res = await verify()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('ORG_NUMBER_PROVEN_TWICE')
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
+  })
+
+  it('a clear claim (sole claimant, or the one proven) is probed', async () => {
+    const res = await verify()
+    expect(res.status).toBe(200)
+    expect(mockProbeCompanyGrants).toHaveBeenCalledWith('company-1', '165560000000', 'user-1')
   })
 })

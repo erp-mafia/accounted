@@ -25,11 +25,15 @@ vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
 
 const mockListConnections = vi.fn()
 const mockRecordProbeResult = vi.fn()
-const mockContested = vi.fn(async (): Promise<Set<string>> => new Set())
+/** Company ids whose claim is held back, and how. Everyone else is 'clear'. */
+let heldBack: Record<string, 'unproven' | 'proven_twice'> = {}
+const mockStandings = vi.fn(async (claims: Array<{ companyId: string; orgNumber: string }>) =>
+  new Map(claims.map((claim) => [claim.companyId, heldBack[claim.companyId] ?? 'clear']))
+)
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   listConnections: (...a: unknown[]) => mockListConnections(...a),
   recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
-  findContestedOrgNumbers: () => mockContested(),
+  getOmbudClaimStandings: (claims: Array<{ companyId: string; orgNumber: string }>) => mockStandings(claims),
 }))
 
 const mockListOmbudGrants = vi.fn()
@@ -90,7 +94,7 @@ beforeEach(() => {
   mockConfigured.mockReturnValue(true)
   mockListConnections.mockResolvedValue([])
   mockRecordProbeResult.mockResolvedValue({ id: 'conn' })
-  mockContested.mockResolvedValue(new Set())
+  heldBack = {}
   mockListOmbudGrants.mockResolvedValue([])
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -302,18 +306,23 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(recordedFor('c-new')[0]).toMatchObject({ lasombud: { status: 'granted' } })
   })
 
-  it('a contested org number (two live companies claim it) is never granted, and an existing grant on it is withdrawn', async () => {
+  it('a held-back claim (contested, not the one proven with BankID) is never granted, and an existing grant on it is withdrawn', async () => {
     mockListConnections.mockResolvedValue([
       connection('c-victim', '165560000000'), // verified before the twin appeared
       connection('c-twin', '165560000000', 'unknown', 'unknown', 'pending'),
       connection('c-clear', '165570000000', 'unknown', 'unknown', 'pending'),
     ])
-    mockContested.mockResolvedValue(new Set(['165560000000']))
+    heldBack = { 'c-victim': 'unproven', 'c-twin': 'unproven' }
     mockListOmbudGrants.mockResolvedValue([SKOL('165560000000'), MOMS('165560000000'), SKOL('165570000000')])
 
     const body = await (await GET(request())).json()
 
     expect(body).toMatchObject({ contested: 2, revoked: 1, granted: 1, guardTripped: false })
+    expect(mockStandings).toHaveBeenCalledWith([
+      { companyId: 'c-victim', orgNumber: '165560000000' },
+      { companyId: 'c-twin', orgNumber: '165560000000' },
+      { companyId: 'c-clear', orgNumber: '165570000000' },
+    ])
     expect(mockRecordProbeResult).toHaveBeenCalledTimes(2)
     expect(recordedFor('c-clear')[0]).toMatchObject({ lasombud: { status: 'granted' } })
     expect(recordedFor('c-victim')[0]).toMatchObject({
@@ -321,6 +330,36 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
       momsOmbud: { status: 'denied' },
     })
     expect(recordedFor('c-twin')).toHaveLength(0)
+  })
+
+  it('on a contested number the one claimant proven with BankID is reconciled like any other row; the unproven twin is not', async () => {
+    mockListConnections.mockResolvedValue([
+      connection('c-owner', '165560000000', 'unknown', 'unknown', 'pending'),
+      connection('c-stranger', '165560000000', 'unknown', 'unknown', 'pending'),
+    ])
+    heldBack = { 'c-stranger': 'unproven' }
+    mockListOmbudGrants.mockResolvedValue([SKOL('165560000000'), MOMS('165560000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ contested: 1, granted: 1, revoked: 0 })
+    expect(recordedFor('c-owner')[0]).toMatchObject({ lasombud: { status: 'granted' }, momsOmbud: { status: 'granted' } })
+    expect(recordedFor('c-stranger')).toHaveLength(0)
+  })
+
+  it('two claimants proven on one number: both held back, a grant either held is withdrawn', async () => {
+    mockListConnections.mockResolvedValue([
+      connection('c-real', '165560000000'),
+      connection('c-copy', '165560000000', 'unknown', 'unknown', 'pending'),
+    ])
+    heldBack = { 'c-real': 'proven_twice', 'c-copy': 'proven_twice' }
+    mockListOmbudGrants.mockResolvedValue([SKOL('165560000000'), MOMS('165560000000')])
+
+    const body = await (await GET(request())).json()
+
+    expect(body).toMatchObject({ contested: 2, revoked: 1, granted: 0 })
+    expect(recordedFor('c-real')[0]).toMatchObject({ lasombud: { status: 'denied' }, momsOmbud: { status: 'denied' } })
+    expect(recordedFor('c-copy')).toHaveLength(0)
   })
 
   it('a huvudman listed with only unrecognised role codes is neither granted nor denied (pinning problem)', async () => {

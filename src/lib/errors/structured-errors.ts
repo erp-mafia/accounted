@@ -9248,6 +9248,24 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
         'Verify the signed-in user is firmatecknare/deklarationsombud for this company at Skatteverket, then reconnect with BankID.',
     },
   },
+  // The ombud connection (deep link, Verifiera) on an org number several live
+  // companies claim goes only to the one proven with BankID (ombudClaimStanding
+  // in the skatteverket extension's connection-store).
+  ORG_NUMBER_CONTESTED: {
+    httpStatus: 409,
+    message_sv:
+      'Organisationsnumret används av fler än ett företag. Anslut det här företaget till Skatteverket med BankID under Inställningar → Skatteverket och försök sedan igen. Den som ansluter måste få företräda företaget hos Skatteverket.',
+    message_en:
+      'The organisation number is used by more than one company. Connect this company to Skatteverket with BankID under Settings → Skatteverket, then try again. The person connecting must be allowed to represent the company at Skatteverket.',
+  },
+  // Two or more claimants are proven: the connection follows neither.
+  ORG_NUMBER_PROVEN_TWICE: {
+    httpStatus: 409,
+    message_sv:
+      'Organisationsnumret är bekräftat med BankID i fler än ett företag, och ombudsanslutningen kan bara gälla ett av dem. Arkivera de andra företagen med samma organisationsnummer, eller be den som administrerar dem att göra det, och försök sedan igen.',
+    message_en:
+      'The organisation number is confirmed with BankID in more than one company, and the ombud connection can only apply to one of them. Archive the other companies with the same organisation number, or ask whoever manages them to, then try again.',
+  },
   SKATTEVERKET_RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar mot Skatteverket. Vänta en stund och försök igen.',
