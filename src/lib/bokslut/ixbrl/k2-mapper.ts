@@ -117,31 +117,56 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
     ranges: [r('7740', '7749'), r('7790', '7799')],
   },
   { concept: 'OvrigaRorelsekostnader', balance: 'debit', ranges: [r('7900', '7999')] },
-  { concept: 'ResultatAndelarKoncernforetag', balance: 'credit', ranges: [r('8000', '8099')] },
+  // Finansiella poster follow the BAS kopplingstabell for INK2R 3.12-3.18
+  // (fältkoder 7414, 7415, 7423, 7416, 7417, 7521, 7522), the same ÅRL rows.
+  // The "resultat från ..." concepts are "exklusive nedskrivningar" in the
+  // taxonomy: every x070-x089 nedskrivning/återföring account belongs to
+  // NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar.
+  // 82xx is "andra företag" (övriga finansiella anläggningstillgångar); the
+  // ägarintresse row only draws the four 81xx ägarintresse accounts.
+  {
+    concept: 'ResultatAndelarKoncernforetag',
+    balance: 'credit',
+    ranges: [r('8000', '8069'), r('8090', '8099')],
+  },
   {
     concept: 'ResultatAndelarIntresseforetagGemensamtStyrda',
     balance: 'credit',
-    ranges: [r('8100', '8199')],
+    ranges: [
+      r('8100', '8112'),
+      r('8114', '8117'),
+      r('8119', '8122'),
+      r('8124', '8132'),
+      r('8134', '8169'),
+      r('8190', '8199'),
+    ],
   },
   {
     concept: 'ResultatOvrigaforetagAgarintresse',
     balance: 'credit',
-    ranges: [r('8200', '8269')],
+    ranges: [r('8113', '8113'), r('8118', '8118'), r('8123', '8123'), r('8133', '8133')],
   },
   {
     concept: 'ResultatOvrigaFinansiellaAnlaggningstillgangar',
     balance: 'credit',
-    ranges: [r('8270', '8299')],
+    ranges: [r('8200', '8269'), r('8290', '8299')],
   },
   {
     concept: 'OvrigaRanteintakterLiknandeResultatposter',
     balance: 'credit',
-    ranges: [r('8300', '8399')],
+    ranges: [r('8300', '8369'), r('8390', '8399')],
   },
   {
     concept: 'NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar',
     balance: 'debit',
-    ranges: [r('8500', '8599')],
+    ranges: [
+      r('8070', '8089'),
+      r('8170', '8189'),
+      r('8270', '8289'),
+      r('8370', '8389'),
+      // 85xx is not a BAS range; kept so custom 85xx accounts keep their row.
+      r('8500', '8599'),
+    ],
   },
   {
     concept: 'RantekostnaderLiknandeResultatposter',
