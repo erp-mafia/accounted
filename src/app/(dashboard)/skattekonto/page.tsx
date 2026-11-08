@@ -1185,9 +1185,11 @@ function SkattekontoTable({
   return (
     // Negative margin + matching padding: lets the hover-revealed selection
     // checkbox hang into the page margins without being clipped by the
-    // overflow container (transactions-page pattern).
+    // overflow container (transactions-page pattern). It bleeds exactly the
+    // panel padding (MainContainer px-4, md:px-6): more scrolls the page
+    // sideways on a phone.
     <div
-      className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8"
+      className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6"
       role="region"
       aria-label="Skattekontohändelser"
     >
@@ -1289,7 +1291,7 @@ function SkattekontoRow({
             }}
             onCheckedChange={() => onToggleSelect(row.id, shiftHeld.current)}
             aria-label={t('select_row_aria', { text: row.transaktionstext })}
-            className="absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6"
+            className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>

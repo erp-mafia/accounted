@@ -638,7 +638,7 @@ export function StockCountRegister() {
           <TotalsTable totals={count.totals} label={categoryLabel} t={t} />
 
           {adjustments && adjustments.length > 0 && (
-            <div className="space-y-2">
+            <div className="space-y-2 overflow-x-auto">
               <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('booking_heading')}</h2>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
@@ -666,7 +666,7 @@ export function StockCountRegister() {
           )}
 
           {counts.length > 1 && (
-            <div className="space-y-2">
+            <div className="space-y-2 overflow-x-auto">
               <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('earlier_counts')}</h2>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
@@ -785,7 +785,7 @@ function TotalsTable({
   if (totals.length === 0) return null
   const total = sumOre(totals.map((row) => row.value))
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 overflow-x-auto">
       <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('totals_heading')}</h2>
       <table className="w-full border-collapse text-[13px]">
         <thead>

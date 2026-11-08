@@ -246,7 +246,7 @@ export function DeadlineForm({
             />
           </div>
 
-          <DialogFooter className="flex-row justify-between sm:justify-between gap-2">
+          <DialogFooter className="flex-row flex-wrap justify-between sm:justify-between gap-2">
             {/* Delete (only when editing an existing deadline) */}
             {initialData?.id && onDelete ? (
               <div className="flex items-center gap-2">

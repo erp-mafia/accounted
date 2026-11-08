@@ -269,7 +269,7 @@ export function RunHeader({
           the next step on the right. Everything else lives in the ⋯ menu.
           The page-header hooks turn it into the top bar; the sidebar says
           where we are, so there is no back link. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">

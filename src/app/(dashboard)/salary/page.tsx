@@ -152,7 +152,7 @@ export default function SalaryPage() {
   })
 
   const header = (
-    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
       <div className="flex items-center gap-4">
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>

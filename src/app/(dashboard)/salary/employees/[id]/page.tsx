@@ -441,7 +441,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet personnummer/type kicker, quiet actions right */}
       <div>
-        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
