@@ -131,6 +131,22 @@ describe('POST /import-sie: job refusals', () => {
     expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', SIE, MAPPINGS,
       expect.objectContaining({ onExistingPeriod: 'block' }), undefined)
   })
+  it.each([true, false])('preserves the explicit no-document choice in a new job: %s', async markImportedNoDocRequired => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({ id: 'new-import', job_state: 'queued' } as never)
+    const response = await post({ ...BODY, options: { ...BODY.options, markImportedNoDocRequired } })
+    expect(response.status).toBe(202)
+    expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', SIE, MAPPINGS,
+      expect.objectContaining({ markImportedNoDocRequired }), undefined)
+  })
+
+  it('does not mark existing vouchers during a no-addition resync even with the choice enabled', async () => {
+    vi.mocked(planSIEResync).mockResolvedValueOnce({ periodId: 'period', added: 0, unchanged: 12,
+      reviewCount: 0, reviews: [], metadataChanged: false, newOrdinals: [] })
+    const response = await post({ ...BODY, options: { ...BODY.options, markImportedNoDocRequired: true } })
+    expect(response.status).toBe(200)
+    expect(submitSIEJob).not.toHaveBeenCalled()
+  })
+
   it('ignores an older client replacement request and admits only incremental additions', async () => {
     vi.mocked(planSIEResync).mockResolvedValueOnce({periodId:'period',added:1,unchanged:12,reviewCount:0,reviews:[],metadataChanged:false,newOrdinals:[12]})
     vi.mocked(submitSIEJob).mockResolvedValueOnce({id:'delta-1',job_state:'queued'} as never)

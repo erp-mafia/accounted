@@ -7127,6 +7127,8 @@
     "ext_arcim_documents_prompt_standalone": "{count, plural, one {# supporting document from {provider} remains to import and link to its voucher.} other {# supporting documents from {provider} remain to import and link to their vouchers.}}",
     "ext_arcim_documents_discovery_error_standalone": "We could not check the documents in {provider}. Try again.",
     "ext_arcim_documents_import_error_standalone": "The documents could not be imported. Try again; documents already imported will be skipped.",
+    "ext_arcim_option_no_doc_required": "Mark newly imported vouchers as “No supporting document required”",
+    "ext_arcim_option_no_doc_required_description": "Only applies to vouchers created now. Keep the supporting documents from your previous system; they can also be imported here. Existing vouchers keep their current settings.",
     "ext_arcim_option_series_help": "Vouchers keep their series from the source system (A, D, E ...). The series here is only used for vouchers without one.",
     "ext_arcim_option_sie_required_hint": "The ledger (chart of accounts, opening balances and verifications) has not been imported yet. Tick Bokföringsdata (SIE) to fetch it in the same run: customers, suppliers and invoices cannot be imported without it.",
     "ext_arcim_year_select_all": "All years",

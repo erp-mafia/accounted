@@ -312,6 +312,7 @@ const STEP_LABELS: Record<WizardStep, string> = {
 interface MigrationOptions {
   importCompanyInfo: boolean
   importSIEData: boolean
+  markImportedNoDocRequired: boolean
   importCustomers: boolean
   importSuppliers: boolean
   importSalesInvoices: boolean
@@ -323,6 +324,7 @@ interface MigrationOptions {
 const DEFAULT_OPTIONS: MigrationOptions = {
   importCompanyInfo: true,
   importSIEData: true,
+  markImportedNoDocRequired: true,
   importCustomers: true,
   importSuppliers: true,
   importSalesInvoices: true,
@@ -1423,6 +1425,12 @@ function OptionsStep({
                 ))}
               </div>
             )}
+            {options.importSIEData && (!sieComparison || sieComparison.added > 0) && <OptionRow
+              label={t('ext_arcim_option_no_doc_required')}
+              description={t('ext_arcim_option_no_doc_required_description')}
+              checked={options.markImportedNoDocRequired}
+              onChange={() => toggleOption('markImportedNoDocRequired')}
+            />}
             {/* Verifikationsserie: one aligned row, not a nested box. */}
             {options.importSIEData && (
               <div className="flex items-center gap-3 border-t border-border py-3">
@@ -1562,6 +1570,7 @@ function OptionRow({
         <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
       <Switch
+        aria-label={label}
         checked={checked}
         onCheckedChange={() => !disabled && onChange()}
         disabled={disabled}
@@ -3657,6 +3666,7 @@ export default function ArcimMigrationWorkspace({
                 importOpeningBalances: true,
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
+                markImportedNoDocRequired: migrationOptions.markImportedNoDocRequired,
                 incremental:!!filesToImport[i].status?.previousImport,
               },
             }),

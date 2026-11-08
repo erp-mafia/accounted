@@ -1233,3 +1233,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-08] Stream underlag progress over the existing POST instead of shortening slices and repeatedly relisting provider files. Keep actual invoice exclusion reasons separate from imported payables that are unpaid but not yet due; derive both from stored/current facts.
 
 [2026-11-08] Reuse retained Bokio upload mappings for discovery and retries: trust an upload ID only when its retained document belongs to the currently resolved dated voucher. Offer remaining files rather than the full provider list.
+
+[2026-11-08] Expose the existing no-document migration choice in the API wizard and send it per SIE job. Scope it to newly created vouchers so a no-change resync cannot reapply exemptions the user later removed.

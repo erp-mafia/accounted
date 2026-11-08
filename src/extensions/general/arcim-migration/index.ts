@@ -1480,6 +1480,7 @@ export const arcimMigrationExtension: Extension = {
             importTransactions: boolean
             voucherSeries?: string
             updateAccountNames?: boolean
+            markImportedNoDocRequired?: boolean
             supersedesImportId?: string
             incremental?: boolean
           }
