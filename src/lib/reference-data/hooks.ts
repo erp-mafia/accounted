@@ -114,9 +114,9 @@ export function useCashAccounts(
   return { cashAccounts, ...state }
 }
 
-export function useAccounts(activeOnly = true): ReferenceListState & { accounts: BASAccount[] } {
+export function useAccounts(activeOnly = true, options: { enabled?: boolean } = {}): ReferenceListState & { accounts: BASAccount[] } {
   const companyId = useActiveCompanyId()
-  const { items, ...state } = useReferenceList(refKeys.accounts(companyId, activeOnly), ([, , active]) =>
+  const { items, ...state } = useReferenceList(options.enabled === false ? null : refKeys.accounts(companyId, activeOnly), ([, , active]) =>
     fetchAccounts(active),
   )
   return { accounts: items, ...state }

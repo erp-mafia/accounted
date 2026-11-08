@@ -29,6 +29,7 @@ export const GET = withRouteContext(
       windowFrom: dateFrom,
       windowTo: dateTo,
       withStatus: searchParams.get('with_status') !== 'false',
+      includeManual: searchParams.get('include_manual') !== 'false',
     })
     return NextResponse.json({ data: { accounts } })
   },

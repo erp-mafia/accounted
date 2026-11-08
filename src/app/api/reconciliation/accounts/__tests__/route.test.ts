@@ -95,7 +95,14 @@ describe('dashboard reconciliation routes', () => {
       windowFrom: '2026-01-01',
       windowTo: '2026-08-20',
       withStatus: false,
+      includeManual: true,
     })
+  })
+
+  it('allows the overview to omit manual accounts explicitly', async () => {
+    const response = await listGET(createMockRequest('/api/reconciliation/accounts?include_manual=false'), { params: Promise.resolve({}) })
+    expect(response.status).toBe(200)
+    expect(listAccountsMock).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ includeManual: false, withStatus: true }))
   })
 
   it('status: 404 on an invalid key, 404 when the service finds nothing, 200 otherwise', async () => {

@@ -439,24 +439,24 @@ export default function JournalEntryList({
     }
   }, [])
 
-  const fetchNoDocRequired = useCallback(async () => {
+  const fetchNoDocRequired = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
+    const batches: string[][] = []
+    for (let index = 0; index < entryIds.length; index += 100) {
+      batches.push(entryIds.slice(index, index + 100))
+    }
     try {
-      const res = await fetch('/api/bookkeeping/no-doc-required')
-      if (!res.ok) return
-      const { data } = await res.json()
-      const map = new Map<string, string | null>()
-      for (const row of (data || []) as { journal_entry_id: string; reason: string | null }[]) {
-        map.set(row.journal_entry_id, row.reason)
-      }
-      setNoDocRequired(map)
+      const results = await Promise.all(batches.map(async ids => {
+        const response = await fetch(`/api/bookkeeping/no-doc-required?journal_entry_ids=${ids.join(',')}`)
+        if (!response.ok) throw new Error('Unable to read document exemptions')
+        return await response.json() as { data: { journal_entry_id: string; reason: string | null }[] }
+      }))
+      if (!isCurrent()) return
+      setNoDocRequired(new Map(results.flatMap(result => result.data.map(row => [row.journal_entry_id, row.reason] as const))))
     } catch {
-      // Non-critical: silently ignore
+      // Preserve the last successful metadata while disconnected.
     }
   }, [])
 
-  useEffect(() => {
-    fetchNoDocRequired()
-  }, [fetchNoDocRequired])
 
   // Restore the persisted sort order (per company). Read in an effect rather
   // than the useState initializer to avoid an SSR/client hydration mismatch.
@@ -678,6 +678,7 @@ export default function JournalEntryList({
       // carrying the generation guard so their late completions can't
       // overwrite metadata a newer request just rendered.
       const ids = loadedEntries.map((e: JournalEntry) => e.id)
+      fetchNoDocRequired(ids, isCurrent)
       fetchAttachmentCounts(ids, isCurrent)
       fetchRattelseFlags(ids, isCurrent)
     } catch {
@@ -967,7 +968,7 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
       })
-      await fetchNoDocRequired()
+      await fetchNoDocRequired(entries.map(entry => entry.id))
       await fetchEntries()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })

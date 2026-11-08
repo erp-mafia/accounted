@@ -26,7 +26,7 @@ function createCapturingSupabase(results: { data?: unknown; error?: unknown }[])
     const result = results[idx++] ?? { data: null, error: null }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'eq', 'order', 'range']) {
+    for (const m of ['select', 'eq', 'order', 'range', 'in']) {
       b[m] = (...args: unknown[]) => {
         calls.push({ method: m, args })
         return b
@@ -71,4 +71,23 @@ describe('GET /api/bookkeeping/no-doc-required', () => {
       'journal_entry_id'
     )
   })
+  it('scopes a page-sized exemption read to the current company and requested IDs', async () => {
+    const id = '11111111-1111-4111-8111-111111111111'
+    const { supabase, calls } = createCapturingSupabase([{ data: [{ journal_entry_id: id, reason: 'SIE-import' }] }])
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    const response = await GET(createMockRequest('/api/bookkeeping/no-doc-required?journal_entry_ids='+id), routeParams)
+    expect(response.status).toBe(200)
+    expect(calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
+    expect(calls).toContainEqual({ method: 'in', args: ['journal_entry_id', [id]] })
+    expect(calls.some(call => call.method === 'range')).toBe(false)
+  })
+
+  it.each(['', 'invalid', Array(101).fill('11111111-1111-4111-8111-111111111111').join(',')])('rejects an invalid scoped read: %s', async ids => {
+    const { supabase, calls } = createCapturingSupabase([])
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    const response = await GET(createMockRequest('/api/bookkeeping/no-doc-required?journal_entry_ids='+ids), routeParams)
+    expect(response.status).toBe(400)
+    expect(calls).toHaveLength(0)
+  })
+
 })
