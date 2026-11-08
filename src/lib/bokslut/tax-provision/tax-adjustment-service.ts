@@ -16,6 +16,11 @@ interface DetectedTaxAdjustmentAccount {
   sourceKey: string
   adjustmentType: TaxAdjustmentType
   description: string
+  /**
+   * false: shown unticked until the user confirms it applies. Default is
+   * ticked whenever the account carries a balance.
+   */
+  includedByDefault?: boolean
 }
 
 export const DETECTED_TAX_ADJUSTMENT_ACCOUNTS: readonly DetectedTaxAdjustmentAccount[] = [
@@ -52,6 +57,37 @@ const EKONOMISK_FORENING_DETECTED_ACCOUNTS: readonly DetectedTaxAdjustmentAccoun
   },
 ]
 
+/**
+ * Dividends on shares in an aktiebolag (crm#1726). A dividend on a
+ * näringsbetingad andel is not taxed (IL 24 kap. 35 §): an unlisted share held
+ * as kapitaltillgång always is one, a listed share only with at least 10 % of
+ * the votes held for at least a year (24 kap. 33 and 40 §§). The ledger cannot
+ * tell which, so each account is offered unticked: ticking it is the user's
+ * confirmation. Ticked by default it would also count twice for a company
+ * that already typed the dividend into "Ej skattepliktiga intäkter", and tax
+ * too little. The proposal asks the question (dividendConfirmationWarning in
+ * dispositions-proposal-builder).
+ */
+const DIVIDEND_ACCOUNT_DESCRIPTIONS: ReadonlyArray<readonly [string, string]> = [
+  ['8010', 'Utdelning på andelar i koncernföretag'],
+  ['8012', 'Utdelning på andelar i dotterföretag'],
+  ['8110', 'Utdelningar på andelar i intresseföretag m.fl.'],
+  ['8111', 'Utdelningar på andelar i intresseföretag'],
+  ['8112', 'Utdelningar på andelar i gemensamt styrda företag'],
+  ['8113', 'Utdelningar på andelar i övriga företag med ägarintresse'],
+  ['8210', 'Utdelningar på andelar i andra företag'],
+  ['8212', 'Utdelningar, andra företag'],
+]
+
+const DIVIDEND_ON_SHARES_ACCOUNTS: readonly DetectedTaxAdjustmentAccount[] =
+  DIVIDEND_ACCOUNT_DESCRIPTIONS.map(([accountNumber, name]) => ({
+    accountNumber,
+    sourceKey: `account:${accountNumber}`,
+    adjustmentType: 'non_taxable_income' as const,
+    description: `${name}, skattefri om andelarna är näringsbetingade`,
+    includedByDefault: false,
+  }))
+
 /** Detected-account rules for a legal form; the base list applies to every form. */
 export function detectedTaxAdjustmentAccounts(
   entityType: EntityType | null,
@@ -59,6 +95,9 @@ export function detectedTaxAdjustmentAccounts(
   // Member-capital forms (an ekonomisk förening) are financed by members.
   if (entityType !== null && supportsMemberCapital(entityType)) {
     return [...DETECTED_TAX_ADJUSTMENT_ACCOUNTS, ...EKONOMISK_FORENING_DETECTED_ACCOUNTS]
+  }
+  if (entityType === 'aktiebolag') {
+    return [...DETECTED_TAX_ADJUSTMENT_ACCOUNTS, ...DIVIDEND_ON_SHARES_ACCOUNTS]
   }
   return DETECTED_TAX_ADJUSTMENT_ACCOUNTS
 }
@@ -168,7 +207,8 @@ export async function loadTaxAdjustmentSnapshot(
       description: config.description,
       accountNumber: config.accountNumber,
       amount,
-      included: persisted?.included ?? amount > 0,
+      included: persisted?.included ?? (config.includedByDefault !== false && amount > 0),
+      ...(config.includedByDefault === false ? { needsConfirmation: true } : {}),
     }
   })
 

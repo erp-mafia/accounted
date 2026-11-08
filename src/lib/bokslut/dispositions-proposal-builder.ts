@@ -229,6 +229,8 @@ export async function buildDispositionsProposal(
   // after posting each item).
   const state = await loadDispositionState(supabase, companyId, period, form)
   const { taxAdjustments, bookedTax } = state
+  const dividendQuestion = dividendConfirmationWarning(taxAdjustments)
+  if (dividendQuestion) warnings.push(dividendQuestion)
 
   // Rate resolves lazily: a company without opening fonder never touches
   // the SLR table, so an unmapped year cannot break its bokslut.
@@ -397,6 +399,29 @@ function pendingTaxBaseDispositions(input: {
 
 function kr(amount: number): string {
   return formatCurrency(amount, 'SEK', { maximumFractionDigits: 0 })
+}
+
+/**
+ * The question behind an unticked dividend account (crm#1726): the proposal
+ * taxes the dividend until the user confirms the shares are näringsbetingade.
+ * Silent when the user already typed at least that much into the manual
+ * "Ej skattepliktiga intäkter" field.
+ */
+export function dividendConfirmationWarning(taxAdjustments: TaxAdjustmentSnapshot): string | null {
+  const unconfirmed = taxAdjustments.items.filter(
+    (item) => item.needsConfirmation === true && !item.included && item.amount > 0,
+  )
+  const unconfirmedTotal = unconfirmed.reduce((sum, item) => sum + item.amount, 0)
+  if (unconfirmedTotal <= 0) return null
+  const manualNonTaxable = taxAdjustments.items.find(
+    (item) => item.sourceKey === 'manual:non_taxable_income' && item.included,
+  )?.amount ?? 0
+  if (manualNonTaxable >= unconfirmedTotal) return null
+  const accounts = unconfirmed.map((item) => `konto ${item.accountNumber}: ${kr(item.amount)}`).join(', ')
+  return `Utdelning på andelar är bokförd (${accounts}) och räknas som skattepliktig i förslaget. `
+    + 'Utdelning på näringsbetingade andelar är skattefri (IL 24 kap. 35 §): onoterade andelar som bolaget äger som kapitaltillgång, '
+    + 'och marknadsnoterade andelar med minst 10 % av rösterna som ägts i minst ett år. '
+    + 'Är andelarna näringsbetingade, markera kontot under Skattemässiga justeringar så räknas bolagsskatten och periodiseringsfonden om.'
 }
 
 /** "Förändring av överavskrivningar (-10 959 kr)": each pending disposition and its result effect. */

@@ -60,6 +60,8 @@ export interface TaxAdjustmentItem {
   accountNumber: string | null
   amount: number
   included: boolean
+  /** Detected, but counts only once the user ticks it (dividends, crm#1726). */
+  needsConfirmation?: boolean
 }
 
 export interface TaxAdjustmentSnapshot {
