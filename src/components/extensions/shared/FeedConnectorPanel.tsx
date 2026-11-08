@@ -447,7 +447,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                       )}
                       {props.renderBadges?.(connection)}
                     </div>
-                    {detail && <p className="mt-1 text-sm text-muted-foreground">{detail}</p>}
+                    {detail && <p className="mt-1 break-all text-sm text-muted-foreground">{detail}</p>}
                     {isActive && connection.connected_at && (
                       <p className="mt-1 text-sm text-muted-foreground">
                         {tf('connected_since', { date: formatDateLong(connection.connected_at) })}

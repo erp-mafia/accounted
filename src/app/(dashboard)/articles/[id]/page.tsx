@@ -229,7 +229,7 @@ export default function ArticleDetailPage({
           (convention 2), like the customer and supplier detail pages: name,
           a quiet type/status kicker, quiet actions right. The sidebar says
           where we are, so there is no back link. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
           <p className="page-header-meta mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">

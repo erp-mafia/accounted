@@ -334,7 +334,7 @@ export default function OrdersPage() {
           {/* Negative margin + matching padding: lets the hover-revealed
               selection checkbox hang into the page margins without being
               clipped by the overflow container (transactions-page pattern). */}
-          <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
+          <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -538,7 +538,7 @@ function OrderRow({
             }}
             onCheckedChange={() => onToggleSelect(order.id, shiftHeld.current)}
             aria-label={t('select_order_aria', { number: order.order_number })}
-            className="absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6"
+            className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>

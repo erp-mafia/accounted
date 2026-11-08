@@ -605,7 +605,7 @@ export default function RotRutOverviewPage() {
                         )}
                       </div>
                     </td>
-                    <td className={`${TD_CLASS} whitespace-nowrap`}>{formatDate(request.created_at)}</td>
+                    <td className={`${TD_CLASS} whitespace-nowrap tabular-nums`}>{formatDate(request.created_at)}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>{formatCurrency(Number(request.requested_total))}</td>
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
                       {request.decided_total == null ? <span className="text-muted-foreground">-</span> : formatCurrency(Number(request.decided_total))}

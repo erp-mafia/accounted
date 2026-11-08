@@ -298,7 +298,7 @@ export default function CustomerDetailPage({
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
       <div>
-        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
             <p className="page-header-meta mt-1 text-sm text-muted-foreground">
@@ -354,7 +354,7 @@ export default function CustomerDetailPage({
         )}
         <DefRow label={t('def_email')}>
           {customer.email ? (
-            <a href={`mailto:${customer.email}`} className="hover:underline">
+            <a href={`mailto:${customer.email}`} className="break-all hover:underline">
               {customer.email}
             </a>
           ) : (

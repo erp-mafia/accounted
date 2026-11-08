@@ -210,7 +210,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
       {/* Header: the page-header hooks make it the panel's top bar
           (convention 2), like the invoice and customer detail pages: the
           sidebar says where we are, so there is no back link. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">
