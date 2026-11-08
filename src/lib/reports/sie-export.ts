@@ -279,6 +279,11 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // the record order SIE 4 prescribes (#IB, #UB, #RES, then #VER).
   // Movement balances from journal entries
   const movementBalances = calculateBalances(periodEntries)
+  // #RES 0 is the year's result per account before the resultatavslut, the
+  // same rule as #RES -1 (computePriorYearBalances) and the årsredovisning:
+  // after the closing every result account reads 0 and a receiver got an
+  // all-zero resultaträkning (crm#1727). #UB and #VER keep the closing.
+  const resultClosingNet = await resultClosingNetOf(supabase, companyId, period, periodEntries)
 
   // Merge all accounts that have either IB or movements
   const allAccountNumbers = new Set([
@@ -298,8 +303,10 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
       const ub = Math.round((ib + movement) * 100) / 100
       closingRecords.push(`#UB 0 ${accountNumber} ${formatAmount(ub)}`)
     } else {
-      // Income statement: RES = movements only (IB should be zero)
-      resultRecords.push(`#RES 0 ${accountNumber} ${formatAmount(movement)}`)
+      // Income statement: RES = movements only (IB should be zero), less the
+      // resultatavslut.
+      const result = roundOre(movement - (resultClosingNet.get(accountNumber) ?? 0))
+      resultRecords.push(`#RES 0 ${accountNumber} ${formatAmount(result)}`)
     }
   }
 
@@ -428,6 +435,39 @@ async function computePriorYearBalances(
   return { openingBalances, movements, resultMovements }
 }
 
+/** The year's resultatavslut (result_closing_entry_ids): posted only, so an undone one nets with its storno. */
+async function fetchResultClosingEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string[]> {
+  const { data: closingIds, error: closingIdsError } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (closingIdsError) throw new Error(closingIdsError.message)
+  return Array.isArray(closingIds) ? (closingIds as string[]) : []
+}
+
+/**
+ * Net (debit - credit) per account of the export year's resultatavslut among
+ * the entries the file writes. A resultatavslut is dated on the year's last
+ * day (Accounted's own and the shape rule alike), so a year without a posted
+ * entry on that day has none and the lookup is skipped. With
+ * exclude_year_end_closing the closing is not among the entries: nothing to
+ * subtract.
+ */
+async function resultClosingNetOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { id: string; period_end: string },
+  entries: JournalEntry[],
+): Promise<Map<string, number>> {
+  if (!entries.some((e) => e.entry_date === period.period_end && e.status === 'posted')) return new Map()
+  const ids = new Set(await fetchResultClosingEntryIds(supabase, companyId, period.id))
+  return calculateBalances(entries.filter((e) => ids.has(e.id)))
+}
+
 /**
  * Net (debit - credit) per account of the year's resultatavslut: the entries
  * of result_closing_entry_ids among those the 'include' trial balance sums
@@ -438,12 +478,7 @@ async function resultClosingMovements(
   companyId: string,
   prevPeriod: { id: string; opening_balance_entry_id: string | null },
 ): Promise<Map<string, number>> {
-  const { data: closingIds, error: closingIdsError } = await supabase.rpc('result_closing_entry_ids', {
-    p_company_id: companyId,
-    p_fiscal_period_id: prevPeriod.id,
-  })
-  if (closingIdsError) throw new Error(closingIdsError.message)
-  const ids = (Array.isArray(closingIds) ? (closingIds as string[]) : []).filter(
+  const ids = (await fetchResultClosingEntryIds(supabase, companyId, prevPeriod.id)).filter(
     (id) => id !== prevPeriod.opening_balance_entry_id,
   )
 

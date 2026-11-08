@@ -5,7 +5,7 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
-import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, seriesNumberedInOrder, validateIBBalance,
+import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, resultClosingMovementsOf, seriesNumberedInOrder, validateIBBalance,
   type SIEPendingNumberGaps } from './sie-import'
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
@@ -49,6 +49,8 @@ interface PreparationTotals {
   pendingNumberGaps?:SIEPendingNumberGaps
   /** The last source number per series, so a number missing across a group boundary is held too. */
   lastSourceNumbers?:Record<string,number>
+  /** Net per account of the file's resultatavslut among the booked vouchers (crm#1727); absent before it was recorded. */
+  resultClosingMovements?:Array<[string,number]>
 }
 export interface SIEAppendCounts { present:number; possibleDuplicatesSkipped:number; possibleDuplicatesIncluded:number }
 
@@ -360,6 +362,16 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     for (const entry of entries) for (const line of entry.lines) movements.set(line.account_number,
       roundOre((movements.get(line.account_number) ?? 0)+line.debit_amount-line.credit_amount))
     summary.movements = [...movements]
+    // The resultatavslut among this group's vouchers, for the migration
+    // adjustment's #RES comparison (resultClosingMovementsOf). The form's
+    // account is only resolved when a voucher falls on the year's last day.
+    const yearEnd = snapshot.parsed.stats.fiscalYearEnd ?? job.fiscal_year_end
+    if (entries.some(entry => entry.date === yearEnd)) {
+      const closing = resultClosingMovementsOf(entries,yearEnd,await differenceAccount())
+      const recorded = new Map(totals.resultClosingMovements ?? [])
+      for (const [account,amount] of closing) recorded.set(account,roundOre((recorded.get(account) ?? 0)+amount))
+      totals.resultClosingMovements = [...recorded]
+    }
     for (const payload of boundedChunks(entries)) {
       await sieJobRPC(supabase,job,'save_sie_import_chunk',{p_phase:'vouchers',p_chunk_no:chunkNo++,p_payload:payload})
       summary.chunkCount++
@@ -429,7 +441,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
       openingBalanceSplitRefused = opening.splitRefused
     }
   }
-  const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount) : null
+  const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount,
+    new Map(totals.resultClosingMovements ?? [])) : null
   if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,50_001,accountIds))
   assertSIEReportingAccounts(finalEntries.flatMap(entry => entry.lines.map(line => line.account_number)))
   if (append && totals.entries === 0) {

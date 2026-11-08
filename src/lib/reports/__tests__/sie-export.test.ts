@@ -1061,6 +1061,60 @@ describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', 
     expect(records).toContain('#RES 0 3001 -200.00')
   })
 
+  // crm#1727: the export year closed by the resultatavslut e-close. #RES 0 is
+  // the result before it (as #RES -1 already was), while #UB 0 and #VER keep
+  // the closing as booked.
+  it('writes #RES 0 of a closed year before the resultatavslut, keeping it in #UB and #VER', async () => {
+    const ledger = twoYearLedger()
+
+    const records = (await generateSIEExport(ledger.supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-1',
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -500.00')
+    expect(records).toContain('#RES 0 7832 100.00')
+    // The closing stays in the books' view: 2099 carries the result.
+    expect(records).toContain('#UB 0 2099 -400.00')
+    expect(records.some((r) => r.startsWith('#VER ') && r.endsWith('"e-close"'))).toBe(true)
+    // The year's result in #RES equals what the closing moved to 2099.
+    const resTotal = records
+      .filter((r) => r.startsWith('#RES 0 '))
+      .reduce((sum, r) => sum + Number(r.split(' ')[3]), 0)
+    expect(Math.round(resTotal * 100) / 100).toBe(-400)
+    expect(ledger.supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+      p_company_id: COMPANY,
+      p_fiscal_period_id: 'period-1',
+    })
+  })
+
+  it('leaves #RES 0 as it was when the closed year is exported without its year-end entries', async () => {
+    const records = (await generateSIEExport(twoYearLedger().supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-1',
+      exclude_year_end_closing: true,
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -500.00')
+    expect(records.some((r) => r.startsWith('#RES 0 7832 '))).toBe(false)
+    expect(records.some((r) => r.endsWith('"e-close"'))).toBe(false)
+  })
+
+  it('does not look for a resultatavslut in an open year without an entry on its last day', async () => {
+    const ledger = twoYearLedger()
+
+    const records = (await generateSIEExport(ledger.supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-2',
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -200.00')
+    expect(ledger.supabase.rpc).not.toHaveBeenCalledWith('result_closing_entry_ids', {
+      p_company_id: COMPANY,
+      p_fiscal_period_id: 'period-2',
+    })
+  })
+
   it('writes no year -1 records when there is no previous fiscal year', async () => {
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },

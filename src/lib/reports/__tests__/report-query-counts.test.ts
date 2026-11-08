@@ -76,7 +76,9 @@ describe('report query counts', () => {
 
     expect(small.trialBalances).toBe(1)
     expect(small.counts).toMatchObject({ chart_of_accounts: 1 })
-    expect(small.total).toBe(20)
+    // 21: result_closing_entry_ids for the export year too (crm#1727, #RES 0
+    // before the resultatavslut); its lines are already in memory.
+    expect(small.total).toBe(21)
     // 2 500 more vouchers in the previous year: not one more read, and the
     // line rows read are the current year's, the IB entries and the
     // resultatavslut, not the previous year's vouchers.
