@@ -44,6 +44,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
@@ -149,7 +150,7 @@ export default function ChartOfAccountsManager() {
   const [usageLoaded, setUsageLoaded] = useState(false)
 
   // Data state
-  const { accounts, isLoading: loading, refresh: fetchAccounts } = useAccounts(!showInactive)
+  const { accounts, isLoading: loading } = useAccounts(!showInactive)
   const [referenceAccounts, setReferenceAccounts] = useState<ReferenceAccount[]>([])
   const [usageCounts, setUsageCounts] = useState<Map<string, number>>(new Map())
   // The BAS catalog + K2 default are fetched lazily the first time the user
@@ -247,12 +248,12 @@ export default function ChartOfAccountsManager() {
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
-      fetchAccounts(),
+      invalidateReferenceData('ref:accounts'),
       fetchUsage(),
       // Only refresh the catalog if the user has actually opened that tab.
       ...(referenceLoaded ? [fetchReference()] : []),
     ])
-  }, [fetchAccounts, fetchUsage, fetchReference, referenceLoaded])
+  }, [fetchUsage, fetchReference, referenceLoaded])
 
   // -------------------------------------------
   // Actions
