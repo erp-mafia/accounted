@@ -4,7 +4,7 @@ import { roundOre } from '@/lib/money'
  * Pågående arbeten på balansdagen under K3 kapitel 23: successiv
  * vinstavräkning (23.17-23.27) and, for a juridisk person in a branch that
  * IL 17 kap. 23 § names, the färdigställandemetod (23.31-23.32). Pure: the
- * contracts and the ledger balances come in, the positions and the
+ * contracts and the register's balances come in, the positions and the
  * adjustment's journal lines come out.
  *
  * Successiv vinstavräkning, per contract:
@@ -30,8 +30,10 @@ import { roundOre } from '@/lib/money'
  * stycket), so it is a company choice, not a contract one.
  *
  * The adjustment is the difference between the positions and what the
- * ledger already holds on the position accounts, so the same year can be
- * recomputed and only the change is booked. Every invoice in the year went
+ * register's own verifikat already hold on the position accounts, so the
+ * same year can be recomputed and only the change is booked, and a balance
+ * the register did not book (another provision on 2290, a manual posting on
+ * 1620) is never moved. Every invoice in the year went
  * to revenue as usual (with its VAT); the adjustment moves revenue to or from
  * the balance sheet on `revenueAdjustment`, which must be a class 3 account
  * outside the momsdeklaration rutor: upparbetad intäkt is not a supply for
@@ -113,7 +115,7 @@ export const DEFAULT_CONTRACT_REVENUE_ACCOUNTS: Omit<ContractRevenueAccounts, 'r
   wipBilling: '2431',
 }
 
-/** What the ledger holds on the position accounts on balansdagen, before the adjustment (debit positive). */
+/** What the register's own verifikat hold on the position accounts on balansdagen, before the adjustment (debit positive). */
 export type PositionBalances = Readonly<Record<string, number>>
 
 export interface ContractRevenueLine {
@@ -241,7 +243,7 @@ function line(account: string, amount: number, description: string): ContractRev
 
 /**
  * The positions on balansdagen and the journal lines that move the ledger
- * there from `balances` (the position accounts before the adjustment).
+ * there from `balances` (what the register's verifikat hold on the position accounts before it).
  */
 export function computeContractRevenue(
   method: ContractRevenueMethod,

@@ -15,6 +15,8 @@ import {
   AssetOpeningChangedError,
   AssetValueAdjustmentBlockedError,
   BookkeepingDatabaseError,
+  ContractRevenueRefusedError,
+  contractRevenueRefusalFromRpc,
   DeferredTaxAlreadyPostedError,
   K3TransitionBlockedError,
   k3TransitionBlockFromRpc,
@@ -1678,6 +1680,68 @@ export async function commitDeferredTax(
     operation: 'commit_deferred_tax',
     fetchOperation: 'fetch_deferred_tax_entry',
     what: 'deferred tax',
+  })
+  return { entry }
+}
+
+/**
+ * What a pågående-arbeten adjustment was computed from (K3 kapitel 23), kept
+ * with its verifikat in contract_revenue_bookings.
+ */
+export interface ContractRevenueBookingInput {
+  method: 'successiv' | 'fardigstallande'
+  /** The account per role; revenueAdjustment is the saved settings' account. */
+  accounts: Record<string, string>
+  /** Every uppdrag as stated for the balansdag. */
+  contracts: unknown[]
+  /** Each uppdrag's computed position. */
+  positions: unknown[]
+  /** The register's balance per position account after the verifikat (debit positive). */
+  targets: Record<string, number>
+}
+
+/**
+ * Commit a pågående-arbeten draft: the year_end verifikat AND what it was
+ * computed from in one database transaction (commit_contract_revenue, which
+ * delegates numbering to commit_journal_entry). A year not reported under K3,
+ * a register that changed since the adjustment was computed, or a later
+ * year's booking that stands on this year's balance is refused
+ * (ContractRevenueRefusedError); the draft is left cancelled either way.
+ */
+export async function commitContractRevenue(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id' | 'fiscal_period_id'>,
+  booking: ContractRevenueBookingInput,
+): Promise<{ entry: JournalEntry }> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_contract_revenue', {
+    p_company_id: companyId,
+    p_entry_id: draft.id,
+    p_fiscal_period_id: draft.fiscal_period_id,
+    p_booking: booking,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    await cancelRefusedSqlDraft(supabase, companyId, draft.id, 'commit_contract_revenue')
+    const refusal = pgCode === 'PT409' ? contractRevenueRefusalFromRpc(error.message) : null
+    if (refusal) throw new ContractRevenueRefusedError(refusal)
+    log.error('commit_contract_revenue RPC failed', error, {
+      operation: 'commit_contract_revenue',
+      companyId,
+      userId,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_contract_revenue', error.message, error.code)
+  }
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draft.id, {
+    operation: 'commit_contract_revenue',
+    fetchOperation: 'fetch_contract_revenue_entry',
+    what: 'contract revenue',
   })
   return { entry }
 }

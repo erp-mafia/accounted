@@ -73,6 +73,7 @@ export const POSTING_SURFACE = {
     'commitAssetComponentReplacement', // commit_asset_component_replacement
     'commitAssetValueAdjustment', // commit_asset_value_adjustment
     'commitDeferredTax', // commit_deferred_tax
+    'commitContractRevenue', // commit_contract_revenue
     'commitK3Transition', // commit_k3_transition
     'replaceOpeningBalanceEntry', // commit_opening_balance_replacement
     'commitBulkBooking', // bulk_book_transactions

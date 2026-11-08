@@ -232,6 +232,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/voucher-gaps': covered([`POST ${V}/voucher-gap-explanations`, 'gnubok_explain_voucher_gap']),
   // Pågående arbeten (K3 kapitel 23), behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED: dashboard first.
   'PUT /api/bookkeeping/contract-revenue': gap('P3', 'choose the method and the pinned adjustment account for pågående arbeten'),
+  'DELETE /api/bookkeeping/contract-revenue': gap('P3', 'stop using pågående arbeten, releasing an adjustment account no register verifikat touched'),
   'POST /api/bookkeeping/contract-revenue/contracts': gap('P3', 'add a pågående uppdrag with its figures on a balansdag'),
   'PUT /api/bookkeeping/contract-revenue/contracts/:id': gap('P3', 'state a pågående uppdrag\'s figures anew'),
   'DELETE /api/bookkeeping/contract-revenue/contracts/:id': gap('P3', 'remove a pågående uppdrag'),
@@ -1122,5 +1123,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * through gnubok_create_skill (company_skill_id, delete: true).
  * 167 -> 166 (2026-11-04, crm#1663): the ledger account of a connected bank
  * account, through gnubok_change_bank_ledgers.
+ * 166 -> 167 (2026-11-07, accounted#111): stop using pågående arbeten (the
+ * settings' DELETE), dashboard first behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED.
  */
-export const GAP_CEILING = 166
+export const GAP_CEILING = 167

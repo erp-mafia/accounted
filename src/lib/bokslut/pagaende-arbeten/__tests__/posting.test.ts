@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/lib/posting/port', () => ({ postingPort: { postJournalEntry: vi.fn() } }))
-vi.mock('@/lib/reports/trial-balance', () => ({ generateTrialBalance: vi.fn() }))
+vi.mock('@/lib/posting/port', () => ({ postingPort: { draftJournalEntry: vi.fn(), commitSqlPosting: vi.fn() } }))
 vi.mock('@/lib/reports/vat-revenue-accounts', () => ({ fetchDynamicVatAccounts: vi.fn() }))
 
 import { postingPort } from '@/lib/posting/port'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import { DEFAULT_CONTRACT_REVENUE_ACCOUNTS, type ContractInput } from '../calculator'
-import { ContractRevenueAccountError, bookContractRevenueAdjustment } from '../posting'
+import { ContractRevenueAccountError, bookContractRevenueAdjustment, unregisteredBalances } from '../posting'
 import { contractRevenueDisclosures } from '../disclosures'
 
-const supabase = {} as never
+/** contract_revenue_register_balances: what the register's own verifikat hold. */
+const rpc = vi.fn()
+const supabase = { rpc } as never
 const contract: ContractInput = {
   id: 'c1',
   name: 'Tak Storgatan 1',
@@ -53,8 +53,9 @@ function args(revenueAdjustment: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchDynamicVatAccounts).mockResolvedValue(dynamic())
-  vi.mocked(generateTrialBalance).mockResolvedValue({ rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true } as never)
-  vi.mocked(postingPort.postJournalEntry).mockResolvedValue({ id: 'entry-1' } as never)
+  rpc.mockResolvedValue({ data: [], error: null })
+  vi.mocked(postingPort.draftJournalEntry).mockResolvedValue({ id: 'draft-1', fiscal_period_id: 'period-1' } as never)
+  vi.mocked(postingPort.commitSqlPosting).mockResolvedValue({ entry: { id: 'draft-1' } } as never)
 })
 
 describe('bookContractRevenueAdjustment', () => {
@@ -63,13 +64,14 @@ describe('bookContractRevenueAdjustment', () => {
     vi.mocked(fetchDynamicVatAccounts).mockResolvedValue(dynamic(['3090']))
     await expect(bookContractRevenueAdjustment(args('3090'))).rejects.toMatchObject({ reason: 'vat_ruta' })
     await expect(bookContractRevenueAdjustment(args('1620'))).rejects.toMatchObject({ reason: 'not_revenue' })
-    expect(postingPort.postJournalEntry).not.toHaveBeenCalled()
+    expect(postingPort.draftJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('posts the year-end adjustment through the posting port on balansdagen', async () => {
+  it('drafts the year-end adjustment through the posting port on balansdagen', async () => {
     const { entry, result } = await bookContractRevenueAdjustment(args('3090'))
-    expect(entry).toEqual({ id: 'entry-1' })
-    const call = vi.mocked(postingPort.postJournalEntry).mock.calls[0][0]
+    expect(entry).toEqual({ id: 'draft-1' })
+    expect(rpc).toHaveBeenCalledWith('contract_revenue_register_balances', { p_company_id: 'company-1', p_as_of: '2026-12-31' })
+    const call = vi.mocked(postingPort.draftJournalEntry).mock.calls[0][0]
     expect(call.input).toMatchObject({
       fiscal_period_id: 'period-1',
       entry_date: '2026-12-31',
@@ -86,18 +88,56 @@ describe('bookContractRevenueAdjustment', () => {
     expect(event).toMatchObject({ kind: 'ledger.accrual', occurredOn: '2026-12-31', amount: 200_000 })
   })
 
-  it('books nothing when the ledger already holds the positions', async () => {
-    vi.mocked(generateTrialBalance).mockResolvedValue({
-      rows: [{
-        account_number: '1620', account_name: 'Upparbetad men ej fakturerad intäkt', account_class: 1,
-        opening_debit: 0, opening_credit: 0, period_debit: 200_000, period_credit: 0,
-        closing_debit: 200_000, closing_credit: 0,
-      }],
-      totalDebit: 200_000, totalCredit: 200_000, isBalanced: true,
-    } as never)
+  it('commits the draft with what it was computed from, in one SQL posting', async () => {
+    const { result } = await bookContractRevenueAdjustment(args('3090'))
+    const commit = vi.mocked(postingPort.commitSqlPosting).mock.calls[0][0]
+    expect(commit.fn).toBe('commit_contract_revenue')
+    const [draft, booking] = commit.args as unknown as [unknown, Record<string, unknown>]
+    expect(draft).toEqual({ id: 'draft-1', fiscal_period_id: 'period-1' })
+    expect(booking).toEqual({
+      method: 'successiv',
+      accounts: { ...DEFAULT_CONTRACT_REVENUE_ACCOUNTS, revenueAdjustment: '3090' },
+      contracts: [contract],
+      positions: result.positions,
+      targets: result.targets,
+    })
+    expect(booking.targets).toMatchObject({ '1620': 200_000, '2450': 0, '2290': 0 })
+  })
+
+  it('books nothing when the register\'s own verifikat already hold the positions', async () => {
+    rpc.mockResolvedValue({ data: [{ account_number: '1620', balance: '200000.00' }, { account_number: '3090', balance: '-200000.00' }], error: null })
     const { entry } = await bookContractRevenueAdjustment(args('3090'))
     expect(entry).toBeNull()
-    expect(postingPort.postJournalEntry).not.toHaveBeenCalled()
+    expect(postingPort.draftJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books only the change from what the register holds, never another balance on the account', async () => {
+    // The register holds 150 000 on 1620; whatever else 1620 holds (a manual
+    // posting) is not in what the register reads, so it is not moved.
+    rpc.mockResolvedValue({ data: [{ account_number: '1620', balance: 150_000 }], error: null })
+    const { result } = await bookContractRevenueAdjustment(args('3090'))
+    expect(result.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1620', 50_000, 0],
+      ['3090', 0, 50_000],
+    ])
+  })
+
+  it('fails when the register cannot be read, before any draft', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'boom' } })
+    await expect(bookContractRevenueAdjustment(args('3090'))).rejects.toThrow(/registrets/)
+    expect(postingPort.draftJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('unregisteredBalances', () => {
+  it('names what the position accounts hold beyond the register, per account', () => {
+    const accounts = { ...DEFAULT_CONTRACT_REVENUE_ACCOUNTS, revenueAdjustment: '3090' }
+    expect(
+      unregisteredBalances({ '1620': 250_000, '2290': -40_000, '2450': -10_000 }, { '1620': 200_000, '2450': -10_000 }, accounts),
+    ).toEqual([
+      { account: '1620', amount: 50_000 },
+      { account: '2290', amount: -40_000 },
+    ])
   })
 })
 

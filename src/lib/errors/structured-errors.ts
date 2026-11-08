@@ -4120,6 +4120,26 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kontot ingår i momsdeklarationen eller har en momskod eller momssats. Välj ett intäktskonto utan moms för de upparbetade intäkterna.',
     message_en: 'The account is part of the VAT return or has a VAT code or rate. Choose a revenue account without VAT for the earned revenue.',
   },
+  CONTRACT_REVENUE_ACCOUNT_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Kontot har redan bokförda rader för annat än pågående arbeten. Välj ett konto som bara används för de upparbetade intäkterna.',
+    message_en: 'The account already has posted lines for other things than work in progress. Choose an account used only for the earned revenue.',
+  },
+  CONTRACT_REVENUE_NOT_K3: {
+    httpStatus: 409,
+    message_sv: 'Pågående arbeten bokförs här enligt K3 kapitel 23, och räkenskapsåret upprättas inte enligt K3.',
+    message_en: 'Work in progress is booked here under K3 chapter 23, and the financial year is not prepared under K3.',
+  },
+  CONTRACT_REVENUE_LATER_YEAR_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Pågående arbeten är redan bokförda för ett senare räkenskapsår, och de bygger på det här årets saldo. Gör storno på det årets verifikat innan det här året bokförs.',
+    message_en: 'Work in progress is already booked for a later financial year, which builds on this year\'s balance. Reverse that year\'s voucher before booking this year.',
+  },
+  CONTRACT_REVENUE_STALE: {
+    httpStatus: 409,
+    message_sv: 'Pågående arbeten ändrades medan året bokfördes, till exempel av en annan bokning. Ladda om sidan och försök igen.',
+    message_en: 'Work in progress changed while the year was being booked, for example by another booking. Reload the page and try again.',
+  },
 }
 
 const FX: Record<string, StructuredErrorEntry> = {

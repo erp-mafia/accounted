@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   commitAssetComponentReplacement,
   commitAssetValueAdjustment,
+  commitContractRevenue,
   commitDeferredTax,
   commitK3Transition,
   commitAssetDepreciation,
@@ -132,6 +133,8 @@ function sqlPostingDoor(fn: SqlPostingFunction): SqlPostingDoors[SqlPostingFunct
       return commitAssetValueAdjustment
     case 'commit_deferred_tax':
       return commitDeferredTax
+    case 'commit_contract_revenue':
+      return commitContractRevenue
     case 'commit_k3_transition':
       return commitK3Transition
     case 'book_counterparty_setoff':

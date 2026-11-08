@@ -118,6 +118,7 @@ export function ContractRevenueRegister() {
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Contract | null>(null)
   const [confirmBook, setConfirmBook] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
 
   const fail = useCallback(
     (title: string, body: unknown): void => {
@@ -137,6 +138,9 @@ export function ContractRevenueRegister() {
       if (saved) {
         setMethod(saved.method)
         setAccount(saved.revenue_account)
+      } else {
+        setMethod('successiv')
+        setAccount('')
       }
       setContracts(body.data?.contracts ?? [])
     } finally {
@@ -175,6 +179,15 @@ export function ContractRevenueRegister() {
     } finally {
       setSavingSettings(false)
     }
+  }
+
+  async function removeSettings() {
+    const res = await fetch('/api/bookkeeping/contract-revenue', { method: 'DELETE' })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) return fail(t('settings_remove_failed'), body)
+    toast({ title: t('settings_removed') })
+    setPreview(null)
+    await load()
   }
 
   function openEditor(contract: Contract | 'new') {
@@ -233,13 +246,23 @@ export function ContractRevenueRegister() {
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [key]: e.target.value })),
   })
 
+  const notK3 = preview !== null && preview.framework !== 'k3'
+  // What the accounts hold beyond the register: named on the page and again
+  // before booking, since the booking leaves it as it is.
+  const unregistered = preview && preview.unregistered.length > 0
+    ? t('unregistered_attn', {
+        amounts: preview.unregistered.map((u) => `${u.account} ${formatCurrency(u.amount)}`).join(', '),
+      })
+    : null
   const attention = !loading && !settings
     ? t('not_configured_attn')
-    : preview && preview.stated_on_other_day.length > 0
-      ? t('other_day_attn', { contracts: preview.stated_on_other_day.join(', '), date: preview.balansdag })
-      : preview && preview.issues.length > 0
-        ? t('issues_attn', { contracts: [...new Set(preview.issues.map((i) => i.contract))].join(', ') })
-        : null
+    : notK3
+      ? t('not_k3_attn', { framework: preview?.framework.toUpperCase() ?? '' })
+      : preview && preview.stated_on_other_day.length > 0
+        ? t('other_day_attn', { contracts: preview.stated_on_other_day.join(', '), date: preview.balansdag })
+        : preview && preview.issues.length > 0
+          ? t('issues_attn', { contracts: [...new Set(preview.issues.map((i) => i.contract))].join(', ') })
+          : unregistered
 
   const money = (value: number | string) => formatCurrency(Number(value))
 
@@ -256,7 +279,7 @@ export function ContractRevenueRegister() {
               </Button>
             )}
             {canWrite && settings && (
-              <Button size="sm" onClick={() => setConfirmBook(true)} disabled={!periodId || !preview}>
+              <Button size="sm" onClick={() => setConfirmBook(true)} disabled={!periodId || !preview || notK3}>
                 {t('book')}
               </Button>
             )}
@@ -292,6 +315,11 @@ export function ContractRevenueRegister() {
           {canWrite && (
             <Button size="sm" variant="outline" onClick={saveSettings} loading={savingSettings} disabled={account.trim().length !== 4}>
               {t('settings_save')}
+            </Button>
+          )}
+          {canWrite && settings && (
+            <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(true)}>
+              {t('settings_remove')}
             </Button>
           )}
         </SettingsRow>
@@ -414,9 +442,19 @@ export function ContractRevenueRegister() {
         open={confirmBook}
         onOpenChange={setConfirmBook}
         title={t('book_confirm_title', { date: preview?.balansdag ?? '' })}
-        description={t('book_confirm_description')}
+        description={unregistered ? `${t('book_confirm_description')} ${unregistered}` : t('book_confirm_description')}
         confirmLabel={t('book')}
         onConfirm={bookYear}
+      />
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title={t('settings_remove_confirm_title')}
+        description={t('settings_remove_confirm_description')}
+        confirmLabel={t('settings_remove')}
+        destructive
+        onConfirm={removeSettings}
       />
 
       <ConfirmDialog
