@@ -22,8 +22,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile', use: { ...devices['Pixel 7'] } },
+    { name: 'startup', testMatch: '**/startup.spec.mts', use: { ...devices['Desktop Chrome'] } },
+    { name: 'desktop', dependencies: ['startup'], testIgnore: '**/startup.spec.mts', use: { ...devices['Desktop Chrome'] } },
+    { name: 'mobile', dependencies: ['startup'], testIgnore: '**/startup.spec.mts', use: { ...devices['Pixel 7'] } },
   ],
   webServer: {
     command: 'node scripts/e2e/run.mjs serve',

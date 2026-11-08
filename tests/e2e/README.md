@@ -2,8 +2,10 @@
 
 The suite uses Playwright Chromium, a production build, and an isolated Podman
 Supabase stack. It measures navigation until the page displays its actual data,
-and interactions until the resulting UI state is visible. Navigation has a
-3000 ms deadline and interactions have a 1000 ms deadline. There are no retries.
+and interactions until the resulting UI state is visible. A separate startup
+project measures the first authenticated request with a 5000 ms deadline.
+Dependent desktop/mobile projects then enforce a 3000 ms navigation deadline
+and a 1000 ms interaction deadline. There are no retries.
 An exceeded deadline fails the test and the command exits unsuccessfully.
 
 ## Run
@@ -16,7 +18,8 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Podman must be available. The stack uses loopback ports 54331 and 3101, and a
+Node.js 22 or later and Podman must be available. CI uses Node.js 26, matching
+the self-hosted development runtime. The stack uses loopback ports 54331 and 3101, and a
 checkout-specific resource prefix. Other Supabase installations are independent.
 Image tags are pinned in `scripts/e2e/stack.mjs`.
 The production build uses an 8 GiB V8 heap limit, matching the repository's

@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks'
 
-export const BUDGET = { navigation: 3000, interaction: 1000 } as const
+export const BUDGET = { startup: 5000, navigation: 3000, interaction: 1000 } as const
 
 /** One deadline covers the action and its meaningful ready state together. */
 export async function withinBudget<T>(name: string, milliseconds: number, action: () => Promise<T>): Promise<{ value: T; elapsed: number }> {
