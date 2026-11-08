@@ -71,6 +71,9 @@
     "source_code": "Källkod"
   },
   "nav": {
+    "expand_section": "Expandera {name}",
+    "collapse_section": "Fäll ihop {name}",
+    "reports_overview": "Alla rapporter",
     "dashboard": "Översikt",
     "home": "Hem",
     "assistant": "Assistent",

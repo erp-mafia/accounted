@@ -26,6 +26,15 @@ for (const service of ['db', 'auth', 'rest', 'storage', 'realtime', 'gateway']) 
   }
   const result = spawnSync('podman', ['logs', '--tail', '60', name], { encoding: 'utf8', maxBuffer: 1024 * 1024 })
   let output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+  if (service === 'db') {
+    const activity = spawnSync('podman', ['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-c', `
+      SELECT usename, application_name, state, wait_event_type, wait_event,
+        pg_blocking_pids(pid) AS blocking_pids
+      FROM pg_stat_activity
+      WHERE backend_type = 'client backend';
+    `], { encoding: 'utf8' })
+    output += `\nConnection wait metadata\n${activity.stdout ?? ''}\n${activity.stderr ?? ''}`
+  }
   for (const secret of secrets.filter(Boolean).sort((left, right) => right.length - left.length)) {
     output = output.replaceAll(secret, '[redacted]')
   }

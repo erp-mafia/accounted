@@ -71,6 +71,9 @@
     "source_code": "Source code"
   },
   "nav": {
+    "expand_section": "Expand {name}",
+    "collapse_section": "Collapse {name}",
+    "reports_overview": "All reports",
     "dashboard": "Overview",
     "home": "Home",
     "assistant": "Assistant",

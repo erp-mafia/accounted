@@ -62,6 +62,8 @@ test('account search finds accounts beyond the first rendered page', async ({ pa
   await page.goto('/chart-of-accounts')
   const search = page.getByPlaceholder('Sök konto (nummer eller namn)...')
   await expect(search).toBeEnabled()
+  // The input is enabled before the initial chart request has completed.
+  await destinations[6].ready(page)
   await measured(info, 'Search full chart', BUDGET.interaction, async () => {
     await search.fill('8999')
     await page.getByRole('row').filter({ hasText: '8999' }).waitFor({ state: 'visible' })
@@ -114,6 +116,50 @@ test('authenticated client navigation can return to cached registers', async ({ 
     await page.goBack()
     await destinations[0].ready(page)
   })
+})
+
+test('menu disclosure opens nested reports without navigating', async ({ page }, info) => {
+  await page.goto('/customers')
+  await destinations[0].ready(page)
+  const originalUrl = page.url()
+  const mobile = info.project.name === 'mobile'
+  if (mobile) await page.getByRole('button', { name: 'Öppna meny', exact: true }).click()
+  const navigation = mobile
+    ? page.getByRole('dialog', { name: 'Navigeringsmeny' })
+    : page.getByRole('navigation', { name: 'Huvudnavigation' })
+  const parentRequests: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/reports') parentRequests.push(request.url())
+  })
+  if (!mobile) {
+    await navigation.getByRole('button', { name: 'Expandera Inköp', exact: true }).click()
+    await navigation.getByRole('link', { name: 'Leverantörer', exact: true }).waitFor({ state: 'visible' })
+  }
+  await measured(info, 'Expand report menu', BUDGET.interaction, async () => {
+    await navigation.getByRole('button', { name: 'Expandera Rapporter', exact: true }).click()
+    await navigation.getByRole('button', { name: 'Expandera Huvudböcker', exact: true }).waitFor({ state: 'visible' })
+  })
+  await measured(info, 'Expand nested report category', BUDGET.interaction, async () => {
+    await navigation.getByRole('button', { name: 'Expandera Huvudböcker', exact: true }).click()
+    await navigation.getByRole('link', { name: 'Huvudbok', exact: true }).waitFor({ state: 'visible' })
+  })
+  await expect(page).toHaveURL(originalUrl)
+  expect(parentRequests).toHaveLength(0)
+  const collapse = navigation.getByRole('button', { name: 'Fäll ihop Rapporter', exact: true })
+  await collapse.focus()
+  await page.keyboard.press('Space')
+  await expect(navigation.getByRole('link', { name: 'Huvudbok', exact: true })).toBeHidden()
+  await navigation.getByRole('button', { name: 'Expandera Rapporter', exact: true }).click()
+  await measured(info, 'Navigate to a nested report', BUDGET.navigation, async () => {
+    await navigation.getByRole('link', { name: 'Huvudbok', exact: true }).click()
+    await expect(page).toHaveURL(/\/reports\/huvudbok$/)
+    await destinations[7].ready(page)
+  })
+  if (mobile) {
+    await expect(navigation).toBeHidden()
+  } else {
+    await expect(navigation.getByRole('link', { name: 'Huvudbok', exact: true })).toHaveAttribute('aria-current', 'page')
+  }
 })
 
 test.describe('password login', () => {

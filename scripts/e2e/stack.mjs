@@ -114,6 +114,9 @@ export async function up() {
     GOTRUE_DB_DRIVER: 'postgres', GOTRUE_DB_DATABASE_URL: `postgres://supabase_auth_admin:${password}@${prefix}-db:5432/postgres`,
     GOTRUE_SITE_URL: state.appUrl, GOTRUE_JWT_SECRET: secret, GOTRUE_JWT_ADMIN_ROLES: 'service_role',
     GOTRUE_JWT_ISSUER: `${state.supabaseUrl}/auth/v1`,
+    // CI has hit Auth's default ten-second deadline during initial provisioning.
+    // Browser request budgets are enforced independently after fixture setup.
+    GOTRUE_API_MAX_REQUEST_DURATION: '60s',
     GOTRUE_JWT_AUD: 'authenticated', GOTRUE_JWT_DEFAULT_GROUP_NAME: 'authenticated', GOTRUE_JWT_EXP: '7200',
     GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true', GOTRUE_MAILER_AUTOCONFIRM: 'true',
     GOTRUE_RATE_LIMIT_EMAIL_SENT: '1000', GOTRUE_RATE_LIMIT_TOKEN_REFRESH: '1000',
