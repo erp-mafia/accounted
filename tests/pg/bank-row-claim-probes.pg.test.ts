@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getClient } from './setup'
-import { seedCompany } from './fixtures'
+import { seedCompany, setActiveCompany } from './fixtures'
 
 // posted_entries_naming_bank_row answers "which posted verifikat name this
 // bank row" (source_id or bank booking context) on the two indexes instead of
@@ -109,6 +109,41 @@ describe('the movers keep their refusals', () => {
     const where = new Map(bound.rows.map((r) => [r.id as string, r.cash_account_id as string]))
     for (const id of open) expect(where.get(id)).toBe(keeperId)
     expect(where.get(named)).toBe(twinId)
+  })
+})
+
+describe('a person moving the account (row level security on)', () => {
+  // Under the journal_entries select policy Postgres may not use the GIN index
+  // for jsonb @> (not leakproof), so the guard's probe scanned the table for
+  // every moved row as `authenticated`. The guard runs as its owner instead.
+  it('the binding guard runs as its owner with an empty search path', async () => {
+    const { rows } = await client.query(`SELECT prosecdef, proconfig FROM pg_proc
+      WHERE oid = 'public.guard_cash_transaction_binding()'::regprocedure`)
+    expect(rows[0].prosecdef).toBe(true)
+    expect(rows[0].proconfig).toContain('search_path=""')
+  })
+
+  it('moves the open rows and keeps the named one, as authenticated', async () => {
+    await setActiveCompany(owner.userId, owner.companyId)
+    const open = await Promise.all(Array.from({ length: 5 }, () => bankRow()))
+    const named = await bankRow()
+    await postedEntry({ context: contextFor(named) })
+
+    await client.query(`SELECT set_config('request.jwt.claims', $1, true), set_config('request.jwt.claim.sub', $2, true)`,
+      [JSON.stringify({ sub: owner.userId, role: 'authenticated' }), owner.userId])
+    await client.query('SET LOCAL ROLE authenticated')
+    const { rows } = await client.query('SELECT promote_psd2_cash_account($1,$2) AS result', [owner.companyId, JSON.stringify({
+      bank_connection_id: connectionId, external_uid: uid, currency: 'SEK', ledger_account: '1930', iban,
+      expected_session_id: 'pg-claim-probe-session', user_chosen_ledger: true,
+    })])
+    expect(rows[0].result.moved).toBe(open.length)
+    const bound = await client.query('SELECT id, cash_account_id FROM transactions WHERE company_id=$1', [owner.companyId])
+    const where = new Map(bound.rows.map((r) => [r.id as string, r.cash_account_id as string]))
+    for (const id of open) expect(where.get(id)).toBe(keeperId)
+    expect(where.get(named)).toBe(twinId)
+    // Last: a refused statement aborts the transaction (afterEach rolls back).
+    await expect(client.query('UPDATE transactions SET cash_account_id=$2 WHERE id=$1', [named, keeperId]))
+      .rejects.toMatchObject({ code: 'PT409', message: 'BANK_ANCHOR_BINDING_IN_USE' })
   })
 })
 
