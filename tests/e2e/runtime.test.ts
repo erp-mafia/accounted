@@ -4,6 +4,7 @@ import { appEnv, owner, validateRuntime } from '../../scripts/e2e/runtime.mjs'
 const runtime = {
   kind: 'synthetic-ten-year-fixture', owner,
   appUrl: 'http://127.0.0.1:3101', supabaseUrl: 'http://127.0.0.1:54331',
+  encryptionKey: 'synthetic-key-for-environment-mapping',
 }
 
 describe('E2E runtime isolation', () => {
@@ -21,5 +22,7 @@ describe('E2E runtime isolation', () => {
     expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY')
     expect(env).not.toHaveProperty('ENABLE_BANKING_PRIVATE_KEY')
     expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe(runtime.supabaseUrl)
+    expect(env.PERSONNUMMER_ENCRYPTION_KEY).toBe(runtime.encryptionKey)
+    expect(env).not.toHaveProperty('ENCRYPTION_KEY')
   })
 })

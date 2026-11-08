@@ -56,7 +56,7 @@ export function appEnv(state) {
     NEXT_PUBLIC_APP_URL: state.appUrl,
     NEXT_PUBLIC_SELF_HOSTED: 'true',
     NEXT_PUBLIC_REQUIRE_MFA: 'false',
-    ENCRYPTION_KEY: state.encryptionKey,
+    PERSONNUMMER_ENCRYPTION_KEY: state.encryptionKey,
     CRON_SECRET: state.cronSecret,
     SIE_IMPORT_JOBS: 'true',
     SIE_IMPORT_CHUNK_AUDIT: 'true',
