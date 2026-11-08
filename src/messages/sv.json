@@ -428,7 +428,7 @@
     "skatteverket": "Moms, arbetsgivardeklaration och skattekonto går direkt till och från Skatteverket när {appName} är ombud för företaget.",
     "peppol": "Ta emot leverantörsfakturor som e-faktura. De hamnar i Underlag.",
     "bank_payments": "Företagsverifieringen hos betalningsleverantören och de konton betalningar kan lämna.",
-    "attest": "Vem som attesterar leverantörsfakturor och från vilket belopp. En faktura som behöver attest betalas inte förrän den är attesterad.",
+    "attest": "Vem som attesterar leverantörsfakturor, i vilken ordning och från vilket belopp, och vem som ersätter den som är borta. En faktura som behöver attest betalas inte förrän den är attesterad.",
     "mail": "Kvitton till köp som saknar underlag letas upp i din mejl. {appName} kan bara läsa, aldrig skicka, ändra eller radera något."
   },
   "settings_nav": {
@@ -17826,7 +17826,37 @@
     "read_only_note": "Bara ägare och administratörer kan ändra attestreglerna.",
     "save": "Spara ändringar",
     "saved": "Sparat",
-    "unsaved": "Osparade ändringar"
+    "unsaved": "Osparade ändringar",
+    "group_pre_attest": "Förattest",
+    "pre_attest_help": "Förattesten kommer före attesten: den som ansvarar för ett projekt godkänner fakturan först, och först därefter kan attestanterna ovan attestera den. Varje projekt på fakturans rader behöver en förattest. En person godkänner en faktura en gång, så den som förattesterat kan inte också attestera samma faktura. Ingen attestgräns gäller förattesten. Välj ingen så fungerar attesten som förut.",
+    "pre_default_label": "Förattest av fakturor utan projekt",
+    "pre_default_help": "Fakturor och fakturarader utan ett projekt med egna förattestanter godkänns först av en av dessa. Välj ingen så går de direkt till attestanterna.",
+    "pre_none": "Ingen förattest",
+    "people_placeholder": "Välj förattestanter",
+    "project_rows_label": "Förattest per projekt",
+    "project_rows_help": "En faktura vars rader har projektet godkänns först av en av projektets förattestanter, till exempel projektledaren. Har fakturan flera projekt behöver vart och ett sin förattest.",
+    "project_add": "Lägg till projekt",
+    "project_attesters_label": "Förattestanter för {project}",
+    "project_remove": "Ta bort förattesten för {project}",
+    "project_incomplete": "Välj minst en förattestant för projektet, eller ta bort det.",
+    "projects_none_note": "Företaget har inga projekt ännu. Lägg upp dem under Dimensioner för att styra förattesten per projekt.",
+    "group_substitutes": "Ersättare",
+    "substitutes_help": "När en attestant är borta attesterar ersättaren i hens ställe under perioden: i samma steg och med samma attestgräns. Attesten sparas som ersättarens, för attestanten, och mejlen och Att göra går till ersättaren. Ägare och administratörer väljer ersättare för alla, övriga för sig själva.",
+    "substitute_none": "Inga ersättare",
+    "substitute_row": "{substitute} för {user}",
+    "substitute_period": "{from} till {to}",
+    "substitute_active": "pågår",
+    "substitute_remove": "Ta bort",
+    "substitute_remove_label": "Ta bort ersättaren {name}",
+    "substitute_for_label": "Attestant som är borta",
+    "substitute_label": "Ersättare",
+    "substitute_pick": "Välj person",
+    "substitute_period_label": "Period",
+    "substitute_from_label": "Första dagen",
+    "substitute_to_label": "Sista dagen",
+    "substitute_invalid_period": "Sista dagen kan inte ligga före den första.",
+    "substitute_add": "Lägg till ersättare",
+    "substitute_failed_title": "Ersättaren kunde inte sparas"
   },
   "supplier_invoice_attest": {
     "kicker": "Attest",
@@ -17864,7 +17894,19 @@
     "reject_comment_placeholder": "Varför? Till exempel: fel belopp, inte beställt.",
     "reject_comment_label": "Kommentar",
     "cancel": "Avbryt",
-    "reject_confirm": "Neka"
+    "reject_confirm": "Neka",
+    "stage_pre": "Steg 1 av 2: förattest",
+    "stage_final": "Steg 2 av 2: attest",
+    "pre_group_project": "Förattest för {project}",
+    "pre_group_default": "Förattest",
+    "pre_group_done": "{label}: godkänd av {name}",
+    "pre_group_waiting": "{label}: väntar på en av {names}",
+    "pre_group_blocked": "{label}: ingen kan ge den",
+    "stands_in": "{name} (ersättare för {for})",
+    "reason_other_step": "Fakturan väntar på ett annat steg än ditt: förattesten först, sedan attesten.",
+    "acts_for": "Du attesterar i stället för {name}.",
+    "trail_stage_pre": "förattest",
+    "trail_on_behalf": "{name} för {for}"
   },
   "attest_batch_page": {
     "meta_title": "Attestera leverantörsfakturor",
@@ -17903,7 +17945,11 @@
     "done_title": "Tack, ditt svar är skickat",
     "done_counts": "{approved} godkända, {rejected} nekade. Den som registrerade fakturorna får besked.",
     "all_done": "Alla fakturor i mejlet är besvarade.",
-    "expires": "Länken gäller till {date}."
+    "expires": "Länken gäller till {date}.",
+    "stage_pre": "Steg 1 av 2: förattest",
+    "stage_final": "Steg 2 av 2: attest",
+    "acts_for": "i stället för {name}",
+    "state_other_step": "Väntar på ett annat steg än ditt."
   },
   "attest_link_page": {
     "eyebrow": "Attest för {company}",
@@ -17939,7 +17985,11 @@
     "state_registrant": "Du registrerade fakturan och attesterar den inte själv.",
     "state_limit": "Din attestgräns räcker inte för den här fakturan. Den väntar på någon vars gräns gör det.",
     "limit_reject_only": "Din attestgräns räcker inte för att godkänna fakturan, men du kan neka den.",
-    "state_not_allowed": "Du kan inte attestera den här fakturan längre."
+    "state_not_allowed": "Du kan inte attestera den här fakturan längre.",
+    "stage_pre": "Steg 1 av 2: förattest",
+    "stage_final": "Steg 2 av 2: attest",
+    "acts_for": "Du attesterar i stället för {name}.",
+    "state_other_step": "Fakturan väntar på ett annat steg än ditt: förattesten först, sedan attesten."
   },
   "att_gora_attest": {
     "row_label": "Attestera {supplier} {amount}",

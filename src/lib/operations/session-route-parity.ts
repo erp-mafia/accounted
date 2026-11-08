@@ -613,6 +613,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/supplier-invoices/:id/reject': covered([`POST ${V}/supplier-invoices/:id/reject`]),
   'PUT /api/supplier-invoices/attest-policy': covered([`PUT ${V}/supplier-invoices/attest-policy`], 'owners and admins; no MCP tool: who controls payments is a person\'s decision'),
   'PUT /api/supplier-invoices/attest-policy/mail': uiOnly(PREFS),
+  'POST /api/supplier-invoices/attest-policy/substitutes': covered([`POST ${V}/supplier-invoices/attest-substitutes`], 'no MCP tool: who may release a payment is a person\'s decision'),
+  'DELETE /api/supplier-invoices/attest-policy/substitutes/:id': covered([`DELETE ${V}/supplier-invoices/attest-substitutes/:id`], 'no MCP tool: who may release a payment is a person\'s decision'),
   'POST /api/attest/:token/decision': uiOnly(ATTEST_LINK),
   'POST /api/attest/lista/:token/decisions': uiOnly(ATTEST_LIST_LINK),
   'POST /api/supplier-invoices/:id/book': covered([`POST ${V}/supplier-invoices/:id/book`, 'gnubok_book_supplier_invoice']),

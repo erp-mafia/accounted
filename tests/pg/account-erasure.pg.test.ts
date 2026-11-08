@@ -105,6 +105,9 @@ const RETAINED = new Set([
   'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
   'company_attest_limits.user_id', // The attester a limit is for; company configuration, a departed member stops counting.
   'company_attest_limits.updated_by', // Who last changed an attest limit; the company keeps the record.
+  'company_attest_substitutes.user_id', // The attester a substitute stands in for; company configuration, a departed member stops counting.
+  'company_attest_substitutes.substitute_user_id', // Who stands in; a departed member's attest stops counting.
+  'company_attest_substitutes.created_by', // Who named the substitute; the company keeps the record.
   'company_capability_config.decided_by', // Who approved a package switch (a processing-rule change); the company keeps the record.
   'legal_acceptances.user_id', // Which document version a person accepted and when: the evidence of the agreement outlives the account.
   'company_grants.accepted_by', // Who accepted a rule for automatic booking (a dated processing rule); the company keeps the record.
@@ -115,6 +118,7 @@ const RETAINED = new Set([
   'booking_review_rules.revoked_by', // Who archived or superseded that rule; the company keeps the record.
   'booking_review_stamps.reviewed_by', // Who reviewed and booked a verifikat a booking review rule matched; the company keeps the record.
   'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
+  'supplier_invoice_attestations.on_behalf_of', // The attester a substitute decided for; the company keeps the record.
   'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoice_attest_batches.attester_user_id', // The attester a batched attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.

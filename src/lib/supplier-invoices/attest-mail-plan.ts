@@ -11,14 +11,16 @@
  * rejection waits on the registrant, not on the attester, so nobody is asked
  * or reminded about it again by mail (the attester still sees it under Att
  * göra); one nobody can attest under the current rules is blocked; the rest
- * wait on the attesters attestProgress names. The attest service and the
- * worklist read the same attestProgress, so a mail never asks someone the
- * service would refuse.
+ * wait on the attesters attestProgress names, at the step the invoice is at
+ * (the förattestants first, #192), and on the substitutes standing in for
+ * them today. The attest service and the worklist read the same
+ * attestProgress, so a mail never asks someone the service would refuse.
  */
 
 import { addDaysIso, daysBetweenIso, isPastDue } from '@/lib/dates/iso'
 import { canApproveSupplierInvoice } from './lifecycle'
 import {
+  attestAskees,
   attestProgress,
   invoiceNeedsAttest,
   type AttestationRecord,
@@ -75,8 +77,9 @@ export function attestMailStanding(company: AttestMailCompany, invoice: AttestMa
   const progress = attestProgress(company.policy, company.accountingMethod, invoice, attestations, company.attesters, company.limits)
   if (progress.satisfied) return { kind: 'closed' }
   if (progress.blocked) return { kind: 'blocked' }
-  if (progress.remaining.length === 0) return { kind: 'closed' }
-  return { kind: 'waiting', attesters: progress.remaining }
+  const askees = attestAskees(progress)
+  if (askees.length === 0) return { kind: 'closed' }
+  return { kind: 'waiting', attesters: askees }
 }
 
 /**

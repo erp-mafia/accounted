@@ -223,7 +223,8 @@ export function SettingsTextarea({ className, ...rest }: React.TextareaHTMLAttri
  * styled and clashes with the panel (same call as TeamPanel's role
  * dropdowns). The trigger is the same box as SettingsInput.
  */
-const SETTINGS_SELECT_TRIGGER_CLASS = cn(SETTINGS_FIELD_CLASS, 'h-9 w-full cursor-pointer justify-between gap-2')
+/** The SettingsSelect trigger's look, for a field-shaped picker of another kind (the attest settings' people picker). */
+export const SETTINGS_SELECT_TRIGGER_CLASS = cn(SETTINGS_FIELD_CLASS, 'h-9 w-full cursor-pointer justify-between gap-2')
 
 // Radix Select refuses empty-string item values; settings selects use '' for
 // placeholder-shaped options ("Ingen", "Lägg till valuta"), so '' maps onto a

@@ -1841,6 +1841,53 @@ describe('auditRowToEvent: attest levels (#135)', () => {
   })
 })
 
+describe('auditRowToEvent: förattest and substitutes (#192)', () => {
+  const policy = {
+    company_id: 'company-1',
+    enabled: true,
+    threshold_amount: null,
+    mode: 'any',
+    attesters: ['a', 'b'],
+    preparer_may_attest: false,
+    two_step_from_sek: null,
+    pre_attesters: [],
+    project_attesters: {},
+  }
+
+  it('states no förattest when the policy names none, and the change when it names one', () => {
+    const created = auditRowToEvent(auditRow({ table_name: 'company_attest_policies', action: 'INSERT', new_state: policy }))
+    expect(created?.details?.some((d) => d.startsWith('Förattest'))).toBe(false)
+    expect(
+      auditRowToEvent(
+        auditRow({
+          table_name: 'company_attest_policies',
+          action: 'UPDATE',
+          old_state: policy,
+          new_state: { ...policy, pre_attesters: ['c'], project_attesters: { P100: ['d'], P200: ['d', 'e'] } },
+        }),
+      ),
+    ).toMatchObject({
+      code: 'attest_policy.updated',
+      details: ['Förattest av fakturor utan projekt: 0 st → 1 st', 'Förattest per projekt: 0 projekt → 2 projekt'],
+    })
+  })
+
+  it('states a substitute added and removed with its period', () => {
+    const row = { id: 's-1', company_id: 'company-1', user_id: 'a', substitute_user_id: 'b', starts_on: '2026-12-21', ends_on: '2027-01-06', created_by: 'a' }
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_substitutes', action: 'INSERT', new_state: row }))).toMatchObject({
+      category: 'installningar',
+      code: 'attest_substitute.added',
+      event: 'Ersättare för attest vald',
+      object: 'Leverantörsfakturor',
+      details: ['Period: 2026-12-21 till 2027-01-06'],
+    })
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_substitutes', action: 'DELETE', old_state: row, new_state: null }))).toMatchObject({
+      code: 'attest_substitute.removed',
+      details: ['Period: 2026-12-21 till 2027-01-06'],
+    })
+  })
+})
+
 describe('auditRowToEvent: hard blocks (accounted#130)', () => {
   const block = {
     id: 'block-1',

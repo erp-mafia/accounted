@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 465 endpoints.
+  pagination, scopes), and all 467 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 465 operations. Paths are shown without
+API version `2026-05-12`, 467 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -416,7 +416,7 @@ POST /companies/{companyId}/customers/merge : Merge duplicate customers into one
 POST /companies/{companyId}/customers/merges/{mergeId}/undo : Undo a customer merge [scope:customers:write risk:medium idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (48)
+### Suppliers (AP) (50)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -457,6 +457,8 @@ GET /companies/{companyId}/supplier-invoices/{id}/self-billing-pdf : Download th
 POST /companies/{companyId}/supplier-invoices/{id}/uncredit : Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-invoices/attest-policy : Read the company's attest policy for supplier invoices [scope:suppliers:read risk:low idempotent]
 PUT /companies/{companyId}/supplier-invoices/attest-policy : Save the company's attest policy for supplier invoices [scope:suppliers:write risk:high idempotent dry-run reversible]
+POST /companies/{companyId}/supplier-invoices/attest-substitutes : Name a substitute for a supplier invoice attester for a period [scope:suppliers:write risk:high idempotent dry-run reversible]
+DELETE /companies/{companyId}/supplier-invoices/attest-substitutes/{id} : Remove a substitute for a supplier invoice attester [scope:suppliers:write risk:low idempotent dry-run]
 GET /companies/{companyId}/supplier-payment-batches : List supplier payment batches (betalfiler), newest first, with settlement progress [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-payment-batches : Create a supplier payment file (betalfil: pain.001, or an LB file for Svea Bank) for one or more supplier invoices [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-payment-batches/{id} : Read one supplier payment batch (betalfil) with its lines and live settlement [scope:suppliers:read risk:low idempotent]

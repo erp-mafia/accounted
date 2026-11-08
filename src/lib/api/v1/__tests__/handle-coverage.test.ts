@@ -140,6 +140,7 @@ describe('path parameter typing', () => {
       'accrual-schedules/:id': null,
       'agreements/:id': null,
       'assets/:id': 'asset',
+      'attest-substitutes/:id': null,
       'bank-connections/:connectionId': null,
       'bank/:id': null,
       'banks/:bic': null,

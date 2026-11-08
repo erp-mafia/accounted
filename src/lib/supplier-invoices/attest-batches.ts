@@ -353,3 +353,27 @@ export async function queueAttestRequest(service: SupabaseClient, companyId: str
   if (error) throw error
   return 'queued'
 }
+
+/**
+ * Put an invoice back in the request job's queue as if it were registered
+ * now: its förattest is complete (#192), so the attesters are asked next, in
+ * a round of their own, and reminded as if asked for the first time. What the
+ * registrant was told stays told. 'unavailable' before the batched mail's
+ * migration; nothing to do then, Att göra asks the attesters.
+ */
+export async function requeueAttestRequest(service: SupabaseClient, companyId: string, invoiceId: string, now: number = Date.now()): Promise<QueueAttestRequestResult> {
+  const { error } = await service.from('supplier_invoice_attest_mail_state').upsert(
+    {
+      supplier_invoice_id: invoiceId,
+      company_id: companyId,
+      queued_at: new Date(now).toISOString(),
+      asked_at: null,
+      reminded_early_at: null,
+      reminded_last_at: null,
+    },
+    { onConflict: 'supplier_invoice_id' },
+  )
+  if (isMissingTableError(error)) return 'unavailable'
+  if (error) throw error
+  return 'queued'
+}

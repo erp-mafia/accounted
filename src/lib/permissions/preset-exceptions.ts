@@ -117,11 +117,16 @@ export const OWN_AGENT_KEYS: readonly string[] = [
  * so these routes check no role and the attest service and the database
  * decide (deciderRefusal, supplier_invoice_attest_ruling). The viewer's
  * preset holds no write, and no preset can say "only where the policy names
- * you": when the door enforces permissions, these two stay the service's.
+ * you": when the door enforces permissions, these stay the service's. The
+ * same holds for naming one's own substitute while away (#192): any member,
+ * a viewer attester too, for themselves; an owner or admin for anyone (the
+ * attest service and the RLS policies of company_attest_substitutes).
  */
 export const VIEWER_ATTESTS_BY_POLICY: readonly string[] = [
   'POST /api/supplier-invoices/:id/approve',
   'POST /api/supplier-invoices/:id/reject',
+  'POST /api/supplier-invoices/attest-policy/substitutes',
+  'DELETE /api/supplier-invoices/attest-policy/substitutes/:id',
 ]
 
 export type PresetException =

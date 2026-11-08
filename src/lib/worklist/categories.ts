@@ -51,8 +51,8 @@ import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orde
 import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
 import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { ATTESTABLE_SUPPLIER_INVOICE_STATUSES, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
-import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
-import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import { attestsAtAnyStep, invoiceNeedsAttest, ruleOnApproval } from '@/lib/supplier-invoices/attest-policy'
+import { loadAttestLimits, loadAttestPolicy, loadAttestTrails, loadInvoiceProjects, withProjects } from '@/lib/supplier-invoices/attest-policy-read'
 import { loadToPayQueue } from '@/lib/supplier-invoices/attest-queues'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
@@ -297,7 +297,10 @@ const ATTEST_DUE_SCAN_CAP = 200
  * approved it in the current round, and their limit covers it or the round
  * still has room for an attester without a covering limit (#135). An
  * invoice above the controller's limit is the CEO's row, not the
- * controller's. Done: the user approves or rejects, the policy is satisfied
+ * controller's. With ordered steps (#192) a row is the förattestant's until
+ * the förattest is given and the attester's after; a substitute gets the
+ * rows of the attester they stand in for while the substitution runs.
+ * Done: the user approves or rejects, the policy is satisfied
  * by others, or the invoice leaves attest.
  * Soft-fails to an empty list, like every count here.
  */
@@ -308,7 +311,7 @@ export async function listSupplierInvoiceAttestsDue(
 ): Promise<SupplierInvoiceAttestDue[]> {
   try {
     const policy = await loadAttestPolicy(supabase, companyId)
-    if (!policy.enabled || !policy.attesters.includes(userId)) return []
+    if (!policy.enabled || !attestsAtAnyStep(policy, userId)) return []
     const [{ data: settings, error: settingsError }, { data: memberRows, error: memberError }, limits] = await Promise.all([
       supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
       supabase.from('company_members').select('user_id, role').eq('company_id', companyId),
@@ -351,26 +354,15 @@ export async function listSupplierInvoiceAttestsDue(
       is_credit_note: boolean
       supplier: { name: string | null } | null
     }
-    const candidates = ((invoices ?? []) as unknown as Row[]).filter((row) => {
+    const governed = ((invoices ?? []) as unknown as Row[]).filter((row) => {
       const facts = { ...row, total: Number(row.total) }
-      return invoiceNeedsAttest(policy, accountingMethod, facts) && mayAttest(policy, facts, userId).ok
+      return invoiceNeedsAttest(policy, accountingMethod, facts) && (policy.preparer_may_attest || facts.user_id !== userId)
     })
-    if (candidates.length === 0) return []
-
-    const { data: decisions, error: decisionsError } = await supabase
-      .from('supplier_invoice_attestations')
-      .select('supplier_invoice_id, user_id, decision, decided_at')
-      .eq('company_id', companyId)
-      .in('supplier_invoice_id', candidates.map((c) => c.id))
-    if (decisionsError) {
-      logAndZero('supplier_invoice_attest_due', companyId, decisionsError)
-      return []
-    }
-    const byInvoice = new Map<string, AttestationRecord[]>()
-    for (const d of (decisions ?? []) as Array<AttestationRecord & { supplier_invoice_id: string }>) {
-      byInvoice.set(d.supplier_invoice_id, [...(byInvoice.get(d.supplier_invoice_id) ?? []), d])
-    }
-    return candidates
+    if (governed.length === 0) return []
+    const ids = governed.map((c) => c.id)
+    const [projects, byInvoice] = await Promise.all([loadInvoiceProjects(supabase, companyId, policy, ids), loadAttestTrails(supabase, companyId, ids)])
+    return governed
+      .map((c) => withProjects(c, projects))
       .filter(
         (c) =>
           ruleOnApproval(policy, accountingMethod, { ...c, total: Number(c.total) }, byInvoice.get(c.id) ?? [], userId, attesters, { limits }).kind ===

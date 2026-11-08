@@ -428,7 +428,7 @@
     "skatteverket": "VAT, employer declarations and the tax account go straight to and from Skatteverket when {appName} is the company's agent.",
     "peppol": "Receive supplier invoices as e-invoices. They land in Underlag.",
     "bank_payments": "The company verification with the payment provider and the accounts payments can leave from.",
-    "attest": "Who attests supplier invoices and from which amount. An invoice that needs attest is not paid until it is attested.",
+    "attest": "Who attests supplier invoices, in which order and from which amount, and who stands in for someone who is away. An invoice that needs attest is not paid until it is attested.",
     "mail": "Receipts for purchases without a document are looked up in your email. {appName} can only read, never send, change or delete anything."
   },
   "settings_nav": {
@@ -17826,7 +17826,37 @@
     "read_only_note": "Only owners and administrators can change the attest policy.",
     "save": "Save changes",
     "saved": "Saved",
-    "unsaved": "Unsaved changes"
+    "unsaved": "Unsaved changes",
+    "group_pre_attest": "Pre-approval",
+    "pre_attest_help": "Pre-approval comes before the attest: whoever is responsible for a project approves the invoice first, and only then can the attesters above attest it. Every project on the invoice lines needs a pre-approval. A person approves an invoice once, so whoever pre-approved cannot also attest the same invoice. No attest limit applies to a pre-approval. Choose nobody and attest works as before.",
+    "pre_default_label": "Pre-approval of invoices without a project",
+    "pre_default_help": "Invoices and invoice lines without a project that has its own pre-approvers are approved first by one of these people. Choose nobody and they go straight to the attesters.",
+    "pre_none": "No pre-approval",
+    "people_placeholder": "Choose pre-approvers",
+    "project_rows_label": "Pre-approval per project",
+    "project_rows_help": "An invoice whose lines carry the project is approved first by one of the project's pre-approvers, for example the project manager. An invoice with several projects needs a pre-approval for each.",
+    "project_add": "Add project",
+    "project_attesters_label": "Pre-approvers for {project}",
+    "project_remove": "Remove the pre-approval for {project}",
+    "project_incomplete": "Choose at least one pre-approver for the project, or remove it.",
+    "projects_none_note": "The company has no projects yet. Add them under Dimensions to route pre-approval per project.",
+    "group_substitutes": "Substitutes",
+    "substitutes_help": "While an attester is away, the substitute attests in their place for the period: at the same step and with the same attest limit. The attest is saved as the substitute's, for the attester, and the emails and To do go to the substitute. Owners and admins choose substitutes for anyone, everyone else for themselves.",
+    "substitute_none": "No substitutes",
+    "substitute_row": "{substitute} for {user}",
+    "substitute_period": "{from} to {to}",
+    "substitute_active": "ongoing",
+    "substitute_remove": "Remove",
+    "substitute_remove_label": "Remove the substitute {name}",
+    "substitute_for_label": "Attester who is away",
+    "substitute_label": "Substitute",
+    "substitute_pick": "Choose person",
+    "substitute_period_label": "Period",
+    "substitute_from_label": "First day",
+    "substitute_to_label": "Last day",
+    "substitute_invalid_period": "The last day cannot be before the first.",
+    "substitute_add": "Add substitute",
+    "substitute_failed_title": "The substitute could not be saved"
   },
   "supplier_invoice_attest": {
     "kicker": "Attest",
@@ -17864,7 +17894,19 @@
     "reject_comment_placeholder": "Why? For example: wrong amount, not ordered.",
     "reject_comment_label": "Comment",
     "cancel": "Cancel",
-    "reject_confirm": "Reject"
+    "reject_confirm": "Reject",
+    "stage_pre": "Step 1 of 2: pre-approval",
+    "stage_final": "Step 2 of 2: attest",
+    "pre_group_project": "Pre-approval for {project}",
+    "pre_group_default": "Pre-approval",
+    "pre_group_done": "{label}: approved by {name}",
+    "pre_group_waiting": "{label}: waiting for one of {names}",
+    "pre_group_blocked": "{label}: nobody can give it",
+    "stands_in": "{name} (substitute for {for})",
+    "reason_other_step": "The invoice is waiting for a step that is not yours: pre-approval first, then the attest.",
+    "acts_for": "You attest in place of {name}.",
+    "trail_stage_pre": "pre-approval",
+    "trail_on_behalf": "{name} for {for}"
   },
   "attest_batch_page": {
     "meta_title": "Approve supplier invoices",
@@ -17903,7 +17945,11 @@
     "done_title": "Thank you, your answer is sent",
     "done_counts": "{approved} approved, {rejected} rejected. The person who registered the invoices is told.",
     "all_done": "Every invoice in the email is answered.",
-    "expires": "The link is valid until {date}."
+    "expires": "The link is valid until {date}.",
+    "stage_pre": "Step 1 of 2: pre-approval",
+    "stage_final": "Step 2 of 2: attest",
+    "acts_for": "in place of {name}",
+    "state_other_step": "Waiting for a step that is not yours."
   },
   "attest_link_page": {
     "eyebrow": "Attest for {company}",
@@ -17939,7 +17985,11 @@
     "state_registrant": "You registered the invoice and do not attest it yourself.",
     "state_limit": "Your attest limit does not cover this invoice. It waits for someone whose limit does.",
     "limit_reject_only": "Your attest limit does not cover approving the invoice, but you can reject it.",
-    "state_not_allowed": "You can no longer attest this invoice."
+    "state_not_allowed": "You can no longer attest this invoice.",
+    "stage_pre": "Step 1 of 2: pre-approval",
+    "stage_final": "Step 2 of 2: attest",
+    "acts_for": "You attest in place of {name}.",
+    "state_other_step": "The invoice is waiting for a step that is not yours: pre-approval first, then the attest."
   },
   "att_gora_attest": {
     "row_label": "Attest {supplier} {amount}",

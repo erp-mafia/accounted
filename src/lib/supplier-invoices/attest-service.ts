@@ -40,6 +40,7 @@ import {
   invoiceTotalSek,
   latestRejection,
   ruleOnApproval,
+  sameIdSet,
   ruleOnRejection,
   type AttestationRecord,
   type AttestDecision,
@@ -48,15 +49,27 @@ import {
   type AttestPolicy,
   type AttestProgress,
   type AttestSource,
+  type AttestStage,
 } from './attest-policy'
 import { canApproveSupplierInvoice, resolveUnsettledStatus } from './lifecycle'
-import { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
+import {
+  loadAttestBlockedInvoiceIds,
+  loadAttestLimits,
+  loadAttestPolicy,
+  loadAttestSubstitutes,
+  loadAttestPolicyWithProjects,
+  loadProjectNames,
+  loadProjectValues,
+  withAttestationStepColumns,
+  withProjects,
+} from './attest-policy-read'
+import { requeueAttestRequest } from './attest-batches'
 import { isAttestRole, isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { notifyAttestDecisionSafely, type AttestDecisionBatch, type AttestDecisionNotice } from './attest-decision-notify'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
-export { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy }
+export { loadAttestBlockedInvoiceIds, loadAttestLimits, loadAttestPolicy, loadAttestSubstitutes }
 
 /** The invoice columns the rules and the decision read. */
 const ATTEST_INVOICE_COLUMNS =
@@ -121,15 +134,18 @@ interface AttestationRow extends AttestationRecord {
 }
 
 async function loadAttestations(supabase: SupabaseClient, companyId: string, invoiceId: string): Promise<AttestationRow[]> {
-  const { data, error } = await supabase
-    .from('supplier_invoice_attestations')
-    .select('id, user_id, decision, comment, source, decided_at, step')
-    .eq('company_id', companyId)
-    .eq('supplier_invoice_id', invoiceId)
-    .order('decided_at', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as AttestationRow[]
+  return withAttestationStepColumns(async (columns) => {
+    const { data, error } = await supabase
+      .from('supplier_invoice_attestations')
+      .select(columns)
+      .eq('company_id', companyId)
+      .eq('supplier_invoice_id', invoiceId)
+      .order('decided_at', { ascending: true })
+    if (error) throw error
+    return (data ?? []) as unknown as AttestationRow[]
+  })
 }
+
 
 async function loadInvoice(supabase: SupabaseClient, companyId: string, invoiceId: string): Promise<AttestInvoiceRow | null> {
   const { data, error } = await supabase
@@ -161,10 +177,12 @@ async function recordDecision(
   decision: AttestDecision,
   source: AttestSource,
   comment: string | null,
+  onBehalfOf: string | null = null,
 ): Promise<string> {
+  // on_behalf_of only when a substitute decides: a row before the column's migration never names it.
   const { data, error } = await service
     .from('supplier_invoice_attestations')
-    .insert({ company_id: companyId, supplier_invoice_id: invoiceId, user_id: userId, decision, source, comment })
+    .insert({ company_id: companyId, supplier_invoice_id: invoiceId, user_id: userId, decision, source, comment, ...(onBehalfOf ? { on_behalf_of: onBehalfOf } : {}) })
     .select('id')
     .single()
   if (error || !data) throw error ?? new Error('Attest decision not stored')
@@ -248,9 +266,9 @@ function attestKey(): { viaKey: boolean; keyCeiling: number | null } {
   return { viaKey, keyCeiling: actorUnattendedCeiling(actor) }
 }
 
-/** The answer of attest_supplier_invoice (migration 20261030140000). */
+/** The answer of attest_supplier_invoice (migrations 20261030140000, 20261108180000: stage and on_behalf_of). */
 type AttestRpcAnswer =
-  | { ok: true; approved: boolean; attestation_id: string; status: string; approved_at?: string | null }
+  | { ok: true; approved: boolean; attestation_id: string; status: string; approved_at?: string | null; stage?: AttestStage | null; on_behalf_of?: string | null }
   | {
       ok: false
       code: string
@@ -278,7 +296,14 @@ function refusalOutcome(refusal: { code: string; reason?: string; limit_sek?: nu
             details: { reason: 'not_member' },
           }
     case 'ATTEST_NOT_ALLOWED':
-      return { ok: false, code: 'ATTEST_NOT_ALLOWED', details: { reason: refusal.reason } }
+      return refusal.reason === 'other_step'
+        ? {
+            ok: false,
+            code: 'ATTEST_NOT_ALLOWED',
+            messageSv: 'Fakturan väntar på ett annat atteststeg: förattesten först, sedan attesten.',
+            details: { reason: refusal.reason },
+          }
+        : { ok: false, code: 'ATTEST_NOT_ALLOWED', details: { reason: refusal.reason } }
     case 'ATTEST_LIMIT_EXCEEDED':
       return {
         ok: false,
@@ -342,8 +367,8 @@ export async function approveSupplierInvoice(
   const selectColumns = input.select ?? '*'
 
   if (input.dryRun) {
-    const [policy, accountingMethod, attestations, members, limits] = await Promise.all([
-      loadAttestPolicy(supabase, companyId),
+    const [{ policy, projects }, accountingMethod, attestations, members, limits] = await Promise.all([
+      loadAttestPolicyWithProjects(supabase, companyId, [invoice.id]),
       loadAccountingMethod(supabase, companyId),
       loadAttestations(supabase, companyId, invoice.id),
       loadAttestMembers(service, companyId),
@@ -351,7 +376,8 @@ export async function approveSupplierInvoice(
     ])
     // In the database's order: a member whose attest can count, the rules, then keeping the books where no policy governs.
     if (deciderRefusal(members, userId, false)) return refusalOutcome({ code: 'FORBIDDEN', reason: 'not_member' })
-    const ruling = ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, policy.enabled ? members.attesters : undefined, {
+    const facts = withProjects(invoice, projects)
+    const ruling = ruleOnApproval(policy, accountingMethod, facts, attestations, userId, policy.enabled ? members.attesters : undefined, {
       limits,
       ...key,
     })
@@ -369,6 +395,8 @@ export async function approveSupplierInvoice(
         completes_attest: setsMarker,
         attest_remaining_user_ids: ruling.kind === 'record' ? ruling.remainingAfter : [],
         ...(ruling.kind === 'record' ? { attest_step: ruling.step, attest_limit_sek: ruling.limitSek } : {}),
+        ...(ruling.kind === 'record' && ruling.stage ? { attest_stage: ruling.stage } : {}),
+        ...(ruling.kind === 'record' && ruling.onBehalfOf ? { attest_on_behalf_of: ruling.onBehalfOf } : {}),
       },
     }
   }
@@ -432,19 +460,30 @@ export async function approveSupplierInvoice(
     // After the event and before the reads below, which can throw.
     if (!input.decisions) await tellRegistrant(service, companyId, userId, approvedNotice, undefined)
   }
-  const [policy, accountingMethod, attestations, members, limits] = await Promise.all([
-    loadAttestPolicy(supabase, companyId),
+  const [{ policy, projects }, accountingMethod, attestations, members, limits] = await Promise.all([
+    loadAttestPolicyWithProjects(supabase, companyId, [invoice.id]),
     loadAccountingMethod(supabase, companyId),
     loadAttestations(supabase, companyId, invoice.id),
     loadActiveAttestMembers(service, companyId),
     loadAttestLimits(supabase, companyId),
   ])
+  const facts = withProjects(invoice, projects)
+  const attest = attestProgress(policy, accountingMethod, facts, attestations, policy.enabled ? members : undefined, limits)
+  // This förattest completed the last group: the attesters are asked now, in a round of their own.
+  if (answer.stage === 'pre' && !answer.approved && attest.stage === 'final') {
+    await requeueAttestRequest(service, companyId, invoice.id).catch((error) =>
+      log.warn('attest request not queued after the förattest; Att göra still asks', {
+        invoiceId: invoice.id,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
   return {
     ok: true,
     data: {
       invoice: current,
       approved: answer.approved,
-      attest: attestProgress(policy, accountingMethod, invoice, attestations, policy.enabled ? members : undefined, limits),
+      attest,
       attestation_id: answer.attestation_id,
     },
   }
@@ -479,6 +518,9 @@ export async function personalAttestCap(
       loadAttestLimits(supabase, companyId),
     ])
     if (!invoice || !invoiceNeedsAttest(policy, accountingMethod, invoice) || !attestLevelsOn(policy, limits)) return null
+    // A substitute attests with the limit of the attester they stand in for;
+    // which one the database decides under the lock, so this answers the
+    // person's own (the ruling still caps the attest when it runs).
     return attestLimitOf(limits, userId)
   } catch {
     // Safe to answer no cap: the dispatch runs attest_supplier_invoice, whose
@@ -517,12 +559,13 @@ export async function rejectSupplierInvoice(
     return { ok: false, code: 'ATTEST_NOT_PENDING', details: { current_status: invoice.status } }
   }
   const service = serviceWriter(input.writer)
-  const [policy, accountingMethod, members] = await Promise.all([
-    loadAttestPolicy(supabase, companyId),
+  const [{ policy, projects }, accountingMethod, members] = await Promise.all([
+    loadAttestPolicyWithProjects(supabase, companyId, [invoice.id]),
     loadAccountingMethod(supabase, companyId),
     loadAttestMembers(service, companyId),
   ])
-  const ruling = ruleOnRejection(policy, accountingMethod, invoice, userId, policy.enabled ? members.attesters : undefined)
+  const facts = withProjects(invoice, projects)
+  const ruling = ruleOnRejection(policy, accountingMethod, facts, userId, policy.enabled ? members.attesters : undefined)
   if (ruling.kind === 'refused') return { ok: false, code: ruling.code, details: { reason: ruling.reason } }
   // Neka is decided like Attestera: without a governing policy, only by someone who keeps the books.
   const gate = deciderRefusal(members, userId, ruling.kind === 'unrestricted')
@@ -541,7 +584,8 @@ export async function rejectSupplierInvoice(
   }
 
   const comment = normalizeComment(input.comment)
-  const attestationId = await recordDecision(service, companyId, invoice.id, userId, 'rejected', input.source, comment)
+  const onBehalfOf = ruling.kind === 'record' ? (ruling.onBehalfOf ?? null) : null
+  const attestationId = await recordDecision(service, companyId, invoice.id, userId, 'rejected', input.source, comment, onBehalfOf)
   // The rejection is stored and ends the round. The other attesters' open
   // links close first, so none approves the invoice while the mail is sent;
   // whoever registered it still hears that it will not be paid, and why,
@@ -574,6 +618,20 @@ export interface AttestPerson {
 /** Someone whose approval would move the invoice on, with their limit in SEK (null = no limit). */
 export interface AttestCandidatePerson extends AttestPerson {
   limit_sek: number | null
+  /** A substitute: the attester they stand in for today, whose limit applies. Null for the attester in their own name. */
+  stands_in_for: AttestPerson | null
+}
+
+/** A förattest the invoice needs: for a project (null: lines without a project of their own), done or by whom it may come. */
+export interface AttestPreGroupView {
+  project: string | null
+  /** The project's name in the dimension register; null when it has none. */
+  project_name: string | null
+  done: boolean
+  /** Who gave it this round (the attester it counts for); null while missing. */
+  approved_by: AttestPerson | null
+  /** Who may give it, while it is missing. */
+  attesters: AttestPerson[]
 }
 
 export interface SupplierInvoiceAttestState {
@@ -601,6 +659,12 @@ export interface SupplierInvoiceAttestState {
   approvals_needed: number
   /** One of them must come from someone whose limit covers amount_sek. */
   needs_covering: boolean
+  /** With förattest (#192): 'pre' while a förattest is missing, 'final' once the attest is what is left; null without förattest or once attested. */
+  stage: AttestStage | null
+  /** The förattests the invoice needs, in order; empty without förattest. */
+  pre_attest: AttestPreGroupView[]
+  /** The attester the caller would approve for, as their substitute (viewer.acts_for); null in their own name. */
+  acts_for: AttestPerson | null
   latest_rejection: { user: AttestPerson; comment: string | null; decided_at: string } | null
   attestations: Array<{
     attestation_id: string
@@ -611,6 +675,10 @@ export interface SupplierInvoiceAttestState {
     decided_at: string
     /** The approval's place in its round under the policy; null otherwise. */
     step: number | null
+    /** The step it was given in: 'pre' (förattest) or 'final'; null for a rejection and older rows. */
+    stage: AttestStage | null
+    /** The attester a substitute decided for; null when the person decided in their own name. */
+    on_behalf_of: AttestPerson | null
   }>
   /** What the caller may do now. */
   viewer: { may_approve: boolean; may_reject: boolean; reason: string | null }
@@ -633,8 +701,10 @@ export async function loadAttestPeople(service: SupabaseClient, userIds: string[
 export interface AttestViewer {
   may_approve: boolean
   may_reject: boolean
-  /** Why not, when the person may not decide: already_approved, not_pending, already_given, not_member, read_only, or the rules' reason. */
+  /** Why not, when the person may not decide: already_approved, not_pending, already_given, not_member, read_only, or the rules' reason (other_step: the invoice is at a step that is not theirs). */
   reason: string | null
+  /** The attester the person would approve for, as their substitute (#192); left out when they approve in their own name. */
+  acts_for?: string
 }
 
 /**
@@ -669,10 +739,13 @@ export function attestViewerOf(
         ? 'already_given'
         : approval.reason
       : approvalGate
+  const mayApprove = !!approval && approval.kind !== 'refused' && approvalGate === null
+  const actsFor = mayApprove && approval?.kind === 'record' ? approval.onBehalfOf : undefined
   return {
-    may_approve: !!approval && approval.kind !== 'refused' && approvalGate === null,
+    may_approve: mayApprove,
     may_reject: !!rejection && rejection.kind !== 'refused' && rejectionGate === null,
     reason,
+    ...(actsFor ? { acts_for: actsFor } : {}),
   }
 }
 
@@ -688,26 +761,39 @@ export async function getSupplierInvoiceAttestState(
   options: { writer?: SupabaseClient } = {},
 ): Promise<OperationOutcome<SupplierInvoiceAttestState>> {
   const { supabase, companyId, userId } = ctx
-  const invoice = await loadInvoice(supabase, companyId, invoiceId)
-  if (!invoice) return { ok: false, code: 'SI_NOT_FOUND' }
+  const loaded = await loadInvoice(supabase, companyId, invoiceId)
+  if (!loaded) return { ok: false, code: 'SI_NOT_FOUND' }
   const service = serviceWriter(options.writer)
-  const [policy, accountingMethod, attestations, members, limits] = await Promise.all([
-    loadAttestPolicy(supabase, companyId),
+  const [{ policy, projects }, accountingMethod, attestations, members, limits] = await Promise.all([
+    loadAttestPolicyWithProjects(supabase, companyId, [loaded.id]),
     loadAccountingMethod(supabase, companyId),
-    loadAttestations(supabase, companyId, invoice.id),
+    loadAttestations(supabase, companyId, loaded.id),
     loadAttestMembers(service, companyId),
     loadAttestLimits(supabase, companyId),
   ])
+  const invoice = withProjects(loaded, projects)
   const activeMembers = policy.enabled ? members.attesters : undefined
   const progress = attestProgress(policy, accountingMethod, invoice, attestations, activeMembers, limits)
-  const people = await loadAttestPeople(service, [
-    ...attestations.map((a) => a.user_id),
-    ...progress.remaining,
-    ...(invoice.approved_by ? [invoice.approved_by] : []),
+  const standIns = progress.stand_ins ?? []
+  const preGroups = progress.pre_groups ?? []
+  const viewer = attestViewerOf(policy, accountingMethod, invoice, attestations, userId, members, { limits, ...attestKey() })
+  const [people, projectNames] = await Promise.all([
+    loadAttestPeople(service, [
+      ...(viewer.acts_for ? [viewer.acts_for] : []),
+      ...attestations.flatMap((a) => [a.user_id, ...(a.on_behalf_of ? [a.on_behalf_of] : [])]),
+      ...progress.remaining,
+      ...standIns.map((s) => s.user_id),
+      ...preGroups.flatMap((g) => g.eligible),
+      ...(progress.pre_approved_by ?? []),
+      ...(invoice.approved_by ? [invoice.approved_by] : []),
+    ]),
+    loadProjectNames(supabase, companyId, preGroups.map((g) => g.project).filter((p): p is string => p !== null)).catch(
+      // The names only label the förattest: a failed read shows the codes.
+      () => new Map<string, string>(),
+    ),
   ])
   const person = (id: string): AttestPerson => people.get(id) ?? { user_id: id, name: null, email: null }
 
-  const viewer = attestViewerOf(policy, accountingMethod, invoice, attestations, userId, members, { limits, ...attestKey() })
   const rejected = latestRejection(attestations)
   const attested = !!invoice.approved_at
 
@@ -728,11 +814,25 @@ export async function getSupplierInvoiceAttestState(
       approved_at: invoice.approved_at,
       approved_by: invoice.approved_by ? person(invoice.approved_by) : null,
       approved: progress.approved_by.map(person),
-      remaining: attested ? [] : progress.remaining.map((id) => ({ ...person(id), limit_sek: attestLimitOf(limits, id) })),
+      remaining: attested
+        ? []
+        : [
+            ...progress.remaining.map((id) => ({ ...person(id), limit_sek: attestLimitOf(limits, id), stands_in_for: null })),
+            ...standIns.map((s) => ({ ...person(s.user_id), limit_sek: attestLimitOf(limits, s.for_user_id), stands_in_for: person(s.for_user_id) })),
+          ],
       amount_sek: progress.amount_sek,
       steps: progress.steps,
       approvals_needed: attested ? 0 : progress.approvals_needed,
       needs_covering: !attested && progress.needs_covering,
+      stage: attested ? null : (progress.stage ?? null),
+      pre_attest: preGroups.map((g) => ({
+        project: g.project,
+        project_name: g.project ? (projectNames.get(g.project) ?? null) : null,
+        done: g.done,
+        approved_by: g.approved_by ? person(g.approved_by) : null,
+        attesters: g.done ? [] : g.eligible.map(person),
+      })),
+      acts_for: viewer.acts_for ? person(viewer.acts_for) : null,
       latest_rejection: rejected ? { user: person(rejected.user_id), comment: rejected.comment ?? null, decided_at: rejected.decided_at } : null,
       attestations: (attestations as AttestationRow[]).map((a) => ({
         attestation_id: a.id,
@@ -742,6 +842,8 @@ export async function getSupplierInvoiceAttestState(
         source: a.source ?? 'app',
         decided_at: a.decided_at,
         step: a.step ?? null,
+        stage: a.stage ?? null,
+        on_behalf_of: a.on_behalf_of ? person(a.on_behalf_of) : null,
       })),
       viewer,
     },
@@ -758,16 +860,45 @@ export interface AttestPolicyInput {
   two_step_from_sek?: number | null
   /** The attesters' limits in SEK (null = no limit); replaces every limit. Left out: as they are. */
   limits?: Array<{ user_id: string; max_amount_sek: number | null }>
+  /** Förattest for invoices (and lines) without a project of their own in project_attesters; empty = none. Left out: as it is. */
+  pre_attesters?: string[]
+  /** Förattest per project (dimension 6 code); replaces every project's. Left out: as they are. */
+  project_attesters?: Array<{ project: string; attesters: string[] }>
+}
+
+
+/** The förattest per project as the database keeps it ({code: [ids]}), one entry per project, the attesters deduplicated. */
+function projectAttestersOf(input: AttestPolicyInput['project_attesters']): Record<string, string[]> | null {
+  if (!input) return null
+  const out: Record<string, string[]> = {}
+  for (const route of input) {
+    const code = route.project.trim()
+    const ids = [...new Set([...(out[code] ?? []), ...route.attesters])]
+    if (ids.length > 0) out[code] = ids
+  }
+  return out
+}
+
+function sameProjectAttesters(a: Readonly<Record<string, readonly string[]>>, b: Readonly<Record<string, readonly string[]>>): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((code) => !!b[code] && sameIdSet(a[code]!, b[code]!))
 }
 
 /**
- * Save the company's attest policy and the attesters' limits, in one
- * transaction (save_company_attest_policy). Owners and admins only: the
- * session door gates with requireAdmin and the RLS policies, a service-role
- * door passes `checkAdmin` (lib/operations/access.ts does the asking). Every
- * attester must be a member whose attest can count (isAttestRole: one who
- * keeps the books, or a viewer); a policy that is on needs at least one, and
- * two from a two-step amount. A limit is for an attester.
+ * Save the company's attest policy, the attesters' limits and the förattest,
+ * in one transaction (save_company_attest_policy). Owners and admins only:
+ * the session door gates with requireAdmin and the RLS policies, a
+ * service-role door passes `checkAdmin` (lib/operations/access.ts does the
+ * asking). Every attester and förattestant must be a member whose attest can
+ * count (isAttestRole: one who keeps the books, or a viewer); a policy that
+ * is on needs at least one attester, and two from a two-step amount. A limit
+ * is for an attester. A project named for förattest must be one of the
+ * company's projects (dimension 6).
+ *
+ * The förattest goes to the database only when it changes: a save from
+ * before migration 20261108180000 reached the database (none named, none
+ * saved) calls the function as it was, so the policy can be saved while the
+ * deploy waits for its migration.
  */
 export async function saveAttestPolicy(
   ctx: OperationContext,
@@ -778,14 +909,25 @@ export async function saveAttestPolicy(
   if (input.enabled && attesters.length === 0) {
     return { ok: false, code: 'ATTEST_POLICY_NO_ATTESTERS' }
   }
-  const members = await loadActiveAttestMembers(serviceWriter(options.writer), ctx.companyId)
-  const outsiders = attesters.filter((id) => !members.has(id))
+  const preAttesters = input.pre_attesters ? [...new Set(input.pre_attesters)] : null
+  const projectAttesters = projectAttestersOf(input.project_attesters)
+  const codes = Object.keys(projectAttesters ?? {})
+  const [members, projectValues, current] = await Promise.all([
+    loadActiveAttestMembers(serviceWriter(options.writer), ctx.companyId),
+    loadProjectValues(ctx.supabase, ctx.companyId, codes),
+    input.two_step_from_sek === undefined || preAttesters || projectAttesters ? loadAttestPolicy(ctx.supabase, ctx.companyId) : null,
+  ])
+  const named = [...attesters, ...(preAttesters ?? []), ...Object.values(projectAttesters ?? {}).flat()]
+  const outsiders = [...new Set(named.filter((id) => !members.has(id)))]
   if (outsiders.length > 0) {
     return { ok: false, code: 'ATTEST_POLICY_ATTESTER_NOT_MEMBER', details: { user_ids: outsiders } }
   }
+  const known = new Set(projectValues.map((v) => v.code))
+  const unknown = codes.filter((code) => !known.has(code))
+  if (unknown.length > 0) return { ok: false, code: 'ATTEST_PROJECT_NOT_FOUND', details: { projects: unknown } }
   const twoStep =
     input.two_step_from_sek === undefined
-      ? (await loadAttestPolicy(ctx.supabase, ctx.companyId)).two_step_from_sek
+      ? current!.two_step_from_sek
       : input.two_step_from_sek === null
         ? null
         : roundOre(input.two_step_from_sek)
@@ -812,7 +954,13 @@ export async function saveAttestPolicy(
     two_step_from_sek: twoStep,
     updated_by: ctx.userId,
   }
-  if (options.dryRun) return { ok: true, dryRun: true, preview: { ...row, ...(limits ? { limits } : {}) } }
+  const steps = {
+    ...(preAttesters ? { pre_attesters: preAttesters } : {}),
+    ...(projectAttesters ? { project_attesters: Object.entries(projectAttesters).map(([project, ids]) => ({ project, attesters: ids })) } : {}),
+  }
+  if (options.dryRun) return { ok: true, dryRun: true, preview: { ...row, ...(limits ? { limits } : {}), ...steps } }
+  const changesPre = preAttesters !== null && !sameIdSet(preAttesters, current?.pre_attesters ?? [])
+  const changesProjects = projectAttesters !== null && !sameProjectAttesters(projectAttesters, current?.project_attesters ?? {})
   const writer = options.writer ?? ctx.supabase
   const { error } = await writer.rpc('save_company_attest_policy', {
     p_company_id: row.company_id,
@@ -824,6 +972,8 @@ export async function saveAttestPolicy(
     p_two_step_from_sek: row.two_step_from_sek,
     p_limits: limits,
     p_updated_by: row.updated_by,
+    ...(changesPre ? { p_pre_attesters: preAttesters } : {}),
+    ...(changesProjects ? { p_project_attesters: projectAttesters } : {}),
   })
   // A session that is not an owner or admin meets the RLS policies.
   if (error?.code === '42501') {
@@ -831,4 +981,85 @@ export async function saveAttestPolicy(
   }
   if (error) return { ok: false, code: 'INTERNAL_ERROR', error }
   return { ok: true, data: await loadAttestPolicy(ctx.supabase, ctx.companyId) }
+}
+
+const SUBSTITUTE_ADD_FORBIDDEN = 'Du kan bara välja ersättare för dig själv. Ägare och administratörer väljer för andra.'
+const SUBSTITUTE_REMOVE_FORBIDDEN = 'Du kan bara ta bort dina egna ersättare. Ägare och administratörer tar bort andras.'
+
+export interface AttestSubstituteInput {
+  /** The attester who is away. */
+  user_id: string
+  /** Who attests in their place. */
+  substitute_user_id: string
+  /** Stockholm dates, both included. */
+  starts_on: string
+  ends_on: string
+}
+
+/**
+ * Name a substitute: while the period runs, `substitute_user_id` attests
+ * wherever `user_id` may, as them (attest-policy.ts). An owner or admin names
+ * one for anyone; anyone else only their own. Both must be members whose
+ * attest can count. The session door is held to the same by the RLS
+ * policies; a service-role door (v1) is held by `isAdmin` here.
+ */
+export async function addAttestSubstitute(
+  ctx: OperationContext,
+  input: AttestSubstituteInput,
+  options: { isAdmin: boolean; dryRun?: boolean; writer?: SupabaseClient },
+): Promise<OperationOutcome<AttestSubstituteInput & { id: string }>> {
+  if (!options.isAdmin && input.user_id !== ctx.userId) return { ok: false, code: 'FORBIDDEN', messageSv: SUBSTITUTE_ADD_FORBIDDEN }
+  if (input.ends_on < todayIsoStockholm()) {
+    return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Perioden har redan tagit slut.', details: { field: 'ends_on' } }
+  }
+  const members = await loadActiveAttestMembers(serviceWriter(options.writer), ctx.companyId)
+  const outsiders = [input.user_id, input.substitute_user_id].filter((id) => !members.has(id))
+  if (outsiders.length > 0) return { ok: false, code: 'ATTEST_SUBSTITUTE_NOT_MEMBER', details: { user_ids: outsiders } }
+  if (options.dryRun) return { ok: true, dryRun: true, preview: { company_id: ctx.companyId, ...input } }
+  const writer = options.writer ?? ctx.supabase
+  const { data, error } = await writer.rpc('add_company_attest_substitute', {
+    p_company_id: ctx.companyId,
+    p_user_id: input.user_id,
+    p_substitute_user_id: input.substitute_user_id,
+    p_starts_on: input.starts_on,
+    p_ends_on: input.ends_on,
+    p_actor: ctx.userId,
+  })
+  if (error?.code === '42501') return { ok: false, code: 'FORBIDDEN', messageSv: SUBSTITUTE_ADD_FORBIDDEN }
+  // The substitutes key on the policy row: a company that never saved attest rules has nobody to stand in for.
+  if (error?.code === '23503') return { ok: false, code: 'ATTEST_SUBSTITUTE_NO_POLICY' }
+  // The table's own checks (someone else, a period of at most a year); the doors' schema says the same first.
+  if (error?.code === '23514') {
+    return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Välj någon annan som ersättare, för en period på högst ett år.' }
+  }
+  if (error) return { ok: false, code: 'INTERNAL_ERROR', error }
+  return { ok: true, data: { id: data as string, ...input } }
+}
+
+/**
+ * Remove a substitute, ending it at once. An owner or admin removes any; the
+ * attester who is away removes their own.
+ */
+export async function removeAttestSubstitute(
+  ctx: OperationContext,
+  substituteId: string,
+  options: { isAdmin: boolean; dryRun?: boolean; writer?: SupabaseClient },
+): Promise<OperationOutcome<{ id: string; removed: true }>> {
+  const { data: existing, error: readError } = await ctx.supabase
+    .from('company_attest_substitutes')
+    .select('id, user_id')
+    .eq('company_id', ctx.companyId)
+    .eq('id', substituteId)
+    .maybeSingle()
+  if (readError) return { ok: false, code: 'INTERNAL_ERROR', error: readError }
+  const row = existing as { id: string; user_id: string } | null
+  if (!row) return { ok: false, code: 'ATTEST_SUBSTITUTE_NOT_FOUND' }
+  if (!options.isAdmin && row.user_id !== ctx.userId) return { ok: false, code: 'FORBIDDEN', messageSv: SUBSTITUTE_REMOVE_FORBIDDEN }
+  if (options.dryRun) return { ok: true, dryRun: true, preview: { id: row.id, removed: true } }
+  const writer = options.writer ?? ctx.supabase
+  const { data, error } = await writer.rpc('remove_company_attest_substitute', { p_company_id: ctx.companyId, p_id: row.id, p_actor: ctx.userId })
+  if (error?.code === '42501') return { ok: false, code: 'FORBIDDEN', messageSv: SUBSTITUTE_REMOVE_FORBIDDEN }
+  if (error) return { ok: false, code: 'INTERNAL_ERROR', error }
+  if (data !== true) return { ok: false, code: 'ATTEST_SUBSTITUTE_NOT_FOUND' }
+  return { ok: true, data: { id: row.id, removed: true } }
 }

@@ -56,6 +56,10 @@ describe('supplier-invoices.attest-policy.get', () => {
         ],
         preparer_may_attest: false,
         two_step_from_sek: 100000,
+        // No förattest and no substitutes (#192): read as empty.
+        pre_attesters: [],
+        project_attesters: [],
+        substitutes: [],
         updated_at: '2026-10-14T09:00:00Z',
       },
     })
@@ -95,6 +99,33 @@ describe('supplier-invoices.attest-policy.update', () => {
       p_updated_by: ANNA,
       p_limits: [{ user_id: ANNA, max_amount_sek: 50000 }],
     })
+  })
+
+  it('sends the förattest only when it changes, so a save works before its migration (#192)', async () => {
+    const { mock, ctx: c } = ctx({
+      company_members: [{ data: { role: 'owner' } }, { data: [{ user_id: ANNA, role: 'owner' }, { user_id: BO, role: 'member' }] }],
+      company_attest_policies: { data: POLICY },
+      profiles: { data: [] },
+    })
+    // Nothing named, nothing saved: the call is the one from before the förattest.
+    expect(await supplierInvoicesAttestPolicyUpdate.run(c, { ...input, pre_attesters: [], project_attesters: [] }, { dryRun: false })).toMatchObject({ ok: true })
+    const unchanged = mock.findCall('rpc:save_company_attest_policy', 'rpc')?.[0] as Record<string, unknown>
+    expect(unchanged).not.toHaveProperty('p_pre_attesters')
+    expect(unchanged).not.toHaveProperty('p_project_attesters')
+
+    // Naming someone sends it; a project must be one of the company's.
+    mock.setTable('company_members', [{ data: { role: 'owner' } }, { data: [{ user_id: ANNA, role: 'owner' }, { user_id: BO, role: 'member' }] }])
+    mock.setTable('dimensions', { data: { id: 'dim-6' } })
+    mock.setTable('dimension_values', { data: [{ code: 'P100', name: 'Kv. Eken', is_active: true }] })
+    expect(
+      await supplierInvoicesAttestPolicyUpdate.run(c, { ...input, pre_attesters: [BO], project_attesters: [{ project: 'P100', attesters: [BO, BO] }] }, { dryRun: false }),
+    ).toMatchObject({ ok: true })
+    expect(mock.findCalls('rpc:save_company_attest_policy', 'rpc').at(-1)?.[0]).toMatchObject({ p_pre_attesters: [BO], p_project_attesters: { P100: [BO] } })
+
+    mock.setTable('company_members', [{ data: { role: 'owner' } }, { data: [{ user_id: ANNA, role: 'owner' }, { user_id: BO, role: 'member' }] }])
+    expect(
+      await supplierInvoicesAttestPolicyUpdate.run(c, { ...input, project_attesters: [{ project: 'P999', attesters: [BO] }] }, { dryRun: false }),
+    ).toMatchObject({ ok: false, code: 'ATTEST_PROJECT_NOT_FOUND', details: { projects: ['P999'] } })
   })
 
   it('validates its input: a negative threshold, an unknown mode, a limit of zero and a bad two-step amount are refused by the schema', () => {

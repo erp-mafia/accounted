@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `465`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `467`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -33,6 +33,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "DELETE /api/v1/companies/:companyId/salary/premium-rules/:id",
   "DELETE /api/v1/companies/:companyId/supplier-invoices/:id",
+  "DELETE /api/v1/companies/:companyId/supplier-invoices/attest-substitutes/:id",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
   "DELETE /api/v1/companies/:companyId/transactions/:id",
   "DELETE /api/v1/companies/:companyId/transactions/:id/ignore",
@@ -429,6 +430,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid",
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/reject",
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit",
+  "POST /api/v1/companies/:companyId/supplier-invoices/attest-substitutes",
   "POST /api/v1/companies/:companyId/supplier-payment-batches",
   "POST /api/v1/companies/:companyId/supplier-payment-batches/:id/cancel",
   "POST /api/v1/companies/:companyId/supplier-payment-batches/preview",
@@ -490,7 +492,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "platform": 29,
   "pos": 10,
   "skatteverket": 4,
-  "supplier-invoices": 23,
+  "supplier-invoices": 25,
   "transactions": 31,
   "vat": 1,
   "webshop": 5,

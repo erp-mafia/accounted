@@ -35,8 +35,8 @@ export interface SupplierInvoiceAttestState {
   approved_at: string | null
   approved_by: AttestPerson | null
   approved: AttestPerson[]
-  /** Who may give a missing approval, with their attest limits (null = no limit). */
-  remaining: Array<AttestPerson & { limit_sek: number | null }>
+  /** Who may give a missing approval, with their attest limits (null = no limit); a substitute names whom they stand in for. */
+  remaining: Array<AttestPerson & { limit_sek: number | null; stands_in_for?: AttestPerson | null }>
   /** The SEK total the limits are judged against; null for a foreign invoice without a rate. */
   amount_sek: number | null
   /** How many different attesters the invoice needs. */
@@ -44,6 +44,12 @@ export interface SupplierInvoiceAttestState {
   approvals_needed: number
   /** One missing approval must come from someone whose limit covers amount_sek. */
   needs_covering: boolean
+  /** With förattest (#192): the step the invoice is at; null without förattest or once attested. */
+  stage?: 'pre' | 'final' | null
+  /** The förattests the invoice needs, in order. */
+  pre_attest?: Array<{ project: string | null; project_name: string | null; done: boolean; approved_by: AttestPerson | null; attesters: AttestPerson[] }>
+  /** The attester the viewer would approve for, as their substitute. */
+  acts_for?: AttestPerson | null
   latest_rejection: { user: AttestPerson; comment: string | null; decided_at: string } | null
   attestations: Array<{
     attestation_id: string
@@ -54,8 +60,12 @@ export interface SupplierInvoiceAttestState {
     decided_at: string
     /** The approval's place in its round under the policy; null otherwise. */
     step: number | null
+    /** The step it was given in; null for a rejection and older rows. */
+    stage?: 'pre' | 'final' | null
+    /** The attester a substitute decided for. */
+    on_behalf_of?: AttestPerson | null
   }>
-  viewer: { may_approve: boolean; may_reject: boolean; reason: string | null }
+  viewer: { may_approve: boolean; may_reject: boolean; reason: string | null; acts_for?: string }
 }
 
 /** The invoice's attest state; the page reads it to hand Attestera to the panel when the policy governs the invoice. */
@@ -100,11 +110,18 @@ export function SupplierInvoiceAttestPanel({
   if (!state.required && state.attestations.length === 0) return null
 
   const someone = t('someone')
-  const remainingNames = state.remaining.map((p) => nameOf(p, someone)).join(', ')
+  // A substitute is named with whom they stand in for.
+  const personLabel = (p: SupplierInvoiceAttestState['remaining'][number]) =>
+    p.stands_in_for ? t('stands_in', { name: nameOf(p, someone), for: nameOf(p.stands_in_for, someone) }) : nameOf(p, someone)
+  const remainingNames = state.remaining.map(personLabel).join(', ')
   // "Anna Ek eller Bo Lind": one of them is what is missing.
-  const eitherNames = new Intl.ListFormat(listLocale, { style: 'long', type: 'disjunction' }).format(
-    state.remaining.map((p) => nameOf(p, someone)),
-  )
+  const disjunction = new Intl.ListFormat(listLocale, { style: 'long', type: 'disjunction' })
+  const eitherNames = disjunction.format(state.remaining.map(personLabel))
+  const preGroups = state.pre_attest ?? []
+  const either = (people: AttestPerson[]) => disjunction.format(people.map((p) => nameOf(p, someone)))
+  const groupLabel = (g: (typeof preGroups)[number]) =>
+    g.project ? t('pre_group_project', { project: g.project_name ? `${g.project} ${g.project_name}` : g.project }) : t('pre_group_default')
+  const actsForName = state.acts_for ? nameOf(state.acts_for, someone) : null
   // Levels are on: two attesters from an amount, or someone left has a limit.
   const levels = state.policy.two_step_from_sek !== null || state.remaining.some((p) => p.limit_sek !== null)
   const coveringAmount = levels && state.needs_covering && state.amount_sek !== null ? formatCurrency(state.amount_sek) : null
@@ -180,7 +197,29 @@ export function SupplierInvoiceAttestPanel({
       }
     >
       <div className="space-y-3 text-[13px]">
-        {state.blocked ? <AttnLine>{t('blocked')}</AttnLine> : status ? <p data-ph-mask="">{status}</p> : null}
+        {state.stage && !state.satisfied ? (
+          <p className="text-[12.5px] text-muted-foreground">{t(state.stage === 'pre' ? 'stage_pre' : 'stage_final')}</p>
+        ) : null}
+        {preGroups.length > 0 && !state.satisfied ? (
+          <ul className="space-y-1" data-ph-mask="">
+            {preGroups.map((g, i) => (
+              <li key={g.project ?? `default-${i}`} className={g.done ? 'text-muted-foreground' : undefined}>
+                {g.done
+                  ? t('pre_group_done', { label: groupLabel(g), name: nameOf(g.approved_by, someone) })
+                  : g.attesters.length === 0
+                    ? t('pre_group_blocked', { label: groupLabel(g) })
+                    : t('pre_group_waiting', { label: groupLabel(g), names: either(g.attesters) })}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {state.blocked ? <AttnLine>{t('blocked')}</AttnLine> : status && state.stage !== 'pre' ? <p data-ph-mask="">{status}</p> : null}
+        {!state.satisfied && actsForName && state.viewer.may_approve ? (
+          <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">{t('acts_for', { name: actsForName })}</p>
+        ) : null}
+        {!state.satisfied && state.viewer.reason === 'other_step' && (
+          <p className="text-[12.5px] text-muted-foreground">{t('reason_other_step')}</p>
+        )}
         {!state.satisfied && state.viewer.reason === 'registrant' && (
           <p className="text-[12.5px] text-muted-foreground">{t('reason_registrant')}</p>
         )}
@@ -206,12 +245,15 @@ export function SupplierInvoiceAttestPanel({
             {state.attestations.map((a) => (
               <li key={a.attestation_id} className="flex items-baseline justify-between gap-4 border-b border-border py-2">
                 <span className="min-w-0 truncate">
-                  {t(a.decision === 'approved' ? 'decision_approved' : 'decision_rejected', { name: nameOf(a.user, someone) })}
+                  {t(a.decision === 'approved' ? 'decision_approved' : 'decision_rejected', {
+                    name: a.on_behalf_of ? t('trail_on_behalf', { name: nameOf(a.user, someone), for: nameOf(a.on_behalf_of, someone) }) : nameOf(a.user, someone),
+                  })}
                   {a.comment ? <span className="text-muted-foreground">{` · ${a.comment}`}</span> : null}
                 </span>
                 <span className="shrink-0 text-[12.5px] tabular-nums text-muted-foreground">
                   {formatDate(a.decided_at)} · {sourceLabel(a.source)}
-                  {a.decision === 'approved' && a.step !== null && a.step !== undefined && state.steps === 2
+                  {a.decision === 'approved' && a.stage === 'pre' ? ` · ${t('trail_stage_pre')}` : null}
+                  {a.decision === 'approved' && a.stage !== 'pre' && a.step !== null && a.step !== undefined && state.steps === 2 && preGroups.length === 0
                     ? ` · ${t('trail_step', { step: a.step, steps: state.steps })}`
                     : null}
                 </span>

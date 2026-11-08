@@ -96,6 +96,9 @@ export function AttestLinkPage({
         <span className="text-muted-foreground">{t('due_date')}</span>
         <span className="tabular-nums">{formatDate(data.invoice.due_date)}</span>
       </div>
+      {data.stage && data.state === 'open' && (
+        <p className="pt-2 text-[12.5px] text-muted-foreground">{t(data.stage === 'pre' ? 'stage_pre' : 'stage_final')}</p>
+      )}
       {data.remaining_names.length > 0 && data.state === 'open' && (
         <p className="pt-2 text-[12.5px] text-muted-foreground">
           {data.mode === 'all' ? t('waiting_all', { names: data.remaining_names.join(', ') }) : t('waiting_any', { names: data.remaining_names.join(', ') })}
@@ -145,7 +148,9 @@ export function AttestLinkPage({
               ? 'state_registrant'
               : overLimit
                 ? 'state_limit'
-                : 'state_not_allowed'
+                : data.reason === 'other_step'
+                  ? 'state_other_step'
+                  : 'state_not_allowed'
     decisionBlock = (
       <section className="space-y-2 rounded-lg border border-border p-6">
         <p className="text-[13px] text-muted-foreground">{t(key)}</p>
@@ -155,6 +160,11 @@ export function AttestLinkPage({
     decisionBlock = (
       <section className="space-y-4 rounded-lg border border-border p-6">
         {!data.may_approve && overLimit && <p className="text-[13px] text-muted-foreground">{t('limit_reject_only')}</p>}
+        {data.may_approve && data.acts_for_name && (
+          <p className="text-[13px] text-muted-foreground" data-ph-mask="">
+            {t('acts_for', { name: data.acts_for_name })}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={t('decision_label')}>
           {data.may_approve && (
             <Button type="button" size="sm" variant={choice === 'approve' ? 'default' : 'outline'} role="radio" aria-checked={choice === 'approve'} onClick={() => setChoice('approve')}>
