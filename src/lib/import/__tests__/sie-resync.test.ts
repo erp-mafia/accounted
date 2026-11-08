@@ -26,10 +26,10 @@ const baseline={id:'baseline',file_storage_path:'archive',job_state:'completed',
 function entry(ordinal:number,number=ordinal+1):SIEPreparedEntry {
   return {sourceId:`A${number}`,sourceOrdinal:ordinal,sieImportId:'preview',series:'A',date:'2026-02-01',description:'Sale',sourceSeries:'A',sourceNumber:number,sourceType:'import',lines:[]}
 }
-function setup(classified:unknown[],existing:unknown[]=[{id:'old',source_voucher_series:'A',source_voucher_number:1}],latest:unknown=baseline){
+function setup(classified:unknown[],existing:unknown[]=[{id:'old',source_voucher_series:'A',source_voucher_number:1}],latest:unknown=baseline,accounts:unknown[]=[]){
   const db=createQueuedMockSupabase()
   db.enqueueMany([{data:[{id:'period'}]},{data:baseline},{data:latest}])
-  mocks.rows.mockResolvedValueOnce(existing).mockResolvedValueOnce([])
+  mocks.rows.mockResolvedValueOnce(existing).mockResolvedValueOnce(accounts)
   const rpc=vi.fn().mockResolvedValue({data:classified,error:null})
   return {...db,supabase:{...db.supabase,rpc} as never,rpc}
 }
@@ -71,6 +71,37 @@ describe('read-only incremental SIE plan',()=>{
     const db=setup([{source_ordinal:0,outcome:'unchanged',entry_id:'old'}],undefined,{...baseline,id:'latest'})
     const plan=await planSIEResync(db.supabase,'company','user',parseSIEFile(current),[])
     expect(plan).toMatchObject({added:0,unchanged:1,metadataChanged:false,reviewCount:0})
+  })
+  it('does not repeat a source account rename that another year already applied to the company chart',async()=>{
+    const current=source.replace('#KONTO 3001 "Sales"','#KONTO 3001 "Current sales name"')
+    const db=setup([{source_ordinal:0,outcome:'unchanged',entry_id:'old'}],undefined,baseline,
+      [{id:'account',account_number:'3001',account_name:'Current sales name'}])
+    const mappings=[{sourceAccount:'3001',sourceName:'Current sales name',targetAccount:'3001',targetName:'Current sales name',confidence:1,matchType:'exact' as const,isOverride:false}]
+    const plan=await planSIEResync(db.supabase,'company','user',parseSIEFile(current),mappings)
+    expect(plan).toMatchObject({added:0,unchanged:1,metadataChanged:false,reviewCount:0})
+    // Both archives retain their source names; comparison is read-only.
+    expect(mocks.source).toHaveBeenCalledTimes(1)
+  })
+  it('continues to report a source rename that the company chart does not have',async()=>{
+    const db=setup([{source_ordinal:0,outcome:'unchanged',entry_id:'old'}],undefined,baseline,
+      [{id:'account',account_number:'3001',account_name:'Sales'}])
+    const mappings=[{sourceAccount:'3001',sourceName:'New name',targetAccount:'3001',targetName:'New name',confidence:1,matchType:'exact' as const,isOverride:false}]
+    const plan=await planSIEResync(db.supabase,'company','user',parseSIEFile(source.replace('"Sales"','"New name"')),mappings)
+    expect(plan).toMatchObject({added:0,metadataChanged:true})
+  })
+  it('does not hide SRU metadata changes when the source account name is already current',async()=>{
+    const db=setup([{source_ordinal:0,outcome:'unchanged',entry_id:'old'}],undefined,baseline,
+      [{id:'account',account_number:'3001',account_name:'Sales'}])
+    const mappings=[{sourceAccount:'3001',sourceName:'Sales',targetAccount:'3001',targetName:'Sales',confidence:1,matchType:'exact' as const,isOverride:false}]
+    const parsed=parseSIEFile(source);parsed.accounts.find(account=>account.number==='3001')!.sruCode='7310'
+    expect(await planSIEResync(db.supabase,'company','user',parsed,mappings)).toMatchObject({metadataChanged:true})
+  })
+  it('does not treat a remapped target name as approval of the source account name',async()=>{
+    const db=setup([{source_ordinal:0,outcome:'unchanged',entry_id:'old'}],undefined,baseline,
+      [{id:'account',account_number:'3001',account_name:'New name'}])
+    const mappings=[{sourceAccount:'3001',sourceName:'New name',targetAccount:'3002',targetName:'Other account',confidence:1,matchType:'manual' as const,isOverride:true}]
+    expect(await planSIEResync(db.supabase,'company','user',parseSIEFile(source.replace('"Sales"','"New name"')),mappings))
+      .toMatchObject({metadataChanged:true})
   })
   it('does not repeat an unchanged source record that the original import already skipped',async()=>{
     mocks.prepare.mockResolvedValue({preparedEntries:[],skippedDetails:[{voucherId:'A1',reason:'empty'}]})

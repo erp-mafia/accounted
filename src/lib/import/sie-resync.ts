@@ -26,8 +26,11 @@ export interface SIEResyncPlan extends SIEResyncSummary {
 const PREVIEW_ID = '00000000-0000-4000-8000-000000000001'
 const voucherHash = (value: unknown) => hashSIEPayload(JSON.parse(JSON.stringify(value)))
 const reference = (series: string | null, number: number | null) => JSON.stringify([series, number])
-const metadataHash = (parsed: ParsedSIEFile) => hashSIEPayload({
-  accounts: parsed.accounts.slice().sort((a, b) => a.number.localeCompare(b.number)),
+const metadataHash = (parsed: ParsedSIEFile, currentAccountNames: ReadonlySet<string>) => hashSIEPayload({
+  // An account is company-wide, while these archives belong to individual
+  // years. A later import may already have applied the incoming name.
+  accounts: parsed.accounts.map(account => currentAccountNames.has(account.number)
+    ? {...account,name:''} : account).sort((a, b) => a.number.localeCompare(b.number)),
   dimensions: parsed.dimensions, values: parsed.dimensionValues,
   opening: getEffectiveOpeningBalances(parsed).balances,
   objects: parsed.objectOpeningBalances ?? [],
@@ -54,9 +57,14 @@ export async function planSIEResync(supabase: SupabaseClient, companyId: string,
   if (baselineError) throw new Error(baselineError.message)
   // An existing empty period is still a first import.
   if (!baseline && !existing.length) return null
-  const accounts = await fetchAllRows<{ id: string; account_number: string }>(({ from, to }) => supabase.from('chart_of_accounts')
-    .select('id,account_number').eq('company_id', companyId).order('account_number').range(from, to))
-  const prepared = await importVouchers(supabase, companyId, userId, periodId, parsed, mappingsToMap(mappings), voucherSeries,
+  const accounts = await fetchAllRows<{ id: string; account_number: string; account_name: string }>(({ from, to }) => supabase.from('chart_of_accounts')
+    .select('id,account_number,account_name').eq('company_id', companyId).order('account_number').range(from, to))
+  const accountMap = mappingsToMap(mappings)
+  const chartNames = new Map(accounts.map(row => [row.account_number,row.account_name]))
+  const currentAccountNames = new Set(parsed.accounts.filter(account =>
+    accountMap.get(account.number) === account.number && chartNames.get(account.number) === account.name,
+  ).map(account => account.number))
+  const prepared = await importVouchers(supabase, companyId, userId, periodId, parsed, accountMap, voucherSeries,
     PREVIEW_ID, { only: true, startOrdinal: 0, hasCurrentYearIb: getEffectiveOpeningBalances(parsed).balances.length > 0,
       accountIds: new Map(accounts.map(row => [row.account_number, row.id])) })
   const entries = prepared.preparedEntries ?? []
@@ -119,7 +127,7 @@ export async function planSIEResync(supabase: SupabaseClient, companyId: string,
       }
     }
     const lastSource = latest?.id && latest.id!==baseline.id ? parseSIEFile(await readSIEJobSource(supabase,latest as SIEJob)) : original
-    metadataChanged = metadataHash(lastSource) !== metadataHash(parsed)
+    metadataChanged = metadataHash(lastSource,currentAccountNames) !== metadataHash(parsed,currentAccountNames)
     const priorClosingReview = (latest?.job_result?.resync?.reviews as SIEResyncReview[] | undefined)?.some(review => review.kind==='closing_balance')
     if ((hashSIEPayload(lastSource.closingBalances) !== hashSIEPayload(parsed.closingBalances) || priorClosingReview) && newOrdinals.length === 0 && reviews.length === 0) {
       reviews.push({sourceId:'UB',kind:'closing_balance'})
