@@ -230,7 +230,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={name}>
-          <StrataField seed={seedOf(agentId)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
+          <StrataField seed={seedOf(agentId)} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
           <div className={styles.stageTile}>
             <FlowSymbol hue={hue} size={96} />
             <b data-ph-mask={own ? '' : undefined}>{name}</b>

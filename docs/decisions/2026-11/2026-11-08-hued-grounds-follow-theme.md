@@ -1,0 +1,1 @@
+[2026-11-08] Hued grounds (Upptäck banner, item stages) take their lightness from the theme (--hue-ground, dim in dark mode) instead of pinning the text on them to dark ink: the buttons, notes and logos on them are theme-coloured, so only a theme-aware ground keeps them all readable (crm#1730).

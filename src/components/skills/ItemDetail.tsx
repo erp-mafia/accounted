@@ -254,7 +254,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={item.name}>
-          <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
+          <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
           <div className={styles.stageTile}>
             <ItemSymbol kind={item.kind} hue={hue} seedKey={item.key} size={104} open />
             <b data-ph-mask={item.community ? '' : undefined}>{item.name}</b>

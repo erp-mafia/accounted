@@ -402,9 +402,9 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
     return starting
   }
   return (
-    <section className={styles.featured} style={{ background: `hsl(${hue} 32% 90%)` }}>
-      {/* A faint strata ground, the stage's in the item's colour, kept quiet behind the text. */}
-      <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} 32% 90%)`} bar={`hsl(${hue} 35% 45%)`} strength={1.2} />
+    <section className={styles.featured} style={{ background: `hsl(${hue} var(--hue-ground))` }}>
+      {/* A faint strata ground, the stage's in the item's colour, kept quiet behind the text. Its lightness follows the theme (--hue-ground). */}
+      <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} var(--hue-ground))`} bar={`hsl(${hue} 35% 45%)`} strength={1.2} />
       {/* The whole banner opens the item; the start button and connection logos sit above this link. */}
       <Link href={item.href} className={styles.featuredLink} aria-label={item.title} />
       <div className={styles.featuredText}>
