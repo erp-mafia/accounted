@@ -835,7 +835,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain",
+              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain scroll-pt-8",
               isClosing
                 ? "animate-out slide-out-to-bottom duration-150"
                 : "animate-in slide-in-from-bottom duration-300"
@@ -845,7 +845,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             aria-label={tNav('navigation_menu')}
           >
             {/* Drag handle */}
-            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
+            <div className="pointer-events-none flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
               <div className="w-8 h-1 rounded-full bg-muted-foreground/25" />
             </div>
 
