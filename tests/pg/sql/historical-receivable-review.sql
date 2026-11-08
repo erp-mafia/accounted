@@ -67,6 +67,20 @@ BEGIN
   SET LOCAL ROLE authenticated;
   ASSERT NOT EXISTS(SELECT 1 FROM historical_receivable_references),'foreign company history leaked';
   RESET ROLE;
+  -- The sandbox teardown must release both references before deleting their
+  -- payment vouchers, migration job, company and originating user.
+  PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  PERFORM set_config('request.jwt.claim.role', '', true);
+  INSERT INTO company_settings(company_id,user_id,is_sandbox)
+    VALUES(company,u,true)
+    ON CONFLICT(company_id) DO UPDATE SET is_sandbox=true;
+  PERFORM cleanup_sandbox_user(u);
+  ASSERT NOT EXISTS(SELECT 1 FROM historical_receivable_references WHERE company_id=company),
+    'sandbox history blocked teardown';
+  ASSERT NOT EXISTS(SELECT 1 FROM companies WHERE id=company),'sandbox company remains';
+  ASSERT NOT EXISTS(SELECT 1 FROM auth.users WHERE id=u),'sandbox user remains';
+  ASSERT EXISTS(SELECT 1 FROM auth.users WHERE id=outsider),'unrelated user was deleted';
 END $$;
 SELECT 'historical receivable review assertions passed';
 ROLLBACK;

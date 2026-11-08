@@ -1235,3 +1235,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-08] Reuse retained Bokio upload mappings for discovery and retries: trust an upload ID only when its retained document belongs to the currently resolved dated voucher. Offer remaining files rather than the full provider list.
 
 [2026-11-08] Expose the existing no-document migration choice in the API wizard and send it per SIE job. Scope it to newly created vouchers so a no-change resync cannot reapply exemptions the user later removed.
+[2026-11-08] Remove historical receivable references before sandbox voucher teardown: their NO ACTION foreign keys otherwise block cleanup. Patch the current routine with an anchored new migration and retain its existing sandbox authorization checks.
