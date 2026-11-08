@@ -38,6 +38,26 @@ describe('canSkipMappingStep', () => {
     expect(canSkipMappingStep([row('9999', '2999', { matchType: 'class' }), row('4599', '')], { unmapped: 1, allImported: true })).toBe(true)
   })
 
+  it('skips repeated VAT review when every source comparison has zero new vouchers', () => {
+    const pending=[row('3071','3071',{requiresVatTreatmentReview:true,vatTreatmentReviewed:false})]
+    // allImported is false for changed metadata or an existing-voucher review.
+    expect(canSkipMappingStep(pending,{unmapped:0,allImported:false,
+      fileStatuses:[{delta:{added:0}},{delta:{added:0}}]})).toBe(true)
+  })
+
+  it('retains the missing-target gate for a metadata-only comparison', () => {
+    expect(canSkipMappingStep([row('4599','')],{unmapped:1,fileStatuses:[{delta:{added:0}}]})).toBe(false)
+  })
+
+  it('retains mapping approval when a compared year has new vouchers', () => {
+    const pending=[row('3071','3071',{requiresVatTreatmentReview:true})]
+    expect(canSkipMappingStep(pending,{unmapped:0,fileStatuses:[{delta:{added:0}},{delta:{added:1}}]})).toBe(false)
+  })
+
+  it.each([{fileStatuses:[]},{fileStatuses:[{delta:null}]},{fileStatuses:[{delta:{added:0}},{}]}])('does not treat an absent comparison as no new data: %j',({fileStatuses})=>{
+    expect(canSkipMappingStep([row('3071','3071',{requiresVatTreatmentReview:true})],{unmapped:0,fileStatuses})).toBe(false)
+  })
+
   it('shows the page for the /sie-data decision on a fresh company with class 9 amounts', () => {
     // A fresh company: no stored mappings and no 9xxx row in the chart. Before
     // #3312 the 9xxx targets were blank, so the page was shown for them.

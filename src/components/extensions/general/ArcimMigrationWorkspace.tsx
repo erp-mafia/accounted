@@ -3481,9 +3481,11 @@ export default function ArcimMigrationWorkspace({
       // If all SIE files are already imported, disable SIE import by default
       setMigrationOptions(prev => ({ ...prev, importSIEData: !data.allImported }))
 
-      // Auto-skip only when the page has nothing to ask: no blank target, no
-      // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
-      if (canSkipMappingStep(enrichedMappings, { unmapped: data.mappingStats.unmapped, allImported: data.allImported })) {
+      // Only new vouchers need mapping approval. Metadata differences and
+      // reviews of existing vouchers remain visible in the options step.
+      if (canSkipMappingStep(enrichedMappings, {
+        unmapped:data.mappingStats.unmapped,allImported:data.allImported,fileStatuses:data.fileStatuses,
+      })) {
         setStep('options')
       }
     } catch (err) {
