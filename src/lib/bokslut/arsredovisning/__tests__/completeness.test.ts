@@ -26,7 +26,7 @@ const eligibility: AnnualReportEligibilityResult = {
 function report(): ArsredovisningData {
   return {
     accounting_framework: 'k2',
-    company: { name: 'Test AB', org_number: '556012-5790', registered_office: 'Stockholm' },
+    company: { name: 'Test AB', org_number: '556012-5790', registered_office: 'Stockholm', entity_type: 'aktiebolag' },
     fiscal_period: {
       id: 'period-1',
       name: '2025',
@@ -212,6 +212,28 @@ describe('validateAnnualReportCompleteness', () => {
       const result = validateAnnualReportCompleteness(k3Value())
       expect(result.issues.map((issue) => issue.code)).not.toContain('AR-K3-DRAFT-ONLY')
       expect(result.ok).toBe(true)
+    })
+
+    it.each(['bostadsrattsforening', 'ekonomisk_forening', 'handelsbolag'])(
+      'keeps it for %s, whose K3 document is not built, flag or not',
+      (entityType) => {
+        vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
+        const value = k3Value()
+        value.report.company = { ...value.report.company, entity_type: entityType }
+        const result = validateAnnualReportCompleteness(value)
+        const issue = result.issues.find((item) => item.code === 'AR-K3-DRAFT-ONLY')
+        expect(issue?.severity).toBe('error')
+        expect(issue?.message).toContain('byggt för aktiebolag')
+        expect(result.ok).toBe(false)
+      },
+    )
+
+    it('names kapitel 38 for a bostadsrättsförening', () => {
+      vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
+      const value = k3Value()
+      value.report.company = { ...value.report.company, entity_type: 'bostadsrattsforening' }
+      const issue = validateAnnualReportCompleteness(value).issues.find((item) => item.code === 'AR-K3-DRAFT-ONLY')
+      expect(issue?.message).toContain('kapitel 38')
     })
 
     it('keeps it while the flag is off', () => {

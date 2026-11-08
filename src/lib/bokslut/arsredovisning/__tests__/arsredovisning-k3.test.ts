@@ -514,6 +514,54 @@ describe('buildArsredovisningData: K3', () => {
     expect(principles.body).not.toContain('särredovisas inte')
   })
 
+  it('discloses an uppskjuten skattefordran on 1370 that the K3 deferred tax posting booked', async () => {
+    // commit_deferred_tax books 8940 against 2240 and 1370 (a deductible
+    // difference or a recognised loss): the fordran is a post of the K3
+    // balance sheet, so the note and the principles must show it too.
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        {
+          account_number: '1370',
+          account_name: 'Uppskjuten skattefordran',
+          account_class: 1,
+          opening_debit: 10_000,
+          opening_credit: 0,
+          period_debit: 30_900,
+          period_credit: 0,
+          closing_debit: 40_900,
+          closing_credit: 0,
+        },
+        {
+          account_number: '8940',
+          account_name: 'Uppskjuten skatt',
+          account_class: 8,
+          opening_debit: 0,
+          opening_credit: 0,
+          period_debit: 0,
+          period_credit: 30_900,
+          closing_debit: 0,
+          closing_credit: 30_900,
+        },
+      ],
+      totalDebit: 30_900,
+      totalCredit: 30_900,
+      isBalanced: true,
+    })
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const uppskjuten = data.noter.find((n) => n.title === 'Uppskjutna skatter')
+    expect(uppskjuten).toBeDefined()
+    expect(uppskjuten!.body).toMatch(/Ingående saldo \(1370\): 10\s000 kr/)
+    expect(uppskjuten!.body).toMatch(/Årets förändring: 30\s900 kr/)
+    expect(uppskjuten!.body).toMatch(/Utgående saldo \(1370\): 40\s900 kr/)
+    expect(uppskjuten!.body).toMatch(/\(8940\): -30\s900 kr/)
+    expect(uppskjuten!.body).not.toContain('2240')
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    expect(principles.body).toContain('Uppskjuten skattefordran redovisas på konto 1370.')
+    expect(principles.body).not.toContain('särredovisas inte')
+  })
+
   it('denies the split in the principles note when no 2240/8940 activity exists', async () => {
     // What the engine produces today: no deferred tax is booked, so there is
     // no movement note and the policy paragraph states the gross treatment.

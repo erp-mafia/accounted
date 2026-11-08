@@ -13225,6 +13225,7 @@
     "cashflow_allowed": "Enligt siffrorna i Accounted och svaret om reglerad marknad är bolaget inte ett större företag, så kassaflödesanalysen får utelämnas.",
     "cashflow_needs_confirmation": "Accounted kan inte avgöra storleken: ett jämförelseår saknas eller frågan om reglerad marknad är obesvarad. För att utelämna kassaflödesanalysen behöver du bekräfta att bolaget inte är ett större företag.",
     "cashflow_forbidden": "Bolaget är ett större företag enligt uppgifterna i Accounted, så kassaflödesanalysen måste ingå.",
+    "cashflow_required_by_form": "En bostadsrättsförening ska alltid ha en kassaflödesanalys i årsredovisningen (ÅRL 2 kap. 1 §), så den måste ingå.",
     "cashflow_omit": "Utelämna kassaflödesanalys",
     "cashflow_confirm": "Jag bekräftar att bolaget inte är ett större företag enligt ÅRL 1 kap. 3 §.",
     "cashflow_omitted_notice": "Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen är utelämnad enligt ert val.",

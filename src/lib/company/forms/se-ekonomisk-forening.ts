@@ -47,6 +47,8 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     arsredovisning: true,
     frameworks: ['K2'],
     ixbrl: false,
+    // The K3 document's equity specification follows the aktiebolag's.
+    k3Document: false,
     auditorAlwaysRequired: true,
     forenklatArsbokslut: null,
     revisorspateckningLagrum: '8 kap. 32 § lagen om ekonomiska föreningar',

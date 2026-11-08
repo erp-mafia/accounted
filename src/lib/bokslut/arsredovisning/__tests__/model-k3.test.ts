@@ -48,9 +48,10 @@ const facts: Omit<DisclosureFacts, 'publicCompany'> = {
 
 const previousYear = { fiscal_period_id: 'fp-2025', framework: 'k3' as const, source: 'election' as const, reliable: true }
 
-function report(): Report {
+function report(entityType = 'aktiebolag'): Report {
   return {
     accounting_framework: 'k3',
+    company: { entity_type: entityType },
     forvaltningsberattelse: { description: 'Konsultverksamhet.' },
     noter: [
       { number: 1, title: 'Redovisnings- och värderingsprinciper', body: 'Årsredovisningen är upprättad enligt K3.', key: 'redovisningsprinciper' },
@@ -141,6 +142,23 @@ describe('applyCashFlowOmission for K3', () => {
     applyCashFlowOmission(value, eligibility('smaller'), metrics, profile)
     expect(value.kassaflodesanalys).toBeUndefined()
     expect(value.kassaflodesanalys_omission).toMatchObject({ omitted: true, withheld: true, requested: false })
+  })
+
+  it('never withholds it from a form that must always have one (a bostadsrättsförening, ÅRL 2 kap. 1 §)', () => {
+    const value = report('bostadsrattsforening')
+    applyCashFlowOmission(value, eligibility('smaller'), metrics, profile)
+    expect(value.kassaflodesanalys).toBeDefined()
+    expect(value.kassaflodesanalys_omission).toMatchObject({ rule: 'forbidden', omitted: false, required_by_form: true })
+    expect(value.kassaflodesanalys_omission?.withheld).toBeUndefined()
+  })
+
+  it('does not honour a request to leave it out of a bostadsrättsförening document', () => {
+    const value = report('bostadsrattsforening')
+    value.disclosures.omit_kassaflodesanalys = true
+    value.disclosures.kassaflodesanalys_omission_confirmed = true
+    applyCashFlowOmission(value, eligibility('smaller'), metrics, profile)
+    expect(value.kassaflodesanalys).toBeDefined()
+    expect(value.kassaflodesanalys_omission).toMatchObject({ rule: 'forbidden', requested: true, omitted: false })
   })
 
   it('keeps it for a större företag', () => {

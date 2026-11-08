@@ -44,6 +44,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     arsredovisning: false,
     frameworks: ['K1'],
     ixbrl: false,
+    k3Document: false,
     auditorAlwaysRequired: false,
     forenklatArsbokslut: 'BFNAR 2010:1',
     revisorspateckningLagrum: null,

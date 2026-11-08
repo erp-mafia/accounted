@@ -39,6 +39,9 @@ export const SE_BOSTADSRATTSFORENING: LegalFormProfile = {
     booksCurrentTax: false,
     corporateTaxDispositions: false,
     frameworks: ['K3'],
+    // K3 kapitel 38 (the key ratios, the disclosures, a kassaflödesanalys
+    // every year) is not in the K3 document yet.
+    k3Document: false,
     cashFlowStatement: 'always',
     housingKeyRatios: true,
   },

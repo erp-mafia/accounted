@@ -35,7 +35,7 @@
     {
       "number": 2,
       "title": "Uppskjutna skatter",
-      "body": "Posten avser uppskjuten skatteskuld redovisad på konto 2240.\n\nIngående saldo (2240): 50 000 kr\nÅrets förändring (8940): 20 600 kr\nUtgående saldo (2240): 70 600 kr"
+      "body": "Posten avser uppskjuten skatteskuld redovisad på konto 2240.\n\nUppskjuten skatteskuld\nIngående saldo (2240): 50 000 kr\nÅrets förändring: 20 600 kr\nUtgående saldo (2240): 70 600 kr\n\nÅrets uppskjutna skatt i resultaträkningen (8940): 20 600 kr"
     },
     {
       "number": 3,
