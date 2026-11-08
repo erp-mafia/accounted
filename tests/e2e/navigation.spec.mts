@@ -163,6 +163,25 @@ test('menu disclosure opens nested reports without navigating', async ({ page },
   }
 })
 
+test('statutory report navigation keeps its dedicated section', async ({ page }, info) => {
+  await page.goto('/reports/vat-declaration')
+  const mobile = info.project.name === 'mobile'
+  if (mobile) await page.getByRole('button', { name: 'Öppna meny', exact: true }).click()
+  const navigation = mobile
+    ? page.getByRole('dialog', { name: 'Navigeringsmeny' })
+    : page.getByRole('navigation', { name: 'Huvudnavigation' })
+  const toggle = navigation.getByRole('button', { name: 'Expandera Rapporter', exact: true })
+  await toggle.waitFor({ state: 'visible' })
+  const panelId = await toggle.getAttribute('aria-controls')
+  await toggle.click()
+  const reports = navigation.locator(`[id="${panelId}"]`)
+  await expect(reports.locator('a[href="/reports/vat-declaration"]')).toHaveCount(0)
+  await expect(reports.locator('a[href="/reports/ink2-declaration"]')).toHaveCount(0)
+  await expect(reports.locator('a[href="/reports/ne-declaration"]')).toHaveCount(0)
+  await expect(reports.locator('a[href="/reports/huvudbok"]')).toHaveCount(1)
+  if (!mobile) await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1)
+})
+
 test.describe('password login', () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 

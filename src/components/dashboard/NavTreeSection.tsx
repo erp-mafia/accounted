@@ -4,6 +4,7 @@ import { useId, useState, type ReactNode } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { ChevronRight } from 'lucide-react'
 import { NavLink } from './NavLink'
+import { Button } from '@/components/ui/button'
 import { activeSubHref, isNavSectionExpanded, type NavExpansion, type NavV2Item } from './nav-v2'
 import { cn } from '@/lib/utils'
 
@@ -81,16 +82,18 @@ export function NavTreeSection({
   return <div>
     <div className="flex min-w-0 items-center gap-0.5">
       {row(item, active)}
-      {hasChildren && <button
+      {hasChildren && <Button
         type="button"
-        className={cn('flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring', mobile && 'min-h-[44px] min-w-[44px]')}
+        variant="ghost"
+        size="icon"
+        className="shrink-0 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
         aria-expanded={open}
         aria-controls={panelId}
         aria-label={toggleLabel(name, open)}
         onClick={() => toggle(item.href, active)}
       >
         <ChevronRight className={cn('h-[15px] w-[15px] transition-transform duration-150', open && 'rotate-90')} aria-hidden />
-      </button>}
+      </Button>}
     </div>
     {hasChildren && <div
       id={panelId}
@@ -108,9 +111,11 @@ export function NavTreeSection({
             const groupName = label(group.labelKey, group.labelNamespace)
             const groupPanelId = `${id}-${group.id}`
             return <div key={group.id}>
-              <button
+              <Button
                 type="button"
-                className={cn('flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring', mobile && 'min-h-[44px]')}
+                variant="ghost"
+                size={mobile ? 'lg' : 'default'}
+                className="w-full justify-start gap-2 px-3 text-left font-normal text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                 aria-expanded={groupOpen}
                 aria-controls={groupPanelId}
                 aria-label={toggleLabel(groupName, groupOpen)}
@@ -118,7 +123,7 @@ export function NavTreeSection({
               >
                 <span className="min-w-0 flex-1 truncate">{groupName}</span>
                 <ChevronRight className={cn('h-[15px] w-[15px] shrink-0 transition-transform duration-150', groupOpen && 'rotate-90')} aria-hidden />
-              </button>
+              </Button>
               <div id={groupPanelId} hidden={!groupOpen} inert={!groupOpen}>
                 <div className="ml-3 space-y-px border-l border-border pl-1.5">
                   {group.items.map(child => row(child, child.href === selected, true))}

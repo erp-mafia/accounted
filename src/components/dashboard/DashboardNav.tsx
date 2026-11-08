@@ -640,8 +640,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const v2Top: NavV2Item[] = cockpitMode
     ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : gateTree(NAV_V2_TOP)
+  const dedicatedNavHrefs = new Set(NAV_V2_COMPANY.flatMap(item => [
+    item.href, ...(item.sub ?? []).map(child => child.href),
+  ]))
   const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY.map(item => item.href === '/reports'
-    ? { ...item, groups: reportNavigationGroups(entityType, hasEmployees, dimensionsEnabled) }
+    ? {
+        ...item,
+        groups: reportNavigationGroups(entityType, hasEmployees, dimensionsEnabled)
+          .map(group => ({ ...group, items: group.items.filter(report => !dedicatedNavHrefs.has(report.href)) }))
+          .filter(group => group.items.length > 0),
+      }
     : item))
   const reportsNav = v2Company.find(item => item.href === '/reports')
   const navTreeLabel = (key: string, namespace?: 'reports') => namespace === 'reports' ? tReports(key) : tNav(key as NavLabelKey)

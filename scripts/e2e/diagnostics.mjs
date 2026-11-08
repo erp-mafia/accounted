@@ -12,7 +12,11 @@ if (existsSync(runtimeDir)) {
       const value = line.slice(separator + 1)
       if (separator < 0 || !/PASSWORD|SECRET|KEY|DB_URI|DATABASE_URL/.test(key) || !value) continue
       secrets.push(value)
-      if (value.startsWith('postgres://')) secrets.push(decodeURIComponent(new URL(value).password))
+      if (value.startsWith('postgres://')) {
+        try {
+          secrets.push(decodeURIComponent(new URL(value).password))
+        } catch { /* The raw value remains redacted when parsing fails. */ }
+      }
     }
   }
 }
