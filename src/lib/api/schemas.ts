@@ -78,7 +78,7 @@ export const SIEJobOptionsSchema = z.object({
   openingBalanceSeries: z.string().trim().min(1).max(16).optional(),
   updateAccountNames: z.boolean().default(true),
   markImportedNoDocRequired: z.boolean().default(false),
-  onExistingPeriod: z.enum(['block','replace']).default('block'),
+  onExistingPeriod: z.enum(['block','replace','incremental']).default('block'),
   supersedesImportId: z.string().uuid().optional(),
 })
 export const SIEJobMappingsSchema = z.array(z.object({
@@ -1769,11 +1769,8 @@ export const CreateSupplierInvoiceSchema = z.object({
   })
 })
 
-// Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the
-// partial unique index idx_supplier_invoices_company_supplier_number on
-// (company_id, supplier_id, supplier_invoice_number), which excludes
-// credited/reversed invoices, so the advisory never warns on the re-issue
-// pattern the index was widened to allow.
+// Advisory repeated-reference lookup. Reused supplier numbers are allowed;
+// a hit does not establish that two documents are the same invoice.
 export const SupplierInvoiceExistsQuerySchema = z.object({
   supplier_id: uuid,
   number: z.string().min(1, 'number is required'),

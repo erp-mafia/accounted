@@ -1079,6 +1079,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     denormalize: { prefix: 'invoice_', columns: ['currency', 'exchange_rate'] },
   },
   { name: 'migration_source_records', file: 'migration_source_records.json' },
+  { name: 'historical_receivable_references', file: 'historical_receivable_references.json', orderBy: 'created_at' },
   { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
   { name: 'invoice_reminders', file: 'invoice_reminders.json' },
   // Delivery metadata proves which recipient received the archived PDF and

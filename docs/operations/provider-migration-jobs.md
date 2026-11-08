@@ -125,3 +125,31 @@ not deployed by this worktree. Browser testing with a real provider account is
 still the joint local verification step. Production rollout requires merging and
 deploying the application and explicitly approving the production migrations.
 The affected production company’s repair is separate and has not been executed.
+
+## Missing supplier invoice numbers
+
+Supplier import uses the provider invoice number, then the OCR reference, then the literal string `-`. Existing saved explicit corrections are still honored. No historical manual completion is required when both source fields are absent. Original source payloads and hashes remain unchanged.
+
+A dash is an unknown-number marker, not invoice identity. The unique supplier-number index excludes it, and the import RPC does not adopt an existing invoice by this placeholder. Each distinct provider source ID remains its own invoice even with equal supplier/date/amount. Replaying an existing source uses the durable source mapping rather than creating duplicates. Real invoice numbers and OCR references retain the normal collision checks.
+
+## Review historical receivable references
+
+Once the register job is paused for review or complete, the wizard automatically searches existing, active payment vouchers for references to incomplete invoices actually present in the Bokio source snapshot. Ledger-only references are excluded from new proposals and approvals; already approved history is retained. It recognizes explicit Bokio paid-invoice descriptions and Fortnox-style customer-payment references. Supplier entries, reversals, wrong bank/receivable direction and inconsistent amounts are excluded. An incomplete invoice source must be paid in SEK, have no rows or registration reference, match customer/number/amount and not already have been imported as a normal invoice.
+
+Findings and approved references are ordered by payment date, oldest first, with a stable ID tie-breaker. The finding page cursor carries date and ID, so approving the last record on a previous page does not break chronological pagination.
+
+New findings always require an incomplete source invoice. Historical voucher-only references approved under the earlier policy remain readable, but the review no longer asks users to reconstruct invoices missing from the provider API. The provider API is not an inventory of all pre-migration invoices; those absent records are outside this workflow.
+
+GET discovery performs no writes. Approval is a separate authenticated company-writer POST that accepts only job/payment IDs, re-derives the proposal, and calls the service-only review RPC. The RPC locks/rechecks the job, source chunk and active payment evidence, then records the decision, actor and time in historical_receivable_references. It creates no invoice, payment or journal entry and changes no posted entry. For an approved incomplete source the chunk is preserved as historically handled; later imports of the same provider source cannot recreate it as a normal invoice. Source snapshots remain unchanged.
+
+Reviewed history remains accessible through the latest import. A completed job stays on the review screen until the user chooses the results. Approval does not silently continue the job: the user may resume remaining review work explicitly. Unreviewed text candidates remain proposals.
+
+During the existing document import, an approved historical target may resolve a Bokio voucher reference that also names a reversed original. The target must still be the unique active entry on the exact source date, series and number. File hashing/idempotency, other-underlag rules and period locks still apply; approval does not unlock a year or bypass document-admission rules. Documents are imported through that underlag step, not by the metadata approval itself.
+
+Deployment requires the historical_receivable_review migration before serving the review endpoints or the updated worker. The table is company-readable but client write-protected; the service RPC independently checks membership and current evidence.
+
+## Reading import review status
+
+A paused job does not continue automatically: the user must resolve/review issues and resume it. Imported counts include invoices whose later voucher/payment linkage needs review, while excluded counts include source records deliberately preserved as historical metadata. These are separate from records that could not be inserted.
+
+Issue responses include best-effort invoice number/date/amount and a target invoice link when already imported. Only these header labels are returned, never the encrypted source snapshot. An unreadable snapshot falls back to the original source ID without hiding the job. The UI distinguishes registration and payment-link review, shows all remaining issues in their own section, and keeps technical source IDs/codes in expandable details.

@@ -1,10 +1,15 @@
 'use client'
 
+import { UnmatchedProviderDocuments } from './UnmatchedProviderDocuments'
+
+import type { SIEResyncSummary } from '@/lib/import/sie-resync'
+import { findReopenableImportPeriod, type ImportFiscalPeriod } from '@/lib/import/reopen-import-period'
+
 import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
-import { useAccounts } from '@/lib/reference-data/hooks'
+import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -46,8 +51,8 @@ import {
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
-  requestArcimDocumentImport,
   runArcimDocumentImportToCompletion,
+  runArcimDocumentDiscoveryToCompletion,
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
@@ -71,7 +76,7 @@ type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | '
 const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: true },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
   { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
   { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true },
@@ -273,6 +278,7 @@ import {
 import { canSkipMappingStep } from '@/extensions/general/arcim-migration/lib/mapping-step'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
+import ProviderMigrationReviews from './ProviderMigrationReviews'
 import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -306,6 +312,7 @@ const STEP_LABELS: Record<WizardStep, string> = {
 interface MigrationOptions {
   importCompanyInfo: boolean
   importSIEData: boolean
+  markImportedNoDocRequired: boolean
   importCustomers: boolean
   importSuppliers: boolean
   importSalesInvoices: boolean
@@ -317,6 +324,7 @@ interface MigrationOptions {
 const DEFAULT_OPTIONS: MigrationOptions = {
   importCompanyInfo: true,
   importSIEData: true,
+  markImportedNoDocRequired: true,
   importCustomers: true,
   importSuppliers: true,
   importSalesInvoices: true,
@@ -355,7 +363,7 @@ interface PreviewData {
   sourceYears?: SourceFiscalYear[]
   // The most years one run may select: /sie-data refuses more. Read from
   // the server so the picker never drifts from the route.
-  maxSelectedYears?: number
+  maxSelectedYears?: number | null
   assetStats: {
     total: number
     importable: number
@@ -364,7 +372,10 @@ interface PreviewData {
 }
 
 interface SIEFileStatus {
+  delta?: SIEResyncSummary | null
   fiscalYear: number
+  fiscalYearStart?: string | null
+  fiscalYearEnd?: string | null
   // Legacy field for older builds: read previousImport instead.
   alreadyImported: boolean
   importedAt: string | null
@@ -589,8 +600,8 @@ function ProviderStep({
   const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
   // A returning customer whose last connect stalled gets it back here. The
-  // retry follows the same gate as the provider list below: Visma and Bokio
-  // stay behind "SIE krävs först", so only the upload is offered for them.
+  // retry follows the same gate as the provider list below: Visma
+  // stays behind "SIE krävs först", so only the upload is offered for it.
   const unfinished = connectionStatus?.unfinishedConnect ?? null
   const unfinishedInfo = unfinished ? ARCIM_PROVIDERS.find(p => p.id === unfinished.provider) : undefined
   const unfinishedCanRetry = !!unfinishedInfo
@@ -609,9 +620,7 @@ function ProviderStep({
           banner. */}
       {showSieRequiredBanner && (
         <AttnLine action={{ label: 'Ladda upp SIE-fil', href: '/import?mode=sie' }}>
-          Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera
-          bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
-          Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
+          {t('ext_arcim_sie_manual_required')}
         </AttnLine>
       )}
 
@@ -1061,7 +1070,7 @@ function PreviewStep({
   error: string | null
   authExpired: boolean
   licenseMissing: boolean
-  /** Fiscal years (start years) ticked in the picker; default = the three latest. */
+  /** Fiscal years (start years) ticked in the picker; default = all source years. */
   selectedYears: number[]
   onSelectedYearsChange: (years: number[]) => void
   onReconnect: () => void
@@ -1111,11 +1120,7 @@ function PreviewStep({
           if (sieStats) {
             parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
             parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
-            parts.push(
-              sieStats.fiscalYears.length === 1
-                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
-                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
-            )
+            parts.push(t('ext_arcim_preview_sample_year', {years:sieStats.fiscalYears.join(', ')}))
           }
           if (assetCount > 0) {
             parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
@@ -1137,12 +1142,17 @@ function PreviewStep({
 
       {/* ── The year picker (issues #2211, #2238) ──
           Every fiscal year the source has, as hairline rows with a checkbox.
-          The three latest are ticked by default (the limit that used to be a
-          silent cap); older years are the user's own choice and their own
-          wait: each one is another SIE export fetched in the next step. */}
+          All years are ticked by default. The user can narrow the selection;
+          every selected year needs another source export in the next step. */}
       {showYearPicker && (
         <section className="space-y-3">
-          <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionKicker>{t('ext_arcim_year_select_kicker')}</SectionKicker>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => onSelectedYearsChange(sourceYears.map(year => year.year))}>{t('ext_arcim_year_select_all')}</Button>
+              <Button variant="ghost" size="sm" onClick={() => onSelectedYearsChange([])}>{t('ext_arcim_year_select_clear')}</Button>
+            </div>
+          </div>
           <p className="text-[13px] text-muted-foreground">{t('ext_arcim_year_select_lede')}</p>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {sourceYears.map((fy) => {
@@ -1331,11 +1341,13 @@ function OptionsStep({
   }
 
   const fileStatuses = sieData?.fileStatuses ?? []
-  const newFileCount = sieData?.newFileCount ?? 0
-  const replacedFileCount = fileStatuses.filter(fs => fs.previousImport).length
-  const yearsToReplace = fileStatuses
-    .filter(fs => fs.previousImport)
-    .map(fs => fs.fiscalYear)
+  const sieComparison = fileStatuses.length > 0 && fileStatuses.every(file => file.delta)
+    ? fileStatuses.reduce((total, file) => ({
+        added: total.added + file.delta!.added,
+        unchanged: total.unchanged + file.delta!.unchanged,
+        review: total.review + file.delta!.reviewCount,
+      }), { added: 0, unchanged: 0, review: 0 })
+    : null
   const failedYears = sieData?.failedYears ?? []
 
   const selectedItems: string[] = []
@@ -1392,15 +1404,7 @@ function OptionsStep({
           <div>
             <OptionRow
               label="Bokföringsdata (SIE)"
-              description={
-                replacedFileCount > 0 && newFileCount > 0
-                  ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
-                  : replacedFileCount > 0
-                    ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
-                    : newFileCount > 0
-                      ? `${newFileCount} ny(a) räkenskapsår att importera`
-                      : 'Kontoplan, ingående balanser och verifikationer'
-              }
+              description={fileStatuses.some(file => file.previousImport) ? t('ext_arcim_resync_description') : t('ext_arcim_resync_first_import')}
               checked={options.importSIEData}
               onChange={() => toggleOption('importSIEData')}
             />
@@ -1409,17 +1413,24 @@ function OptionsStep({
               <div className="space-y-1 pb-3">
                 {fileStatuses.map((fs) => (
                   <p key={fs.fiscalYear} className="text-xs text-muted-foreground tabular-nums">
-                    {fs.previousImport
-                      ? `Räkenskapsår ${fs.fiscalYear}: ersätter tidigare import${
-                          fs.previousImport.importedAt
-                            ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
-                            : ''
-                        }`
-                      : `Räkenskapsår ${fs.fiscalYear}: ny data att importera`}
+                    {fs.delta
+                      ? t('ext_arcim_resync_year', {year:fs.fiscalYear,added:fs.delta.added,unchanged:fs.delta.unchanged,review:fs.delta.reviewCount})
+                      : t('ext_arcim_resync_new_year', {year:fs.fiscalYear})}
+                    {fs.delta?.metadataChanged && <span className="mt-1 block">{t('ext_arcim_resync_metadata_changed')}</span>}
+                    {fs.delta?.reviews.map((review,i) => <span className="mt-1 block" key={`${review.sourceId}:${i}`}>
+                      {review.entryId ? <Link className="underline" href={`/bookkeeping/${review.entryId}`} target="_blank" rel="noopener noreferrer">{review.sourceId}</Link> : review.sourceId}
+                      {' · '}{t(`ext_arcim_resync_review_${review.kind}`)}
+                    </span>)}
                   </p>
                 ))}
               </div>
             )}
+            {options.importSIEData && (!sieComparison || sieComparison.added > 0) && <OptionRow
+              label={t('ext_arcim_option_no_doc_required')}
+              description={t('ext_arcim_option_no_doc_required_description')}
+              checked={options.markImportedNoDocRequired}
+              onChange={() => toggleOption('markImportedNoDocRequired')}
+            />}
             {/* Verifikationsserie: one aligned row, not a nested box. */}
             {options.importSIEData && (
               <div className="flex items-center gap-3 border-t border-border py-3">
@@ -1506,7 +1517,7 @@ function OptionsStep({
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm">
-              Det här hämtas från källsystemet och importeras till {branding.appName.toLowerCase()}:
+              {t('ext_arcim_confirm_sync_selection')}
             </p>
             <ul className="space-y-1">
               {selectedItems.map((item) => (
@@ -1515,15 +1526,17 @@ function OptionsStep({
             </ul>
           </div>
 
-          {options.importSIEData && yearsToReplace.length > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {yearsToReplace.length === 1
-                ? `Räkenskapsår ${yearsToReplace[0]} ersätts:`
-                : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts:`}{' '}
-              tidigare importerade verifikationer markeras som annullerade och ersätts av
-              uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}{' '}
-              (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
-            </p>
+          {sieAvailable && options.importSIEData && (
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>{sieComparison
+                ? t(sieComparison.added === 0 && sieComparison.review === 0
+                    ? 'ext_arcim_confirm_sie_unchanged' : 'ext_arcim_confirm_sie_delta', sieComparison)
+                : t(fileStatuses.some(file => file.previousImport)
+                    ? 'ext_arcim_resync_description' : 'ext_arcim_resync_first_import')}</p>
+              {fileStatuses.some(file => file.delta?.metadataChanged) && (
+                <p>{t('ext_arcim_confirm_sie_metadata')}</p>
+              )}
+            </div>
           )}
         </div>
       </ConfirmationDialog>
@@ -1557,6 +1570,7 @@ function OptionRow({
         <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
       <Switch
+        aria-label={label}
         checked={checked}
         onCheckedChange={() => !disabled && onChange()}
         disabled={disabled}
@@ -1711,8 +1725,9 @@ function untransferredResultSentences(results: ImportResult[]): string[] {
  * the info icon next to the status. Nothing gets a box.
  */
 function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
+  const t = useTranslations('extensions')
   const [showRemarks, setShowRemarks] = useState(false)
-  const status = getFYStatus(result)
+  const status = (result.resync?.reviewCount ?? 0) > 0 ? {tone:'warning' as const,label:t('ext_arcim_resync_needs_review')} : getFYStatus(result)
   const d = result.details
   const fyLabel = d?.fiscalYear
     ? formatFiscalYearLabel(d.fiscalYear.start, d.fiscalYear.end)
@@ -1813,6 +1828,7 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
 }
 
 function DocumentImportFollowUp({
+  consentId,
   state,
   standalone = false,
   onDiscover,
@@ -1820,6 +1836,7 @@ function DocumentImportFollowUp({
   onDismiss,
   onReconnect,
 }: {
+  consentId: string | null
   state: ArcimDocumentImportState
   /** Started from an active connection rather than as the tail of a migration: the copy must not claim a migration just ran. */
   standalone?: boolean
@@ -1844,6 +1861,8 @@ function DocumentImportFollowUp({
   // Underlag whose verifikat sits in a klarmarkerat or locked year: the
   // database refuses those links, so a retry cannot help. Say which years and
   // where to reopen them, before the import (dry run) and after it (crm#251).
+  const unmatchedReview = consentId && (state.result?.unmatched ?? 0) > 0
+    ? <UnmatchedProviderDocuments key={consentId} consentId={consentId} /> : null
   const lockedCount = state.result?.locked ?? 0
   const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
   const lockedYearsLine = (key: 'ext_arcim_documents_locked_offer' | 'ext_arcim_documents_locked_result') =>
@@ -1868,9 +1887,7 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
 
-    // Running totals arrive after each server slice of a real import; the
-    // dry-run result that sits in state while the first slice runs is not
-    // progress, so it stays silent.
+    // Streamed counters report completed files; discovery only seeds the total.
     const progress =
       state.phase === 'importing' && state.result && !state.result.dryRun && state.result.total > 0
         ? state.result
@@ -1880,14 +1897,18 @@ function DocumentImportFollowUp({
       <section className="space-y-3" aria-live="polite">
         {title}
         <SpinnerLine>{label}</SpinnerLine>
-        {progress && (
+        {progress && <>
+          <Progress value={Math.min(100,Math.floor(progress.scanned/progress.total*100))} className="h-1" aria-label={label} />
           <p className="text-sm tabular-nums text-muted-foreground">
             {t('ext_arcim_documents_import_progress', {
               done: progress.scanned,
               total: progress.total,
             })}
           </p>
-        )}
+          <p className="text-xs tabular-nums text-muted-foreground">{t('ext_arcim_documents_progress_counts',{
+            imported:progress.linked,skipped:progress.skipped,unmatched:progress.unmatched,failed:progress.failed,locked:progress.locked,
+          })}</p>
+        </>}
       </section>
     )
   }
@@ -1901,11 +1922,15 @@ function DocumentImportFollowUp({
             ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
             : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
+        {(state.result?.skipped ?? 0) > 0 && <p className="text-sm text-muted-foreground">
+          {t('ext_arcim_documents_existing', { count: state.result!.skipped })}
+        </p>}
         {lockedYearsLine('ext_arcim_documents_locked_offer')}
+        {unmatchedReview}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Button onClick={onImport}>
+          {state.found > 0 && <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action', { provider })}
-          </Button>
+          </Button>}
           <Button variant="ghost" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
           </Button>
@@ -1918,7 +1943,7 @@ function DocumentImportFollowUp({
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
+        <p className="text-sm text-muted-foreground">{t((state.result?.scanned ?? 0) > 0 ? 'ext_arcim_documents_up_to_date' : 'ext_arcim_documents_empty', { provider, count: state.result?.skipped ?? 0 })}</p>
         <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
@@ -1987,7 +2012,8 @@ function DocumentImportFollowUp({
             {t('ext_arcim_documents_unmatched_help')}
           </p>
         )}
-        {lockedCount > 0 && (
+        {unmatchedReview}
+        {(lockedCount > 0 || unmatched > 0) && (
           <div className="space-y-3">
             {lockedYearsLine('ext_arcim_documents_locked_result')}
             <Button variant="outline" onClick={onDiscover}>
@@ -2081,11 +2107,15 @@ function ResultStep({
   sieResults,
   omittedYears,
   error,
+  documentConsentId,
   documentImportState,
   documentsOnly,
   theaterModel,
   onDone,
   onRetry,
+  blockedPeriod,
+  isReopening,
+  onReopenAndRetry,
   onDiscoverDocuments,
   onImportDocuments,
   onDismissDocuments,
@@ -2098,12 +2128,16 @@ function ResultStep({
   /** Source fiscal years outside the selection: not fetched in this run. */
   omittedYears: SourceFiscalYear[]
   error: string | null
+  documentConsentId: string | null
   documentImportState: ArcimDocumentImportState
   /** Only the underlag import ran, from an active connection: no migration verdict to show. */
   documentsOnly: boolean
   theaterModel: TheaterModel | null
   onDone: () => void
   onRetry: () => void
+  blockedPeriod: ImportFiscalPeriod | null
+  isReopening: boolean
+  onReopenAndRetry: () => void
   onDiscoverDocuments: () => void
   onImportDocuments: () => void
   onDismissDocuments: () => void
@@ -2111,6 +2145,7 @@ function ResultStep({
 }) {
   const t = useTranslations('extensions')
   const fiscalYearSpanLabel = useFiscalYearSpanLabel()
+  const [confirmReopen, setConfirmReopen] = useState(false)
   if (error) {
     // Steps run one request each (#2469), so a failure in a later request
     // leaves earlier steps' rows in place. Name them: the user must not
@@ -2142,11 +2177,30 @@ function ResultStep({
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>Klar</Button>
-          <Button onClick={onRetry}>
+          <Button variant={blockedPeriod ? 'outline' : 'default'} onClick={onRetry} disabled={isReopening}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
+          {blockedPeriod && (
+            <Button onClick={() => setConfirmReopen(true)} loading={isReopening}>
+              {t('ext_arcim_reopen_retry')}
+            </Button>
+          )}
         </div>
+        {blockedPeriod && (
+          <ConfirmationDialog
+            open={confirmReopen}
+            onOpenChange={setConfirmReopen}
+            title={t('ext_arcim_reopen_title', { name: blockedPeriod.name })}
+            confirmLabel={t('ext_arcim_reopen_retry')}
+            isSubmitting={isReopening}
+            onConfirm={() => { setConfirmReopen(false); onReopenAndRetry() }}
+          >
+            <p>{t('ext_arcim_reopen_description', {
+              name: blockedPeriod.name, start: blockedPeriod.period_start, end: blockedPeriod.period_end,
+            })}</p>
+          </ConfirmationDialog>
+        )}
       </div>
     )
   }
@@ -2170,6 +2224,7 @@ function ResultStep({
           </p>
         </div>
         <DocumentImportFollowUp
+          consentId={documentConsentId}
           state={documentImportState}
           standalone
           onDiscover={onDiscoverDocuments}
@@ -2262,7 +2317,7 @@ function ResultStep({
           ? `${results.customers.imported} importerade, ${results.customers.updated} kompletterade`
           : `${results.customers.imported} importerade`,
         detail: results.customers.skipped > 0
-          ? formatSkipReasons(results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.customers.imported, results.customers.skipReasons) === 'error',
       })
@@ -2272,7 +2327,7 @@ function ResultStep({
         label: 'Leverantörer',
         value: `${results.suppliers.imported} importerade`,
         detail: results.suppliers.skipped > 0
-          ? formatSkipReasons(results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.suppliers.imported, results.suppliers.skipReasons) === 'error',
       })
@@ -2282,7 +2337,7 @@ function ResultStep({
         label: 'Kundfakturor',
         value: `${results.salesInvoices.imported} importerade`,
         detail: results.salesInvoices.skipped > 0
-          ? formatSkipReasons(results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
+          ? formatSkipReasons(t, results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
           : undefined,
         failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
       })
@@ -2326,7 +2381,7 @@ function ResultStep({
       // as "the supplier invoices were lost" (crm#251). The paid ones are in
       // the ledger as the SIE file's verifikat.
       const skipDetail = results.supplierInvoices.skipped > 0
-        ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+        ? formatSkipReasons(t, results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
         : undefined
       const scopeDetail = provider === 'fortnox' ? t('ext_arcim_supplier_invoices_unpaid_only') : undefined
       entityLines.push({
@@ -2380,7 +2435,7 @@ function ResultStep({
         detail: results.assets.scopesMissing
           ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
           : results.assets.skipped > 0
-            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
+            ? formatSkipReasons(t, results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
             : undefined,
         failed: !results.assets.scopesMissing &&
           entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
@@ -2439,6 +2494,14 @@ function ResultStep({
               <FiscalYearLine key={i} result={r} index={i} />
             ))}
           </div>
+          {sieResults.filter(result => result.resync).map((result,i) => <div key={`resync:${i}`} className="space-y-2 text-sm">
+            <p>{t('ext_arcim_resync_result', {added:result.resync!.added,unchanged:result.resync!.unchanged,review:result.resync!.reviewCount})}</p>
+            {result.resync!.metadataChanged && <p className="text-muted-foreground">{t('ext_arcim_resync_metadata_changed')}</p>}
+            {result.resync!.reviews.map((review,index) => <p key={`${review.sourceId}:${index}`}>
+              {review.entryId ? <Link className="underline" href={`/bookkeeping/${review.entryId}`}>{review.sourceId}</Link> : review.sourceId}
+              {' · '}{t(`ext_arcim_resync_review_${review.kind}`)}
+            </p>)}
+          </div>)}
           {/* Company-level fact, said once: a prior year whose result was
               never transferred to equity skews every later opening balance. */}
           {untransferredResultSentences(sieResults).map((sentence, i) => (
@@ -2495,7 +2558,17 @@ function ResultStep({
         </section>
       )}
 
+      {!!results?.supplierInvoices?.paymentsAwaitingDueDate?.count && <section className="space-y-3">
+        <SectionKicker>{t('ext_arcim_payment_waiting_title')}</SectionKicker>
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_payment_waiting_detail',{count:results.supplierInvoices.paymentsAwaitingDueDate.count})}</p>
+        <ul className="space-y-2 text-sm" data-ph-mask="">{results.supplierInvoices.paymentsAwaitingDueDate.items.map(invoice=><li key={invoice.id}>
+          <Link className="underline" href={`/supplier-invoices/${invoice.id}`}>{invoice.invoiceNumber}</Link>
+          {' · '}{t('ext_arcim_payment_waiting_due',{date:invoice.dueDate})}
+        </li>)}</ul>
+      </section>}
+
       <DocumentImportFollowUp
+        consentId={documentConsentId}
         state={documentImportState}
         onDiscover={onDiscoverDocuments}
         onImport={onImportDocuments}
@@ -2571,12 +2644,15 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
+  t:ReturnType<typeof useTranslations<'extensions'>>,
   reasons?: AssetSkipReasons,
   entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
+  if (reasons.historicalReceivable) parts.push(t('ext_arcim_skip_historical',{count:reasons.historicalReceivable}))
+  if (reasons.creditNoteInOldShape) parts.push(t('ext_arcim_skip_old_credit',{count:reasons.creditNoteInOldShape}))
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
   if (reasons.outsideFiscalYears) {
     parts.push(
@@ -2656,6 +2732,9 @@ export default function ArcimMigrationWorkspace({
   // submit and the confirm button.
   const migrationInFlightRef = useRef(false)
   const [isStartingMigration, setIsStartingMigration] = useState(false)
+  const [blockedPeriod, setBlockedPeriod] = useState<ImportFiscalPeriod | null>(null)
+  const [isReopening, setIsReopening] = useState(false)
+  const reopenInFlightRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   // Per-item details behind `error`: e.g. the SIE validation errors from
   // /sie-data, which would otherwise be swallowed (the envelope's `error`
@@ -2695,6 +2774,7 @@ export default function ArcimMigrationWorkspace({
   // (lib/reference-data). Re-read when the mapping step opens because the
   // preview may have created accounts; the SIE import invalidates it too.
   const { refresh: refreshCompanyAccounts } = useAccounts(false)
+  const { refresh: refreshFiscalPeriods } = useFiscalPeriods()
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -3073,7 +3153,7 @@ export default function ArcimMigrationWorkspace({
     if (!supportsUnderlagImport(provider) || !migrationSucceeded) return
 
     try {
-      const result = await requestArcimDocumentImport(currentConsentId, true)
+      const result = await runArcimDocumentDiscoveryToCompletion(currentConsentId)
       dispatchDocumentImport({ type: 'discovery-succeeded', result })
     } catch (documentError) {
       dispatchDocumentImport({
@@ -3301,8 +3381,8 @@ export default function ArcimMigrationWorkspace({
 
   // Deep-linked provider preselect (onboarding branch question, and the
   // unfinished-connect retry). Only when this mount is not an OAuth return
-  // (that flow owns the wizard state). Visma and Bokio need a completed SIE
-  // import first, so for them the preselect waits for the connection status
+  // (that flow owns the wizard state). Visma needs a completed SIE
+  // import first, so its preselect waits for the connection status
   // and leaves the provider list with its "SIE krävs först" gate in place
   // when that import is missing.
   const preselectedRef = useRef(false)
@@ -3425,13 +3505,13 @@ export default function ArcimMigrationWorkspace({
       setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
-      if (data.allImported) {
-        setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
-      }
+      setMigrationOptions(prev => ({ ...prev, importSIEData: !data.allImported }))
 
-      // Auto-skip only when the page has nothing to ask: no blank target, no
-      // VAT review, and no class 9 account suggested onto 2999 OBS-konto.
-      if (canSkipMappingStep(enrichedMappings, { unmapped: data.mappingStats.unmapped, allImported: data.allImported })) {
+      // Only new vouchers need mapping approval. Metadata differences and
+      // reviews of existing vouchers remain visible in the options step.
+      if (canSkipMappingStep(enrichedMappings, {
+        unmapped:data.mappingStats.unmapped,allImported:data.allImported,fileStatuses:data.fileStatuses,
+      })) {
         setStep('options')
       }
     } catch (err) {
@@ -3504,6 +3584,7 @@ export default function ArcimMigrationWorkspace({
 
     setStep('migrating')
     setDocumentsOnly(false)
+    setBlockedPeriod(null)
     setMigrationStep('Startar migrering...')
     setMigrationProgress(5)
     setError(null)
@@ -3523,18 +3604,42 @@ export default function ArcimMigrationWorkspace({
     }
 
     try {
+      // Validate every selected register before the first SIE upload/job.
+      // A later register configuration error must not leave a partial migration.
+      const selected = {
+        customers: migrationOptions.importCustomers, suppliers: migrationOptions.importSuppliers,
+        salesInvoices: migrationOptions.importSalesInvoices, supplierInvoices: migrationOptions.importSupplierInvoices,
+      }
+      const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
+      const preflight = await fetch('/api/extensions/ext/arcim-migration/migration-jobs/preflight', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resources }),
+      })
+      const readiness = await preflight.json()
+      if (!preflight.ok) throw apiError(readiness, `HTTP ${preflight.status}`)
+
       // ── Phase 1: SIE import ──────────────────────────────────
       if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
+        // Check every selected year before uploading files or admitting jobs.
+        // A confirmed reopen can then retry without replaying earlier years.
+        const periods = await refreshFiscalPeriods()
+        if (!Array.isArray(periods)) throw new Error('Fiscal period response is incomplete')
+        const workFiles = sieData.fileStatuses.filter(file => !file.delta || file.delta.added > 0)
+        const blocked = findReopenableImportPeriod(periods, workFiles)
+        if (blocked) {
+          setBlockedPeriod(blocked)
+          throw new UserFacingError(t('ext_arcim_reopen_blocked', { name: blocked.name }))
+        }
         setMigrationStep('Importerar bokföringsdata (SIE)...')
         setMigrationProgress(10)
         setSieImportResults([])
 
-        // Complete fiscal years chronologically. Replacement is pinned to
-        // the execution reviewed in the preview, including on retries.
+        // Complete fiscal years chronologically; only new source vouchers
+        // are eligible for incremental writes, including on retries.
         const filesToImport = sieData.rawContent.map((content, i) => ({
           content,
           status: sieData.fileStatuses?.[i],
-        })).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
+        })).filter(file => !file.status?.delta || file.status.delta.added > 0 || file.status.delta.reviewCount > 0 || file.status.delta.metadataChanged).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
 
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)
@@ -3561,7 +3666,8 @@ export default function ArcimMigrationWorkspace({
                 importOpeningBalances: true,
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
-                supersedesImportId:filesToImport[i].status?.previousImport?.id,
+                markImportedNoDocRequired: migrationOptions.markImportedNoDocRequired,
+                incremental:!!filesToImport[i].status?.previousImport,
               },
             }),
           })
@@ -3575,10 +3681,10 @@ export default function ArcimMigrationWorkspace({
             throw new UserFacingError(`${yearLabel}${formatImportFailure(failure)}`)
           }
 
-          const submitted = await res.json() as {importId:string}
+          const submitted = await res.json() as {importId:string;result?:ImportResult}
           let result: ImportResult
           try {
-            result = await waitForSIEJob(submitted.importId,job => {
+            result = submitted.result ?? await waitForSIEJob(submitted.importId,job => {
               setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
             })
           } catch (err) {
@@ -3645,15 +3751,10 @@ export default function ArcimMigrationWorkspace({
           merged = mergeMigrationResults(merged, results)
           setMigrationResults(merged)
         }
-        const selected = {
-          customers: migrationOptions.importCustomers, suppliers: migrationOptions.importSuppliers,
-          salesInvoices: migrationOptions.importSalesInvoices, supplierInvoices: migrationOptions.importSupplierInvoices,
-        }
-        const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
         if (resources.length) {
           const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ consentId, resources }),
+            body: JSON.stringify({ consentId, resources, ...((sieData?.fileStatuses.length ?? selectedYears.length)>0 ? {years:[...new Set(sieData?.fileStatuses.map(file=>file.fiscalYear) ?? selectedYears)]} : {}) }),
           })
           const body = await response.json()
           if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
@@ -3702,10 +3803,29 @@ export default function ArcimMigrationWorkspace({
       migrationInFlightRef.current = false
       setIsStartingMigration(false)
     }
-  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, selectedYears, sieData, toast, t, refreshFiscalPeriods])
+
+  const handleReopenAndRetry = useCallback(async () => {
+    if (!blockedPeriod || reopenInFlightRef.current || migrationInFlightRef.current) return
+    reopenInFlightRef.current = true
+    setIsReopening(true)
+    try {
+      const response = await fetch(`/api/bookkeeping/fiscal-periods/${encodeURIComponent(blockedPeriod.id)}/reopen-external`, { method: 'POST' })
+      const body = await response.json()
+      if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
+      void invalidateReferenceData('ref:fiscal-periods')
+      await handleStartMigration()
+    } catch (err) {
+      setError(displayError(err))
+    } finally {
+      reopenInFlightRef.current = false
+      setIsReopening(false)
+    }
+  }, [blockedPeriod, handleStartMigration])
 
   const handleDone = useCallback(() => {
     // Reset wizard
+    setBlockedPeriod(null)
     setStep('provider')
     setSelectedProvider(null)
     setConsentId(null)
@@ -3735,12 +3855,15 @@ export default function ArcimMigrationWorkspace({
       setProviderJobId(null)
       void handleReconnect(status.job.provider as ArcimProvider, status.job.consent_id ?? '')
     }} onResult={status => {
+      setConsentId(status.job.consent_id)
+      setSelectedProvider(status.job.provider as ArcimProvider)
       const results: MigrationResults = {}
       for (const count of status.counts) {
         results[count.resource] = {
-          total: count.total, imported: count.imported, skipped: count.skipped,
-          skipReasons: { failed: count.needs_attention },
+          total: count.total, imported: count.imported, skipped: count.skipped, unchanged:count.unchanged,
+          skipReasons: { ...count.skipReasons, failed: count.needs_attention },
           ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
+            ...(count.resource==='supplierInvoices' ? {paymentsAwaitingDueDate:status.paymentsAwaitingDueDate} : {}),
             fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,
             creditNotesLinked: count.credit_notes_linked ?? 0,
           } : {}),
@@ -3752,7 +3875,7 @@ export default function ArcimMigrationWorkspace({
       setMigrationProgress(100)
       setStep('result')
       void fetchStatus()
-      const provider = resolveArcimDocumentFollowUpProvider(preview?.consent.provider, selectedProvider)
+      const provider = resolveArcimDocumentFollowUpProvider(status.job.provider, selectedProvider)
       if (provider && status.job.consent_id) void runDocumentDiscovery(status.job.consent_id, provider, true)
     }} />
   }
@@ -3764,6 +3887,7 @@ export default function ArcimMigrationWorkspace({
         void handleReconnect('fortnox', id)
       }} />}
       {step === 'provider' && latestJobId && <Button variant="outline" onClick={() => setProviderJobId(latestJobId)}>{t('ext_arcim_job_latest')}</Button>}
+      {step === 'provider' && <ProviderMigrationReviews onOpen={setProviderJobId} />}
       {/* Step indicator: only during interactive steps */}
       {step !== 'provider' && isInteractiveStep && (
         <StepRail steps={userSteps} currentIndex={currentUserStepIndex} />
@@ -3863,11 +3987,16 @@ export default function ArcimMigrationWorkspace({
           sieResults={sieImportResults}
           omittedYears={sieData?.omittedYears ?? []}
           error={error}
+          documentConsentId={consentId}
           documentImportState={documentImportState}
           documentsOnly={documentsOnly}
           theaterModel={theaterModel}
           onDone={handleDone}
+          blockedPeriod={blockedPeriod}
+          isReopening={isReopening}
+          onReopenAndRetry={() => { void handleReopenAndRetry() }}
           onRetry={() => {
+            setBlockedPeriod(null)
             setError(null)
             setStep('options')
           }}

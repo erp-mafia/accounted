@@ -30,7 +30,7 @@ export type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlund
 export const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: true },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
   { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
   // WINT's "token" is the user's WINT login exchanged once for a JWT pair
@@ -50,6 +50,8 @@ export interface MigrationProgress {
 }
 
 export interface SkipReasons {
+  historicalReceivable?: number
+  creditNoteInOldShape?: number
   duplicate?: number
   inactive?: number
   failed?: number
@@ -110,6 +112,8 @@ export interface MigrationStepError {
  * reach, so a partially hydrated run is visible rather than looking complete.
  */
 export interface InvoiceStepResult {
+  paymentsAwaitingDueDate?: import('@/lib/providers/migration-contract').PendingImportPayables
+  unchanged?: number
   total: number
   imported: number
   skipped: number
@@ -142,8 +146,8 @@ export interface InvoiceStepResult {
 
 export interface MigrationResults {
   companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  customers?: { unchanged?: number; total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  suppliers?: { unchanged?: number; total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: InvoiceStepResult
   supplierInvoices?: InvoiceStepResult
   /**

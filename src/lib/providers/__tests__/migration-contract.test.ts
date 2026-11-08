@@ -24,3 +24,17 @@ describe('migrationIssueKind', () => {
     expect(migrationIssueKind(null)).toBe('retry')
   })
 })
+
+
+it('distinguishes missing encryption configuration from a retryable error', () => {
+  expect(migrationIssueKind('PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED')).toBe('configuration')
+})
+
+it('distinguishes registration review from payment review on already imported invoices', () => {
+  expect(migrationIssueKind('MIGRATION_REGISTRATION_REVIEW')).toBe('registration')
+  expect(migrationIssueKind('MIGRATION_PAYMENT_REVIEW')).toBe('payment')
+})
+
+it('describes an overdue open balance separately from an uncertain payment match', () => {
+  expect(migrationIssueKind('MIGRATION_UNPAID_OVERDUE')).toBe('overdue')
+})

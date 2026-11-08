@@ -373,6 +373,7 @@ export interface ImportResultDetails {
  * Result of executing an import
  */
 export interface ImportResult {
+  resync?: import('./sie-resync').SIEResyncSummary
   success: boolean
 
   // What was created

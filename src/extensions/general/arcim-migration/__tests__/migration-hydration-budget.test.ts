@@ -11,9 +11,9 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
  * with no notion of the clock. Two rules keep a large register inside the
  * ceiling now:
  *
- *  - Only invoices this run can insert get a detail request. A number that is
- *    already in the database is a duplicate whatever its detail form says, so
- *    on a re-run the budget goes to the rows that are still missing instead
+ *  - Only invoices this run can insert get a detail request. Existing sales
+ *    numbers and full supplier header matches avoid hydration on replay, so
+ *    the budget goes to the rows that are still missing instead
  *    of the same open invoices every time.
  *  - The budget is derived from the run's deadline: what is left, minus a
  *    reserve for inserting the rows, capped at the provider default. No
@@ -224,7 +224,7 @@ describe('executeMigration: hydration budget and scope', () => {
     expect(mHydrateSales.mock.calls[0][4]).toBe(0)
   })
 
-  it('skips the detail request for a supplier invoice whose (supplier, number) pair is already in the database', async () => {
+  it('skips the detail request for a supplier invoice whose full supplier header is already in the database', async () => {
     ;(fetchSuppliersDirect as Mock).mockResolvedValue([SUPPLIER])
     mListSupplier.mockResolvedValue([supplierDto('L-77'), supplierDto('L-78')])
     // fetchAllRows is called for the existing suppliers (step 3), for the
@@ -234,7 +234,7 @@ describe('executeMigration: hydration budget and scope', () => {
     mFetchAll
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ supplier_invoice_number: 'L-77', supplier_id: 'suppliers-1' }])
+      .mockResolvedValueOnce([{ supplier_invoice_number: 'L-77', supplier_id: 'suppliers-1', invoice_date: '2025-05-02', total: 2500, currency: 'SEK', is_credit_note: false }])
 
     const results = await executeMigration(
       baseOptions({ importSuppliers: true, importSupplierInvoices: true }),
@@ -250,4 +250,19 @@ describe('executeMigration: hydration budget and scope', () => {
       skipReasons: { duplicate: 1 },
     })
   })
+  it('imports separate source invoices sharing a supplier reference on different dates', async () => {
+    ;(fetchSuppliersDirect as Mock).mockResolvedValue([SUPPLIER])
+    mListSupplier.mockResolvedValue([
+      { ...supplierDto('L-77'), id: 'source-dec', issueDate: '2025-12-13' },
+      { ...supplierDto('L-77'), id: 'source-jun', issueDate: '2025-06-13' },
+    ])
+    mFetchAll.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { supplier_invoice_number: 'L-77', supplier_id: 'suppliers-1', invoice_date: '2026-06-24', total: 2500, currency: 'SEK', is_credit_note: false },
+    ])
+    const results = await executeMigration(baseOptions({ importSuppliers: true, importSupplierInvoices: true }))
+    const given = mHydrateSupplier.mock.calls[0][3] as SupplierInvoiceDto[]
+    expect(given.map(dto => dto.id)).toEqual(['source-dec', 'source-jun'])
+    expect(results.supplierInvoices).toMatchObject({ total: 2, imported: 2, skipped: 0 })
+  })
+
 })

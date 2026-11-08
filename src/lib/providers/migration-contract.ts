@@ -5,6 +5,7 @@ export type MigrationJobState = 'queued' | 'running' | 'retry_wait' | 'needs_att
 export type MigrationJobPhase = 'discover' | 'import' | 'link' | 'reconcile' | 'settle' | 'completed'
 
 export interface ProviderMigrationJob {
+  review_deferred_at?: string | null
   id: string
   company_id: string
   user_id: string
@@ -22,12 +23,19 @@ export interface ProviderMigrationJob {
   next_attempt_at: string | null
   failures: number
   error_code: string | null
-  fiscal_year_scope: { start: string; end: string } | null
+  fiscal_year_scope: { start: string; end: string; periods?: {start:string;end:string}[] } | null
   created_at: string
   updated_at: string
 }
 
+export interface PendingImportPayables {
+  count:number
+  items:{id:string;invoiceNumber:string;dueDate:string;remaining:number;currency:string}[]
+}
 export interface MigrationResourceCounts {
+  skipReasons?: {historicalReceivable?:number;outsideFiscalYears?:number;inactive?:number;zeroTotal?:number;creditNoteInOldShape?:number}
+
+  unchanged?: number
   resource: MigrationResource
   total: number
   imported: number
@@ -49,15 +57,19 @@ export interface MigrationResourceCounts {
 }
 
 export interface ProviderMigrationStatus {
+  paymentsAwaitingDueDate?: PendingImportPayables
   job: ProviderMigrationJob
   counts: MigrationResourceCounts[]
-  issues: { id: string; resource: MigrationResource; source_id: string; error_code: string }[]
+  changes?: {id:string;resource:MigrationResource;source_id:string;targetId:string;label:string;kind:'new'|'changed'}[]
+  issues: { id: string; resource: MigrationResource; source_id: string; error_code: string;
+    invoiceNumber?: string; invoiceDate?: string; amount?: number; currency?: string;
+    targetId?: string | null; errorPhase?: string | null }[]
 }
 
 export function migrationProgress(status: ProviderMigrationStatus): number {
   if (status.job.state === 'completed') return 100
   const total = status.counts.reduce((n, row) => n + row.total, 0)
-  const done = status.counts.reduce((n, row) => n + row.completed + row.skipped, 0)
+  const done = status.counts.reduce((n, row) => n + row.completed + row.skipped + (row.unchanged ?? 0), 0)
   // Discovery has an unknown denominator. Persisted counts, never elapsed time,
   // determine the rest; final checks cannot appear as a completed import.
   if (status.job.phase === 'discover' || total === 0) return 0
@@ -69,7 +81,13 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'review' | 'lines' | 'size' | 'exists' | 'configuration' | 'missing' | 'registration' | 'payment' | 'overdue' | 'source_changed' | 'retry' {
+  if (code === 'MIGRATION_SOURCE_CHANGED') return 'source_changed'
+  if (code === 'MIGRATION_REGISTRATION_REVIEW') return 'registration'
+  if (code === 'MIGRATION_UNPAID_OVERDUE') return 'overdue'
+  if (code === 'MIGRATION_PAYMENT_REVIEW') return 'payment'
+  if (code === '23502' || code === 'MIGRATION_INVOICE_NUMBER_REQUIRED') return 'missing'
+  if (code === 'PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED') return 'configuration'
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
   // A record with the same number already exists and differs. Resuming
   // repeats the same outcome, so never suggest a retry (23505 = unique_violation).

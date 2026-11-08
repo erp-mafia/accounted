@@ -119,7 +119,7 @@ async function fetchSieData(ctx: ExtensionContext) {
   const res = await sieData(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
     searchParams: { consentId: 'consent-1', years: '2025,2026' },
   }), ctx)
-  const { status, body } = await parseJsonResponse<{ mappings: AccountMapping[]; parsed: { accounts: { number: string; name: string }[] } }>(res)
+  const { status, body } = await parseJsonResponse<{ fileStatuses: { fiscalYear: number; fiscalYearStart: string | null; fiscalYearEnd: string | null }[]; mappings: AccountMapping[]; parsed: { accounts: { number: string; name: string }[] } }>(res)
   expect(status).toBe(200)
   return body
 }
@@ -196,4 +196,12 @@ describe('#3312: the onboarding provider step on a year with class 9 amounts', (
     expect(body.error.code).toBe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS')
     expect(body.error.details).toEqual({ account_numbers: ['9998'] })
   })
+})
+
+it('returns exact source period bounds for pre-import recovery', async () => {
+  const data = await fetchSieData(buildCtx([]))
+  expect(data.fileStatuses).toEqual([
+    expect.objectContaining({ fiscalYear: 2025, fiscalYearStart: '2025-01-01', fiscalYearEnd: '2025-12-31' }),
+    expect.objectContaining({ fiscalYear: 2026, fiscalYearStart: '2026-01-01', fiscalYearEnd: '2026-12-31' }),
+  ])
 })

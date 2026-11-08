@@ -1,3 +1,4 @@
+import { resolveMigrationSupplierInvoiceNumber } from '@/lib/providers/migration-corrections'
 /**
  * Maps Arcim Sync canonical DTOs to Accounted internal types.
  *
@@ -1227,11 +1228,9 @@ export function mapSupplierInvoice(
     user_id: userId,
     company_id: companyId,
     supplier_id: supplierId,
-    // Empty string must become NULL: with '' every number-less invoice from
-    // the same supplier collides on the UNIQUE
-    // (company_id, supplier_id, supplier_invoice_number) index, while NULLs
-    // are treated as distinct.
-    supplier_invoice_number: dto.invoiceNumber || null,
+    // Preserve the provider number; use its OCR reference when that is absent.
+    // A dash means unknown; provider source receipts preserve import identity.
+    supplier_invoice_number: resolveMigrationSupplierInvoiceNumber(dto),
     invoice_date: dto.issueDate,
     due_date: dto.dueDate || dto.issueDate,
     received_date: dto.issueDate,

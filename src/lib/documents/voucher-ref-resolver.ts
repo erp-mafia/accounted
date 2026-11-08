@@ -43,6 +43,9 @@ export interface VoucherRow {
   entry_date: string
   source_voucher_series: string | null
   source_voucher_number: number | null
+  status?: string
+  reversed_by_id?: string | null
+  import_batch_id?: string | null
   // Display-only, and fetched only by the reads that need them: the provider
   // sweep resolves thousands of entries and never renders any of this.
   description?: string | null
@@ -203,17 +206,21 @@ const ATTACHABLE_STATUSES = ['posted', 'reversed']
 export async function fetchSourceRefVouchers(
   supabase: SupabaseClient,
   companyId: string,
+  includeImportDetails = false,
 ): Promise<VoucherRow[]> {
-  return fetchAllRows<VoucherRow>(({ from, to }) =>
-    supabase
+  return fetchAllRows<VoucherRow>(({ from, to }) => {
+    const query = supabase
       .from('journal_entries')
-      .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number')
+      .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number, status, reversed_by_id')
       .eq('company_id', companyId)
       .not('source_voucher_number', 'is', null)
       .in('status', ATTACHABLE_STATUSES)
       .order('id', { ascending: true })
-      .range(from, to),
-  )
+    if (includeImportDetails) return query
+      .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number, status, reversed_by_id, import_batch_id, voucher_series, voucher_number')
+      .range(from, to)
+    return query.range(from, to)
+  })
 }
 
 /** PostgREST puts `.in()` lists in the URL, so the filter is chunked. */
@@ -249,7 +256,7 @@ export async function fetchVouchersForNumbers(
       let query = supabase
         .from('journal_entries')
         .select(
-          'id, fiscal_period_id, entry_date, description, voucher_series, voucher_number, source_voucher_series, source_voucher_number',
+          'id, fiscal_period_id, entry_date, description, voucher_series, voucher_number, source_voucher_series, source_voucher_number, status, reversed_by_id',
         )
         .eq('company_id', companyId)
         .in('source_voucher_number', chunk)

@@ -1,5 +1,5 @@
 -- Every fixture and mutation is rolled back. Run only against an already
--- migrated test database (migration 20260925205556).
+-- migrated test database (including repeated supplier references).
 BEGIN;
 DO $$
 DECLARE
@@ -7,7 +7,7 @@ DECLARE
   j public.migration_jobs; legacy_customer uuid; other_customer uuid; kept_customer uuid; legacy_supplier uuid;
   inv1 uuid; inv3 uuid; inv5 uuid; dup uuid; dup_party uuid; n bigint; inv_row jsonb; sup_row jsonb; items jsonb; rec jsonb;
   cust1 uuid; cust4 uuid; ch_inv1 uuid; ch_inv2 uuid; ch_inv3 uuid; ch_inv4 uuid; ch_inv5 uuid; ch_inv9 uuid;
-  ch_sup uuid; ch_si1 uuid; ch_si2 uuid; ch_si3 uuid;
+  ch_sup uuid; ch_si1 uuid; ch_si2 uuid; ch_si3 uuid; ch_si4 uuid; ch_si5 uuid; before_target uuid; ch_dash1 uuid; ch_dash2 uuid; dash_target uuid;
 BEGIN
   INSERT INTO auth.users(id,email,instance_id) VALUES(u,u||'@test.invalid','00000000-0000-0000-0000-000000000000');
   INSERT INTO companies(id,name,entity_type,created_by) VALUES(company,'Adopt test','aktiebolag',u);
@@ -62,7 +62,9 @@ BEGIN
       {"source_id":"inv-5","payload":"c","payload_hash":"h"},{"source_id":"inv-9","payload":"c","payload_hash":"h"}]',NULL);
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'supplierInvoices',1,
     '[{"source_id":"si-1","payload":"c","payload_hash":"h"},{"source_id":"si-2","payload":"c","payload_hash":"h"},
-      {"source_id":"si-3","payload":"c","payload_hash":"h"}]',NULL);
+      {"source_id":"si-3","payload":"c","payload_hash":"h"},
+      {"source_id":"si-4","payload":"c","payload_hash":"h"},{"source_id":"si-5","payload":"c","payload_hash":"h"},
+      {"source_id":"dash-1","payload":"c","payload_hash":"h"},{"source_id":"dash-2","payload":"c","payload_hash":"h"}]',NULL);
   SELECT id INTO cust1 FROM migration_job_chunks WHERE job_id=j.id AND source_id='cust-1';
   SELECT id INTO cust4 FROM migration_job_chunks WHERE job_id=j.id AND source_id='cust-4';
   SELECT id INTO ch_sup FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-1';
@@ -159,19 +161,19 @@ BEGIN
   SELECT count(*) INTO n FROM invoices WHERE company_id=company;
   ASSERT n=5,'sales invoices were duplicated or dropped';
 
-  -- Supplier invoices: numbers are unique per supplier only.
+  -- Supplier invoices: repeated references do not establish identity.
   -- 6. Same supplier and number, same header: adopted (unchanged).
   rec:=jsonb_build_object('id',ch_si1,'party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB','org_number','5566778899'),
     'row',sup_row,'items','[]'::jsonb);
   PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
   ASSERT (SELECT state='imported' AND NOT (receipt->>'imported')::boolean FROM migration_job_chunks WHERE id=ch_si1),
     'matching supplier invoice not adopted';
-  -- 7. Same supplier and number, different total: named code, not 23505.
+  -- 7. Same supplier and number, different total: a separate invoice.
   rec:=jsonb_build_object('id',ch_si2,'party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB','org_number','5566778899'),
     'row',sup_row||jsonb_build_object('total',999,'total_sek',999,'remaining_amount',999),'items','[]'::jsonb);
   PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
-  ASSERT (SELECT state='needs_attention' AND error_code='MIGRATION_INVOICE_NUMBER_TAKEN' FROM migration_job_chunks
-    WHERE id=ch_si2),'supplier number collision did not raise MIGRATION_INVOICE_NUMBER_TAKEN';
+  ASSERT (SELECT state='imported' AND (receipt->>'imported')::boolean FROM migration_job_chunks
+    WHERE id=ch_si2),'different-total supplier reference was blocked or merged';
   -- 8. Same number from a different supplier is a different invoice.
   rec:=jsonb_build_object('id',ch_si3,'party_source_id','sup-2','party',jsonb_build_object('name','Other supplier AB','org_number','5561112222'),
     'row',sup_row,'items','[]'::jsonb);
@@ -179,7 +181,69 @@ BEGIN
   ASSERT (SELECT state='imported' AND (receipt->>'imported')::boolean FROM migration_job_chunks WHERE id=ch_si3),
     'same number from another supplier was not inserted';
   SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
-  ASSERT n=2,'supplier invoices were merged across suppliers or duplicated';
+  ASSERT n=3,'separate supplier invoices were merged or duplicated';
+
+  -- Same supplier/reference/amount, different dates: preserve separate IDs.
+  SELECT id INTO ch_si4 FROM migration_job_chunks WHERE job_id=j.id AND source_id='si-4';
+  rec:=jsonb_build_object('id',ch_si4,'party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB'),
+    'row',sup_row||jsonb_build_object('invoice_date','2025-12-13'),'items','[]'::jsonb);
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
+  ASSERT (SELECT state='imported' AND (receipt->>'imported')::boolean FROM migration_job_chunks WHERE id=ch_si4),
+    'repeated reference on another date was refused';
+  SELECT target_id INTO before_target FROM migration_job_chunks WHERE id=ch_si4;
+  ASSERT before_target<>(SELECT target_id FROM migration_job_chunks WHERE id=ch_si1),'different-date invoices merged';
+  ASSERT (SELECT count(DISTINCT arrival_number)=3 FROM supplier_invoices WHERE company_id=company AND supplier_id=legacy_supplier),
+    'supplier arrival identities collided';
+  ASSERT (SELECT invoice_date='2026-01-05' AND total=125 FROM supplier_invoices
+    WHERE id=(SELECT target_id FROM migration_job_chunks WHERE id=ch_si1)),'older invoice was overwritten';
+  SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
+  UPDATE migration_job_chunks SET state='pending' WHERE id=ch_si4;
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
+  ASSERT (SELECT count(*)=n FROM supplier_invoices WHERE company_id=company),'source replay duplicated repeated reference';
+  ASSERT (SELECT target_id=before_target FROM migration_job_chunks WHERE id=ch_si4),'replay changed identity';
+
+  -- A non-unique reference must never make exact-but-ambiguous adoption arbitrary.
+  PERFORM insert_provider_migration_row('supplier_invoices',sup_row||jsonb_build_object('company_id',company,'user_id',u,
+    'supplier_id',legacy_supplier,'supplier_invoice_number','AMBIG','arrival_number',get_next_arrival_number(company)));
+  PERFORM insert_provider_migration_row('supplier_invoices',sup_row||jsonb_build_object('company_id',company,'user_id',u,
+    'supplier_id',legacy_supplier,'supplier_invoice_number','AMBIG','arrival_number',get_next_arrival_number(company)));
+  SELECT id INTO ch_si5 FROM migration_job_chunks WHERE job_id=j.id AND source_id='si-5';
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(jsonb_build_object('id',ch_si5,
+    'party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB'),
+    'row',sup_row||jsonb_build_object('supplier_invoice_number','AMBIG'),'items','[]'::jsonb)));
+  ASSERT (SELECT state='needs_attention' AND error_code='MIGRATION_INVOICE_AMBIGUOUS' FROM migration_job_chunks WHERE id=ch_si5),
+    'ambiguous exact adoption guessed a target';
+
+  -- Unknown numbers do not collide or adopt another equal-date/equal-amount invoice.
+  SELECT id INTO ch_dash1 FROM migration_job_chunks WHERE job_id=j.id AND source_id='dash-1';
+  SELECT id INTO ch_dash2 FROM migration_job_chunks WHERE job_id=j.id AND source_id='dash-2';
+  rec:=jsonb_build_object('party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB'),
+    'row',sup_row||jsonb_build_object('supplier_invoice_number','-'),'items','[]'::jsonb);
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,
+    jsonb_build_array(rec||jsonb_build_object('id',ch_dash1),rec||jsonb_build_object('id',ch_dash2)));
+  ASSERT (SELECT count(*)=2 AND count(DISTINCT target_id)=2 FROM migration_job_chunks
+    WHERE id IN (ch_dash1,ch_dash2) AND state='imported'),'dash invoices collided or merged';
+  SELECT target_id INTO dash_target FROM migration_job_chunks WHERE id=ch_dash1;
+  SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
+  UPDATE migration_job_chunks SET state='pending' WHERE id=ch_dash1;
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec||jsonb_build_object('id',ch_dash1)));
+  ASSERT (SELECT count(*)=n FROM supplier_invoices WHERE company_id=company),'dash replay created a duplicate';
+  ASSERT (SELECT target_id=dash_target FROM migration_job_chunks WHERE id=ch_dash1),'dash replay changed identity';
+
+  -- A separate job must reuse the source mapping, not insert a fourth copy.
+  SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
+  UPDATE migration_jobs SET state='completed',phase='completed',worker_id=NULL,lease_until=NULL WHERE id=j.id;
+  j:=create_provider_migration_job(company,u,consent,ARRAY['supplierInvoices'],NULL);
+  j:=claim_provider_migration_job(worker,j.id);
+  PERFORM save_provider_migration_page(j.id,worker,j.attempt,'supplierInvoices',1,
+    '[{"source_id":"si-4","payload":"c","payload_hash":"h"}]',NULL);
+  SELECT id INTO ch_si4 FROM migration_job_chunks WHERE job_id=j.id AND source_id='si-4';
+  rec:=jsonb_build_object('id',ch_si4,'party_source_id','sup-1','party',jsonb_build_object('name','Supplier AB'),
+    'row',sup_row||jsonb_build_object('invoice_date','2025-12-13'),'items','[]'::jsonb);
+  PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(rec));
+  ASSERT (SELECT state='imported' AND target_id=before_target FROM migration_job_chunks WHERE id=ch_si4),
+    'cross-job replay lost source identity';
+  ASSERT (SELECT count(*)=n FROM supplier_invoices WHERE company_id=company),'cross-job replay duplicated invoice';
 
   ASSERT NOT has_function_privilege('authenticated','public.adopt_provider_migration_invoice_party(uuid,text,uuid)','EXECUTE'),
     'client can remap migration parties';

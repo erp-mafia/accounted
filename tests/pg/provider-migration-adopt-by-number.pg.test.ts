@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { getClient } from './setup'
 
-it('adopts an already-imported invoice on its own number, folds the duplicate customer, and names number collisions', async () => {
+it('adopts an already-imported invoice on its own number, folds the duplicate customer, preserves sales-number conflicts, repeated supplier references and source replay identity', async () => {
   const client = await getClient()
   try {
     const sql = readFileSync(fileURLToPath(new URL('./sql/provider-migration-adopt-by-number.sql', import.meta.url)), 'utf8')

@@ -20,13 +20,21 @@ export interface MappingStepRow {
  * sent to 2999 OBS-konto. That last one is a suggestion made from the file's
  * usage (sie-preview-mappings.ts) and is posted as is once the import runs,
  * so the page shows it for review instead of applying it unseen (#3312).
- * A run where every file is already imported has nothing to map.
+ * A run with complete comparisons and no new vouchers has nothing to map,
+ * even when source metadata or existing-voucher reviews changed.
  */
 export function canSkipMappingStep(
   rows: readonly MappingStepRow[],
-  { unmapped, allImported = false }: { unmapped: number; allImported?: boolean },
+  { unmapped, allImported = false, fileStatuses }: {
+    unmapped: number
+    allImported?: boolean
+    fileStatuses?: readonly {delta?: {added:number} | null}[]
+  },
 ): boolean {
   if (allImported) return true
+  // Missing comparisons or a new fiscal year still require the normal gate.
+  // This only skips UI; admission and the worker re-derive the source delta.
+  if (unmapped === 0 && fileStatuses?.length && fileStatuses.every(file => file.delta?.added === 0)) return true
   if (unmapped > 0) return false
   if (rows.some((row) => row.requiresVatTreatmentReview && !row.vatTreatmentReviewed)) return false
   return obsAccountsOf(rows).length === 0

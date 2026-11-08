@@ -246,7 +246,7 @@ export default function NewSupplierInvoiceForm({
   >(null)
 
   // Pre-submit duplicate advisory (change 3): debounced lookup against
-  // GET /api/supplier-invoices/exists; the create route's 409 stays the backstop.
+  // GET /api/supplier-invoices/exists; reused references are allowed.
   const [duplicateWarning, setDuplicateWarning] = useState<{
     number: string
     existingId: string | null
@@ -655,9 +655,8 @@ export default function NewSupplierInvoiceForm({
   }, [watchedInvoiceDate])
 
   // Pre-submit duplicate advisory (change 3): debounced, sequence-guarded and
-  // purely advisory: the create route's structured 409 stays the enforcement
-  // point, and the exists endpoint mirrors the unique index's
-  // credited/reversed exclusion so re-issues never warn.
+  // purely advisory: a reused reference may be a separate invoice. The
+  // exists endpoint excludes credited/reversed records.
   useEffect(() => {
     const supplierId = watchedSupplierId
     const number = (watchedInvoiceNumber || '').trim()
@@ -683,7 +682,7 @@ export default function NewSupplierInvoiceForm({
             : null,
         )
       } catch {
-        // Advisory only; the 409 backstop still catches real duplicates.
+        // Advisory only; a lookup failure must not prevent registration.
       }
     }, 400)
     return () => clearTimeout(timer)

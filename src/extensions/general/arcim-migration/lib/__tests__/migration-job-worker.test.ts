@@ -28,7 +28,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
   const rows: Row[] = []
-  const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown>): Promise<{ data: unknown; error?: unknown }> => {
     if (name === 'claim_provider_migration_job') {
       if (job.state === 'completed' || job.state === 'needs_attention') return { data: null }
       Object.assign(job, { worker_id: args.p_worker_id, state: 'running', attempt: job.attempt + 1 })
@@ -62,7 +62,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     const chain = { select: () => chain, eq: (key: string, value: unknown) => {
       filters[key] = value; if (key === 'state') state = value as string; return chain
     },
-      order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
+      in: () => chain, is: () => chain, order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
       then: (resolve: (data: unknown) => void) => resolve({ data: table === 'migration_jobs'
         ? Object.entries(filters).every(([key, value]) => job[key as keyof ProviderMigrationJob] === value) ? { ...job } : null
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
@@ -79,6 +79,31 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 describe('bounded durable worker', () => {
+  it('initializes source hash baselines in RPC-sized batches before saving a large page', async () => {
+    const db = database()
+    const items = Array.from({ length: 1001 }, (_, index) => customer(index))
+    mocks.page.mockResolvedValue({ items, nextPage: null })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'read_provider_source_hash_baselines') {
+        return { data: (args.p_ids as string[]).map(id => ({
+          record_id: id, chunk_id: `chunk-${id}`, payload_hash: 'original-hash',
+          payload: sealMigrationPayload({ id }).payload,
+        })), error: null }
+      }
+      return original(name, args)
+    })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    const reads = db.rpc.mock.calls.filter(([name]) => name === 'read_provider_source_hash_baselines')
+    const writes = db.rpc.mock.calls.filter(([name]) => name === 'initialize_provider_source_hashes')
+    expect(reads.map(([, args]) => (args.p_ids as string[]).length)).toEqual([1000, 1])
+    expect(writes.map(([, args]) => (args.p_rows as unknown[]).length)).toEqual([1000, 1])
+    expect(db.rows).toHaveLength(1001)
+    expect(db.job.state).toBe('completed')
+  })
+
   it.each(['worker_id', 'attempt'] as const)('stops when the lease %s changes after a checkpoint', async token => {
     const db = database()
     const originalRpc = db.rpc.getMockImplementation()!
@@ -97,7 +122,7 @@ describe('bounded durable worker', () => {
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
     expect(db.job.state).toBe('running')
     expect(db.rpc.mock.calls.map(([name]) => name)).toEqual([
-      'claim_provider_migration_job', 'save_provider_migration_page',
+      'claim_provider_migration_job', 'read_provider_source_hash_baselines', 'save_provider_migration_page',
     ])
   })
   it.each(['salesInvoices', 'supplierInvoices'] as const)('isolates %s with inconsistent VAT rows before writing an invoice', async resource => {
@@ -653,5 +678,98 @@ describe('supplier credit notes in the import phase', () => {
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [expect.objectContaining({ id: 'si-1', link: expect.objectContaining({ totalSek: 125 }) })],
     }))
+  })
+})
+
+it.each([false, true])('uses a dash or applies the saved correction after hydration: corrected=%s', async corrected => {
+  const db = database({ phase: 'import', resources: ['supplierInvoices'] })
+  const dto = mapBokioToSupplierInvoice({ id: 'missing-number', supplierRef: { id: 'supplier', name: 'Fixture' }, totalAmount: 125 })
+  dto.invoiceNumber = ''
+  const correction = sealMigrationPayload({ invoiceNumber: 'SUP-42' }).payload
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto),
+    receipt: corrected ? { userCorrection: correction, correctedBy: 'user', correctedAt: '2026-11-04T00:00:00Z' } : {} })
+  mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+  await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+  const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+  const record = (commit[1].p_records as Record<string, unknown>[])[0]
+  if (corrected) {
+    expect(vi.mocked(mapSupplierInvoice).mock.lastCall?.[0].invoiceNumber).toBe('SUP-42')
+    expect(record).not.toHaveProperty('error')
+    expect(record.link).toEqual(expect.objectContaining({ userCorrection: correction, correctedBy: 'user' }))
+    expect(dto.invoiceNumber).toBe('')
+  } else {
+    expect(record).not.toHaveProperty('error')
+    expect(record.link).toEqual(expect.objectContaining({ invoiceNumber: '-' }))
+  }
+})
+
+it('uses OCR after hydration for invoice admission and voucher-link identity', async () => {
+  const db = database({ phase: 'import', resources: ['supplierInvoices'] })
+  const dto = mapBokioToSupplierInvoice({ id: 'ocr-fallback', supplierRef: { id: 'supplier', name: 'Fixture' }, totalAmount: 125 })
+  dto.invoiceNumber = ''; dto.ocrNumber = '001234567890'
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto), receipt: {} })
+  mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+  await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+  expect(vi.mocked(mapSupplierInvoice).mock.lastCall?.[0].invoiceNumber).toBe('001234567890')
+  const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+  const record = (commit[1].p_records as Record<string, unknown>[])[0]
+  expect(record).not.toHaveProperty('error')
+  expect(record.link).toEqual(expect.objectContaining({ invoiceNumber: '001234567890' }))
+  expect(dto.invoiceNumber).toBe('')
+})
+
+it('does not recreate an invoice whose provider source was already approved as historical', async () => {
+  const db = database({ phase: 'import', resources: ['salesInvoices'] })
+  const dto = mapBokioToSalesInvoice({ id: 'historical-source', invoiceNumber: '216', totalAmount: 125, paidAmount: 125,
+    status: 'paid', lineItems: [{ description: 'Provider later added details', quantity: 1, unitPrice: 100, taxRate: 25 }] })
+  db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+  const from = db.supabase.from.bind(db.supabase)
+  const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { id: 'approved-reference' }, error: null }) }
+  const supabase = { ...db.supabase, from: (table: string) => table === 'historical_receivable_references' ? chain : from(table) } as unknown as SupabaseClient
+  await runProviderMigrationWorker({ supabase, jobId: db.job.id })
+  expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+    p_records: [{ id: dto.id, skip: 'historical_receivable' }],
+  }))
+  expect(mocks.hydrate).not.toHaveBeenCalled()
+})
+
+
+describe('Bokio open-balance reconciliation policy', () => {
+  beforeEach(() => mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } }))
+  it.each([
+    ['explicit unpaid balance', 1499, ['target']],
+    ['missing provider balance', undefined, []],
+    ['settled source', 0, []],
+    ['contradictory balance', 2000, []],
+  ])('passes only confirmed open records to the unpaid policy: %s', async (_label, remaining, expected) => {
+    const db = database({ provider: 'bokio', phase: 'reconcile', resources: ['supplierInvoices'] })
+    const dto = mapBokioToSupplierInvoice({ id: 'telia', invoiceNumber: '20508368261', invoiceDate: '2026-10-27',
+      dueDate: '2026-11-30', totalAmount: 1499, remainingAmount: remaining })
+    db.rows.push({ id: 'chunk', source_id: dto.id, resource: 'supplierInvoices', state: 'linked', target_id: 'target', ...sealMigrationPayload(dto) })
+    mocks.reconcile.mockResolvedValue({ links: [], review: [] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') db.rows[0].state = 'done'
+      return original(name, args)
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.reconcile).toHaveBeenCalledWith(expect.objectContaining({ sourceUnpaidInvoiceIds: expected, dryRun: true }))
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({ p_records: [{ id: 'chunk', payment: null }] }))
+  })
+  it.each([
+    ['overdue_unpaid', 'MIGRATION_UNPAID_OVERDUE'],
+    ['low_confidence', 'MIGRATION_PAYMENT_REVIEW'],
+  ])('retains the reason %s in the durable review', async (reason, error) => {
+    const db = database({ provider: 'bokio', phase: 'reconcile', resources: ['supplierInvoices'] })
+    const dto = mapBokioToSupplierInvoice({ id: 'telia', totalAmount: 1499, remainingAmount: 1499 })
+    db.rows.push({ id: 'chunk', source_id: dto.id, resource: 'supplierInvoices', state: 'linked', target_id: 'target', ...sealMigrationPayload(dto) })
+    mocks.reconcile.mockResolvedValue({ links: [], review: [{ supplier_invoice_id: 'target', reason }] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') db.rows[0].state = 'needs_attention'
+      return original(name, args)
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({ p_records: [{ id: 'chunk', payment: null, error }] }))
   })
 })

@@ -863,10 +863,9 @@ export async function createSupplierInvoice(
 }
 
 /**
- * The insert failed. The unique index on (company_id, supplier_id,
- * supplier_invoice_number) gets its own code with the existing row, and its
- * credit note when it was credited, so the dashboard can offer "undo
- * crediting" and an agent can fetch the original.
+ * Preserve structured conflicts during rollout to older database schemas.
+ * New schemas allow repeated supplier references; an older number-only unique
+ * index can still reject one, so retain its existing-row response for clients.
  */
 async function duplicateOrInsertFailure(
   ctx: CreateSupplierInvoiceContext,

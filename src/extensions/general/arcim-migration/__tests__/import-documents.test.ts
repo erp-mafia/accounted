@@ -70,15 +70,16 @@ function rangeMockSupabase(byTable: Record<string, unknown[]>): SupabaseClient {
   const builder = (table: string) => {
     const node = {
       select: () => node,
-      eq: () => node,
+      eq: vi.fn(() => node),
       not: () => node,
       in: () => node,
+      or: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }
     return node
   }
-  return { from: (table: string) => builder(table), rpc: vi.fn().mockResolvedValue({ data: null, error: null }) } as unknown as SupabaseClient
+  return { from: vi.fn((table: string) => builder(table)), rpc: vi.fn().mockResolvedValue({ data: null, error: null }) } as unknown as SupabaseClient
 }
 
 function bytesOf(text: string): ArrayBuffer {
@@ -135,7 +136,7 @@ interface ExistingAttachment {
 }
 
 function wireBokio(
-  opts: { existingAttachments?: ExistingAttachment[]; voucherRef?: BokioVoucherRef } = {},
+  opts: { existingAttachments?: ExistingAttachment[]; voucherRef?: BokioVoucherRef; archivedUploads?: { source_id: string; target_id: string }[] } = {},
 ) {
   mockFetchUploads.mockResolvedValue([UPLOAD] as never)
   mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', opts.voucherRef ?? VOUCHER_REF]]))
@@ -144,6 +145,7 @@ function wireBokio(
     fiscal_periods: PERIODS,
     journal_entries: GNUBOK_VOUCHERS,
     document_attachments: opts.existingAttachments ?? [],
+    migration_source_records: opts.archivedUploads ?? [],
   })
 }
 
@@ -227,6 +229,62 @@ describe('importProviderDocuments', () => {
     })
     expect(mockDownload).toHaveBeenCalledTimes(1)
     expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('uses retained Bokio upload identity before download (dryRun=%s)', async dryRun => {
+    const supabase = wireBokio({
+      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1', upload_source: 'api' }],
+      archivedUploads: [{ source_id: 'up-1', target_id: 'existing-doc' }],
+    })
+    mockArchivedForOwnEntry.mockResolvedValue(true)
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun })
+    expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1, total: 1 })
+    expect(mockDownload).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    const from = vi.mocked(supabase.from)
+    const mappingIndex = from.mock.calls.findIndex(args => args[0] === 'migration_source_records')
+    const builder = from.mock.results[mappingIndex].value
+    expect(builder.eq.mock.calls).toEqual([
+      ['company_id', COMPANY], ['provider', 'bokio'], ['account_key', 'bokio-co'], ['resource', 'uploads'],
+    ])
+  })
+
+  it('still imports a new file on a voucher with a previously imported file', async () => {
+    const supabase = wireBokio({
+      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'different-content', journal_entry_id: 'je-1', upload_source: 'api' }],
+      archivedUploads: [{ source_id: 'up-1', target_id: 'existing-doc' }],
+    })
+    mockArchivedForOwnEntry.mockResolvedValue(true)
+    mockFetchUploads.mockResolvedValue([UPLOAD, { ...UPLOAD, id: 'up-2' }] as never)
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result).toMatchObject({ scanned: 2, linked: 1, skipped: 1 })
+    expect(mockDownload).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'tok', 'bokio-co', 'up-2')
+    expect(mockUpload).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['missing-doc', 'other-voucher'])('does not trust stale upload mappings: %s', async stale => {
+    const supabase = wireBokio({
+      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'different-content', journal_entry_id: 'je-other', upload_source: 'api' }],
+      archivedUploads: [{ source_id: 'up-1', target_id: stale === 'missing-doc' ? stale : 'existing-doc' }],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result).toMatchObject({ linked: 1, skipped: 0 })
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports an already archived document as complete even when its period is now locked', async () => {
+    mockFetchUploads.mockResolvedValue([UPLOAD] as never)
+    mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
+    mockArchivedForOwnEntry.mockResolvedValue(true)
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS.map(p => ({ ...p, is_closed: true })), journal_entries: GNUBOK_VOUCHERS,
+      document_attachments: [{ id: 'existing-doc', journal_entry_id: 'je-1', upload_source: 'api' }],
+      migration_source_records: [{ source_id: 'up-1', target_id: 'existing-doc' }],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true })
+    expect(result).toMatchObject({ skipped: 1, locked: 0, linked: 0 })
+    expect(mockDownload).not.toHaveBeenCalled()
   })
 
   it('still archives content already attached to a DIFFERENT verifikat (same contract, several vouchers)', async () => {
@@ -893,6 +951,65 @@ describe('importProviderDocuments', () => {
     expect(file).toMatchObject({ name: 'Kvitto.jpg', type: 'image/jpeg' })
   })
 
+  it('resolves the current import without an undone or replaced predecessor blocking the file', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[
+        {...GNUBOK_VOUCHERS[0],id:'old',status:'reversed',reversed_by_id:'storno',import_batch_id:'old-import'},
+        {...GNUBOK_VOUCHERS[0],id:'current',status:'posted',reversed_by_id:null,import_batch_id:'new-import'},
+      ],sie_imports:[{id:'old-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1'})
+    expect(result).toMatchObject({linked:1,unmatched:0})
+    expect(mockUpload).toHaveBeenCalledWith(expect.anything(),USER,COMPANY,expect.anything(),expect.objectContaining({journal_entry_id:'current'}))
+  })
+
+  it('does not select a retired import when there is no current source voucher', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[{...GNUBOK_VOUCHERS[0],import_batch_id:'old-import'}],sie_imports:[{id:'old-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',review:{offset:0,limit:25}})
+    expect(result).toMatchObject({linked:0,unmatched:1,unmatchedReview:{reasonCounts:{missing_voucher:1}}})
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('still refuses multiple current candidates without changing any document', async () => {
+    wireBokio()
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,
+      journal_entries:[{...GNUBOK_VOUCHERS[0],id:'one',import_batch_id:'current-import'},
+        {...GNUBOK_VOUCHERS[0],id:'two',import_batch_id:'another-current-import'}]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',review:{offset:0,limit:25}})
+    expect(result).toMatchObject({linked:0,unmatched:1,unmatchedReview:{reasonCounts:{ambiguous:1}}})
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('publishes completed-file counters while a later download is still in flight',async()=>{
+    const supabase=wireBokio()
+    mockFetchUploads.mockResolvedValue(Array.from({length:11},(_,i)=>({...UPLOAD,id:`file-${String(i).padStart(2,'0')}`})))
+    let release!:()=>void
+    const waiting=new Promise<void>(resolve=>{release=resolve});let calls=0
+    mockDownload.mockImplementation(async()=>{if(++calls===11)await waiting;return {bytes:bytesOf('PDFBYTES'),contentType:'application/pdf'}})
+    const progress=vi.fn();let finished=false
+    const task=importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',onProgress:progress}).then(value=>{finished=true;return value})
+    await vi.waitFor(()=>expect(progress).toHaveBeenCalledWith(expect.objectContaining({scanned:10,total:11})))
+    expect(finished).toBe(false);release()
+    expect(await task).toMatchObject({scanned:11,linked:1,skipped:10})
+    expect(progress.mock.calls.some(([value])=>value.scanned===10)).toBe(true)
+  })
+
+  it('reviews all unmatched files without downloads, writes or the 20-sample limit', async () => {
+    mockFetchUploads.mockResolvedValue(Array.from({length:55},(_,i)=>({...UPLOAD,id:`file-${String(i).padStart(2,'0')}`})) as never)
+    mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1',VOUCHER_REF]]))
+    const supabase=rangeMockSupabase({fiscal_periods:PERIODS,journal_entries:[]})
+    const result=await importProviderDocuments({supabase,companyId:COMPANY,userId:USER,consentId:'c1',
+      dryRun:false,timeBudgetMs:0,review:{offset:25,limit:25}})
+    expect(result).toMatchObject({dryRun:true,unmatched:55,partial:false,
+      unmatchedReview:{total:55,filteredTotal:55,offset:25,reasonCounts:{missing_voucher:55}}})
+    expect(result.unmatchedReview?.items).toHaveLength(25)
+    expect(result.unmatchedReview?.items[0]).toMatchObject({uploadId:'file-25',fileName:'Kvitto',voucher:'V33',reason:'missing_voucher'})
+    expect(result.unmatchedSamples).toHaveLength(20)
+    expect(mockDownload).not.toHaveBeenCalled();expect(mockUpload).not.toHaveBeenCalled();expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   describe('time budget and cursor (resumable sweep)', () => {
     const THREE_CONNECTIONS: FortnoxFileConnection[] = [
       { ...FORTNOX_CONNECTION, fileId: 'file-c', name: 'c.pdf' },
@@ -1010,5 +1127,34 @@ describe('importProviderDocuments', () => {
         'd.pdf',
       ])
     })
+  })
+})
+
+describe('manually approved historical payment targets', () => {
+  it.each([false, true])('uses the active dated target only after approval: approved=%s', async approved => {
+    wireBokio()
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS,
+      journal_entries: [{ ...GNUBOK_VOUCHERS[0], status: 'reversed', reversed_by_id: 'storno' },
+        { ...GNUBOK_VOUCHERS[0], id: 'active', status: 'posted', reversed_by_id: null }],
+      document_attachments: [],
+      historical_receivable_references: approved ? [{ payment_journal_entry_id: 'active' }] : [],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result.linked).toBe(approved ? 1 : 0)
+    if (approved) expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'active' })
+    else expect(mockDownload).not.toHaveBeenCalled()
+  })
+  it('does not bypass a locked year even after explicit historical review', async () => {
+    wireBokio()
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS.map(row => ({ ...row, is_closed: true })),
+      journal_entries: [{ ...GNUBOK_VOUCHERS[0], status: 'reversed', reversed_by_id: 'storno' },
+        { ...GNUBOK_VOUCHERS[0], id: 'active', status: 'posted', reversed_by_id: null }],
+      document_attachments: [], historical_receivable_references: [{ payment_journal_entry_id: 'active' }],
+    })
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+    expect(result).toMatchObject({ linked: 0, locked: 1 })
+    expect(mockDownload).not.toHaveBeenCalled()
   })
 })

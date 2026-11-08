@@ -1,3 +1,5 @@
+import { SOURCE_HASH_BATCH_SIZE, sourceHashBaselines } from './migration-source-hashes'
+import { applyMigrationInvoiceCorrection } from '@/lib/providers/migration-corrections'
 import { randomUUID, createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -7,11 +9,12 @@ import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-co
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
-import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
+import { sealMigrationPayload, openMigrationPayload, migrationSourceHash } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
+import { readNumber } from '@/lib/providers/amounts'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
@@ -32,6 +35,9 @@ export interface MigrationChunk {
   payload: string
   target_id: string | null
   receipt: {
+    userCorrection?: string
+    correctedBy?: string
+    correctedAt?: string
     link?: Omit<MigratedInvoiceLinkInput, 'invoiceId'> & {
       /** The credited invoice as the provider named it; pairMigratedCreditNotes resolves it. */
       creditedInvoiceRef?: CreditedInvoiceRefDto | null
@@ -93,6 +99,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   connection: ResolvedConsent, deadline: number): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
+  if (c.resource === 'salesInvoices') {
+    const { data: historical, error } = await withinMigrationDeadline(supabase.from('historical_receivable_references')
+      .select('id').eq('company_id', job.company_id).eq('provider', job.provider).eq('account_key', job.account_key)
+      .eq('source_id', c.source_id).eq('decision', 'approved').maybeSingle(), deadline)
+    if (error) throw new Error('Historical source lookup failed')
+    if (historical?.id) return { id: c.id, skip: 'historical_receivable' }
+  }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
@@ -118,7 +131,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // detail failures so healthy records continue; the user can retry them.
     throw new Error(hydrated.hydration.abortedBy === 'auth' ? 'PROVIDER_AUTH_EXPIRED' : 'MIGRATION_DETAIL_RETRY')
   }
-  const invoice = hydrated.invoices[0]
+  const invoice = c.resource === 'supplierInvoices'
+    ? applyMigrationInvoiceCorrection(hydrated.invoices[0] as SupplierInvoiceDto,
+      c.receipt?.userCorrection ? openMigrationPayload(c.receipt.userCorrection) : undefined)
+    : hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
   if (invoice.lines.length > MAX_INVOICE_LINES) return { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
   const fx = await withinMigrationDeadline(buildFxRateIndex(supabase, [invoice]), deadline)
@@ -158,7 +174,7 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
-    link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
+    link: { ...(c.receipt?.userCorrection ? { userCorrection: c.receipt.userCorrection, correctedBy: c.receipt.correctedBy, correctedAt: c.receipt.correctedAt } : {}), ...(provider === 'bokio' && c.resource === 'supplierInvoices'
       ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
         ? { settlement: { sourcePaid: invoice.paymentStatus.paid, userId: job.user_id } } : {}),
@@ -325,6 +341,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
           || !code.startsWith('MIGRATION_')) throw error
         record = { id: c.id, error: code }
       }
+      if (!record.error && !record.skip) record = {...record,source_hash:migrationSourceHash(openMigrationPayload(c.payload))}
       const size = Buffer.byteLength(JSON.stringify(record))
       if (size > MAX_BATCH_BYTES) record = { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
       if (bytes + size > MAX_BATCH_BYTES) await commit()
@@ -351,10 +368,24 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
         ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW' } : {}) }
     })
   } else if (job.phase === 'reconcile') {
+    const sourceUnpaidInvoiceIds = job.provider === 'bokio' ? chunks.filter(c => {
+      const dto = openMigrationPayload<SupplierInvoiceDto>(c.payload)
+      // The mapper falls back to the total when remainingAmount is absent.
+      // Only an explicit provider balance establishes that payment is not due
+      // to be matched; unknown snapshots retain the existing matching flow.
+      const remaining = readNumber(dto._raw ?? {}, ['remainingAmount'])
+      const total = dto.legalMonetaryTotal.payableAmount.value
+      return dto.invoiceTypeCode !== '381' && dto.paymentStatus.paid === false
+        && remaining !== undefined && remaining > ORE_TOLERANCE && remaining <= total + ORE_TOLERANCE
+        && Math.abs(dto.paymentStatus.balance.value - remaining) <= ORE_TOLERANCE
+    }).map(c => c.target_id!) : []
     const result = await reconcileSupplierInvoiceVouchers({ supabase, companyId: job.company_id, userId: job.user_id,
-      dryRun: true, invoiceIds: chunks.map(c => c.target_id!), maxInvoices: BATCH_SIZE })
-    records = chunks.map(c => ({ id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
-      ...(result.review.some(review => review.supplier_invoice_id === c.target_id) ? { error: 'MIGRATION_PAYMENT_REVIEW' } : {}) }))
+      dryRun: true, invoiceIds: chunks.map(c => c.target_id!), sourceUnpaidInvoiceIds, maxInvoices: BATCH_SIZE })
+    records = chunks.map(c => {
+      const review = result.review.find(item => item.supplier_invoice_id === c.target_id)
+      return { id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
+        ...(review ? { error: review.reason === 'overdue_unpaid' ? 'MIGRATION_UNPAID_OVERDUE' : 'MIGRATION_PAYMENT_REVIEW' } : {}) }
+    })
   } else records = chunks.map(c => ({ id: c.id }))
   await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
 }
@@ -430,7 +461,14 @@ export async function runProviderMigrationWorker(options: {
           const page = await withinMigrationDeadline(withExecutionDeadline(deadline - 5000, 'migration-list',
             () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
               connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
-          const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
+          const baselines = await withinMigrationDeadline(sourceHashBaselines(supabase,job,resource,page.items.flatMap(dto=>dto.id ? [dto.id] : [])),deadline-5000)
+          for (let offset = 0; offset < baselines.length; offset += SOURCE_HASH_BATCH_SIZE) {
+            await migrationRpc(supabase, job, 'initialize_provider_source_hashes', {
+              p_rows: baselines.slice(offset, offset + SOURCE_HASH_BATCH_SIZE),
+            }, deadline - 5000)
+          }
+          const records = page.items.map((dto, i) => ({ source_hash:migrationSourceHash(dto), source_id: dto.id || `missing:${job.next_page}:${i}`,
+            ...(['salesInvoices','supplierInvoices'].includes(resource) && !invoiceWithinScope(dto as InvoiceDto,job.fiscal_year_scope) ? {skip:'outsideFiscalYears'} : {}),
             ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
               ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
           // Persist bounded segments even when an unpaged upstream returns its

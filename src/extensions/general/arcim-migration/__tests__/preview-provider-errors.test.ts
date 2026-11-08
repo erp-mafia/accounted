@@ -1,3 +1,5 @@
+import { BokioApiError } from '@/lib/providers/bokio/client'
+import { providerSupportsSie, fetchProviderSieFiles } from '../lib/sie-fetcher'
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
@@ -122,5 +124,69 @@ describe('GET /preview: company-info failures', () => {
 
     expect(status).toBe(200)
     expect(body.companyInfo).toBeNull()
+  })
+})
+
+describe('GET /preview: Bokio SIE permissions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'bokio' })
+    ;(resolveConsent as Mock).mockResolvedValue({ consent: { provider: 'bokio' }, accessToken: 'tok', providerCompanyId: 'company-1' })
+    ;(fetchCompanyInfoDirect as Mock).mockResolvedValue(null)
+    ;(providerSupportsSie as Mock).mockReturnValue(true)
+  })
+
+  it('explains sie:read when every export is forbidden', async () => {
+    ;(fetchProviderSieFiles as Mock).mockRejectedValue(new BokioApiError('Forbidden', 403))
+    const response = await previewHandler(previewRequest(), buildCtx())
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(response)
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+    expect(body.error.message).toContain('sie:read')
+    expect(body.error.message).toContain('fiscal-years:read')
+    expect(body.error.message_en).toContain('sie:read')
+    expect(body.error.message_en).toContain('fiscal-years:read')
+  })
+
+  it('keeps transient export failures soft', async () => {
+    ;(fetchProviderSieFiles as Mock).mockRejectedValue(new BokioApiError('Unavailable', 503))
+    expect((await previewHandler(previewRequest(), buildCtx())).status).toBe(200)
+  })
+})
+
+describe('GET /sie-data: Bokio SIE permissions', () => {
+  const handler = (arcimMigrationExtension.apiRoutes ?? []).find(
+    (route) => route.method === 'GET' && route.path === '/sie-data',
+  )!.handler as RouteHandler
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(resolveConsent as Mock).mockResolvedValue({ consent: { provider: 'bokio' }, accessToken: 'tok', providerCompanyId: 'company-1' })
+    ;(providerSupportsSie as Mock).mockReturnValue(true)
+  })
+
+  it('returns the same permission error as preview, not an expired-auth error', async () => {
+    ;(fetchProviderSieFiles as Mock).mockRejectedValue(new BokioApiError('Forbidden', 403))
+    const request = createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+      searchParams: { consentId: 'consent-1' },
+    })
+    const response = await handler(request, buildCtx())
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(response)
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+    expect(body.error.message).toContain('sie:read')
+    expect(body.error.message).toContain('fiscal-years:read')
+    expect(body.error.message_en).toContain('sie:read')
+    expect(body.error.message_en).toContain('fiscal-years:read')
+  })
+
+  it('still treats an invalid token as expired authentication', async () => {
+    ;(fetchProviderSieFiles as Mock).mockRejectedValue(new BokioApiError('Unauthorized', 401))
+    const request = createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+      searchParams: { consentId: 'consent-1' },
+    })
+    const response = await handler(request, buildCtx())
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(body.error.code).toBe('PROVIDER_AUTH_EXPIRED')
   })
 })
