@@ -1,0 +1,1 @@
+[2026-11-08] Pågående arbeten book the register target less what its own verifikat hold, never the whole 1620/2450/2290/1471/2431 balance; each posted verifikat keeps what it was computed from, and the momskod pin holds the settings' and each booking's adjustment account only.

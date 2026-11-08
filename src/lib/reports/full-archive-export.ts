@@ -1468,11 +1468,13 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // The bokslut checklist per räkenskapsår (which closing steps were done,
   // by whom, when): the konsult's documented bokslutsarbete (Reko 760); kept.
   { name: 'bokslut_checklist_items', file: 'bokslut_checklist_items.json', orderBy: 'updated_at', pageKey: 'item_key' },
-  // Pågående arbeten (K3 kapitel 23): the method and adjustment account, and
-  // the uppdrag with the figures the balansdag adjustment was computed from:
-  // underlag for that year_end verifikat (BFL 7 kap. 1 §).
+  // Pågående arbeten (K3 kapitel 23): the method and adjustment account, the
+  // uppdrag as stated today, and per posted year_end verifikat what it was
+  // computed from (each uppdrag's figures for that balansdag, the positions
+  // and the targets): underlag for that verifikat (BFL 7 kap. 1 §).
   { name: 'contract_revenue_settings', file: 'contract_revenue_settings.json', orderBy: 'created_at' },
   { name: 'contract_revenue_contracts', file: 'contract_revenue_contracts.json', orderBy: 'created_at' },
+  { name: 'contract_revenue_bookings', file: 'contract_revenue_bookings.json', orderBy: 'created_at' },
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
   // No `denormalize`: rot_rut_payout_requests has no currency column either.

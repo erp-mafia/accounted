@@ -7,6 +7,7 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingEvidence } from '@/lib/core/bookkeeping/year-end-business-events'
+import { roundOre } from '@/lib/money'
 import type { JournalEntry } from '@/types'
 import {
   computeContractRevenue,
@@ -17,12 +18,16 @@ import {
 } from './calculator'
 
 /**
- * Books the pågående-arbeten adjustment on balansdagen through the posting
- * port: the engine draws the voucher number, the period lock and the
- * balance trigger apply as to every verifikat. The adjustment is the
- * difference between the positions computeContractRevenue derives and what
- * the position accounts already hold, so running it twice books nothing the
- * second time; a change in an estimate books only the change (K3 23.21).
+ * Books the pågående-arbeten adjustment on balansdagen: a year_end draft
+ * through the posting port, committed with what it was computed from by
+ * commit_contract_revenue (one transaction; the engine draws the voucher
+ * number, the period lock and the balance trigger apply as to every
+ * verifikat). The adjustment is the difference between the positions
+ * computeContractRevenue derives and what the register's own verifikat
+ * already hold on the position accounts (contract_revenue_register_balances),
+ * so running it twice books nothing the second time, a change in an estimate
+ * books only the change (K3 23.21), and a balance the register did not book
+ * (another provision on 2290, pågående arbeten booked by hand) is never moved.
  */
 
 export class ContractRevenueAccountError extends Error {
@@ -53,16 +58,36 @@ export async function assertRevenueAdjustmentAccount(
   }
 }
 
-/** The position accounts' balances on balansdagen (debit positive), every posted entry included. */
-export async function fetchPositionBalances(
+/**
+ * What the register's own verifikat (its bookings, their stornos and their
+ * rättelse verifikat) hold per account on a day, debit positive: the base the
+ * adjustment is computed from.
+ */
+export async function fetchRegisterBalances(
+  supabase: SupabaseClient,
+  companyId: string,
+  asOf: string,
+): Promise<Record<string, number>> {
+  const { data, error } = await supabase.rpc('contract_revenue_register_balances', {
+    p_company_id: companyId,
+    p_as_of: asOf,
+  })
+  if (error) throw new Error(`Kunde inte läsa registrets verifikationer: ${error.message}`)
+  const balances: Record<string, number> = {}
+  for (const row of (data ?? []) as Array<{ account_number: string; balance: number | string }>) {
+    balances[row.account_number] = Number(row.balance)
+  }
+  return balances
+}
+
+/** The position accounts' whole ledger balances on balansdagen (debit positive), every posted entry included. */
+export async function fetchLedgerPositionBalances(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
   accounts: ContractRevenueAccounts,
 ): Promise<Record<string, number>> {
-  const positionAccounts = new Set([
-    accounts.accruedRevenue, accounts.billedInAdvance, accounts.lossProvision, accounts.wipCosts, accounts.wipBilling,
-  ])
+  const positionAccounts = new Set(positionAccountsOf(accounts))
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' })
   const balances: Record<string, number> = {}
   for (const row of rows) {
@@ -70,6 +95,26 @@ export async function fetchPositionBalances(
     balances[row.account_number] = (row.closing_debit || 0) - (row.closing_credit || 0)
   }
   return balances
+}
+
+function positionAccountsOf(accounts: ContractRevenueAccounts): string[] {
+  return [accounts.accruedRevenue, accounts.billedInAdvance, accounts.lossProvision, accounts.wipCosts, accounts.wipBilling]
+}
+
+/**
+ * What the position accounts hold beyond the register's own verifikat on
+ * balansdagen (debit positive): another provision on 2290, pågående arbeten
+ * booked by hand or brought in with the opening balances. The adjustment
+ * leaves it as it is; the page shows it so the company can judge it.
+ */
+export function unregisteredBalances(
+  ledger: Readonly<Record<string, number>>,
+  register: Readonly<Record<string, number>>,
+  accounts: ContractRevenueAccounts,
+): Array<{ account: string; amount: number }> {
+  return positionAccountsOf(accounts)
+    .map((account) => ({ account, amount: roundOre((ledger[account] ?? 0) - (register[account] ?? 0)) || 0 }))
+    .filter((row) => row.amount !== 0)
 }
 
 /** What happened, for the posting port: income from pågående arbeten recognised on balansdagen. */
@@ -115,12 +160,12 @@ export interface BookContractRevenueResult {
 export async function bookContractRevenueAdjustment(args: BookContractRevenueArgs): Promise<BookContractRevenueResult> {
   const { supabase, companyId, fiscalPeriodId } = args
   await assertRevenueAdjustmentAccount(supabase, companyId, args.accounts.revenueAdjustment)
-  const balances = await fetchPositionBalances(supabase, companyId, fiscalPeriodId, args.accounts)
+  const balances = await fetchRegisterBalances(supabase, companyId, args.periodEnd)
   const result = computeContractRevenue(args.method, args.contracts, args.accounts, balances)
   if (result.lines.length === 0 || (args.refuseWithIssues && result.issues.length > 0)) return { result, entry: null }
 
   const amount = result.lines.reduce((sum, line) => sum + line.debit_amount, 0)
-  const entry = await postingPort.postJournalEntry({
+  const draft = await postingPort.draftJournalEntry({
     supabase,
     companyId,
     userId: args.userId,
@@ -134,6 +179,24 @@ export async function bookContractRevenueAdjustment(args: BookContractRevenueArg
       source_type: 'year_end',
       lines: result.lines,
     },
+  })
+  // The verifikat and what it was computed from, in one transaction: the
+  // uppdrag can be stated anew for the next balansdag, the booking cannot.
+  const { entry } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId: args.userId,
+    fn: 'commit_contract_revenue',
+    args: [
+      draft,
+      {
+        method: args.method,
+        accounts: { ...args.accounts },
+        contracts: [...args.contracts],
+        positions: result.positions,
+        targets: result.targets,
+      },
+    ],
   })
   return { result, entry }
 }

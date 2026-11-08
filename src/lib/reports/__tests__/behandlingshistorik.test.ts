@@ -2517,3 +2517,52 @@ describe('generateBehandlingshistorik: Beslut och förslag', () => {
     expect(client.from).not.toHaveBeenCalledWith('pending_operations')
   })
 })
+
+describe('auditRowToEvent: pågående arbeten, method and account (accounted#111)', () => {
+  // What write_audit_log stores for a contract_revenue_settings row.
+  const settings = {
+    id: 'crs-1',
+    company_id: 'company-1',
+    user_id: 'user-1',
+    method: 'successiv',
+    revenue_account: '3095',
+    created_at: '2026-03-10T09:00:00.000Z',
+    updated_at: '2026-03-10T09:00:00.000Z',
+  }
+  const row = (action: AuditLogEntry['action'], old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null) =>
+    auditRow({ table_name: 'contract_revenue_settings', record_id: 'crs-1', action, old_state, new_state })
+
+  it('is an audited table', () => {
+    expect(AUDITED_TABLES).toContain('contract_revenue_settings')
+  })
+
+  it('states the method and account when chosen', () => {
+    expect(auditRowToEvent(row('INSERT', null, settings))).toMatchObject({
+      category: 'installningar',
+      code: 'contract_revenue_settings.created',
+      event: 'Metod och konto för pågående arbeten valda',
+      object: 'Pågående arbeten',
+      details: ['Metod: Successiv vinstavräkning', 'Konto för upparbetade intäkter: 3095'],
+    })
+  })
+
+  it('shows a change of method or account, and nothing for a save that changed neither', () => {
+    const changed = { ...settings, method: 'fardigstallande', revenue_account: '3096' }
+    expect(auditRowToEvent(row('UPDATE', settings, changed))).toMatchObject({
+      code: 'contract_revenue_settings.updated',
+      details: [
+        'Metod: Successiv vinstavräkning → Färdigställandemetoden',
+        'Konto för upparbetade intäkter: 3095 → 3096',
+      ],
+    })
+    expect(auditRowToEvent(row('UPDATE', settings, { ...settings, updated_at: '2026-03-11T09:00:00.000Z' }))).toBeNull()
+  })
+
+  it('states what was removed', () => {
+    expect(auditRowToEvent(row('DELETE', settings, null))).toMatchObject({
+      code: 'contract_revenue_settings.deleted',
+      event: 'Pågående arbeten används inte längre',
+      details: ['Metod: Successiv vinstavräkning', 'Konto för upparbetade intäkter: 3095'],
+    })
+  })
+})

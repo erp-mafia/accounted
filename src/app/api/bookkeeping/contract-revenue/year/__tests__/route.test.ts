@@ -76,6 +76,19 @@ describe('POST /api/bookkeeping/contract-revenue/year', () => {
     expect((await post({ fiscal_period_id: 'x' })).status).toBe(400)
   })
 
+  it('refuses a year not reported under K3, and a booking computed from a changed register', async () => {
+    vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(new ContractRevenueError('CONTRACT_REVENUE_NOT_K3', { framework: 'k2' }))
+    const res = await post({ fiscal_period_id: PERIOD })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('CONTRACT_REVENUE_NOT_K3')
+    vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(new ContractRevenueError('CONTRACT_REVENUE_STALE'))
+    const stale = await post({ fiscal_period_id: PERIOD })
+    expect(stale.status).toBe(409)
+    expect((await stale.json()).error.code).toBe('CONTRACT_REVENUE_STALE')
+    vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(new ContractRevenueError('CONTRACT_REVENUE_LATER_YEAR_BOOKED'))
+    expect((await (await post({ fiscal_period_id: PERIOD })).json()).error.code).toBe('CONTRACT_REVENUE_LATER_YEAR_BOOKED')
+  })
+
   it('refuses figures stated for another day and open issues', async () => {
     vi.mocked(bookContractRevenueYear).mockRejectedValueOnce(
       new ContractRevenueError('CONTRACT_REVENUE_FIGURES_DATE', { balansdag: '2026-12-31', contracts: ['Ombyggnad'] }),

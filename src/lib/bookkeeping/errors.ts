@@ -537,6 +537,37 @@ export class DeferredTaxAlreadyPostedError extends Error {
   }
 }
 
+export type ContractRevenueRefusal = 'not_k3' | 'stale' | 'later_year'
+
+const CONTRACT_REVENUE_REFUSALS: Record<ContractRevenueRefusal, string> = {
+  not_k3: 'CONTRACT_REVENUE_NOT_K3',
+  stale: 'CONTRACT_REVENUE_STALE',
+  later_year: 'CONTRACT_REVENUE_LATER_YEAR_BOOKED',
+}
+
+/** The refusal commit_contract_revenue raised (PT409 with this message), or null. */
+export function contractRevenueRefusalFromRpc(message: string): ContractRevenueRefusal | null {
+  const found = (Object.entries(CONTRACT_REVENUE_REFUSALS) as Array<[ContractRevenueRefusal, string]>).find(
+    ([, raised]) => raised === message,
+  )
+  return found ? found[0] : null
+}
+
+/**
+ * commit_contract_revenue refused the pågående-arbeten adjustment (409): the
+ * year is not reported under K3, the register's verifikat, method or account
+ * changed since the adjustment was computed (a double click, a concurrent
+ * booking), or a later year's booking stands on this year's balance. Nothing
+ * was posted.
+ */
+export class ContractRevenueRefusedError extends Error {
+  readonly code = 'CONTRACT_REVENUE_REFUSED'
+  constructor(public readonly reason: ContractRevenueRefusal) {
+    super(CONTRACT_REVENUE_REFUSALS[reason])
+    this.name = 'ContractRevenueRefusedError'
+  }
+}
+
 export class AssetDepreciationRefusedError extends Error {
   readonly code = ASSET_DEPRECIATION_REFUSED
   constructor(public readonly reason: AssetDepreciationRefusal) {
@@ -967,6 +998,8 @@ export type BookkeepingOperation =
   | 'fetch_asset_value_adjustment_entry'
   | 'commit_deferred_tax'
   | 'fetch_deferred_tax_entry'
+  | 'commit_contract_revenue'
+  | 'fetch_contract_revenue_entry'
   | 'commit_k3_transition'
   | 'fetch_k3_transition_entry'
   | 'load_collected_payment_rows'

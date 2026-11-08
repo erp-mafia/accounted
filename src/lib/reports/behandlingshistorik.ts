@@ -329,6 +329,10 @@ export const AUDITED_TABLES = [
   // who linked a Skatteverket row to a verifikat, unlinked it, set it aside
   // or restored it. The sync's own updates of the mirror write nothing.
   'skattekonto_transactions',
+  // Pågående arbeten (K3 kapitel 23, migration 20261027180109): the method
+  // and the account the year's adjustment is booked on, chosen, changed and
+  // removed (behandlingshistorik since 20261108174501).
+  'contract_revenue_settings',
 ] as const
 
 /**
@@ -1959,6 +1963,57 @@ function accountingMethodCorrectionEvent(
   })
 }
 
+const CONTRACT_REVENUE_METHOD_LABELS: Record<string, string> = {
+  successiv: 'Successiv vinstavräkning',
+  fardigstallande: 'Färdigställandemetoden',
+}
+
+/**
+ * The method and account of pågående arbeten (contract_revenue_settings):
+ * how the year's adjustment is computed and on which account it is booked,
+ * a behandlingsregel in the sense of BFNAR 2013:2 punkt 9.16.
+ */
+function contractRevenueSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const method = (state: Record<string, unknown> | null) =>
+    CONTRACT_REVENUE_METHOD_LABELS[str(state?.method) ?? ''] ?? fmtValue(state?.method)
+  const account = (state: Record<string, unknown> | null) => fmtValue(state?.revenue_account)
+  const fields = { category: 'installningar' as const, object: 'Pågående arbeten' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.created',
+        event: 'Metod och konto för pågående arbeten valda',
+        details: [`Metod: ${method(row.new_state)}`, `Konto för upparbetade intäkter: ${account(row.new_state)}`],
+      })
+    case 'UPDATE': {
+      const details: string[] = []
+      if (!same(row.old_state?.method, row.new_state?.method)) {
+        details.push(`Metod: ${method(row.old_state)} → ${method(row.new_state)}`)
+      }
+      if (!same(row.old_state?.revenue_account, row.new_state?.revenue_account)) {
+        details.push(`Konto för upparbetade intäkter: ${account(row.old_state)} → ${account(row.new_state)}`)
+      }
+      if (details.length === 0) return null
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.updated',
+        event: 'Metod eller konto för pågående arbeten ändrat',
+        details,
+      })
+    }
+    case 'DELETE':
+      return auditEvent(row, {
+        ...fields,
+        code: 'contract_revenue_settings.deleted',
+        event: 'Pågående arbeten används inte längre',
+        details: [`Metod: ${method(row.old_state)}`, `Konto för upparbetade intäkter: ${account(row.old_state)}`],
+      })
+    default:
+      return null
+  }
+}
+
 /** One audit_log row → zero or one behandlingshistorik event. Exported for tests. */
 export function auditRowToEvent(
   row: AuditLogEntry,
@@ -1993,6 +2048,8 @@ export function auditRowToEvent(
       return attestLimitAuditEvent(row)
     case 'booking_review_rules':
       return bookingReviewRuleAuditEvent(row)
+    case 'contract_revenue_settings':
+      return contractRevenueSettingsAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',

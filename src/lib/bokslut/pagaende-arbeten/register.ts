@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { RUTA_05_EXCLUDED_ACCOUNTS, resolveRevenueDeclarationBox } from '@/lib/reports/vat-revenue-accounts'
-import type { JournalEntry } from '@/types'
+import { resolveAccountingFramework } from '@/lib/company/accounting-framework'
+import { ContractRevenueRefusedError, type ContractRevenueRefusal } from '@/lib/bookkeeping/errors'
+import type { AccountingFramework, JournalEntry } from '@/types'
 import {
   DEFAULT_CONTRACT_REVENUE_ACCOUNTS,
   computeContractRevenue,
@@ -8,7 +10,13 @@ import {
   type ContractRevenueAccounts,
   type ContractRevenueResult,
 } from './calculator'
-import { ContractRevenueAccountError, bookContractRevenueAdjustment, fetchPositionBalances } from './posting'
+import {
+  ContractRevenueAccountError,
+  bookContractRevenueAdjustment,
+  fetchLedgerPositionBalances,
+  fetchRegisterBalances,
+  unregisteredBalances,
+} from './posting'
 import type { ContractRevenueSettings, ContractRevenueYearPreview, ContractRow, ContractRowInput } from './types'
 
 export type { ContractRevenueSettings, ContractRevenueYearPreview, ContractRow, ContractRowInput } from './types'
@@ -23,7 +31,12 @@ export type { ContractRevenueSettings, ContractRevenueYearPreview, ContractRow, 
  * The adjustment account stays outside the momsdeklaration: the rutor are
  * derived from the account, so it is pinned with no momskod, no momsruta and
  * momssats 0 (ingen moms), which no ruta reads. The database keeps it there
- * (20261027180109_contract_revenue.sql); saving the settings pins it first.
+ * (20261027180109_contract_revenue.sql, 20261108174501): saving the settings
+ * pins it first, and an account a booked year took the adjustment on stays
+ * pinned after the settings move or are deleted.
+ *
+ * Pågående arbeten are booked here under K3 kapitel 23, so only in a year
+ * reported under K3 (the year's own framework).
  */
 
 export type ContractRevenueErrorCode =
@@ -34,6 +47,17 @@ export type ContractRevenueErrorCode =
   | 'CONTRACT_REVENUE_INCOMPLETE'
   | 'CONTRACT_REVENUE_ACCOUNT_MISSING'
   | 'CONTRACT_REVENUE_ACCOUNT_VAT'
+  | 'CONTRACT_REVENUE_ACCOUNT_IN_USE'
+  | 'CONTRACT_REVENUE_NOT_K3'
+  | 'CONTRACT_REVENUE_STALE'
+  | 'CONTRACT_REVENUE_LATER_YEAR_BOOKED'
+
+/** What the database's refusals of a booking answer (commit_contract_revenue). */
+const REFUSAL_CODES: Record<ContractRevenueRefusal, ContractRevenueErrorCode> = {
+  not_k3: 'CONTRACT_REVENUE_NOT_K3',
+  stale: 'CONTRACT_REVENUE_STALE',
+  later_year: 'CONTRACT_REVENUE_LATER_YEAR_BOOKED',
+}
 
 export class ContractRevenueError extends Error {
   constructor(
@@ -81,8 +105,9 @@ export async function getContractRevenueSettings(
 
 /**
  * Chooses the method and the adjustment account. The account must be a
- * class 3 account of the chart that no ruta reads today; it is then pinned
- * at momssats 0 (ingen moms). An account with a momskod, a momsruta or a
+ * class 3 account of the chart that no ruta reads today and that carries no
+ * posted line outside the register's own verifikat; it is then pinned at
+ * momssats 0 (ingen moms). An account with a momskod, a momsruta or a
  * momssats is refused rather than cleared: that configuration is the
  * company's, and a sales account must not become the adjustment account.
  */
@@ -113,6 +138,18 @@ export async function saveContractRevenueSettings(
     resolveRevenueDeclarationBox(row) !== null
   if (readByRuta) throw new ContractRevenueError('CONTRACT_REVENUE_ACCOUNT_VAT', { account })
 
+  // In use for something else: asked before the momssats is pinned, so a
+  // refused account keeps its configuration. The settings trigger holds the
+  // same rule (contract_revenue_account_in_use).
+  const { data: inUse, error: inUseError } = await supabase.rpc('contract_revenue_account_in_use', {
+    p_company_id: companyId,
+    p_account: account,
+  })
+  if (inUseError) throw inUseError
+  if (inUse === true && (await getContractRevenueSettings(supabase, companyId))?.revenue_account !== account) {
+    throw new ContractRevenueError('CONTRACT_REVENUE_ACCOUNT_IN_USE', { account })
+  }
+
   if (rate === null) {
     const { error: pinError } = await supabase
       .from('chart_of_accounts')
@@ -127,8 +164,28 @@ export async function saveContractRevenueSettings(
     .upsert({ company_id: companyId, user_id: userId, method: settings.method, revenue_account: account }, { onConflict: 'company_id' })
     .select('method, revenue_account')
     .single()
-  if (error) throw error
+  if (error) {
+    if (error.code === 'PT409' && error.message === 'CONTRACT_REVENUE_ACCOUNT_IN_USE') {
+      throw new ContractRevenueError('CONTRACT_REVENUE_ACCOUNT_IN_USE', { account })
+    }
+    throw error
+  }
   return data as ContractRevenueSettings
+}
+
+/**
+ * Stops using pågående arbeten: the method and account are removed. The
+ * uppdrag stay, and so does the pin on an account a booked year took the
+ * adjustment on; any other account is released.
+ */
+export async function deleteContractRevenueSettings(supabase: SupabaseClient, companyId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('contract_revenue_settings')
+    .delete()
+    .eq('company_id', companyId)
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) throw new ContractRevenueError('CONTRACT_REVENUE_NOT_CONFIGURED')
 }
 
 export async function listContracts(supabase: SupabaseClient, companyId: string): Promise<ContractRow[]> {
@@ -220,6 +277,7 @@ export async function deleteContract(supabase: SupabaseClient, companyId: string
 interface ContractRevenueYear {
   settings: ContractRevenueSettings
   balansdag: string
+  framework: AccountingFramework
   rows: ContractRow[]
   accounts: ContractRevenueAccounts
 }
@@ -238,6 +296,7 @@ async function loadYear(supabase: SupabaseClient, companyId: string, fiscalPerio
   return {
     settings,
     balansdag: period.period_end,
+    framework: await resolveAccountingFramework(supabase, companyId, fiscalPeriodId),
     rows: await listContracts(supabase, companyId),
     accounts: { ...DEFAULT_CONTRACT_REVENUE_ACCOUNTS, revenueAdjustment: settings.revenue_account },
   }
@@ -258,16 +317,21 @@ export async function previewContractRevenueYear(
   fiscalPeriodId: string,
 ): Promise<ContractRevenueYearPreview> {
   const year = await loadYear(supabase, companyId, fiscalPeriodId)
-  const balances = await fetchPositionBalances(supabase, companyId, fiscalPeriodId, year.accounts)
-  const result = computeContractRevenue(year.settings.method, year.rows.map(contractFromRow), year.accounts, balances)
+  const [register, ledger] = await Promise.all([
+    fetchRegisterBalances(supabase, companyId, year.balansdag),
+    fetchLedgerPositionBalances(supabase, companyId, fiscalPeriodId, year.accounts),
+  ])
+  const result = computeContractRevenue(year.settings.method, year.rows.map(contractFromRow), year.accounts, register)
   return {
     method: year.settings.method,
     balansdag: year.balansdag,
+    framework: year.framework,
     revenue_account: year.settings.revenue_account,
     positions: result.positions,
     lines: result.lines,
     issues: namedIssues(year, result),
     stated_on_other_day: statedOnOtherDay(year),
+    unregistered: unregisteredBalances(ledger, register, year.accounts),
   }
 }
 
@@ -277,11 +341,15 @@ export interface BookContractRevenueYearResult {
 }
 
 /**
- * Books the year's change in the pågående arbeten on balansdagen. Every
- * uppdrag's figures must be stated for that balansdag (a figure for another
- * day would book the wrong year), and the calculation must have no open
- * issue (a missing grade or value, an estimate below the costs already
- * incurred). Booking the same year again books only what changed.
+ * Books the year's change in the pågående arbeten on balansdagen. The year
+ * must be reported under K3 (kapitel 23 is the rule booked here; K2 has its
+ * own in kapitel 6), every uppdrag's figures must be stated for that
+ * balansdag (a figure for another day would book the wrong year), and the
+ * calculation must have no open issue (a missing grade or value, an estimate
+ * below the costs already incurred). Booking the same year again books only
+ * what changed; a second booking computed from the same state (a double
+ * click), or an earlier year while a later year's booking stands, is refused
+ * by the database.
  */
 export async function bookContractRevenueYear(
   supabase: SupabaseClient,
@@ -290,6 +358,7 @@ export async function bookContractRevenueYear(
   fiscalPeriodId: string,
 ): Promise<BookContractRevenueYearResult> {
   const year = await loadYear(supabase, companyId, fiscalPeriodId)
+  if (year.framework !== 'k3') throw new ContractRevenueError('CONTRACT_REVENUE_NOT_K3', { framework: year.framework })
   const otherDay = statedOnOtherDay(year)
   if (otherDay.length > 0) {
     throw new ContractRevenueError('CONTRACT_REVENUE_FIGURES_DATE', { balansdag: year.balansdag, contracts: otherDay })
@@ -312,6 +381,7 @@ export async function bookContractRevenueYear(
     if (err instanceof ContractRevenueAccountError) {
       throw new ContractRevenueError('CONTRACT_REVENUE_ACCOUNT_VAT', { account: err.account })
     }
+    if (err instanceof ContractRevenueRefusedError) throw new ContractRevenueError(REFUSAL_CODES[err.reason])
     throw err
   }
   if (booked.result.issues.length > 0) {

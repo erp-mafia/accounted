@@ -3,6 +3,7 @@ import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import type {
   commitAssetComponentReplacement,
   commitAssetValueAdjustment,
+  commitContractRevenue,
   commitDeferredTax,
   commitK3Transition,
   commitAssetDepreciation,
@@ -260,6 +261,7 @@ export interface SqlPostingDoors {
   commit_asset_component_replacement: typeof commitAssetComponentReplacement
   commit_asset_value_adjustment: typeof commitAssetValueAdjustment
   commit_deferred_tax: typeof commitDeferredTax
+  commit_contract_revenue: typeof commitContractRevenue
   commit_k3_transition: typeof commitK3Transition
   book_counterparty_setoff: typeof commitCounterpartySetoff
 }

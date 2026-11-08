@@ -1,3 +1,4 @@
+import type { AccountingFramework } from '@/types'
 import type { ContractRevenueMethod, ContractRevenueResult } from './calculator'
 
 /**
@@ -37,10 +38,17 @@ export type ContractRowInput = Omit<ContractRow, 'id' | 'company_id' | 'created_
 export interface ContractRevenueYearPreview {
   method: ContractRevenueMethod
   balansdag: string
+  /** The year's framework: the year is booked only under K3 (kapitel 23). */
+  framework: AccountingFramework
   revenue_account: string
   positions: ContractRevenueResult['positions']
   lines: ContractRevenueResult['lines']
   issues: Array<{ code: string; contract: string }>
   /** Uppdrag whose figures are stated for another day than balansdagen. */
   stated_on_other_day: string[]
+  /**
+   * What the position accounts hold beyond the register's own verifikat on
+   * balansdagen (debit positive): left as it is by the booking.
+   */
+  unregistered: Array<{ account: string; amount: number }>
 }
