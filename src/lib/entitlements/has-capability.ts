@@ -139,6 +139,12 @@ function grantCounts(source: string | null | undefined, options: CapabilityGrant
  * disable wins. Queries are chunked to keep PostgREST URLs bounded. Any query
  * failure throws so background jobs report a failed run instead of silently
  * treating every paying company as ineligible.
+ *
+ * A deleted company (archived_at set) is entitled to nothing, bypass
+ * included: the bank-sync, Open Payments and skattekonto crons take this list
+ * as their work list, and a trial or a byrå team grant outlives the delete
+ * (accounted#198). A restored company (archived_at back to null) is entitled
+ * again with no other step.
  */
 export async function getCompanyIdsWithCapability(
   supabase: SupabaseClient,
@@ -148,7 +154,7 @@ export async function getCompanyIdsWithCapability(
 ): Promise<Set<string>> {
   const validCompanyIds = [...new Set(companyIds.filter(isUuid))]
   if (validCompanyIds.length === 0) return new Set()
-  if (isBypassedFor(key)) return new Set(validCompanyIds)
+  const bypassed = isBypassedFor(key)
 
   type CompanyScope = { id: string; team_id: string | null }
   type GrantScope = {
@@ -165,13 +171,15 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     const [{ data: companyRows, error: companiesError }, { data: configRows, error: configError }] =
       await Promise.all([
-        supabase.from('companies').select('id, team_id').in('id', chunk),
-        supabase
-          .from('company_capability_config')
-          .select('company_id')
-          .eq('capability_key', key)
-          .eq('enabled', false)
-          .in('company_id', chunk),
+        supabase.from('companies').select('id, team_id').in('id', chunk).is('archived_at', null),
+        bypassed
+          ? Promise.resolve({ data: [], error: null })
+          : supabase
+              .from('company_capability_config')
+              .select('company_id')
+              .eq('capability_key', key)
+              .eq('enabled', false)
+              .in('company_id', chunk),
       ])
 
     if (companiesError) throw new Error(`Failed to resolve capability company scopes: ${companiesError.message}`)
@@ -179,6 +187,7 @@ export async function getCompanyIdsWithCapability(
     companies.push(...((companyRows ?? []) as CompanyScope[]))
     disabledConfigs.push(...((configRows ?? []) as DisabledConfig[]))
   }
+  if (bypassed) return new Set(companies.map(company => company.id))
 
   const teamIds = [...new Set(companies.map(company => company.team_id).filter((id): id is string => !!id))]
   const grants: GrantScope[] = []
