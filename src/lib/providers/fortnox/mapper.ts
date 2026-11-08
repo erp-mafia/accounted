@@ -237,8 +237,9 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
       name: nonEmptyString(address?.['YourReference']),
       email: emailFields.map((field) => nonEmptyString(address?.[field])).find((email) => email !== undefined),
       // The single record names it Phone1; the customer and supplier lists
-      // name the same number Phone (crm#1436).
-      telephone: nonEmptyString(address?.['Phone1']) ?? nonEmptyString(address?.['Phone']),
+      // name the same number Phone (crm#1436). A card whose only number is
+      // in Phone2 (Telefon 2) still has a phone: the card holds one.
+      telephone: nonEmptyString(address?.['Phone1']) ?? nonEmptyString(address?.['Phone']) ?? nonEmptyString(address?.['Phone2']),
     },
   };
 }

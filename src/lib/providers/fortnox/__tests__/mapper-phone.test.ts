@@ -24,6 +24,18 @@ describe('Fortnox phone mapping', () => {
     expect(dto.party.contact?.telephone).toBe('08-222')
   })
 
+  it('falls back to Phone2 when the card has only its second number', () => {
+    const customer = mapFortnoxToCustomer({ CustomerNumber: '1', Name: 'Kund AB', Phone1: '', Phone2: '070-333 44 55' })
+    expect(customer.party.contact?.telephone).toBe('070-333 44 55')
+    const supplier = mapFortnoxToSupplier({ SupplierNumber: '1', Name: 'Leverantör AB', Phone1: ' ', Phone2: '08-444' })
+    expect(supplier.party.contact?.telephone).toBe('08-444')
+  })
+
+  it('keeps Phone1 over Phone2', () => {
+    const dto = mapFortnoxToCustomer({ CustomerNumber: '1', Name: 'Kund AB', Phone1: '08-111', Phone2: '070-222' })
+    expect(dto.party.contact?.telephone).toBe('08-111')
+  })
+
   it('leaves the phone out when neither is set', () => {
     const dto = mapFortnoxToSupplier({ SupplierNumber: '1', Name: 'Leverantör AB', Phone: '' })
     expect(dto.party.contact?.telephone).toBeUndefined()
