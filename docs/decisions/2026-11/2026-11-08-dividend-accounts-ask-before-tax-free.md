@@ -1,0 +1,1 @@
+[2026-11-08] Dividend accounts (8010/8012, 8110-8113, 8210/8212) are detected for an AB but offered unticked, with a question, not proposed as tax-free: the ledger cannot tell a näringsbetingad andel from a listed holding under 10 %, and a default tick double-counts manual entries (crm#1726).

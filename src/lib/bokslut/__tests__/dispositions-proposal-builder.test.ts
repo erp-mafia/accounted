@@ -53,7 +53,8 @@ import {
   listExistingPeriodiseringsfonder,
   SchablonintaktRateNotConfiguredError,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
-import { buildDispositionsProposal } from '../dispositions-proposal-builder'
+import { buildDispositionsProposal, dividendConfirmationWarning } from '../dispositions-proposal-builder'
+import type { TaxAdjustmentItem, TaxAdjustmentSnapshot } from '../types'
 
 function supabaseFor(period: { period_start: string; period_end: string }, entityType = 'aktiebolag') {
   const periodBuilder = {
@@ -368,5 +369,83 @@ describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', ()
     const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(tax?.amount).toBeGreaterThan(0)
     expect(tax?.description).not.toContain('avmarkera')
+  })
+})
+
+/**
+ * crm#1726: a holding AB whose result is a dividend on 8210. The dividend is
+ * taxed until the user confirms the shares are näringsbetingade, and the
+ * proposal says so; once confirmed (with the prior year's underskott), a tax
+ * base at or below zero gets neither a periodiseringsfond nor bolagsskatt.
+ */
+describe('buildDispositionsProposal: dividends on shares (crm#1726)', () => {
+  const dividend = (included: boolean): TaxAdjustmentItem => ({
+    sourceKey: 'account:8210',
+    source: 'detected',
+    adjustmentType: 'non_taxable_income',
+    description: 'Utdelningar på andelar i andra företag, skattefri om andelarna är näringsbetingade',
+    accountNumber: '8210',
+    amount: 100_000,
+    included,
+    needsConfirmation: true,
+  })
+  const manualNonTaxable = (amount: number): TaxAdjustmentItem => ({
+    sourceKey: 'manual:non_taxable_income',
+    source: 'manual',
+    adjustmentType: 'non_taxable_income',
+    description: 'Ej skattepliktiga intäkter',
+    accountNumber: null,
+    amount,
+    included: amount > 0,
+  })
+  const snapshot = (items: TaxAdjustmentItem[], deficitCarryforward = 0): TaxAdjustmentSnapshot => ({
+    items,
+    nonDeductibleExpenses: 0,
+    nonTaxableIncome: items
+      .filter((i) => i.adjustmentType === 'non_taxable_income' && i.included)
+      .reduce((sum, i) => sum + i.amount, 0),
+    deficitCarryforward,
+  })
+
+  it('asks about an unconfirmed dividend and names the account and the rule', () => {
+    const warning = dividendConfirmationWarning(snapshot([dividend(false)]))
+    expect(warning).toContain('konto 8210')
+    expect(warning).toContain('IL 24 kap. 35 §')
+    expect(warning).toContain('Skattemässiga justeringar')
+  })
+
+  it('stays silent once the dividend is confirmed, or typed in by hand', () => {
+    expect(dividendConfirmationWarning(snapshot([dividend(true)]))).toBeNull()
+    expect(dividendConfirmationWarning(snapshot([dividend(false), manualNonTaxable(100_000)]))).toBeNull()
+    expect(dividendConfirmationWarning(snapshot([dividend(false), manualNonTaxable(40_000)]))).not.toBeNull()
+    expect(dividendConfirmationWarning(snapshot([]))).toBeNull()
+  })
+
+  it('puts the question in the proposal while the dividend is still taxed', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(snapshot([dividend(false)]))
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(result.warnings?.some((w) => w.includes('konto 8210'))).toBe(true)
+    // Unconfirmed, the proposal is unchanged: the dividend is in the base.
+    expect(result.proposals.find((p) => p.kind === 'periodiseringsfond_avsattning')?.amount).toBe(25_000)
+  })
+
+  it('proposes neither periodiseringsfond nor bolagsskatt when the confirmed base is below zero', async () => {
+    const actual = await vi.importActual<
+      typeof import('@/lib/bokslut/tax-provision/bolagsskatt-calculator')
+    >('@/lib/bokslut/tax-provision/bolagsskatt-calculator')
+    vi.mocked(calculateBolagsskatt).mockImplementation(actual.calculateBolagsskatt)
+    vi.mocked(readYearResult).mockResolvedValue({ beforeDispositions: 98_000, beforeTax: 98_000 })
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue(snapshot([dividend(true)], 2_000))
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(result.warnings?.some((w) => w.includes('konto 8210'))).toBe(false)
+    expect(result.proposals.map((p) => p.kind)).not.toContain('periodiseringsfond_avsattning')
+    expect(result.proposals.map((p) => p.kind)).not.toContain('bolagsskatt')
+    expect(result.taxBasis?.taxAsBooked).toBe(0)
   })
 })

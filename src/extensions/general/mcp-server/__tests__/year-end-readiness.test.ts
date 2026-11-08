@@ -15,10 +15,16 @@ vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
   previewYearEndClosing: vi.fn(),
 }))
 
+vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/dispositions-proposal-builder')>()),
+  bolagsskattOnLedger: vi.fn(),
+}))
+
 import {
   validateYearEndReadiness,
   previewYearEndClosing,
 } from '@/lib/core/bookkeeping/year-end-service'
+import { bolagsskattOnLedger } from '@/lib/bokslut/dispositions-proposal-builder'
 
 describe('gnubok_year_end_readiness: registration', () => {
   it('is registered in the tools array', () => {
@@ -456,5 +462,67 @@ describe('gnubok_year_end_readiness: execute', () => {
 
     expect(result.drafts).toEqual([])
     expect(mock.from).not.toHaveBeenCalledWith('journal_entries')
+  })
+})
+
+/**
+ * crm#1726: the readiness preview said bolagsskattMissing for a profit year
+ * whose tax, with its ej skattepliktiga intäkter and underskott, is 0 kr. The
+ * web preview drops the flag on that real state (accounted#180); so does the
+ * tool now.
+ */
+describe('gnubok_year_end_readiness: bolagsskattMissing is real state only', () => {
+  const ready = () =>
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: true,
+      blockers: [],
+      errors: [],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+  const run = async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1', name: '2025',
+      period_start: '2025-01-01', period_end: '2025-12-31',
+      is_closed: false, locked_at: null, closing_entry_id: null, continuity_verified: true,
+    })
+    return (await tool.execute(
+      { fiscal_period_id: 'period-1', include_preview: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { bolagsskattMissing?: boolean } | null }
+  }
+
+  beforeEach(() => {
+    vi.mocked(bolagsskattOnLedger).mockReset()
+    ready()
+    vi.mocked(previewYearEndClosing).mockResolvedValue({ netResult: 50_000, bolagsskattMissing: true } as never)
+  })
+
+  it('drops the flag when the tax on the ledger is 0 kr', async () => {
+    vi.mocked(bolagsskattOnLedger).mockResolvedValue(0)
+    const result = await run()
+    expect(result.preview?.bolagsskattMissing).toBe(false)
+    expect(bolagsskattOnLedger).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1')
+  })
+
+  it('keeps the flag when the ledger carries tax', async () => {
+    vi.mocked(bolagsskattOnLedger).mockResolvedValue(10_300)
+    expect((await run()).preview?.bolagsskattMissing).toBe(true)
+  })
+
+  it('keeps the flag when the tax check fails', async () => {
+    vi.mocked(bolagsskattOnLedger).mockRejectedValue(new Error('trial balance unavailable'))
+    expect((await run()).preview?.bolagsskattMissing).toBe(true)
+  })
+
+  it('does not compute the tax when the preview raises no tax line', async () => {
+    vi.mocked(previewYearEndClosing).mockResolvedValue({ netResult: -100, bolagsskattMissing: false } as never)
+    await run()
+    expect(bolagsskattOnLedger).not.toHaveBeenCalled()
   })
 })

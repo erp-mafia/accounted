@@ -23566,6 +23566,20 @@ export const tools: McpTool[] = [
           // Preview is opportunistic: never fail the readiness check on it.
           preview = { error: err instanceof Error ? err.message : 'Preview unavailable' }
         }
+        // Real state only, as the web preview (accounted#180, crm#1726): no
+        // "bolagsskatt missing" when the tax on the ledger as it stands is
+        // 0 kr (ej skattepliktig utdelning, underskottsavdrag). A failed check
+        // keeps the flag: it is advisory.
+        if (preview && 'bolagsskattMissing' in preview && preview.bolagsskattMissing) {
+          try {
+            const { bolagsskattOnLedger } = await import('@/lib/bokslut/dispositions-proposal-builder')
+            if ((await bolagsskattOnLedger(supabase, companyId, fiscalPeriodId)) === 0) {
+              preview = { ...preview, bolagsskattMissing: false }
+            }
+          } catch {
+            // Keep the flag.
+          }
+        }
       }
 
       const summary = validation.ready
