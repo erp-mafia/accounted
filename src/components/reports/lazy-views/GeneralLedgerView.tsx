@@ -181,8 +181,8 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
           <ReportErrorCard message={error} />
         ) : (
           <ReportEmptyState
-            title={data && data.accounts.length > 0 ? t('ledger_no_active_accounts') : 'Inga verifikationer i perioden'}
-            description={data && data.accounts.length > 0 ? t('ledger_show_inactive_hint') : 'Det finns inga bokförda verifikationer i den valda perioden.'}
+            title={data && data.accounts.length > 0 ? t('ledger_no_active_accounts') : t('ledger_empty_title')}
+            description={data && data.accounts.length > 0 ? t('ledger_show_inactive_hint') : t('ledger_empty_description')}
           />
         )}
       </div>
@@ -201,7 +201,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
 
       {data.period.start && (
         <p className="text-sm text-muted-foreground tabular-nums">
-          Period {data.period.start} till {data.period.end} · {visibleAccounts.length} konton
+          {t('ledger_period_summary', { start: data.period.start, end: data.period.end, count: visibleAccounts.length })}
         </p>
       )}
 

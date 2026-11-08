@@ -8424,6 +8424,9 @@
     "rel_days": "för {count} dagar sedan"
   },
   "reports": {
+    "ledger_empty_title": "Inga verifikationer i perioden",
+    "ledger_empty_description": "Det finns inga bokförda verifikationer i den valda perioden.",
+    "ledger_period_summary": "Period {start} till {end} · {count, plural, one {# konto} other {# konton}}",
     "ledger_hide_inactive_help": "Kontot räknas som inaktivt när dess utgående saldo är 0 kr och det saknar verifikat inom det valda rapportintervallet för räkenskapsåret.",
     "ledger_hide_inactive": "Dölj inaktiva",
     "ledger_no_active_accounts": "Inga aktiva konton i intervallet",

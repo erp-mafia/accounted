@@ -239,6 +239,8 @@ export default function JournalEntryList({
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
   const [entries, setEntries] = useState<JournalEntry[]>([])
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
   const [committingId, setCommittingId] = useState<string | null>(null)
   // Confirm-before-posting (convention 10): the draft the user is about to
   // commit, plus the predicted voucher label ("A-218") for the dialog copy.
@@ -704,7 +706,7 @@ export default function JournalEntryList({
       // A failed list refresh leaves the previous rows visible. Their metadata
       // must still reflect a successful bulk update, guarded against navigation.
       if (!listRefreshed && isCurrent()) {
-        await fetchNoDocRequired(entries.map(entry => entry.id), isCurrent)
+        await fetchNoDocRequired(entriesRef.current.map(entry => entry.id), isCurrent)
       }
       if (isCurrent()) setLoading(false)
     }
@@ -831,7 +833,7 @@ export default function JournalEntryList({
           title: t('toast_posted_title'),
           description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
         })
-        await fetchEntries()
+        await fetchEntriesRef.current()
       } else {
         toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -860,7 +862,7 @@ export default function JournalEntryList({
           description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
         })
         setReverseEntryTarget(null)
-        await fetchEntries()
+        await fetchEntriesRef.current()
       } else {
         toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -925,7 +927,7 @@ export default function JournalEntryList({
       // With the server-side saknade-underlag filter on, the exempted rows no
       // longer belong to the filtered set: refetch so they leave the list and
       // the count updates (the pre-server-filter behavior).
-      if (showMissingOnly) await fetchEntries()
+      if (showMissingOnlyRef.current) await fetchEntriesRef.current()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -1887,8 +1889,8 @@ export default function JournalEntryList({
                                       // exempted row leaves the filtered set, so
                                       // refetch in place (keeps expansion state
                                       // semantics of a background refresh).
-                                      if (exempted && showMissingOnly) {
-                                        void fetchEntries({ preserveSelection: true })
+                                      if (exempted && showMissingOnlyRef.current) {
+                                        void fetchEntriesRef.current({ preserveSelection: true })
                                       }
                                     }}
                                   />
@@ -1898,7 +1900,7 @@ export default function JournalEntryList({
                                     {noDocRequiredStatus === 'error' && (
                                       <Button size="sm" variant="outline" onClick={() => {
                                         const gen = fetchGenRef.current
-                                        void fetchNoDocRequired(entries.map(row => row.id), () => fetchGenRef.current === gen)
+                                        void fetchNoDocRequired(entriesRef.current.map(row => row.id), () => fetchGenRef.current === gen)
                                       }}>
                                         {tCommon('retry')}
                                       </Button>
@@ -2025,7 +2027,7 @@ export default function JournalEntryList({
           entry={correctionEntry}
           open={!!correctionEntry}
           onOpenChange={(open) => { if (!open) setCorrectionEntry(null) }}
-          onCorrected={() => { setCorrectionEntry(null); fetchEntries() }}
+          onCorrected={() => { setCorrectionEntry(null); void fetchEntriesRef.current() }}
         />
       )}
 
