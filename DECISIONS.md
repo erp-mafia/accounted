@@ -1231,4 +1231,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 
 [2026-11-08] Huvudbok inactivity means zero closing balance AND no lines in the selected fiscal-year window. The view opts into inactive ledger accounts for instant filtering; exports follow the checkbox and legacy report callers keep their default selection.
 
-[2026-11-08] Browser latency tests use an isolated Podman Supabase stack and deterministic ten-year synthetic SIE history. Production source snapshots exclude environment files. Real data-ready states have 3 s navigation and 1 s interaction deadlines, with no retries.
+[2026-11-08] Browser latency tests use an isolated Podman Supabase stack and deterministic ten-year synthetic SIE history. Production source snapshots exclude environment files. Measured cold requests have a 5 s cap, then navigation has 3 s and interactions 1 s, with no retries.

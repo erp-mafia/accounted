@@ -35,4 +35,3 @@ export const test = base.extend<{ browserHealth: void }>({
     expect(failures, 'Uncaught browser errors or failed application APIs').toEqual([])
   }, { auto: true }],
 })
-

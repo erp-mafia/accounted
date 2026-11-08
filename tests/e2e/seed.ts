@@ -4,9 +4,9 @@ import path from 'node:path'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
-import { appEnv, readRuntime, runtimeDir } from './runtime.mjs'
-import { assertOwnedDatabase } from './stack.mjs'
-import { buildDataset, FIXTURE_NAME, FIXTURE_VERSION, DOCUMENT_COUNT } from '../../tests/e2e/dataset'
+import { appEnv, readRuntime, runtimeDir } from '../../scripts/e2e/runtime.mjs'
+import { assertOwnedDatabase } from '../../scripts/e2e/stack.mjs'
+import { buildDataset, FIXTURE_NAME, FIXTURE_VERSION, DOCUMENT_COUNT } from './dataset'
 import { roundOre } from '../../src/lib/money'
 
 interface Fixture {

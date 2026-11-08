@@ -62,11 +62,11 @@ try {
     if (!['test', 'prepare', 'reset', 'check'].includes(command)) throw new Error(`Unknown E2E command ${command}`)
     if (command !== 'check') {
       const state = await up()
-      await run(process.execPath, ['--conditions=react-server', '--import', 'tsx', 'scripts/e2e/seed.ts'], { env: appEnv(state) })
+      await run(process.execPath, ['--conditions=react-server', '--import', 'tsx', 'tests/e2e/seed.ts'], { env: appEnv(state) })
       await build(state)
     } else {
       assertOwnedDatabase()
-      await run(process.execPath, ['--conditions=react-server', '--import', 'tsx', 'scripts/e2e/seed.ts'], { env: appEnv(readRuntime()) })
+      await run(process.execPath, ['--conditions=react-server', '--import', 'tsx', 'tests/e2e/seed.ts'], { env: appEnv(readRuntime()) })
     }
     if (command === 'test' || command === 'check') {
       await run(process.execPath, ['node_modules/@playwright/test/cli.js', 'test', ...process.argv.slice(3)])
