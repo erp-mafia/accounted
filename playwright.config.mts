@@ -1,0 +1,36 @@
+import { defineConfig, devices } from '@playwright/test'
+import path from 'node:path'
+import { readRuntime, runtimeDir } from './scripts/e2e/runtime.mjs'
+
+const runtime = readRuntime()
+
+export default defineConfig({
+  testDir: './tests/e2e',
+  testMatch: '**/*.spec.mts',
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
+  timeout: 30_000,
+  expect: { timeout: 3000 },
+  reporter: [['list'], ['html', { open: 'never' }], ['json', { outputFile: '.e2e/results.json' }]],
+  use: {
+    baseURL: runtime.appUrl,
+    storageState: path.join(runtimeDir, 'auth.json'),
+    actionTimeout: 3000,
+    navigationTimeout: 5000,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+  },
+  projects: [
+    { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
+    { name: 'mobile', use: { ...devices['Pixel 7'] } },
+  ],
+  webServer: {
+    command: 'node scripts/e2e/run.mjs serve',
+    url: `${runtime.appUrl}/api/health`,
+    timeout: 30_000,
+    reuseExistingServer: false,
+    gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 },
+    stdout: 'pipe', stderr: 'pipe',
+  },
+})

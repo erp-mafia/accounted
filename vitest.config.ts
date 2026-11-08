@@ -35,6 +35,7 @@ const unitProject = {
       '**/*.tool.test.ts',
       '**/.claude/**',
       '**/.next/**',
+      '**/.e2e/**',
     ],
   },
 }
@@ -48,7 +49,7 @@ const pgRealProject = {
     include: ['**/*.pg.test.ts'],
     // `.next/standalone` holds a traced copy of these files after a local
     // build; 128 of them match this project's glob.
-    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
+    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**', '**/.e2e/**'],
     setupFiles: ['tests/pg/setup.ts'],
     // One-connection-at-a-time to avoid cross-file DB contention.
     fileParallelism: false,
@@ -69,7 +70,7 @@ const toolPgProject = {
     include: ['**/*.tool.test.ts'],
     // See the unit project's note: `.next/standalone` is a build artifact that
     // would otherwise be collected as a second copy of this suite.
-    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
+    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**', '**/.e2e/**'],
     setupFiles: ['tests/tool-pg/setup.ts'],
     // The suite shares one database; parallel files would race on seeded rows.
     fileParallelism: false,

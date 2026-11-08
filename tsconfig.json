@@ -34,5 +34,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "docs/reference", "dev_docs"]
+  "exclude": ["node_modules", "docs/reference", "dev_docs", ".e2e"]
 }
