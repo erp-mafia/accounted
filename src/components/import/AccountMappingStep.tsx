@@ -205,6 +205,12 @@ export default function AccountMappingStep({
     setFocusedTargetAccount(null)
   }
 
+  // Mapping and VAT edits can remove a row without a filter transition.
+  // Clear its picker before committing the render, preserving visible rows.
+  const visibleAccounts = new Set(paginatedMappings.map((mapping) => mapping.sourceAccount))
+  if (openTargetAccount !== null && !visibleAccounts.has(openTargetAccount)) setOpenTargetAccount(null)
+  if (focusedTargetAccount !== null && !visibleAccounts.has(focusedTargetAccount)) setFocusedTargetAccount(null)
+
   // Reset page when filter or search changes
   const handleFilterChange = (newFilter: FilterType) => {
     resetPickerState()
