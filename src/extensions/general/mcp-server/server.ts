@@ -299,7 +299,6 @@ import {
   type RecommendedToolClassification,
 } from './recommended-tools'
 import {
-  RECONNECT_ADVICE,
   SEARCH_ONLY_STAGED_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
   STALE_BRIDGE_NOTE,
@@ -325,6 +324,7 @@ import {
   toPublicToolName,
   type McpToolNamespace,
 } from './tool-namespace'
+import { buildServerInstructions } from './server-instructions'
 import { getRiskLevel, requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import {
   CARD_PAYEE_COLUMNS,
@@ -30277,69 +30277,20 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // do (tools/list already hides both tools). Anonymous traffic keeps the
       // chat-approval text: the key it will get is not known yet.
       const canApprove = isAnonymous || hasScope(keyScopes, 'pending_operations:approve')
-      const instructions = projectToolReferencesInText([
-            'Accounted: Swedish double-entry bookkeeping via conversation.',
-            '',
-            ...(isAnonymous
-              ? [
-                  'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt. A user who has no account creates one right there (BankID or e-mail, about a minute), and the call is then retried automatically. To set up bookkeeping for a company that is not in Accounted yet, load the "onboarding" skill (gnubok_load_skill) and follow it: gnubok_create_company is the first protected call and triggers the connect step.',
-                  '',
-                ]
-              : []),
-            'Discovery:',
-            `• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool absent from tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}), then approve with gnubok_approve_pending_operation; "none" commits directly and is unreachable from such a client. A bridge your client does not show means it kept an older copy of tools/list: without gnubok_stage_tool, stage the same tool through gnubok_call_tool, which carries every stage_tool target; otherwise ${RECONNECT_ADVICE}.`,
-            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (a missing scope, or a write no bridge carries). A callable tool with a note is not in tools/list: the note names the bridge that reaches it.',
-            ...(pinnedCompanyId
-              ? [`• Companies: this connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}). Every tool runs for it; do not pass company_id. The company switch (gnubok_list_companies) and the cross-company tools are not available on this connection.`]
-              : simpleCompanyMode
-              ? [
-                  companyId
-                    ? '• Company: this account has one company and every tool runs for it; company_id is never needed.'
-                    : '• Company: this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup.',
-                ]
-              : [
-                `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
-                '• Many companies at once: gnubok_client_overview (unbooked, inbox, next deadline per company; filter by deadline kind and window), gnubok_run_across_companies (any read tool once per company, one summarised answer) and gnubok_stage_across_companies (one write staged per company under a batch_id; approve the batch or each operation). scope = { companies: "all" | "team" | [ids] }; "team" is the byrå team\'s clients.',
-                '• MCP resources read the default company. Another company: Accounted://company/{company_id}/{resource} (e.g. attention, context) or gnubok_get_agent_briefing with company_id.',
-                ]),
-            '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
-            '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
-            '',
-            'Common workflows:',
-            '• Before categorizing or creating vouchers, consult ledger_context in gnubok_get_agent_briefing (full picture: the Accounted://ledger/context resource): it shows how THIS company has booked each counterparty and supplier (dominant account, VAT treatment, evidence = historical frequency). Prefer these observed patterns over guesses; explicit mapping rules outrank them. Frequency is not permission to auto-post: still stage for approval.',
-            canApprove
-              ? '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat).'
-              : '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → the user approves the proposals in Accounted under Att göra › Agentförslag.',
-            '• Applying income to invoices: pick by what you have: a specific bank transaction + a known invoice → gnubok_match_transaction_to_invoice; an invoice you know is paid but no specific bank line → gnubok_mark_invoice_as_paid; a whole period of unmatched income to reconcile → gnubok_auto_match_period (dry_run first). All stage for approval. Unsure which match/link tool fits, or whether to credit 1510 (faktureringsmetoden) vs debit 19xx (kontantmetoden)? gnubok_load_skill("bank-reconciliation") has the full decision tree; gnubok_get_agent_briefing returns the company\'s accounting_method.',
-            '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
-            '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice (faktureringsmetoden only: kontantmetoden has no attest step, the invoice is booked when its payment is matched). Refund via gnubok_credit_supplier_invoice.',
-            '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
-            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
-            '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',
-            `• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) ${canApprove ? 'opens the approval queue where the user approves/rejects with a click' : 'shows the queue of agent proposals (read-only on this connection: the user approves them in Accounted)'}. All also return structured data; other clients ignore the UI and use the data.`,
-            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool (one year-end verifikat per open invoice, no reversal; never book the cut-off by hand). Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
-            '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
-            ...(canApprove
-              ? [
-                  '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
-                  '',
-                  'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
-                  'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
-                  actor.approvalView === true
-                    ? 'WHO THE RECORD NAMES: an approval you make with gnubok_approve_pending_operation is recorded as yours (the AI), even when the user asked for it in chat; a click on Godkänn in the approval widget or in Accounted is recorded as the person\'s own. When the user wants it on record as theirs, open the widget instead of approving.'
-                    : 'WHO THE RECORD NAMES: an approval you make with gnubok_approve_pending_operation is recorded as yours (the AI), even when the user asked for it in chat; one the person makes in Accounted (Att göra › Agentförslag) is recorded as theirs.',
-                ]
-              : [
-                  '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
-                  '',
-                  'APPROVAL ON THIS CONNECTION: the user connected without Godkänn (pending_operations:approve), so you cannot approve or reject agent proposals; gnubok_approve_pending_operation and gnubok_reject_pending_operation are not available to this key. When you have staged a proposal, tell the user it waits for them in Accounted under Att göra › Agentförslag (/pending), where they approve or reject it. If they want you to approve in chat, they disconnect under Inställningar › API och MCP and connect again with Godkänn ticked: permissions cannot be added to an existing connection.',
-                ]),
-            'Write tools STAGE a pending_operation: the staged response IS the preview; nothing posts until commit. A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). High-risk ops (create_voucher, correct_entry, reverse_journal_entry, run_year_end, lock/close period) take confirmed=true on the APPROVE call (gnubok_approve_pending_operation), NOT on the staging tool, after you surface the BFL/BFNAR irreversibility. Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
-            'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
-            toolNamespace === 'gnubok'
-              ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'
-              : 'Tool names use the accounted_ prefix. Legacy gnubok_ aliases remain accepted for existing integrations.',
-          ].join('\n'), toolNamespace, getCanonicalToolNames())
+      const instructions = projectToolReferencesInText(
+        buildServerInstructions({
+          isAnonymous,
+          canApprove,
+          approvalView: actor.approvalView === true,
+          pinnedCompanyId,
+          pinnedCompanyName,
+          simpleCompanyMode,
+          companyId,
+          toolNamespace,
+        }),
+        toolNamespace,
+        getCanonicalToolNames()
+      )
       // 2026-07-28 MUST: server/discover advertises supported revisions,
       // capabilities, and identity so stateless clients can select a version
       // up front or use it as a compatibility probe. Always answers in the
