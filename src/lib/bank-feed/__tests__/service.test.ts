@@ -214,6 +214,12 @@ describe('startBankFeedConsent', () => {
       expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-0' }))
       expect(connect.createConsent).toHaveBeenCalledTimes(2)
       expect(order(connect.revokeConsent)).toBeLessThan(order(connect.createConsent, 1))
+      // A Connect without replacements refused the named one; the second ask
+      // names nothing, since the consent it replaced has just been ended.
+      const asks = (connect.createConsent as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1] as Record<string, unknown>)
+      expect(asks[0]).toMatchObject({ replacesConsentId: 'consent-0' })
+      expect(asks[1]).not.toHaveProperty('replacesConsentId')
+      expect(asks[1]).not.toHaveProperty('replacedPersonalNumber')
     })
 
     it('ends the consent of a removed connection the bank did not end at the time, clears it from the row, and asks once more', async () => {
@@ -342,17 +348,23 @@ describe('startBankFeedConsent', () => {
       ...orgAnswers(),
       companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
       bank_connections: [
-        { data: { id: OLD, status: 'active', aggregator: 'open_payments', bic: 'SWEDSESS', affiliated_aspsp_id: '08999', bank_name: 'Sparbanken Nord', psu_type: 'personal' }, error: null },
+        { data: { id: OLD, status: 'active', aggregator: 'open_payments', bic: 'SWEDSESS', affiliated_aspsp_id: '08999', bank_name: 'Sparbanken Nord', psu_type: 'personal', session_id: 'consent-0' }, error: null },
         { data: [], error: null },
         { data: inserted, error: null },
         { data: null, error: null },
       ],
     })
+    // The old consent was created with another signatory's number than the one renewing now.
+    mocks.storedPsu.mockImplementation(async (id: string) => (id === OLD ? { personalNumber: '198001011234', source: 'typed' } : null))
     // The browser resolved the sparbank to Swedbank's BIC and sends its default context; the row wins on both.
     const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, accountContext: 'corporate', replaceConnectionId: OLD, now: NOW })
     expect(result).toMatchObject({ ok: true, data: { connection_id: CONNECTION, attempt: { state: 'pending' } } })
-    expect(payload('bank_connections', 'insert')[0]).toMatchObject({ bank_name: 'Sparbanken Nord', bic: 'SWEDSESS', affiliated_aspsp_id: '08999', psu_type: 'personal', consent_attempt: expect.objectContaining({ replace_connection_id: null }) })
+    expect(payload('bank_connections', 'insert')[0]).toMatchObject({ bank_name: 'Sparbanken Nord', bic: 'SWEDSESS', affiliated_aspsp_id: '08999', psu_type: 'personal', consent_attempt: expect.objectContaining({ replace_connection_id: null, renews_connection_id: OLD }) })
     expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ affiliatedAspspId: '08999', accountContext: 'private' }) }))
+    // The old consent stays live until the new one is valid: named, with the
+    // number it was created with, and never ended here.
+    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ replacesConsentId: 'consent-0', replacedPersonalNumber: '198001011234' }))
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
     expect(calls.some((c) => c.table.startsWith('rpc:supersede_enable_banking'))).toBe(false)
 
     // Once the new consent is valid, finalize supersedes the old row of the same bank (by name), and the feed says so.
@@ -695,6 +707,65 @@ describe('restartBankFeedConsent', () => {
     expect(connect.createConsent).toHaveBeenCalledTimes(1)
     expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-1', consent_expires: '2027-04-10T21:59:59Z', authorization_id: null })
     expect(connect.startConsentSigning).toHaveBeenLastCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1', method: 'same_device' }))
+  })
+
+  it('a renewal whose consent has to be created anew names the renewed row\'s live consent again, with the number it was created with', async () => {
+    const OLD = '7a6c1a2b-9c0d-4e8f-8a1b-2c3d4e5f6a7b'
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValueOnce(new ConsentOverError('over')).mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
+    mocks.connect.mockReturnValue(connect)
+    mocks.storedPsu.mockImplementation(async (id: string) => (id === OLD ? { personalNumber: '198001011234', source: 'typed' } : null))
+    const renewal = row({ consent_attempt: { method: 'qr', state: 'failed', failure_code: 'SIGNING_SESSION_EXPIRED', renews_connection_id: OLD } })
+    const { supabase, payload, calls } = stub({
+      bank_connections: [
+        { data: renewal, error: null },
+        { data: { id: OLD, status: 'active', bic: 'SWEDSESS', affiliated_aspsp_id: null, bank_name: 'Swedbank', psu_type: 'business', session_id: 'consent-0' }, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ],
+      ...orgAnswers(),
+    })
+    expect((await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).ok).toBe(true)
+    expect(calls).toContainEqual({ table: 'bank_connections', method: 'eq', args: ['id', OLD] })
+    expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ replacesConsentId: 'consent-0', replacedPersonalNumber: '198001011234' }))
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-1', consent_attempt: expect.objectContaining({ renews_connection_id: OLD }) })
+
+    // The renewed row lost its consent meanwhile (revoked): a plain creation.
+    const gone = stub({
+      bank_connections: [
+        { data: renewal, error: null },
+        { data: { id: OLD, status: 'revoked', bic: 'SWEDSESS', affiliated_aspsp_id: null, bank_name: 'Swedbank', psu_type: 'business', session_id: 'consent-0' }, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ],
+      ...orgAnswers(),
+    })
+    const plain = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValueOnce(new ConsentOverError('over')).mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
+    mocks.connect.mockReturnValue(plain)
+    expect((await restartBankFeedConsent({ ...ctx, supabase: gone.supabase }, { connectionId: CONNECTION, now: NOW })).ok).toBe(true)
+    expect((plain.createConsent as ReturnType<typeof vi.fn>).mock.calls[0][1]).not.toHaveProperty('replacesConsentId')
+  })
+
+  it('Svea\'s second consent created anew names the listing consent again; a Connect without replacements gets it ended first', async () => {
+    const quota = new BankFeedRefusedError('Bank connection quota reached for this company', { code: 'CONNECTOR_QUOTA_EXCEEDED', status: 403 })
+    const connect = fakeConnect({
+      startConsentSigning: vi.fn().mockRejectedValueOnce(new ConsentOverError('over')).mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }),
+      createConsent: vi.fn().mockRejectedValueOnce(quota).mockResolvedValueOnce({ consentId: 'consent-3', consentStatus: 'received', validUntil: '2027-04-10' }),
+    })
+    mocks.connect.mockReturnValue(connect)
+    const second = row({
+      bic: 'SVEASESS', session_id: 'consent-2',
+      accounts_data: [{ uid: 'ACC003', currency: 'SEK', enabled: true, iban: 'SE8050000000052131234567', name: 'Företagskonto' }],
+      consent_attempt: { method: 'qr', state: 'failed', listing_only: false, listing_consent_id: 'consent-1', selection: { listing_only: false, accounts: [{ uid: 'ACC003', enabled: true, ledger_account: '1930' }] } },
+    })
+    const { supabase, payload } = stub({ bank_connections: [{ data: second, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+    expect((await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).ok).toBe(true)
+    const asks = (connect.createConsent as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1] as Record<string, unknown>)
+    expect(asks[0]).toMatchObject({ replacesConsentId: 'consent-1', accounts: [{ iban: 'SE8050000000052131234567' }] })
+    expect(asks[1]).not.toHaveProperty('replacesConsentId')
+    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1' }))
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-3' })
   })
 
   it('lets a second signatory sign a partially authorised consent: their personnummer, the same consent, no new one', async () => {
@@ -1055,25 +1126,56 @@ describe('selectBankFeedAccounts', () => {
     expect(await selectBankFeedAccounts({ ...ctx, supabase: picker().supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: false }] })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'none_selected' } })
   })
 
-  it('for Svea ends the listing consent, then creates the second consent naming the chosen IBANs, keeps the selection on the row and answers the attempt', async () => {
+  it('for Svea creates the second consent as the listing consent\'s replacement and keeps the selection on the row', async () => {
     const connect = fakeConnect({ createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }) })
     mocks.connect.mockReturnValue(connect)
     const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
     const { supabase, payload } = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
     const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }, { uid: 'ACC001', enabled: false, ledgerAccount: null }], method: 'qr', signer, now: NOW })
     expect(result).toMatchObject({ ok: true, data: { sync: null, sync_pending: false, attempt: { authorisation_id: 'auth-1', method: 'qr', state: 'pending' }, connection: { status: 'pending' } } })
-    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ accounts: [{ iban: 'SE8050000000052131234567' }] }))
-    // One consent at a time (one bank connection per company): the listing
-    // consent is ended before the second one is created.
-    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1' }))
-    const revokeCalls = (connect.revokeConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder
-    const createCalls = (connect.createConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder
-    expect(revokeCalls[0]).toBeLessThan(createCalls[0])
+    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({
+      accounts: [{ iban: 'SE8050000000052131234567' }],
+      replacesConsentId: 'consent-1',
+    }))
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
     expect(payload('bank_connections', 'update')[0]).toMatchObject({
       session_id: 'consent-2', status: 'pending', authorization_id: null,
       consent_attempt: expect.objectContaining({ listing_only: false, listing_consent_id: 'consent-1', selection: expect.objectContaining({ listing_only: false, accounts: [{ uid: 'ACC003', enabled: true, ledger_account: '1930' }, { uid: 'ACC001', enabled: false, ledger_account: null }] }) }),
     })
     expect(mocks.saveSelection).not.toHaveBeenCalled()
+  })
+
+  it('for Svea, against a Connect without replacements, ends the listing consent after the refusal over the count and asks once more without naming it', async () => {
+    const quota = new BankFeedRefusedError('Bank connection quota reached for this company', { code: 'CONNECTOR_QUOTA_EXCEEDED', status: 403 })
+    const connect = fakeConnect({
+      createConsent: vi.fn().mockRejectedValueOnce(quota).mockResolvedValueOnce({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      // A bank that keeps refusing the end: Connect releases its row anyway, so the second ask goes ahead.
+      revokeConsent: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', { code: 'CONNECTOR_AIS_PROVIDER_FAILED' })),
+    })
+    mocks.connect.mockReturnValue(connect)
+    const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
+    const { supabase, payload } = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+    const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', signer, now: NOW })
+    expect(result).toMatchObject({ ok: true, data: { connection: { status: 'pending' } } })
+    const asks = (connect.createConsent as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1] as Record<string, unknown>)
+    expect(asks).toHaveLength(2)
+    expect(asks[0]).toMatchObject({ replacesConsentId: 'consent-1', accounts: [{ iban: 'SE8050000000052131234567' }] })
+    expect(asks[1]).toMatchObject({ accounts: [{ iban: 'SE8050000000052131234567' }] })
+    expect(asks[1]).not.toHaveProperty('replacesConsentId')
+    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1' }))
+    const order = (fn: unknown, call = 0) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[call]
+    expect(order(connect.revokeConsent)).toBeLessThan(order(connect.createConsent, 1))
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-2', consent_attempt: expect.objectContaining({ listing_consent_id: 'consent-1' }) })
+  })
+
+  it('for Svea answers any other refusal of the second consent without ending the listing consent', async () => {
+    const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValue(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422 })) })
+    mocks.connect.mockReturnValue(connect)
+    const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
+    const { supabase } = stub({ bank_connections: [{ data: listing, error: null }], ...orgAnswers() })
+    expect(await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', signer, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED' })
+    expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
   })
 
   it('for Svea keeps the switch\'s Enable Banking row and the history window on the second consent where finalize reads them, at the top of the attempt', async () => {
@@ -1088,19 +1190,6 @@ describe('selectBankFeedAccounts', () => {
     expect(payload('bank_connections', 'update')[0]).toMatchObject({
       consent_attempt: expect.objectContaining({ replace_connection_id: EB_ROW, extended_history_days: 365, listing_only: false, selection: expect.objectContaining({ replace_connection_id: EB_ROW }) }),
     })
-  })
-
-  it('for Svea creates the second consent even when ending the listing consent fails (already ended)', async () => {
-    const connect = fakeConnect({
-      createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
-      revokeConsent: vi.fn().mockRejectedValue(new Error('consent not found')),
-    })
-    mocks.connect.mockReturnValue(connect)
-    const listing = row({ status: 'pending_selection', bic: 'SVEASESS', accounts_data: stored, consent_attempt: { selection: { listing_only: true, extended_history_days: 365, replace_connection_id: null } } })
-    const { supabase } = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
-    const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', signer, now: NOW })
-    expect(result).toMatchObject({ ok: true, data: { connection: { status: 'pending' } } })
-    expect(connect.createConsent).toHaveBeenCalledTimes(1)
   })
 
   it('starts Svea\'s second consent on the bank\'s page with the entry point\'s return when the bank signs only there, and refuses without a return', async () => {

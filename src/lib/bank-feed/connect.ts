@@ -175,7 +175,7 @@ export interface BankFeedConnect {
   bank(companyId: string, bic: string): Promise<AisBankDetails>
   /** `bank`, answered from the in-memory cache for BANK_DETAILS_TTL_MS. */
   getBankDetails(companyId: string, bic: string): Promise<AisBankDetails>
-  createConsent(companyId: string, input: { party: AisParty; validUntil?: string; accounts?: Array<{ iban: string }> }): Promise<AisConsentCreated>
+  createConsent(companyId: string, input: { party: AisParty; validUntil?: string; accounts?: Array<{ iban: string }>; replacesConsentId?: string; replacedPersonalNumber?: string | null }): Promise<AisConsentCreated>
   startConsentSigning(companyId: string, input: AisStartConsentSigningRequest): Promise<AisConsentSigningStarted>
   pollConsentSigning(companyId: string, input: AisPollConsentSigningRequest): Promise<AisConsentSigningProgress>
   consentStatus(companyId: string, input: { party: AisParty; consentId: string }): Promise<AisConsentStatus>

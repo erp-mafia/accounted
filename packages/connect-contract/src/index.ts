@@ -47,6 +47,13 @@ import { z } from 'zod'
  * Corporate Netbank), sent to the provider as PSU-Authoriser-ID on the
  * authorisation calls only. Optional: a party without it is the party of
  * the previous version.
+ *
+ * Two optional request fields of AIS consent creation came later without a
+ * new version (2026-11-08): `replacesConsentId` and `replacedPersonalNumber`.
+ * A request field needs none: an older service strips it and answers as
+ * before (the old consent still counts toward the company's quota), and no
+ * response changed. A version moved for them would only make every call of a
+ * newer installation look ahead of a service not yet re-pinned.
  */
 
 export const CONTRACT_VERSION = '2026-10-17'
@@ -1493,6 +1500,20 @@ export const aisCreateConsentRequestSchema = z.object({
   validUntil: z.iso.date().optional(),
   /** Name the accounts the consent covers (a bank that lists accounts first and consents to the chosen ones second); default every account. */
   accounts: z.array(z.object({ iban: aisIbanSchema })).max(100).optional(),
+  /**
+   * The active consent (same company, same key) this one replaces. The service
+   * keeps it live, outside the company's quota, until the new one is valid,
+   * then ends it. A consent the service no longer holds makes this a plain
+   * creation. Ignored by a service that predates the field.
+   */
+  replacesConsentId: aisConsentIdSchema.optional(),
+  /**
+   * The PSU-ID the replaced consent was created with, when it differs from
+   * the party's (another signatory renews): several banks want that same
+   * number on every call to a consent, its delete included. Absent: the
+   * party's personalNumber. Never kept in the clear by the service.
+   */
+  replacedPersonalNumber: z.string().regex(/^\d{12}$/, 'personnummer: 12 digits').nullable().optional(),
 })
 export type AisCreateConsentRequest = z.infer<typeof aisCreateConsentRequestSchema>
 

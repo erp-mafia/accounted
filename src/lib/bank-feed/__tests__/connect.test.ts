@@ -85,9 +85,9 @@ describe('createBankFeedConnect', () => {
     expect(sent(bankFetch).url).toBe(`${UPSTREAM.baseUrl}/bank`)
 
     const createFetch = fetchAnswering(200, { consentId: 'c-1', consentStatus: 'received', validUntil: '2027-04-10' })
-    const created = await adapter(createFetch).createConsent('co-1', { party: PARTY, validUntil: '2027-04-10', accounts: [{ iban: 'SE1' }] })
+    const created = await adapter(createFetch).createConsent('co-1', { party: PARTY, validUntil: '2027-04-10', accounts: [{ iban: 'SE1' }], replacesConsentId: 'c-0', replacedPersonalNumber: '198001011234' })
     expect(created.consentId).toBe('c-1')
-    expect(sent(createFetch).body).toEqual({ party: PARTY, validUntil: '2027-04-10', accounts: [{ iban: 'SE1' }] })
+    expect(sent(createFetch).body).toEqual({ party: PARTY, validUntil: '2027-04-10', accounts: [{ iban: 'SE1' }], replacesConsentId: 'c-0', replacedPersonalNumber: '198001011234' })
 
     const startFetch = fetchAnswering(200, { providerAuthorisationId: 'a-1', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: 'started' })
     const started = await adapter(startFetch).startConsentSigning('co-1', { party: PARTY, consentId: 'c-1', method: 'qr' })
