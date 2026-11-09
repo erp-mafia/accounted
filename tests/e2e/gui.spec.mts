@@ -3,6 +3,7 @@ import path from 'node:path'
 import { root, runtimeDir } from '../../scripts/e2e/runtime.mjs'
 import { test } from './fixtures'
 import { BUDGET, measured } from './budget'
+import { horizontalOverflow } from './mobile-layout'
 import { expect } from '@playwright/test'
 
 test.skip(!existsSync(path.join(root, 'src/components/dashboard/NavTreeSection.tsx')), 'Companion UI PR is not present in this build')
@@ -318,3 +319,42 @@ for (const theme of ['light', 'dark'] as const) {
     }
   })
 }
+
+
+test('forms, workflow steps and register toolbars fit narrow mobile widths', async ({ page }, info) => {
+  const routes = [
+    '/reports', '/chart-of-accounts', '/invoices/new', '/supplier-invoices/new',
+    '/sales-orders/new', '/bookkeeping/year-end', '/rules', '/settings/security', '/dpa',
+  ]
+  for (const route of routes) {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await measured(info, `Ready narrow layout ${route}`, BUDGET.navigation, async () => {
+      await page.goto(route)
+      if (route === '/invoices/new') {
+        await page.getByRole('combobox', { name: 'Ny fakturarad', exact: true }).waitFor({ state: 'visible' })
+      } else if (route === '/bookkeeping/year-end') {
+        await page.getByRole('tablist', { name: 'Bokslutets steg' }).waitFor({ state: 'visible' })
+      } else if (route === '/dpa') {
+        await page.getByRole('heading', { name: 'Personuppgiftsbiträdesavtal (DPA)', exact: true }).waitFor({ state: 'visible' })
+      } else {
+        await page.waitForFunction(() => {
+          const main = document.querySelector('main')
+          if (!main?.querySelector('h1') || main.querySelector('[aria-busy="true"]')) return false
+          return main.querySelector('input, tbody tr, [role="tab"], section, form') !== null
+        })
+      }
+    })
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ width, height: 844 })
+      const overflow = await page.evaluate(horizontalOverflow)
+      expect(overflow, `${route} at ${width}px`).toEqual({ page: false, main: false, regions: [] })
+    }
+    if (route === '/invoices/new') {
+      // Stacking keeps the original accessible input and editable entry row.
+      const entry = page.getByRole('combobox', { name: 'Ny fakturarad', exact: true })
+      await entry.focus()
+      await expect(entry).toBeFocused()
+      await expect(page.locator('.responsive-form-cell[data-label="Antal"]')).toBeVisible()
+    }
+  }
+})
