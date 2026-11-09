@@ -33,6 +33,38 @@ export const RESERVED_OAUTH_KEY_NAME = 'MCP-klient (OAuth)'
  */
 const CONNECTOR_SUFFIX = /\s+\((?:Anthropic|OpenAI|xAI|registered client)\)$/
 
+/**
+ * Product names for the MCP client labels the server stores (`client` on
+ * agent_memory and telemetry; extensions/general/mcp-server/client-label.ts),
+ * matched by prefix like public.agent_client_family. The label is a marker a
+ * customer may set freely (names, run ids), so only a known product is shown;
+ * anything else is null and reads as the neutral AI connection.
+ */
+const MCP_CLIENT_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^claude[-_]?code/, 'Claude Code'],
+  [/^claude/, 'Claude'],
+  [/^chatgpt/, 'ChatGPT'],
+  [/^codex/, 'Codex'],
+  [/^cursor/, 'Cursor'],
+  [/^gem[ie]ni/, 'Gemini'],
+  [/^grok/, 'Grok'],
+  [/^openclaw/, 'OpenClaw'],
+  [/^opencode/, 'OpenCode'],
+  [/^accounted-cli/, 'Accounted CLI'],
+  [/^vscode/, 'VS Code'],
+  [/^zed/, 'Zed'],
+]
+
+/** The product name for an MCP client label ("claude-connector" is Claude), or null when it names no known product. */
+export function mcpClientDisplayName(client: string | null | undefined): string | null {
+  const label = client?.trim().toLowerCase()
+  if (!label) return null
+  for (const [pattern, name] of MCP_CLIENT_NAMES) {
+    if (pattern.test(label)) return name
+  }
+  return null
+}
+
 export interface AttributionWords {
   /** "{agent} åt {person}". */
   actedFor: (agent: string, person: string) => string

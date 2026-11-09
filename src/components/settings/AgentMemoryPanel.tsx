@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useLocale } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { BookmarkIcon, LightBulbIcon, PlusIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ import { SettingsSeg, SettingsSelect, SettingsTextarea } from '@/components/sett
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { attributionWordsFrom, formatActorAttribution, mcpClientDisplayName } from '@/lib/attribution/format-actor'
+import type { Creator } from '@/lib/attribution/person-names'
 
 import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
@@ -29,6 +31,10 @@ interface AgentMemoryRow {
   last_accessed_at: string | null
   created_at: string
   updated_at: string
+  /** Who saved it (GET and POST only): the name or that the account is deleted, never the e-mail. */
+  created_by?: Creator | null
+  /** The MCP client label that wrote it; null outside MCP. */
+  client: string | null
 }
 
 const KIND_LABEL: Record<Kind, string> = {
@@ -57,6 +63,26 @@ export function AgentMemoryPanel() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
+  const t = useTranslations('settings')
+  const tAttribution = useTranslations('attribution')
+  const attributionWords = useMemo(() => attributionWordsFrom((key, values) => tAttribution(key, values)), [tAttribution])
+
+  // "Sparad av ...": the person, or the agent and the person it acted for
+  // ("Claude åt Jonas Ek"), worded like Bokförd av. An MCP write carries the
+  // client label; agent_learned rows from before that column read as an AI
+  // connection. Nothing when the row records no one.
+  function savedBy(row: AgentMemoryRow): string | null {
+    if (!row.created_by) return null
+    const personName = row.created_by.name ?? (row.created_by.deleted ? t('memory_creator_deleted') : null)
+    const byAgent = Boolean(row.client) || row.source === 'agent_learned'
+    return formatActorAttribution(
+      byAgent
+        ? { actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName(row.client), personName }
+        : { actorType: 'user', personName },
+      attributionWords,
+      { inline: true },
+    )
+  }
 
   // null = the memory list is not known: still loading, or the read failed
   // (loadError). A failed read must never render the "Inga minnen ännu"
@@ -157,7 +183,8 @@ export function AgentMemoryPanel() {
         return
       }
       const json = await res.json()
-      setRows((prev) => prev?.map((r) => (r.id === id ? (json.data as AgentMemoryRow) : r)) ?? null)
+      // The PATCH answer has no created_by: keep the one the list read.
+      setRows((prev) => prev?.map((r) => (r.id === id ? { ...r, ...(json.data as Partial<AgentMemoryRow>) } : r)) ?? null)
     } catch (err) {
       // A rejected fetch (offline, DNS failure) or a 200 whose body will not
       // parse never reaches the !res.ok arm above: without this toast the
@@ -335,6 +362,7 @@ export function AgentMemoryPanel() {
             const isEditing = editingId === row.id
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
+            const who = savedBy(row)
             return (
               <li key={row.id} className={cn('group flex items-start gap-3 border-b border-border py-3.5', dimmed && 'opacity-60')}>
                 {canWrite && row.is_active ? (
@@ -382,6 +410,7 @@ export function AgentMemoryPanel() {
                   )}
                   <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
                     {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
+                    {who && ` · ${t('memory_saved_by', { who })}`}
                     {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
                     {dimmed && ' · dold'}
                   </p>

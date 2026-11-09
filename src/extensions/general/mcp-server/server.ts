@@ -284,7 +284,7 @@ import { prompts, findPrompt } from './prompts'
 import { closestSkillSlugs, findSkill, isOwnSkillDraft, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash } from '@/lib/agent-skills/provenance'
 import { formatActorAttribution } from '@/lib/attribution/format-actor'
-import { resolvePersonNames } from '@/lib/attribution/person-names'
+import { creatorFields, resolvePersonNames } from '@/lib/attribution/person-names'
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
 import { skillAppliesToCompany } from '@/lib/agent-skills/applicability'
 import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
@@ -7291,7 +7291,9 @@ export const tools: McpTool[] = [
       const hasEmployees = (employeeCount.count ?? 0) > 0
 
       const skillCompanyId = hasScope((args.__keyScopes ?? []) as ApiKeyScope[], 'agent:read') ? companyId : undefined
-      const all = await loadAllSkills(supabase, skillCompanyId, includeAll)
+      // The service-role client reads the own items' creators: the ids come
+      // from the company_skills rows read for this company and its firm.
+      const all = await loadAllSkills(supabase, skillCompanyId, includeAll, { creators: supabase })
 
       // First pass: tier + tag filter (unchanged).
       const tagFiltered = all.filter((s) => {
@@ -7317,6 +7319,9 @@ export const tools: McpTool[] = [
           // Whether an own item (or an Accounted analysis) is a job to run, rules
           // to follow or an analysis to build: the tier alone says only "own".
           ...(s.itemKind ? { item_kind: s.itemKind } : {}),
+          // Who saved an own item: the name, never the e-mail. Undeclared in
+          // outputSchema (tools/list budget), like data_status in the briefing.
+          ...creatorFields(s.createdBy),
         })),
         count: applicable.length,
         hidden_count: tagFiltered.length - applicable.length,
@@ -8393,6 +8398,9 @@ export const tools: McpTool[] = [
           // ChatGPT's memory" differently from "the user said it".
           ...(m.origin ? { origin: m.origin } : {}),
           ...(m.client ? { client: m.client } : {}),
+          // Who saved it (the person, or the person the agent acted for): the
+          // name, never the e-mail; created_by_deleted when the account is gone.
+          ...creatorFields(m.created_by),
         })),
         // Undeclared in outputSchema (catalog ceiling), like data_status.
         ...(remembered.truncated ? { memory_truncated: true } : {}),

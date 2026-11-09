@@ -58,9 +58,12 @@ function mockSupabase(opts: {
     content: string
     relevance_score: number | null
     created_at?: string | null
+    created_by_user_id?: string | null
     origin?: string | null
     client?: string | null
   }>
+  // profiles rows the creators' read (.in('id', ...)) returns.
+  creatorProfiles?: Array<{ id: string; full_name: string | null; deleted_at: string | null; anonymized_at: string | null }>
   atomRows?: Array<{
     id: string
     tier: string
@@ -121,6 +124,7 @@ function mockSupabase(opts: {
                 error: null,
               }),
             })),
+            in: vi.fn().mockResolvedValue({ data: opts.creatorProfiles ?? [], error: null }),
           })),
         }
       }
@@ -424,9 +428,14 @@ describe('gnubok_get_agent_briefing tool', () => {
     const supabase = mockSupabase({
       profile: null,
       memoryRows: [
-        { id: 'mem-3', kind: 'fact', content: 'Hyran höjs till 14 000 kr från januari.', relevance_score: 0.8, created_at: '2026-10-20T09:00:00Z', origin: 'conversation', client: 'claude' },
-        { id: 'mem-2', kind: 'fact', content: 'Två anställda sedan september.', relevance_score: 0.8, created_at: '2026-10-02T09:00:00Z', origin: 'session_sync', client: 'chatgpt' },
-        { id: 'mem-1', kind: 'fact', content: 'Gammal fakta utan ursprung.', relevance_score: 0.8, created_at: '2026-06-01T09:00:00Z', origin: null, client: null },
+        { id: 'mem-3', kind: 'fact', content: 'Hyran höjs till 14 000 kr från januari.', relevance_score: 0.8, created_at: '2026-10-20T09:00:00Z', created_by_user_id: 'u-anna', origin: 'conversation', client: 'claude' },
+        { id: 'mem-2', kind: 'fact', content: 'Två anställda sedan september.', relevance_score: 0.8, created_at: '2026-10-02T09:00:00Z', created_by_user_id: 'u-gone', origin: 'session_sync', client: 'chatgpt' },
+        { id: 'mem-1', kind: 'fact', content: 'Gammal fakta utan ursprung.', relevance_score: 0.8, created_at: '2026-06-01T09:00:00Z', created_by_user_id: 'u-noname', origin: null, client: null },
+      ],
+      creatorProfiles: [
+        { id: 'u-anna', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null },
+        { id: 'u-gone', full_name: null, deleted_at: '2026-10-05T00:00:00Z', anonymized_at: '2026-10-05T00:00:00Z' },
+        { id: 'u-noname', full_name: null, deleted_at: null, anonymized_at: null },
       ],
     })
     const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
@@ -436,7 +445,12 @@ describe('gnubok_get_agent_briefing tool', () => {
       memory_truncated?: boolean
     }
     expect(result.memory).toHaveLength(3)
-    expect(result.memory[0]).toMatchObject({ fact_id: 'mem-3', saved_at: '2026-10-20T09:00:00Z', origin: 'conversation', client: 'claude' })
+    expect(result.memory[0]).toMatchObject({ fact_id: 'mem-3', saved_at: '2026-10-20T09:00:00Z', origin: 'conversation', client: 'claude', created_by: 'Anna Andersson' })
+    // Who saved it: the name, or that the account is gone; never an e-mail or a placeholder.
+    expect(result.memory[1]).toMatchObject({ created_by_deleted: true })
+    expect(result.memory[1]).not.toHaveProperty('created_by')
+    expect(result.memory[2]).not.toHaveProperty('created_by')
+    expect(result.memory[2]).not.toHaveProperty('created_by_deleted')
     // No origin recorded: the keys are left out, not sent as null.
     expect(result.memory[2]).not.toHaveProperty('origin')
     expect(result.memory[2]).not.toHaveProperty('client')
