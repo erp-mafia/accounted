@@ -131,37 +131,24 @@ describe('ombudAppointment', () => {
 })
 
 /**
- * What the toast after a check says. It must agree with the card: a check
- * that finds a withdrawn grant, or one signed before the opt-in, is not a
- * wait, except right after signing, when the new signature is simply not
- * listed yet.
+ * What the toast after the return from signing says: a grant, or a wait. An
+ * older or withdrawn grant only means the new signature is not listed yet.
  */
 describe('ombudCheckOutcome', () => {
   const withdrawn = row({ last_probe_detail: { lasombud: { status: 'denied', reason: 'withdrawn' }, moms_ombud: { status: 'denied', reason: 'withdrawn' } } })
   const predates = row({ last_probe_detail: { lasombud: { status: 'denied', reason: 'predates_opt_in' }, moms_ombud: NOT_LISTED_YET } })
 
-  it('läsombud granted: granted, from either door', () => {
-    const granted = row({ status: 'partial', lasombud_status: 'granted' })
-    expect(ombudCheckOutcome(granted, { justSigned: true })).toBe('granted')
-    expect(ombudCheckOutcome(granted, { justSigned: false })).toBe('granted')
+  it('läsombud granted: granted', () => {
+    expect(ombudCheckOutcome(row({ status: 'partial', lasombud_status: 'granted' }))).toBe('granted')
   })
 
-  it('nothing listed yet: waiting, from either door', () => {
-    expect(ombudCheckOutcome(row(), { justSigned: true })).toBe('waiting')
-    expect(ombudCheckOutcome(row(), { justSigned: false })).toBe('waiting')
-    expect(ombudCheckOutcome(null, { justSigned: false })).toBe('waiting')
+  it('nothing listed yet: waiting', () => {
+    expect(ombudCheckOutcome(row())).toBe('waiting')
+    expect(ombudCheckOutcome(null)).toBe('waiting')
   })
 
-  it('Kontrollera nu on a withdrawn grant says withdrawn, as the card does', () => {
-    expect(ombudCheckOutcome(withdrawn, { justSigned: false })).toBe('withdrawn')
-  })
-
-  it('Kontrollera nu after appointing directly at Skatteverket on an earlier day says it does not count, never waiting', () => {
-    expect(ombudCheckOutcome(predates, { justSigned: false })).toBe('predates')
-  })
-
-  it('back from signing, an older or withdrawn grant only means the new signature is not listed yet', () => {
-    expect(ombudCheckOutcome(predates, { justSigned: true })).toBe('waiting')
-    expect(ombudCheckOutcome(withdrawn, { justSigned: true })).toBe('waiting')
+  it('an older or withdrawn grant only means the new signature is not listed yet', () => {
+    expect(ombudCheckOutcome(predates)).toBe('waiting')
+    expect(ombudCheckOutcome(withdrawn)).toBe('waiting')
   })
 })

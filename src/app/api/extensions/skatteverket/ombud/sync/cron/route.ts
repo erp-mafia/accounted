@@ -41,7 +41,7 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  *
  * Hourly ombudsregister sync (cron 50 * * * *), ten minutes before the
  * hourly skattekonto sync, which picks a grant recorded here up on its next
- * run; Kontrollera nu in the settings records one at once. Hourly because
+ * run; the appoint button's own register check records one at once. Hourly because
  * Skatteverket takes from minutes to over an hour to list a fresh grant
  * (prod, 2026-11-08: 3, 18 and 52 minutes, one past the old nightly run), and
  * the settings card, Hem and Kom igång promise a check every hour while they
@@ -55,7 +55,8 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * against the company's OWN connection row:
  *
  *   - only rows that already exist are touched. A row exists because a
- *     member of that company pressed Kontrollera nu or minted the deep link: the
+ *     member of that company pressed the appoint button (it checks the
+ *     register, then mints the deep link): the
  *     tenant's explicit opt-in. Rows are never created here,
  *   - a row whose company may not hold the connection on its org number
  *     (ombudClaimStanding: another live company claims it and this one is

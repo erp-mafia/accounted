@@ -132,7 +132,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       if (document.visibilityState !== 'visible' || !awaitingOmbud.current) return
       if (phaseRef.current !== 'leaving' && phaseRef.current !== 'away') return
       awaitingOmbud.current = false
-      const outcome = await verifyOmbudGrant(errorLocale, { justSigned: true })
+      const outcome = await verifyOmbudGrant(errorLocale)
       if (outcome.result === 'granted') {
         arrive()
         return
@@ -160,6 +160,11 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
     if (!opened.ok) {
       setAttn(opened.error ?? t('skv_ombud_link_failed'))
       dispatch({ type: 'SKV_PHASE', phase: 'open' })
+      return
+    }
+    // Already appointed (directly at Skatteverket, say): nothing to sign.
+    if (opened.alreadyAppointed) {
+      arrive()
       return
     }
     awaitingOmbud.current = true
