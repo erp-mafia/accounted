@@ -8433,6 +8433,18 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_correct_entry',
     },
   },
+  LINK_VOUCHER_NO_SALE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen bokför varken försäljningen eller kundfordran för fakturan. En obokförd faktura under kontantmetoden betalas av den verifikation som bokför försäljningen: en kredit på ett intäktskonto (3xxx), på kundfordringar (151x) eller på ett konto som fakturans rader bokförs på. Ett eget uttag (debet 2013 mot kredit 19xx) eller en egen insättning (debet 19xx mot kredit 2018) är ingen betalning från kunden. Länka verifikationen som bokför försäljningen i stället.',
+    message_en:
+      'The journal entry books neither the sale nor the receivable of this invoice. Under kontantmetoden an invoice that was never booked is paid by the entry that books its sale: a credit on revenue (3xxx), on accounts receivable (151x) or on an account the invoice\'s lines post to. An owner withdrawal (debit 2013 against a credit on 19xx) or an owner deposit (debit 19xx against a credit on 2018) is not the customer\'s payment. Link the entry that books the sale instead.',
+    remediation: {
+      description:
+        'Pick a voucher from gnubok_find_voucher_candidates_for_invoice: it offers only vouchers that book the sale or the receivable. A payment booked without its revenue is corrected with gnubok_correct_entry first.',
+      tool: 'gnubok_find_voucher_candidates_for_invoice',
+    },
+  },
   LINK_VOUCHER_ALREADY_LINKED: {
     httpStatus: 409,
     message_sv: 'Verifikationen är redan länkad till den här fakturan.',
