@@ -1,6 +1,7 @@
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isBankRangeAccount } from '@/lib/transactions/booking-duplicate-detection'
+import { fetchMigrationCoverageEnd as readMigrationCoverageEnd } from '@/lib/bookkeeping/migration-coverage-end'
 
 /**
  * End of the company's SIE-migration data coverage: the latest entry_date
@@ -52,26 +53,7 @@ export async function fetchMigrationCoverageEnd(
   supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<string | null> {
-  const { data: completedImport } = await supabase
-    .from('sie_imports')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
-    .limit(1)
-    .maybeSingle()
-  if (!completedImport) return null
-
-  const { data } = await supabase
-    .from('journal_entries')
-    .select('entry_date')
-    .eq('company_id', companyId)
-    .eq('status', 'posted')
-    .eq('source_type', 'import')
-    .not('description', 'like', 'Omföringsverifikation:%')
-    .order('entry_date', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  return (data as { entry_date?: string } | null)?.entry_date ?? null
+  return readMigrationCoverageEnd(supabase, companyId)
 }
 
 /**

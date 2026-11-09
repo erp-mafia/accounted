@@ -16,6 +16,9 @@ import { createLogger } from '@/lib/logger'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { bankNetMismatch, bulkBookTransactions, type BulkBookInput } from '../bulk-book'
 
+const covered = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoveredThrough: covered }))
+
 vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
   return { ...actual, detectBookingDuplicate: vi.fn() }
@@ -33,6 +36,15 @@ const transferOut = {
   date: '2026-10-20',
   journal_entry_id: null,
   cash_account_id: 'cash-1930',
+}
+
+const TX_LATER = '22222222-2222-4222-8222-222222222222'
+const stripeFee = {
+  ...transferOut,
+  amount: -37.5,
+  description: 'Stripe-avgift',
+  cash_account_id: 'cash-1686',
+  import_source: 'stripe',
 }
 
 const line = (account_number: string, debit_amount: number, credit_amount: number) => ({
@@ -55,6 +67,7 @@ const messageOf = (outcome: unknown) => (outcome as { messageSv?: string }).mess
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  covered.mockResolvedValue(null)
 })
 
 describe('bankNetMismatch: the RPC bank net', () => {
@@ -156,6 +169,45 @@ describe('bulk booking dry run (what staging runs)', () => {
     expect(messageOf(outcome)).toContain('överföring mellan egna konton (1930 och 1931)')
     expect(messageOf(outcome)).toContain('categorize_transaction med account_override 1931')
     expect(messageOf(outcome)).toContain('link_transaction_to_journal_entry')
+  })
+
+  it('refuses a new samlingsverifikat over Stripe rows on days the ledger already covers, with one read', async () => {
+    covered.mockResolvedValue('2026-10-20')
+    const second = { ...stripeFee, id: TX_LATER, amount: -37.5 }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [second, stripeFee], error: null })
+    enqueue({ data: [{ account_number: '1686', is_active: true }, { account_number: '6570', is_active: true }], error: null })
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null })
+
+    const outcome = await run(supabase, {
+      tx_ids: [TX_LATER, TX_OUT],
+      entry_description: 'Stripeavgifter',
+      manual_lines: [line('6570', 75, 0), line('1686', 0, 75)],
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'BULK_BOOK_LEDGER_DAY_COVERED',
+      details: { transaction_id: TX_LATER, covered_through: '2026-10-20', settlement_account: '1686' },
+    })
+    // One read per settlement account, not one per row.
+    expect(covered).toHaveBeenCalledTimes(1)
+    expect(covered).toHaveBeenCalledWith(supabase, 'company-1', ['1686'], '2026-10-20')
+  })
+
+  it('never reads coverage for bank rows', async () => {
+    covered.mockResolvedValue('2026-12-31')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null })
+    enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '6570', is_active: true }], error: null })
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
+
+    await run(supabase, {
+      entry_description: 'Bankavgift',
+      manual_lines: [line('6570', 5000, 0), line('1930', 0, 5000)],
+    })
+
+    expect(covered).not.toHaveBeenCalled()
   })
 
   it('refuses a bulk link of a transfer\'s row to its verifikat, pointing at the single link', async () => {

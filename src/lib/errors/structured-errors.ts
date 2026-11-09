@@ -1147,6 +1147,24 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   // always asks, it is an imported rule nobody has confirmed here, or its
   // evidence is not settled (lib/transactions/direct-booking.ts). Nothing is
   // written; the page opens the review instead.
+  TX_CATEGORIZE_LEDGER_DAY_COVERED: {
+    httpStatus: 409,
+    message_sv: 'Dagen är redan bokförd i ett manuellt samlingsverifikat eller i den gamla bokföringen. Länka raden till det verifikatet eller ignorera den, i stället för att bokföra den igen.',
+    message_en: 'This day is already covered by a manual combined voucher or the migrated ledger. Link the row to that voucher or ignore it instead of booking it again.',
+    remediation: {
+      description: 'Link the bank row to the existing combined voucher, or ignore it as already booked.',
+      tool: 'gnubok_reconcile_match',
+    },
+  },
+  BULK_BOOK_LEDGER_DAY_COVERED: {
+    httpStatus: 409,
+    message_sv: 'Dagen är redan bokförd i ett manuellt samlingsverifikat eller i den gamla bokföringen. Länka raderna till det verifikatet eller ignorera dem, i stället för att skapa ett nytt samlingsverifikat.',
+    message_en: 'This day is already covered by a manual combined voucher or the migrated ledger. Link the rows to that voucher or ignore them instead of creating another combined voucher.',
+    remediation: {
+      description: 'Use bulk booking with existing_journal_entry_id to link the rows to the existing combined voucher instead of creating a new one.',
+      tool: 'gnubok_bulk_book_transactions',
+    },
+  },
   TX_CATEGORIZE_REVIEW_REQUIRED: {
     httpStatus: 409,
     message_sv: 'Förslaget behöver granskas innan det bokförs. Öppna granskningen och bokför därifrån.',

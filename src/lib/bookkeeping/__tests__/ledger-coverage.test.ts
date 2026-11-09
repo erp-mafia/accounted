@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/lib/transactions/migration-coverage', () => ({
+vi.unmock('@/lib/bookkeeping/ledger-coverage')
+
+vi.mock('@/lib/bookkeeping/migration-coverage-end', () => ({
   fetchMigrationCoverageEnd: vi.fn(),
 }))
 vi.mock('@/lib/bookkeeping/entry-lines', () => ({
@@ -8,7 +10,7 @@ vi.mock('@/lib/bookkeeping/entry-lines', () => ({
 }))
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
+import { fetchMigrationCoverageEnd } from '@/lib/bookkeeping/migration-coverage-end'
 import { fetchEntryLines, type FetchEntryLinesOptions } from '@/lib/bookkeeping/entry-lines'
 import { ledgerCoveredThrough } from '../ledger-coverage'
 

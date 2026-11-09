@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+vi.unmock('@/lib/bookkeeping/ledger-coverage')
+
 // Force the capability gate to run (no dev bypass) but stub requireCapability
 // so entitlement is controlled per test. Mirrors the enable-banking suite.
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {

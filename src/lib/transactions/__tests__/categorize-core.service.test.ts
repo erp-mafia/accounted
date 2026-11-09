@@ -10,13 +10,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, makeCategorizationTemplate } from '@/tests/helpers'
 
-const { createTxJE, propagate, saveRule, intercept, lock } = vi.hoisted(() => ({
+const { createTxJE, propagate, saveRule, intercept, lock, covered } = vi.hoisted(() => ({
   createTxJE: vi.fn(),
   propagate: vi.fn(),
   saveRule: vi.fn(),
   intercept: vi.fn(),
   lock: vi.fn(),
+  covered: vi.fn(),
 }))
+
+vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoveredThrough: covered }))
 
 vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
@@ -97,6 +100,7 @@ beforeEach(() => {
   saveRule.mockResolvedValue(undefined)
   intercept.mockResolvedValue(null)
   lock.mockResolvedValue({ locked: false })
+  covered.mockResolvedValue(null)
 })
 
 describe('categorizeTransaction: dry run', () => {
@@ -119,6 +123,41 @@ describe('categorizeTransaction: dry run', () => {
     expect(createTxJE).not.toHaveBeenCalled()
     expect(payloads('transactions', 'update')).toEqual([])
     expect(payloads('fiscal_periods', 'upsert')).toEqual([])
+  })
+
+  it('refuses a Stripe feed row on a day the ledger already covers, in the dry run too', async () => {
+    covered.mockResolvedValue('2026-05-12')
+    const stripeRow = row({ import_source: 'stripe' })
+    const { supabase, payloads } = ledger({
+      transactions: [{ data: stripeRow, error: null }, { data: [{ ...stripeRow, journal_entry_id: 'je-1' }], error: null }],
+    })
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_LEDGER_DAY_COVERED',
+      details: { covered_through: '2026-05-12', settlement_account: '1930' },
+    })
+    expect(covered).toHaveBeenCalledWith(supabase, COMPANY_ID, ['1930'], '2026-05-12')
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
+
+  it('never reads coverage for a bank row: a manual verifikat on 1930 says nothing about which days are booked', async () => {
+    covered.mockResolvedValue('2026-12-31')
+    const { supabase } = ledger()
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+
+    expect(outcome.ok).toBe(true)
+    expect(covered).not.toHaveBeenCalled()
   })
 
   it('runs the period lock and the invoice-match intercept like the booking', async () => {
