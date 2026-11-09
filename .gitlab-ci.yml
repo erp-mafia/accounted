@@ -170,6 +170,23 @@ checks:
         exit 1
       fi
 
+# Customer data in the MR title, description or a commit message
+# (scripts/check-mr-privacy.mjs lists the rules). The description is read in
+# full from the API with the job token; when that is refused, the job scans
+# GitLab's 2,700-character copy and says it was cut. Editing the description
+# starts no pipeline, so an edit is scanned on the next push or rerun. Customer
+# names come from MR_PRIVACY_CUSTOMER_NAMES or MR_PRIVACY_CUSTOMER_NAMES_B64,
+# which must not be protected; without either the job says so and runs the
+# other rules.
+mr-privacy:
+  stage: checks
+  extends: .mr-only
+  needs: []
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - npm run check:mr-privacy
+
 # Writes the tsc and ESLint state every merge request's checks job reads. Each
 # merge to main starts from the previous main's state, so it rechecks only what
 # that merge changed. It gates nothing: a failure leaves the state one merge
