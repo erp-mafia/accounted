@@ -3,6 +3,7 @@ import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/emai
 import { getSenderForCompany } from '@/lib/email/brand-sender'
 import { deleteDocument, uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { InvoiceDelivery } from '@/types'
 
 const PDF_CONTENT_TYPE = 'application/pdf'
@@ -282,4 +283,57 @@ export async function recordManualInvoiceDelivery(args: {
   }
 
   return data as InvoiceDelivery
+}
+
+/**
+ * Record the invoice PDF imported from the previous system (Fortnox) as the
+ * invoice's archived copy: a delivery with channel 'import', no recipients and
+ * no message. The service-only RPC re-authorizes userId as a writable member,
+ * reads the evidence columns from the stored document and keeps one imported
+ * original per invoice. Returns the delivery id, or null when the invoice
+ * already holds its imported original (another run got there first).
+ */
+export async function recordImportedInvoiceDelivery(args: {
+  companyId: string
+  userId: string
+  invoiceId: string
+  provider: string
+  providerMessageId: string
+  documentId: string
+}): Promise<string | null> {
+  const { data, error } = await createServiceClient().rpc('record_imported_invoice_delivery', {
+    p_company_id: args.companyId,
+    p_invoice_id: args.invoiceId,
+    p_actor_user_id: args.userId,
+    p_provider: args.provider,
+    p_provider_message_id: args.providerMessageId,
+    p_document_attachment_id: args.documentId,
+  })
+
+  if (error) {
+    throw new InvoiceDeliverySnapshotError(
+      `Failed to persist imported invoice delivery: ${error.message || 'unknown error'}`,
+    )
+  }
+
+  return typeof data === 'string' ? data : null
+}
+
+/**
+ * The company's invoices that already hold an imported original. Read with
+ * the service client: the delivery history's SELECT policy shows a member only
+ * the deliveries they made, and an import another member ran counts too.
+ */
+export async function fetchInvoicesWithImportedCopy(companyId: string): Promise<Set<string>> {
+  const service = createServiceClient()
+  const rows = await fetchAllRows<{ id: string; invoice_id: string }>(({ from, to }) =>
+    service
+      .from('invoice_deliveries')
+      .select('id, invoice_id')
+      .eq('company_id', companyId)
+      .eq('channel', 'import')
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  return new Set(rows.map((row) => row.invoice_id))
 }

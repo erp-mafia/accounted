@@ -57,6 +57,25 @@
  * additive: a refusal on it (scope or licence) is reported in
  * `unreachableSources` and never stops the voucher files.
  *
+ * A third Fortnox source is the customer invoice itself (#165): each invoice
+ * the migration imported from this Fortnox account gets Fortnox's own PDF of
+ * it (the preview action; never print or email), recorded as the invoice's
+ * archived copy (an `invoice_deliveries` row with channel 'import') and
+ * linked to the verifikat that booked it. That verifikat is the invoice's own
+ * link when the migration made one to a live migrated verifikat, otherwise
+ * the one Fortnox names on the invoice (VoucherSeries + VoucherNumber +
+ * VoucherYear) through the SIE-preserved source ref. When neither singles out
+ * one verifikat, or that verifikat already carries underlag from another
+ * path, the copy goes on the invoice only: a link to the wrong verifikat
+ * could never be undone. The copy is stored unlinked, then held by its
+ * delivery, then anchored on the verifikat, so a failed delivery leaves a
+ * deletable file that is removed again, never an orphan on a verifikat. A
+ * re-render is a new file every time, so idempotency is per invoice, not per
+ * content: an invoice that holds its imported copy is skipped before any
+ * Fortnox call, and the database keeps one imported copy per invoice.
+ * Additive like the supplier-invoice files: a refusal is reported in
+ * `unreachableSources` and the other files carry on.
+ *
  * Resumable: one call works through the provider's attachment list (sorted
  * by provider id so the order is stable between calls) until `timeBudgetMs`
  * is spent, then returns `partial: true` with `nextCursor` = the id of the
@@ -93,6 +112,8 @@ import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
   fetchFortnoxFinancialYears,
+  fetchFortnoxInvoiceBookingVoucher,
+  fetchFortnoxInvoicePreview,
   fetchFortnoxSupplierInvoiceBookings,
   fetchFortnoxSupplierInvoiceBookingVoucher,
   fetchFortnoxSupplierInvoiceFileConnections,
@@ -103,6 +124,7 @@ import { providerRefusalReason, type ProviderRefusalReason } from '@/lib/provide
 import {
   uploadDocument,
   computeSHA256,
+  deleteDocument,
   detectFileMagic,
   isArchivedForOwnJournalEntry,
   ALLOWED_DOCUMENT_TYPES,
@@ -111,9 +133,14 @@ import {
   buildCopyIndexes,
   fetchFiscalPeriods,
   fetchSourceRefVouchers,
+  isLiveCopy,
   resolveLiveDatedRef,
   type UnresolvedRefReason,
 } from '@/lib/documents/voucher-ref-resolver'
+import {
+  fetchInvoicesWithImportedCopy,
+  recordImportedInvoiceDelivery,
+} from '@/lib/invoices/invoice-deliveries'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
@@ -195,7 +222,11 @@ export interface ImportDocumentsResult {
   provider: string
   /** Provider attachments linked to a voucher that were considered. */
   scanned: number
-  /** Receipts newly archived and linked to their verifikat. */
+  /**
+   * Files newly archived: receipts linked to their verifikat, and customer
+   * invoice copies on their invoice (customerInvoicePdfs tells how many of
+   * those also reached the verifikat).
+   */
   linked: number
   /**
    * Receipts already archived for this verifikat (sha256 + journal entry
@@ -226,6 +257,11 @@ export interface ImportDocumentsResult {
   /** Last handled attachment id; pass back as `cursor` to continue. Null when complete. */
   nextCursor: string | null
   /**
+   * The customer invoice copies among the counts above (Fortnox), so the UI
+   * can say where they went. Absent from providers without the source.
+   */
+  customerInvoicePdfs?: CustomerInvoiceCopyCounts
+  /**
    * Attachment sources the provider refused in this call, with the scope the
    * refused call needs, so the UI can name it. Empty when every source answered.
    */
@@ -240,12 +276,38 @@ export type UnmatchedReason =
   | 'date_mismatch'
   | UnresolvedRefReason
 
+/**
+ * Customer invoice copies (Fortnox's PDF of each imported invoice). Each one
+ * is also in the general counts: linked and invoiceOnly in `linked`, skipped,
+ * locked and failed in theirs.
+ */
+export interface CustomerInvoiceCopyCounts {
+  /** Imported invoices considered. */
+  scanned: number
+  /** Archived on the invoice and on the verifikat that booked it. */
+  linked: number
+  /**
+   * Archived on the invoice only: no verifikat could be singled out for
+   * certain, or it already carries underlag from another path.
+   */
+  invoiceOnly: number
+  /** The invoice already holds its imported copy (an earlier run). */
+  skipped: number
+  /** The verifikat sits in a closed or locked year: not fetched. */
+  locked: number
+  /** Could not be fetched or stored (counted, not thrown). */
+  failed: number
+}
+
 /** Fortnox scopes behind the document import (Fortnox's scope table). */
-export type FortnoxDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice'
+export type FortnoxDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice' | 'invoice'
 
 export interface UnreachableAttachmentSource {
-  /** Files Fortnox keeps on supplier invoices (not on the verifikat). */
-  source: 'supplier_invoice_files'
+  /**
+   * supplier_invoice_files: files Fortnox keeps on supplier invoices (not on
+   * the verifikat). customer_invoice_files: the customer invoices' own PDFs.
+   */
+  source: 'supplier_invoice_files' | 'customer_invoice_files'
   /** The scope the refused call needs. */
   scope: FortnoxDocumentScope
   /**
@@ -272,7 +334,29 @@ interface ProviderAttachment {
   ref: AttachmentRef | null
   /** The ref needs one more provider read (resolveRef) before it is known. */
   refPending?: boolean
+  /** A migrated customer invoice whose own PDF the sweep archives (Fortnox). */
+  customerInvoice?: CustomerInvoiceCopy
 }
+
+/** A customer invoice the migration imported from Fortnox. */
+interface CustomerInvoiceCopy {
+  invoiceId: string
+  /** Fortnox's DocumentNumber: the preview's key and the printed number. */
+  documentNumber: string
+  /** The registration verifikat the migration linked, when it did. */
+  journalEntryId: string | null
+  /** The invoice already holds its imported copy: skipped before any call. */
+  archived: boolean
+}
+
+/** Why a customer invoice copy went on the invoice only (logged, not shown). */
+type InvoiceOnlyReason =
+  | 'no_voucher_ref'
+  | UnresolvedRefReason
+  /** The verifikat already carries underlag from another path (crm#200). */
+  | 'other_underlag'
+  /** The delivery holds the copy, but the verifikat link was refused. */
+  | 'anchor_failed'
 
 interface ProviderAttachmentListing {
   attachments: ProviderAttachment[]
@@ -281,7 +365,7 @@ interface ProviderAttachmentListing {
 
 interface ProviderAttachmentSource {
   list(): Promise<ProviderAttachmentListing>
-  download(fileId: string): Promise<{ bytes: ArrayBuffer; contentType: string | null }>
+  download(attachment: ProviderAttachment): Promise<{ bytes: ArrayBuffer; contentType: string | null }>
   /** Resolve a `refPending` attachment; null when the provider names no verifikat. */
   resolveRef?(attachment: ProviderAttachment): Promise<AttachmentRef | null>
 }
@@ -289,9 +373,10 @@ interface ProviderAttachmentSource {
 function unreachableFrom(
   scope: FortnoxDocumentScope,
   error: unknown,
+  source: UnreachableAttachmentSource['source'] = 'supplier_invoice_files',
 ): UnreachableAttachmentSource {
   return {
-    source: 'supplier_invoice_files',
+    source,
     scope,
     reason: isFortnoxPermissionError(error) ? providerRefusalReason(error) : 'error',
     providerMessage: fortnoxErrorMessage(error),
@@ -374,8 +459,8 @@ function bokioSource(
         }))
       return { attachments, unreachable: [] }
     },
-    download(id) {
-      return downloadBokioUpload(client, accessToken, providerCompanyId, id)
+    download(attachment) {
+      return downloadBokioUpload(client, accessToken, providerCompanyId, attachment.fileId ?? attachment.id)
     },
   }
 }
@@ -411,9 +496,31 @@ function fortnoxFileVoucherKey(fileId: string, voucher: FortnoxBookingVoucher): 
  */
 const SUPPLIER_INVOICE_ATTACHMENT_PREFIX = 'si:'
 
+/** A customer invoice copy's id: apart from file ids and supplier-invoice files. */
+const CUSTOMER_INVOICE_ATTACHMENT_PREFIX = 'ci:'
+
+/**
+ * Invoice statuses that were never issued: a draft (Fortnox neither sent nor
+ * booked it) and a cancelled one. There is no issued invoice to keep a copy
+ * of, and a copy would put a 'sent' delivery on an invoice nobody received.
+ */
+const NEVER_ISSUED_INVOICE_STATUSES = new Set(['draft', 'cancelled'])
+
+/** PostgREST puts `.in()` lists in the URL, so invoice ids are read in chunks. */
+const INVOICE_ID_CHUNK = 200
+
+/** The reference an imported copy's delivery carries: unique per invoice. */
+function importedCopyReference(copy: CustomerInvoiceCopy): string {
+  return `invoice:${copy.documentNumber}:${copy.invoiceId}`
+}
+
 function fortnoxSource(
   client: FortnoxClient,
   accessToken: () => string,
+  supabase: SupabaseClient,
+  companyId: string,
+  /** The migration's account key for this connection (migration_source_records.account_key). */
+  accountKey: string,
 ): ProviderAttachmentSource {
   // Read by resolveRef on later attachments of the same call.
   let financialYearById = new Map<number, FortnoxFinancialYear>()
@@ -496,6 +603,83 @@ function fortnoxSource(
     }
   }
 
+  /**
+   * One attachment per customer invoice this Fortnox account's migration
+   * imported: the invoice's own PDF. Read from the migration's source records,
+   * so a native invoice, or one from another connection, is never touched.
+   * Read from the database alone; the invoices that already hold their
+   * imported copy are marked so the sweep skips them without a Fortnox call.
+   * Additive like the supplier-invoice files: a failure is reported and the
+   * other files carry on.
+   */
+  const customerInvoiceAttachments = async (): Promise<ProviderAttachmentListing> => {
+    try {
+      const sourceRecords = await fetchAllRows<{ id: string; source_id: string; target_id: string }>(
+        ({ from, to }) =>
+          supabase
+            .from('migration_source_records')
+            .select('id, source_id, target_id')
+            .eq('company_id', companyId)
+            .eq('provider', 'fortnox')
+            .eq('account_key', accountKey)
+            .eq('resource', 'salesInvoices')
+            .order('id', { ascending: true })
+            .range(from, to),
+      )
+      if (sourceRecords.length === 0) return { attachments: [], unreachable: [] }
+
+      const documentNumberByInvoice = new Map(
+        sourceRecords.map((record) => [record.target_id, String(record.source_id).trim()]),
+      )
+      const invoiceIds = [...documentNumberByInvoice.keys()]
+      const invoices: { id: string; status: string | null; journal_entry_id: string | null }[] = []
+      for (let index = 0; index < invoiceIds.length; index += INVOICE_ID_CHUNK) {
+        const chunk = invoiceIds.slice(index, index + INVOICE_ID_CHUNK)
+        invoices.push(
+          ...(await fetchAllRows<{ id: string; status: string | null; journal_entry_id: string | null }>(
+            ({ from, to }) =>
+              supabase
+                .from('invoices')
+                .select('id, status, journal_entry_id')
+                .eq('company_id', companyId)
+                .in('id', chunk)
+                .order('id', { ascending: true })
+                .range(from, to),
+          )),
+        )
+      }
+      const archived = await fetchInvoicesWithImportedCopy(companyId)
+
+      const attachments: ProviderAttachment[] = []
+      for (const invoice of invoices) {
+        if (invoice.status && NEVER_ISSUED_INVOICE_STATUSES.has(invoice.status)) continue
+        const documentNumber = documentNumberByInvoice.get(invoice.id) ?? ''
+        if (!/^\d+$/.test(documentNumber)) continue
+        attachments.push({
+          id: `${CUSTOMER_INVOICE_ATTACHMENT_PREFIX}${documentNumber}`,
+          fileName: `Faktura ${documentNumber}.pdf`,
+          fileNameIsBaseName: false,
+          declaredContentType: 'application/pdf',
+          ref: null,
+          customerInvoice: {
+            invoiceId: invoice.id,
+            documentNumber,
+            journalEntryId: invoice.journal_entry_id,
+            archived: archived.has(invoice.id),
+          },
+        })
+      }
+      return { attachments, unreachable: [] }
+    } catch (error) {
+      if (error instanceof ExecutionBudgetExceeded) throw error
+      log.error('fortnox customer invoices not listed', error as Error, {
+        providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+        providerMessage: fortnoxErrorMessage(error),
+      })
+      return { attachments: [], unreachable: [unreachableFrom('invoice', error, 'customer_invoice_files')] }
+    }
+  }
+
   return {
     async list() {
       let voucherAttachments: ProviderAttachment[]
@@ -526,16 +710,36 @@ function fortnoxSource(
         throw error
       }
 
-      const supplierInvoiceFiles = await supplierInvoiceAttachments(voucherFileKeys)
+      const [supplierInvoiceFiles, customerInvoiceCopies] = await Promise.all([
+        supplierInvoiceAttachments(voucherFileKeys),
+        customerInvoiceAttachments(),
+      ])
       return {
-        attachments: [...voucherAttachments, ...supplierInvoiceFiles.attachments],
-        unreachable: supplierInvoiceFiles.unreachable,
+        attachments: [
+          ...voucherAttachments,
+          ...supplierInvoiceFiles.attachments,
+          ...customerInvoiceCopies.attachments,
+        ],
+        unreachable: [...supplierInvoiceFiles.unreachable, ...customerInvoiceCopies.unreachable],
       }
     },
-    download(fileId) {
-      return downloadFortnoxArchiveFile(client, accessToken(), fileId)
+    download(attachment) {
+      if (attachment.customerInvoice) {
+        return fetchFortnoxInvoicePreview(client, accessToken(), attachment.customerInvoice.documentNumber)
+      }
+      return downloadFortnoxArchiveFile(client, accessToken(), attachment.fileId ?? attachment.id)
     },
     async resolveRef(attachment) {
+      if (attachment.customerInvoice) {
+        // The verifikat Fortnox says booked the invoice: series, number and
+        // financial year, never the invoice number read as a voucher number.
+        const voucher = await fetchFortnoxInvoiceBookingVoucher(
+          client,
+          accessToken(),
+          attachment.customerInvoice.documentNumber,
+        )
+        return voucher ? fortnoxRef(voucher, financialYearById) : null
+      }
       if (!attachment.supplierInvoiceNumber) return null
       const voucher = await fetchFortnoxSupplierInvoiceBookingVoucher(
         client,
@@ -585,6 +789,15 @@ export async function importProviderDocuments(
     nextCursor: null,
     unreachableSources: [],
   }
+  const copyCounts: CustomerInvoiceCopyCounts = {
+    scanned: 0,
+    linked: 0,
+    invoiceOnly: 0,
+    skipped: 0,
+    locked: 0,
+    failed: 0,
+  }
+  if (provider === 'fortnox') result.customerInvoicePdfs = copyCounts
 
   // Unsupported providers are a no-op rather than an error
   // so a mixed-provider caller can invoke this unconditionally. The migration
@@ -598,8 +811,15 @@ export async function importProviderDocuments(
   // One Fortnox source per call: it keeps the financial years its listing read
   // for resolveRef, and reads the token on every request, so a refresh after
   // a 401 reaches it.
+  // The account key the migration recorded its source records under: the
+  // connection's organisation number, else the provider's company id (as the
+  // migration job worker derives it).
+  const fortnoxAccountKey =
+    String(resolved.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || resolved.providerCompanyId || ''
   const fortnox =
-    provider === 'fortnox' ? fortnoxSource(new FortnoxClient(), () => resolved.accessToken) : null
+    provider === 'fortnox'
+      ? fortnoxSource(new FortnoxClient(), () => resolved.accessToken, supabase, companyId, fortnoxAccountKey)
+      : null
   const source = (): ProviderAttachmentSource =>
     provider === 'bokio'
       ? bokioSource(bokioClient as BokioClient, resolved)
@@ -774,7 +994,7 @@ export async function importProviderDocuments(
   ): Promise<boolean> => {
     try {
       const { bytes } = await withUnauthorizedRefresh(() =>
-        source().download(attachment.fileId ?? attachment.id),
+        source().download(attachment),
       )
       const archivedId = seenAttachments.get(attachmentKey(await computeSHA256(bytes), journalEntryId))
       if (!archivedId) return false
@@ -787,6 +1007,268 @@ export async function importProviderDocuments(
         reason: error instanceof Error ? error.message : 'unknown',
       })
       return false
+    }
+  }
+
+  // ── Customer invoice copies (Fortnox) ──
+  // Live migrated verifikat: the only ones an invoice's own link may hand its
+  // copy to (isLiveCopy: never a reversed copy left by an SIE re-sync).
+  const liveEntryIds = new Set(vouchers.filter(isLiveCopy).map((voucher) => voucher.id))
+  const invoiceOnlyByReason: Partial<Record<InvoiceOnlyReason, number>> = {}
+  // A refusal (scope or licence) of the invoice register in this call: the
+  // rest of the copies are not tried, and it is reported once.
+  let customerInvoiceCopiesRefused = false
+  const refuseCustomerInvoiceCopies = (error: unknown) => {
+    if (customerInvoiceCopiesRefused) return
+    customerInvoiceCopiesRefused = true
+    result.unreachableSources.push(unreachableFrom('invoice', error, 'customer_invoice_files'))
+    log.warn('fortnox refused customer invoice copies', {
+      providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+      providerMessage: fortnoxErrorMessage(error),
+    })
+  }
+
+  /**
+   * Remove a copy this call stored before any delivery held it. It is
+   * unlinked, so deletable; best effort, because one left behind is only a
+   * stray file in the archive's unlinked documents, never on a verifikat.
+   */
+  const discardUnheldCopy = async (documentId: string) => {
+    try {
+      const outcome = await deleteDocument(supabase, companyId, documentId)
+      if (!outcome.ok) {
+        log.warn('unheld invoice copy not discarded', { documentId, reason: outcome.reason })
+      }
+    } catch (error) {
+      log.warn('unheld invoice copy not discarded', {
+        documentId,
+        reason: error instanceof Error ? error.message : 'unknown',
+      })
+    }
+  }
+
+  /**
+   * Link a held copy to its verifikat (NULL to the entry, which the
+   * document immutability trigger allows). False when the database refused:
+   * the copy then stays on the invoice only.
+   */
+  const anchorCopyOnVerifikat = async (documentId: string, journalEntryId: string): Promise<boolean> => {
+    try {
+      const { data, error } = await supabase
+        .from('document_attachments')
+        .update({
+          journal_entry_id: journalEntryId,
+          // The old system's own copy of the invoice this verifikat booked.
+          ...linkBasisColumns('import_carried_over', { source_system: 'provider_migration' }),
+        })
+        .eq('id', documentId)
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .select('id')
+      if (error || !data || data.length === 0) {
+        log.warn('invoice copy left on the invoice only: verifikat link refused', {
+          documentId,
+          journalEntryId,
+          reason: error?.message ?? 'no row updated',
+        })
+        return false
+      }
+      return true
+    } catch (error) {
+      log.warn('invoice copy left on the invoice only: verifikat link failed', {
+        documentId,
+        journalEntryId,
+        reason: error instanceof Error ? error.message : 'unknown',
+      })
+      return false
+    }
+  }
+
+  const archiveOnInvoiceOnly = (reason: InvoiceOnlyReason) => {
+    result.linked++
+    copyCounts.invoiceOnly++
+    invoiceOnlyByReason[reason] = (invoiceOnlyByReason[reason] ?? 0) + 1
+  }
+
+  /**
+   * One customer invoice's own PDF: onto the invoice as its archived copy,
+   * and onto the verifikat that booked it when exactly one can be named.
+   */
+  // 'cut' when the hard stop cut this copy in flight and the slice stops
+  // before it (cutInFlight in the loop below): the next slice retries it.
+  const importCustomerInvoiceCopy = async (
+    attachment: ProviderAttachment,
+    copy: CustomerInvoiceCopy,
+    cutInFlight: (error: unknown) => boolean,
+  ): Promise<'cut' | void> => {
+    copyCounts.scanned++
+    const cut = (error: unknown): boolean => {
+      if (!cutInFlight(error)) return false
+      copyCounts.scanned--
+      return true
+    }
+    // Idempotent per invoice, not per content: a new preview is a new
+    // rendering, so a re-run would otherwise add a second copy that could
+    // never be removed. Decided before any Fortnox call.
+    if (copy.archived) {
+      result.skipped++
+      copyCounts.skipped++
+      return
+    }
+    if (customerInvoiceCopiesRefused) return
+
+    // Which verifikat the copy may go on: the invoice's own link when the
+    // migration made it to a live migrated verifikat (it corroborated the
+    // ref with the amount), else the one Fortnox names on the invoice by
+    // series, number and financial year. Nothing else, and no guess.
+    let journalEntryId: string | null = null
+    let invoiceOnlyReason: InvoiceOnlyReason | null = null
+    if (copy.journalEntryId && liveEntryIds.has(copy.journalEntryId)) {
+      journalEntryId = copy.journalEntryId
+    } else {
+      // The dry run spends no provider calls past the listing.
+      if (dryRun) return
+      let ref: AttachmentRef | null
+      try {
+        ref = await withUnauthorizedRefresh(() => source().resolveRef!(attachment))
+      } catch (error) {
+        if (cut(error)) return 'cut'
+        if (stopsTheSweep(error)) throw error
+        if (isFortnoxPermissionError(error)) {
+          refuseCustomerInvoiceCopies(error)
+          return
+        }
+        result.failed++
+        copyCounts.failed++
+        log.error('failed to read a customer invoice voucher', error as Error, { uploadId: attachment.id })
+        return
+      }
+      const resolution = ref
+        ? resolveLiveDatedRef(voucherCopies, periods, ref)
+        : { resolved: false as const, reason: 'no_voucher_ref' as const }
+      if (resolution.resolved) journalEntryId = resolution.entryId
+      else invoiceOnlyReason = resolution.reason
+    }
+
+    if (journalEntryId) {
+      // The underlag rule: a klarmarkerat or locked year refuses the link,
+      // so the copy waits, undownloaded, until the year is reopened (a copy
+      // on the invoice alone now would be skipped by every later run).
+      const periodId = periodIdByEntry.get(journalEntryId)
+      if (periodId && isPeriodLocked(periodById.get(periodId))) {
+        result.locked++
+        copyCounts.locked++
+        lockedPeriodIds.add(periodId)
+        return
+      }
+      // Never add to a verifikat that carries underlag from another path
+      // (crm#200): the copy goes on the invoice only.
+      if (verifikatWithOtherUnderlag.has(journalEntryId)) {
+        journalEntryId = null
+        invoiceOnlyReason = 'other_underlag'
+      }
+    }
+
+    if (dryRun) {
+      result.linked++
+      if (journalEntryId) copyCounts.linked++
+      else copyCounts.invoiceOnly++
+      return
+    }
+
+    // A copy this call stored that no delivery holds yet: discarded on any
+    // failure before the delivery is recorded.
+    let unheldCopyId: string | null = null
+    try {
+      const { bytes } = await withUnauthorizedRefresh(() => source().download(attachment))
+      // Only a PDF is the invoice's copy: an error page or an empty body is not.
+      if (detectFileMagic(new Uint8Array(bytes)) !== 'application/pdf') {
+        throw new Error('CUSTOMER_INVOICE_PREVIEW_NOT_PDF')
+      }
+      const sha256 = await computeSHA256(bytes)
+      // The same bytes already on that verifikat (this import's or another
+      // file) are the copy: the delivery points at them, nothing is stored.
+      const alreadyOnVerifikat = journalEntryId
+        ? seenAttachments.get(attachmentKey(sha256, journalEntryId))
+        : undefined
+      let documentId = alreadyOnVerifikat
+      if (!documentId) {
+        const document = await uploadDocument(
+          supabase,
+          userId,
+          companyId,
+          { name: `Faktura ${copy.documentNumber}.pdf`, buffer: bytes, type: 'application/pdf' },
+          {
+            upload_source: 'api',
+            // Unlinked until its delivery holds it. Keyed to the verifikat it
+            // is meant for, as this import keys every file, so a later run
+            // knows it as its own once it is anchored there.
+            ...(journalEntryId ? { idempotency_key: journalEntryId } : {}),
+            extractionOwner: 'none',
+          },
+        )
+        documentId = document.id
+        unheldCopyId = document.id
+      }
+
+      const deliveryId = await recordImportedInvoiceDelivery({
+        companyId,
+        userId,
+        invoiceId: copy.invoiceId,
+        provider: 'fortnox',
+        providerMessageId: importedCopyReference(copy),
+        documentId,
+      })
+      if (!deliveryId) {
+        // Another run archived this invoice's copy in the meantime.
+        if (unheldCopyId) await discardUnheldCopy(unheldCopyId)
+        unheldCopyId = null
+        result.skipped++
+        copyCounts.skipped++
+        return
+      }
+      const storedHere = unheldCopyId !== null
+      // Held by its delivery now (block_sent_invoice_document_deletion).
+      unheldCopyId = null
+
+      let onEntry: string | null = null
+      if (!journalEntryId) {
+        archiveOnInvoiceOnly(invoiceOnlyReason ?? 'no_voucher_ref')
+      } else if (!storedHere || (await anchorCopyOnVerifikat(documentId, journalEntryId))) {
+        onEntry = journalEntryId
+        seenAttachments.set(attachmentKey(sha256, journalEntryId), documentId)
+        result.linked++
+        copyCounts.linked++
+      } else {
+        archiveOnInvoiceOnly('anchor_failed')
+      }
+
+      if (storedHere) {
+        // How it came in: Fortnox's rendering, fetched by the migration.
+        await recordDocumentArrival(supabase, {
+          companyId,
+          source: 'migration',
+          documentId,
+          fetchedBy: { type: 'user', user_id: userId, label: `${provider}-migration` },
+          sourceMeta: {
+            provider,
+            provider_attachment_id: attachment.id,
+            invoice_id: copy.invoiceId,
+            ...(onEntry ? { journal_entry_id: onEntry } : {}),
+          },
+        })
+      }
+    } catch (error) {
+      if (unheldCopyId) await discardUnheldCopy(unheldCopyId)
+      if (cut(error)) return 'cut'
+      if (stopsTheSweep(error)) throw error
+      if (isFortnoxPermissionError(error)) {
+        refuseCustomerInvoiceCopies(error)
+        return
+      }
+      result.failed++
+      copyCounts.failed++
+      log.error('failed to import a customer invoice copy', error as Error, { uploadId: attachment.id })
     }
   }
 
@@ -825,6 +1307,10 @@ export async function importProviderDocuments(
       result.partial = true
       result.nextCursor = attachments[index - 1].id
       return true
+    }
+    if (attachment.customerInvoice) {
+      if ((await importCustomerInvoiceCopy(attachment, attachment.customerInvoice, cutInFlight)) === 'cut') break
+      continue
     }
     const isSupplierInvoiceFile = attachment.supplierInvoiceNumber != null
     if (isSupplierInvoiceFile && refusedSupplierInvoiceScopes.has('archive')) continue
@@ -915,7 +1401,7 @@ export async function importProviderDocuments(
     }
 
     const importAttachment = async () => {
-      const { bytes, contentType } = await source().download(attachment.fileId ?? attachment.id)
+      const { bytes, contentType } = await source().download(attachment)
 
       const sha256 = await computeSHA256(bytes)
       if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
@@ -1030,6 +1516,8 @@ export async function importProviderDocuments(
     unmatchedByReason,
     failed: result.failed,
     locked: result.locked,
+    customerInvoicePdfs: result.customerInvoicePdfs,
+    invoiceOnlyByReason,
     partial: result.partial,
     nextCursor: result.nextCursor,
     unreachableScopes: result.unreachableSources.map((s) => `${s.scope}:${s.reason}`),

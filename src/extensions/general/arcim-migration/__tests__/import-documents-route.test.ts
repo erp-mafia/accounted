@@ -152,6 +152,7 @@ describe('POST /import-documents', () => {
       locked: 2,
       lockedPeriods: ['2024'],
       dryRun: true,
+      customerInvoicePdfs: { scanned: 2, linked: 1, invoiceOnly: 1, skipped: 0, locked: 0, failed: 0 },
       unmatchedSamples: [],
     })
 
@@ -167,7 +168,12 @@ describe('POST /import-documents', () => {
     expect(body).toMatchObject({
       success: true,
       dryRun: true,
-      result: { scanned: 4, locked: 2, lockedPeriods: ['2024'] },
+      result: {
+        scanned: 4,
+        locked: 2,
+        lockedPeriods: ['2024'],
+        customerInvoicePdfs: { scanned: 2, linked: 1, invoiceOnly: 1 },
+      },
     })
     expect(importProviderDocuments).toHaveBeenCalledWith(
       expect.objectContaining({

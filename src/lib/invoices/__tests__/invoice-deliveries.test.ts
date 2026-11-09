@@ -19,6 +19,8 @@ vi.mock('@/lib/email/brand-sender', () => ({
 
 import {
   InvoiceDeliverySnapshotError,
+  fetchInvoicesWithImportedCopy,
+  recordImportedInvoiceDelivery,
   recordManualInvoiceDelivery,
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
@@ -407,5 +409,90 @@ describe('invoice delivery tracking', () => {
       p_invoice_id: 'invoice-1',
       p_sent_at: '2026-07-22T10:30:00.000Z',
     })
+  })
+})
+
+describe('imported invoice originals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('records the imported PDF through the service-only RPC', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: 'delivery-import-1', error: null })
+    mockCreateServiceClient.mockReturnValue({ rpc })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).resolves.toBe('delivery-import-1')
+
+    // Only references: the RPC reads file name, type and hash from the stored document.
+    expect(rpc).toHaveBeenCalledWith('record_imported_invoice_delivery', {
+      p_company_id: 'company-1',
+      p_invoice_id: 'invoice-1',
+      p_actor_user_id: 'user-1',
+      p_provider: 'fortnox',
+      p_provider_message_id: 'invoice:1001:invoice-1',
+      p_document_attachment_id: 'document-1',
+    })
+  })
+
+  it('answers null when the invoice already holds its imported original', async () => {
+    mockCreateServiceClient.mockReturnValue({ rpc: vi.fn().mockResolvedValue({ data: null, error: null }) })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).resolves.toBeNull()
+  })
+
+  it('throws when the RPC refuses, so the caller can discard its unlinked copy', async () => {
+    mockCreateServiceClient.mockReturnValue({
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'invoice not found in company' } }),
+    })
+
+    await expect(recordImportedInvoiceDelivery({
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:invoice-1',
+      documentId: 'document-1',
+    })).rejects.toBeInstanceOf(InvoiceDeliverySnapshotError)
+  })
+
+  it('lists every invoice with an imported original in the company, whoever imported it', async () => {
+    const filters: Array<[string, unknown]> = []
+    const node = {
+      select: () => node,
+      eq: (column: string, value: unknown) => {
+        filters.push([column, value])
+        return node
+      },
+      order: () => node,
+      range: () => Promise.resolve({
+        data: [
+          { id: 'd1', invoice_id: 'invoice-1' },
+          { id: 'd2', invoice_id: 'invoice-2' },
+        ],
+        error: null,
+      }),
+    }
+    const from = vi.fn(() => node)
+    mockCreateServiceClient.mockReturnValue({ from })
+
+    const invoiceIds = await fetchInvoicesWithImportedCopy('company-1')
+
+    expect([...invoiceIds]).toEqual(['invoice-1', 'invoice-2'])
+    expect(from).toHaveBeenCalledWith('invoice_deliveries')
+    expect(filters).toEqual([['company_id', 'company-1'], ['channel', 'import']])
   })
 })

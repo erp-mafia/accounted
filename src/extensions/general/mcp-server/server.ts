@@ -11963,7 +11963,7 @@ export const tools: McpTool[] = [
             type: 'object',
             properties: {
               invoice_delivery_id: { type: 'string' },
-              channel: { type: 'string', description: 'email or manual' },
+              channel: { type: 'string', description: 'email, manual, or import (the invoice PDF archived from the previous system)' },
               status: { type: 'string', description: 'Our own send state: pending, sent, failed, marked_sent' },
               provider: { type: ['string', 'null'] },
               provider_status: {

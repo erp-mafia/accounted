@@ -4,6 +4,8 @@ import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
   fetchFortnoxFinancialYears,
+  fetchFortnoxInvoiceBookingVoucher,
+  fetchFortnoxInvoicePreview,
   fetchFortnoxSupplierInvoiceBookings,
   fetchFortnoxSupplierInvoiceBookingVoucher,
   fetchFortnoxSupplierInvoiceFileConnections,
@@ -252,5 +254,45 @@ describe('Fortnox attachments', () => {
     const client = clientWith({ get: vi.fn().mockRejectedValue(forbidden) } as Partial<FortnoxClient>);
 
     await expect(fetchFortnoxSupplierInvoiceBookingVoucher(client, 'token', '113')).rejects.toBe(forbidden);
+  });
+
+  it('reads a customer invoice booking voucher from its detail form, null when Fortnox names none', async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ Invoice: { DocumentNumber: '1001', VoucherSeries: 'B', VoucherNumber: '7', VoucherYear: 6 } })
+      .mockResolvedValueOnce({ Invoice: { DocumentNumber: '1002', VoucherSeries: 'B', VoucherNumber: 0, VoucherYear: 6 } })
+      .mockResolvedValueOnce({ Invoice: { DocumentNumber: '1003', Cancelled: true, VoucherSeries: 'B', VoucherNumber: 9, VoucherYear: 6 } })
+      .mockResolvedValueOnce({ Invoice: { DocumentNumber: '1004', VoucherSeries: 'B', VoucherNumber: 10 } })
+      .mockRejectedValueOnce(new FortnoxApiError('not found', 404));
+    const client = clientWith({ get } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1001')).resolves.toEqual({
+      series: 'B',
+      number: 7,
+      financialYearId: 6,
+    });
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1002')).resolves.toBeNull();
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1003')).resolves.toBeNull();
+    // No VoucherYear: the number alone repeats every year, so no voucher.
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1004')).resolves.toBeNull();
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1005')).resolves.toBeNull();
+    expect(get).toHaveBeenNthCalledWith(1, 'token', '/invoices/1001');
+  });
+
+  it('propagates a refused customer invoice detail form', async () => {
+    const forbidden = new FortnoxApiError('forbidden', 403);
+    const client = clientWith({ get: vi.fn().mockRejectedValue(forbidden) } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxInvoiceBookingVoucher(client, 'token', '1001')).rejects.toBe(forbidden);
+  });
+
+  it('fetches a customer invoice through the preview action, never print', async () => {
+    const getBinary = vi.fn().mockResolvedValue({ bytes: new ArrayBuffer(4), contentType: 'application/pdf' });
+    const client = clientWith({ getBinary } as Partial<FortnoxClient>);
+
+    await expect(fetchFortnoxInvoicePreview(client, 'token', '1001')).resolves.toMatchObject({
+      contentType: 'application/pdf',
+    });
+    expect(getBinary).toHaveBeenCalledWith('token', '/invoices/1001/preview');
   });
 });

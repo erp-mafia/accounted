@@ -468,6 +468,15 @@ describe('resumable import (one server slice per call)', () => {
     expect(merged.unmatchedSamples).toHaveLength(2)
   })
 
+  it('sums customer-invoice PDF counters across slices', () => {
+    const merged = mergeArcimDocumentImportResults(
+      result({ customerInvoicePdfs: { scanned: 2, linked: 1, invoiceOnly: 0, skipped: 1, locked: 0, failed: 0 } }),
+      result({ customerInvoicePdfs: { scanned: 3, linked: 1, invoiceOnly: 1, skipped: 0, locked: 1, failed: 0 } }),
+    )
+
+    expect(merged.customerInvoicePdfs).toEqual({ scanned: 5, linked: 2, invoiceOnly: 1, skipped: 1, locked: 1, failed: 0 })
+  })
+
   it('sums locked receipts across slices and keeps each locked year once, oldest first', () => {
     const merged = mergeArcimDocumentImportResults(
       result({ locked: 3, lockedPeriods: ['2024', '2025'] }),

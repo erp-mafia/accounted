@@ -9,6 +9,8 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
 import { mergeDeliveryHistory, type MailboxDispatchView } from '@/lib/invoices/digital-mailbox-view'
+import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
+import type { ProviderName } from '@/lib/providers/types'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -126,9 +128,15 @@ export function InvoiceDeliveryHistory({
             const { delivery } = entry
             const occurredAt = entry.at
             const isManual = delivery.channel === 'manual'
+            // The invoice's own PDF from the previous system: no recipients,
+            // no message and no send by us, only the archived copy.
+            const isImport = delivery.channel === 'import'
+            const importProvider = isImport
+              ? PROVIDER_DISPLAY_NAMES[delivery.provider as ProviderName] ?? delivery.provider ?? ''
+              : ''
             const outcome = outcomeOf(delivery)
-            const outcomeChip = outcomeVariant[outcome]
-            const isEmailSend = !isManual && delivery.status === 'sent'
+            const outcomeChip = isImport ? undefined : outcomeVariant[outcome]
+            const isEmailSend = delivery.channel === 'email' && delivery.status === 'sent'
             const recipientCount =
               delivery.to_addresses.length + delivery.cc_addresses.length
             const recipientStatuses = delivery.provider_recipient_statuses ?? {}
@@ -162,12 +170,16 @@ export function InvoiceDeliveryHistory({
                   <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                   <span className="tabular-nums text-muted-foreground">{formatTimestamp(occurredAt)}</span>
                   <span className="min-w-0 flex-1 truncate">
-                    {isManual ? t('delivery_channel_manual') : t('delivery_channel_email')}
+                    {isImport
+                      ? t('delivery_channel_import', { provider: importProvider })
+                      : isManual ? t('delivery_channel_manual') : t('delivery_channel_email')}
                   </span>
                   {outcomeChip ? (
                     <Badge variant={outcomeChip}>{t(`delivery_status_${outcome}`)}</Badge>
                   ) : (
-                    <span className="text-xs text-muted-foreground">{t(`delivery_status_${outcome}`)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {isImport ? t('delivery_status_imported') : t(`delivery_status_${outcome}`)}
+                    </span>
                   )}
                 </summary>
 
@@ -176,6 +188,25 @@ export function InvoiceDeliveryHistory({
                     <p className="text-sm text-muted-foreground">
                       {t('delivery_manual_unknown_details', { appName })}
                     </p>
+                  ) : isImport ? (
+                    <div className="space-y-2 text-sm">
+                      <p className="text-muted-foreground">
+                        {t('delivery_import_details', { provider: importProvider, appName })}
+                      </p>
+                      {delivery.document_attachment_id && (
+                        <a
+                          href={`/api/documents/${delivery.document_attachment_id}/inline`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex max-w-full items-center gap-1 hover:underline"
+                        >
+                          <span className="truncate">
+                            {delivery.attachment_filename || t('delivery_pdf_fallback')}
+                          </span>
+                          <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        </a>
+                      )}
+                    </div>
                   ) : (
                     <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">
                       <dt className="text-muted-foreground">{t('delivery_to_label')}</dt>

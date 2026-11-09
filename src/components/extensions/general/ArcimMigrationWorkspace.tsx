@@ -2502,7 +2502,11 @@ export function DocumentImportFollowUp({
             </Button>
           ) : undefined}
         >
-          <p>{t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}</p>
+          <p>
+            {entry.source === 'customer_invoice_files'
+              ? t(`ext_arcim_documents_customer_invoice_files_${entry.reason}`, { scope })
+              : t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
+          </p>
           {entry.reason === 'permission' ? (
             <DocumentDisclosure summary={t('ext_arcim_documents_supplier_files_how')}>
               <p>{t('ext_arcim_documents_supplier_files_remedy', { provider: 'Fortnox', scope })}</p>
@@ -2627,12 +2631,34 @@ export function DocumentImportFollowUp({
       // The run is a success with exceptions, never a scoreboard: what landed
       // leads, and only the counts above zero follow, each with its own way
       // forward.
-      const { linked, skipped, unmatched, failed } = state.result
+      const { linked, skipped, unmatched, failed, customerInvoicePdfs } = state.result
+      // Customer invoice copies (Fortnox) say where they went: a copy on the
+      // invoice only is archived but not on a verifikat, so the lead, which
+      // counts what is on the verifikat, leaves it out.
+      const invoiceOnly = customerInvoicePdfs?.invoiceOnly ?? 0
+      const customerParts = [
+        (customerInvoicePdfs?.linked ?? 0) > 0
+          ? t('ext_arcim_documents_customer_invoice_pdfs_linked', { count: customerInvoicePdfs?.linked ?? 0 })
+          : null,
+        invoiceOnly > 0 ? t('ext_arcim_documents_customer_invoice_pdfs_invoice_only', { count: invoiceOnly }) : null,
+        (customerInvoicePdfs?.skipped ?? 0) > 0
+          ? t('ext_arcim_documents_customer_invoice_pdfs_skipped', { count: customerInvoicePdfs?.skipped ?? 0 })
+          : null,
+      ].filter((part): part is string => part !== null)
+      const customerSummary = customerParts.length > 0
+        ? t('ext_arcim_documents_customer_invoice_pdfs', { items: customerParts.join(', ') })
+        : null
+      const skippedLine = skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : null
       body = (
         <DocumentState
           icon={<CheckCircleIcon className={cn(DOCUMENT_STATE_ICON, 'text-foreground')} aria-hidden="true" />}
-          lead={t('ext_arcim_documents_result_lead', { count: linked })}
-          sub={skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : undefined}
+          lead={t('ext_arcim_documents_result_lead', { count: linked - invoiceOnly })}
+          sub={skippedLine || customerSummary ? (
+            <>
+              {skippedLine}
+              {customerSummary ? <span className="block">{customerSummary}</span> : null}
+            </>
+          ) : undefined}
         >
           {(failed > 0 || lockedCount > 0 || unmatched > 0) && (
             <ul className="divide-y divide-border border-y border-border">
