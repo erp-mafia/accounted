@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { isActiveLedgerAccount } from '@/lib/reports/general-ledger-activity'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
@@ -76,7 +77,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
     })
 
     const accounts = report.accounts.filter(
-      account => !hideInactive || account.closing_balance !== 0 || account.lines.length > 0,
+      account => !hideInactive || isActiveLedgerAccount(account),
     )
 
     // The web huvudbok shows each line's tags; the file carries them too, in

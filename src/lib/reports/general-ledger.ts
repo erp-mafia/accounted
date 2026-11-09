@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { isActiveLedgerAccount } from './general-ledger-activity'
 import { getOpeningBalances } from './opening-balances'
 
 export interface GeneralLedgerLine {
@@ -222,7 +223,8 @@ export async function generateGeneralLedger(
 
   // Include accounts that carry a balance into the range but have no lines in it
   for (const [accNum, balance] of effectiveOpening) {
-    if (!accountLines.has(accNum) && (options?.includeInactive || Math.abs(balance) > 0.005)) {
+    const carriesBalance = isActiveLedgerAccount({ closing_balance: Math.round(balance * 100) / 100, lines: [] })
+    if (!accountLines.has(accNum) && (options?.includeInactive || carriesBalance)) {
       accountLines.set(accNum, [])
     }
   }

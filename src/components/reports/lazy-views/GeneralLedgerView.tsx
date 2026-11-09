@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatAmount, formatDate } from '@/lib/utils'
+import { isActiveLedgerAccount } from '@/lib/reports/general-ledger-activity'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
@@ -123,7 +124,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
 
   const visibleAccounts = (data?.accounts ?? []).filter(
-    account => !hideInactive || account.closing_balance !== 0 || account.lines.length > 0,
+    account => !hideInactive || isActiveLedgerAccount(account),
   )
 
   // Keep range controls available to recover from empty results or errors.
