@@ -290,6 +290,8 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
   if (!claimed) return
   let version: string = claimed
   let holding = true
+  let contextStale = false
+  let contextCheckedAt = now()
   outcome.claimed++
   log.info('underlag run continued on the server', {
     companyId: row.company_id,
@@ -311,8 +313,29 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
           // The sweep runs to the deadline, not for a fixed budget.
           timeBudgetMs: deadline - now(),
           sweepDeadline: deadline,
+          shouldContinue: async () => {
+            if (now() - contextCheckedAt < 60_000) return true
+            contextCheckedAt = now()
+            const { data, error } = await supabase
+              .from('extension_data')
+              .select('updated_at')
+              .eq('id', row.id)
+              .maybeSingle()
+            if (error) throw new Error(`underlag run freshness read failed: ${error.message}`)
+            if ((data as { updated_at?: string } | null)?.updated_at !== version) {
+              contextStale = true
+              return false
+            }
+            const refreshed = await driverContext(supabase, row, current)
+            if (!refreshed.ok || refreshed.consentId !== context.consentId) {
+              contextStale = true
+              return false
+            }
+            return true
+          },
         }),
       )
+      if (contextStale) break
       outcome.slices++
       // The sweep always moves past at least one file; a slice that says it
       // stopped short without moving would have the server spin on it.
@@ -355,6 +378,16 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
     if (sliceError instanceof ExecutionBudgetExceeded) {
       // Out of time, not a failure: the next cron run takes it on.
       log.info('underlag run deferred to the next server run', { companyId: row.company_id })
+    } else if (sliceError instanceof ProviderCallError && sliceError.code === 'PROVIDER_LICENSE_MISSING') {
+      holding = false
+      const released = await compareAndSet(supabase, row.id, version, {
+        ...withoutServerHold(current),
+        serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES,
+      })
+      if (released) outcome.released++
+      log.info('underlag run on the server stopped: the Fortnox license is missing', {
+        companyId: row.company_id,
+      })
     } else if (providerRefusal(sliceError)) {
       holding = false
       const marked = markDocumentImportNeedsReconnect(current, current.provider, current.nextCursor, iso(now()))

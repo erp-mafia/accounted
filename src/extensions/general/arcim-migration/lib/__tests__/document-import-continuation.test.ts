@@ -16,10 +16,16 @@ vi.mock('../import-documents', () => {
       super(`${provider} refused the connection (${providerStatus}): reconnect required`)
     }
   }
-  return { FortnoxDocumentScopesRequiredError, ProviderConnectionRefusedError, importProviderDocuments: vi.fn() }
+  class ProviderCallError extends Error {
+    constructor(readonly code: string) {
+      super(code)
+    }
+  }
+  return { FortnoxDocumentScopesRequiredError, ProviderConnectionRefusedError, ProviderCallError, importProviderDocuments: vi.fn() }
 })
 
 import { ProviderConnectionRefusedError, type ImportDocumentsResult } from '../import-documents'
+import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import {
   DOCUMENT_IMPORT_LEASE_MS,
   runDocumentImportContinuation,
@@ -360,6 +366,34 @@ describe('runDocumentImportContinuation (crm#1581)', () => {
       expect(outcome).toMatchObject({ eligible: 1, claimed: 0, released: 1 })
       expect(documentImportServerMayClaim(db.stored(), clock + MINUTE)).toBe(false)
     })
+  })
+
+  it('re-checks the run during a long slice and lets go when another writer took it', async () => {
+    const db = database(clock, { run: stoppedRun(clock) })
+    const importDocuments = vi.fn().mockImplementation(async (opts) => {
+      clock += 61_000
+      db.writeElsewhere({ nextCursor: 'file-2900', lease: undefined })
+      const proceed = await opts.shouldContinue()
+      expect(proceed).toBe(false)
+      return slice()
+    })
+
+    const outcome = await run(db, importDocuments)
+
+    expect(outcome.slices).toBe(0)
+    expect(db.stored().lease).toBeUndefined()
+  })
+
+  it('lets go of a missing Fortnox license instead of retrying it as transient', async () => {
+    const db = database(clock, { run: stoppedRun(clock) })
+    const importDocuments = vi.fn().mockRejectedValue(new ProviderCallError('PROVIDER_LICENSE_MISSING', 'fortnox', 'license missing'))
+
+    const outcome = await run(db, importDocuments)
+
+    expect(db.stored()).toMatchObject({ serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES, scanned: 2740 })
+    expect(db.stored()).not.toHaveProperty('lease')
+    expect(outcome).toMatchObject({ released: 1, failed: 0, reconnect: 0 })
+    expect(documentImportServerMayClaim(db.stored(), clock + MINUTE)).toBe(false)
   })
 
   it('lists only unfinished runs touched in the last two weeks, oldest first', async () => {
