@@ -331,6 +331,18 @@ describe('AIS family', () => {
     expect(aisCreateConsentRequestSchema.safeParse({ party, accounts: [{ iban: 'SE8050000000052131234567' }] }).success).toBe(true)
   })
 
+  it('takes the consent a creation replaces, and the PSU-ID that consent was created with, both optional and without a new version', () => {
+    const create = aisCreateConsentRequestSchema
+    expect(create.safeParse({ party, replacesConsentId: 'consent-0' }).success).toBe(true)
+    expect(create.safeParse({ party, replacesConsentId: 'consent-0', replacedPersonalNumber: '198001011234' }).success).toBe(true)
+    expect(create.safeParse({ party, replacesConsentId: 'consent-0', replacedPersonalNumber: null }).success).toBe(true)
+    expect(create.safeParse({ party, replacesConsentId: '' }).success).toBe(false)
+    expect(create.safeParse({ party, replacesConsentId: 'consent-0', replacedPersonalNumber: '8001011234' }).success).toBe(false)
+    // A creation without them is the previous one, under the same version.
+    expect(Object.keys(create.parse({ party }))).toEqual(['party'])
+    expect(CONTRACT_VERSION).toBe('2026-10-17')
+  })
+
   it('takes the signer\'s Nordea Corporate Netbank logon id (2026-10-17): trimmed, 1 to 64 letters, digits, - or _, or null', () => {
     const parsed = aisPartySchema.safeParse({ ...party, bic: 'NDEASESS', psuAuthoriserId: '  ab-12_CD  ' })
     expect(parsed.success && parsed.data.psuAuthoriserId).toBe('ab-12_CD')

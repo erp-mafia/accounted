@@ -37,9 +37,14 @@
  *              consent the bank did not end stays named on the removed row.
  *
  * Connect counts one bank connection per company: a consent holds the place
- * until it is ended. When it refuses a new consent over that, start ends the
- * consents the company no longer needs (the one a renewal replaces, and the
- * removed rows' unended ones) and asks once more.
+ * until it is ended. A new consent that replaces one (a renewal's, Svea's
+ * listing consent) names it on the creation, so Connect keeps the old one
+ * live, outside that count, until the new one is valid, and ends it then. A
+ * Connect deployed before it took replacements refuses over the count
+ * instead: the old consent is ended first, as before, and the new one asked
+ * for once more without naming it (createConsentReplacing). When Connect
+ * refuses any other new consent over the count, start ends the removed rows'
+ * unended consents and asks once more.
  *
  * The signer's personnummer comes from their BankID login or the number they
  * typed; it is sent to the bank and never logged. The number a consent was
@@ -50,10 +55,10 @@
  * and never replaces the kept one.
  */
 
-import type { AisAccount, AisBankDetails, AisConsentSigningProgress, AisConsentSigningStarted, AisParty } from '@accounted/connect-contract'
+import type { AisAccount, AisBankDetails, AisConsentCreated, AisConsentSigningProgress, AisConsentSigningStarted, AisParty } from '@accounted/connect-contract'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
-import { rememberConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
+import { rememberConnectionPsu, storedConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, LIVE_CONNECTION_STATUSES, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
 import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
@@ -199,6 +204,12 @@ export interface ConsentAttempt {
   return_to?: BankConnectReturnTarget | null
   /** Svea: the listing consent, ended once the second consent (naming the chosen accounts) is valid. */
   listing_consent_id?: string | null
+  /**
+   * A renewal: the Open Payments row whose consent this attempt's consent
+   * replaces, so a restart that creates the consent anew names that consent
+   * again (createConsentReplacing).
+   */
+  renews_connection_id?: string | null
   /**
    * The consent is partly signed and a co-signer signs now: their own
    * BankID, so the signing calls carry their number, not the one the consent
@@ -647,6 +658,90 @@ async function startSigning(
   return { ok: true, data: { connection_id: row.id, attempt } }
 }
 
+/**
+ * The consent a new one replaces: a renewal's, or Svea's listing consent
+ * that its second consent (naming the chosen accounts) replaces.
+ */
+interface ReplacedConsent {
+  consentId: string
+  /** The row that keeps the PSU-ID the replaced consent was created with (bank_connection_psus). */
+  connectionId: string
+  /**
+   * Ends the replaced consent to free the company's one place, for a Connect
+   * deployed before it took replacements (it strips the field and refuses
+   * over the count). True when asking again can succeed.
+   */
+  release: () => Promise<boolean>
+}
+
+/**
+ * Creates a consent, naming the one it replaces. A Connect that takes
+ * replacements keeps the old consent live, outside the company's one place,
+ * until the new one is valid, then ends it with the PSU-ID it was created
+ * with (a renewal by another signatory must not end it under the new
+ * signer's number). A Connect that does not refuses over the count: the old
+ * consent is ended first, as before replacements, and the new one asked for
+ * once more without naming it, since it is gone. Works against either.
+ */
+async function createConsentReplacing(
+  ctx: OperationContext,
+  connect: BankFeedConnect,
+  input: { party: AisParty; validUntil: string; accounts?: Array<{ iban: string }> },
+  replaced: ReplacedConsent | null,
+): Promise<AisConsentCreated> {
+  if (!replaced) return connect.createConsent(ctx.companyId, input)
+  const kept = await storedConnectionPsu(replaced.connectionId)
+  try {
+    return await connect.createConsent(ctx.companyId, {
+      ...input,
+      replacesConsentId: replaced.consentId,
+      ...(kept ? { replacedPersonalNumber: kept.personalNumber } : {}),
+    })
+  } catch (error) {
+    if (!isQuotaRefusal(error) || !(await replaced.release())) throw error
+    return connect.createConsent(ctx.companyId, input)
+  }
+}
+
+/**
+ * Ends Svea's listing consent before its second consent is created, for a
+ * Connect that does not take replacements. The place is free afterwards even
+ * when the bank refuses the end (Connect releases its row whatever the bank
+ * answers, and one already ended answers so), so asking again may follow.
+ */
+async function endListingConsent(ctx: OperationContext, connect: BankFeedConnect, connectionId: string, party: AisParty, consentId: string): Promise<boolean> {
+  try {
+    await connect.revokeConsent(ctx.companyId, { party, consentId })
+  } catch (error) {
+    ctx.log.warn('svea listing consent not ended before the second consent', { connectionId, error: error instanceof Error ? error.message : String(error) })
+  }
+  return true
+}
+
+/**
+ * The consent a pending row's new consent replaces, for a restart that has
+ * to create the consent anew: Svea's listing consent on the row itself, or
+ * the consent of the row the attempt renews while that row still holds one.
+ */
+async function replacedConsentOf(ctx: OperationContext, connect: BankFeedConnect, row: Row, party: AisParty): Promise<ReplacedConsent | null> {
+  const attempt = row.consent_attempt
+  const listing = attempt?.listing_consent_id
+  if (attempt?.listing_only !== true && listing && listing !== row.session_id) {
+    return { consentId: listing, connectionId: row.id, release: () => endListingConsent(ctx, connect, row.id, party, listing) }
+  }
+  if (!attempt?.renews_connection_id) return null
+  const { data, error } = await ctx.supabase
+    .from('bank_connections')
+    .select('id, status, bic, affiliated_aspsp_id, bank_name, psu_type, session_id')
+    .eq('id', attempt.renews_connection_id)
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  if (error) throw error
+  const renewed = data as ({ status: string } & RenewedConnection) | null
+  if (!renewed?.session_id || renewed.status === 'revoked') return null
+  return { consentId: renewed.session_id, connectionId: renewed.id, release: () => releaseHeldConsents(ctx, connect, renewed) }
+}
+
 export async function startBankFeedConsent(ctx: OperationContext, input: StartInput): Promise<OperationOutcome<StartView>> {
   const door = await openBankFeedDoor(ctx)
   if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
@@ -748,18 +843,25 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   }
 
   const listingOnly = bank.bic === SVEA_BIC
-  const createConsent = () => connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now) })
-  let created: Awaited<ReturnType<typeof createConsent>> | null = null
+  const consentInput = { party: party.party, validUntil: validUntilRequested(now) }
+  // A renewal names the consent it replaces. Should Connect refuse over the
+  // company's one place anyway, the release frees what the company no longer
+  // needs (that consent, and the removed rows' unended ones) before asking
+  // once more (releaseHeldConsents).
+  const replaced: ReplacedConsent | null = renewed?.session_id
+    ? { consentId: renewed.session_id, connectionId: renewed.id, release: () => releaseHeldConsents(ctx, connect, renewed) }
+    : null
+  let created: AisConsentCreated | null = null
   try {
-    created = await createConsent()
+    created = await createConsentReplacing(ctx, connect, consentInput, replaced)
   } catch (error) {
     // Connect holds one bank connection per company. A place held by a
-    // consent this company no longer needs (the one a renewal replaces, or a
-    // removed connection's that the bank did not end at the time) is freed,
-    // and the consent asked for once more.
+    // removed connection's consent that the bank did not end at the time is
+    // freed, and the consent asked for once more. (A renewal's release has
+    // already done so.)
     let failure: unknown = error
-    if (isQuotaRefusal(error) && (await releaseHeldConsents(ctx, connect, renewed))) {
-      created = await createConsent().catch((retryError: unknown) => {
+    if (!replaced && isQuotaRefusal(error) && (await releaseHeldConsents(ctx, connect, null))) {
+      created = await connect.createConsent(ctx.companyId, consentInput).catch((retryError: unknown) => {
         failure = retryError
         return null
       })
@@ -780,6 +882,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     replace_connection_id: renewed ? null : input.replaceConnectionId ?? null,
     extended_history_days: bank.extendedTransactionHistoryMaxDays ?? bank.transactionHistoryMaxDays ?? null,
     return_to: ret?.surface ?? null,
+    ...(replaced ? { renews_connection_id: replaced.connectionId } : {}),
   }
   const { data: inserted, error: insertError } = await ctx.supabase
     .from('bank_connections')
@@ -842,19 +945,23 @@ export async function restartBankFeedConsent(
   const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false, { coSigner: coSigning })
   if (!party.ok) return party.outcome
   // A consent whose signing window closed is created anew; the attempt record
-  // (listing-only, the row a switch replaces, the return) carries over.
+  // (listing-only, the row a switch replaces, the return) carries over, and
+  // the new consent names the live one it replaces as the first did (a
+  // renewal's, Svea's listing consent): without it, that consent holds the
+  // company's one place at Connect and the new one is refused.
   const started = await startSigning(ctx, connect, row, party.party, method, ret, { coSigning })
   if (!started.ok && started.code === 'BANK_CONSENT_OVER') {
     const now = input.now ?? Date.now()
     let created
     try {
-      created = await connect.createConsent(ctx.companyId, {
+      const replaced = await replacedConsentOf(ctx, connect, row, party.party)
+      created = await createConsentReplacing(ctx, connect, {
         party: party.party,
         validUntil: validUntilRequested(now),
         ...(row.consent_attempt?.selection?.accounts
           ? { accounts: chosenIbans(row) }
           : {}),
-      })
+      }, replaced)
     } catch (error) {
       return providerFailure(error, ctx.log)
     }
@@ -1268,22 +1375,23 @@ export async function selectBankFeedAccounts(
     const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, true)
     if (!party.ok) return party.outcome
     const now = input.now ?? Date.now()
-    // A company holds one bank connection (Connect counts consents, and
-    // every active consent is billed): the listing consent is ended before
-    // the second one is created, so Svea never holds two at once. The
-    // accounts it listed stay on the row, so a second consent that fails is
-    // created again from them without listing anew. An end that fails (one
-    // already ended answers so) does not stop the second consent.
-    if (row.session_id) {
-      try {
-        await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: row.session_id })
-      } catch (error) {
-        ctx.log.warn('svea listing consent not ended before the second consent', { connectionId: row.id, error: error instanceof Error ? error.message : String(error) })
-      }
-    }
+    // The second consent replaces the listing one: Connect keeps the listing
+    // consent live while the second signs and ends it once that is valid, so
+    // a failed second attempt never leaves the company without bank access.
+    // A Connect that does not take replacements refuses over the company's
+    // one bank connection: the listing consent is then ended first, as
+    // before, and the accounts it listed stay on the row, so a second
+    // consent that fails is created again from them without listing anew.
     let created
     try {
-      created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now), accounts: ibans.map((iban) => ({ iban })) })
+      const listingConsentId = row.session_id
+      created = await createConsentReplacing(ctx, connect, {
+        party: party.party,
+        validUntil: validUntilRequested(now),
+        accounts: ibans.map((iban) => ({ iban })),
+      }, listingConsentId
+        ? { consentId: listingConsentId, connectionId: row.id, release: () => endListingConsent(ctx, connect, row.id, party.party, listingConsentId) }
+        : null)
     } catch (error) {
       return providerFailure(error, ctx.log)
     }
