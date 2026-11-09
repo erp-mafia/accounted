@@ -102,7 +102,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
-import { handleMcpRequest } from '../server'
+import { handleMcpRequest, tools } from '../server'
 import { readCompletionLog } from '@/lib/extensions/completion-log'
 
 function mcpRequest(
@@ -424,14 +424,27 @@ describe('mcp.tool_called telemetry', () => {
     it('stays null for a plain Error: the class name "Error" is noise, not vocabulary', async () => {
       const eventPromise = captureNextToolCalledEvent()
 
-      // gnubok_load_skill throws `new Error("Skill not found: ...")`.
+      // Any tool whose execute() throws a bare `new Error(...)`.
+      const listSkills = tools.find((t) => t.name === 'gnubok_list_skills')!
+      vi.spyOn(listSkills, 'execute').mockRejectedValueOnce(new Error('a refusal nobody coded'))
+      await handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBeNull()
+    })
+
+    it('records the code of a coded refusal', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // gnubok_load_skill answers an unknown slug with NOT_FOUND.
       await handleMcpRequest(
         mcpRequest('tools/call', { name: 'gnubok_load_skill', arguments: { slug: 'definitely-does-not-exist' } })
       )
 
       const event = await eventPromise
-      expect(event.errorKind).toBe('execution')
-      expect(event.errorCause).toBeNull()
+      expect(event.errorCode).toBe('NOT_FOUND')
+      expect(event.errorCause).toBe('NOT_FOUND')
     })
 
     it('stays null on success and on pre-execution denials', async () => {

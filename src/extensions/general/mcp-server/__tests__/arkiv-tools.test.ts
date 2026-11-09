@@ -462,6 +462,30 @@ describe('gnubok_ask_document', () => {
     expect(await ask({ status: 'skipped', reason: 'ai_unconfigured' })).toMatchObject({ code: 'EXTENSION_DISABLED', retryable: false })
     expect(await ask({ status: 'skipped', reason: 'no_text' })).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false })
   })
+
+  // "The document has no readable text" alone (13 calls, 4 companies in 30
+  // days) left the agent nothing to do instead.
+  it('a document with no text says what to read instead; pages with none say to ask again', async () => {
+    const { askDocument } = await import('@/lib/arkiv/ask')
+    const { toToolError } = await import('../tool-result')
+    const ask = async (args: Record<string, unknown>) => {
+      ;(askDocument as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ status: 'skipped', reason: 'no_text' })
+      enqueue({ data: { name: 'Arcim' } })
+      const err = await tool('gnubok_ask_document')
+        .execute({ record_ref: `document:${DOC}`, question: 'Vad är beloppet?', ...args }, CO, 'user-1', supabase)
+        .then(() => null, (e: unknown) => e)
+      return toToolError(err).error
+    }
+    expect(await ask({})).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message_en: expect.stringContaining('no page has a text layer'),
+      remediation: { tool: 'gnubok_get_document_content', args: { document_id: DOC }, description: expect.stringContaining('ask the user') },
+    })
+    expect(await ask({ pages: [7, 8] })).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message_en: 'The document has no readable text on pages 7, 8: ask again without pages, or with pages the document has.',
+    })
+  })
 })
 
 describe('gnubok_resolve_missing', () => {

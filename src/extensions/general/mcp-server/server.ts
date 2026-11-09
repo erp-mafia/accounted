@@ -281,7 +281,7 @@ import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { ModuleId } from '@/lib/modules/manifest'
 import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
-import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
+import { closestSkillSlugs, findSkill, isOwnSkillDraft, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash } from '@/lib/agent-skills/provenance'
 import { formatActorAttribution } from '@/lib/attribution/format-actor'
 import { resolvePersonNames } from '@/lib/attribution/person-names'
@@ -1800,12 +1800,42 @@ function resolveMcpDocumentMimeType(fileName: string, requestedMimeType: unknown
       webp: 'image/webp',
     }
     mimeType = extension ? mimeMap[extension] : undefined
-    if (!mimeType) throw new Error(`Cannot infer MIME type from extension: .${extension}`)
+    if (!mimeType) throw unsupportedDocumentType(`Cannot infer MIME type from extension: .${extension}. Allowed: PDF, JPEG, PNG, HEIC, WebP`)
   }
   if (!MCP_DOCUMENT_MIME_TYPE_SET.has(mimeType)) {
-    throw new Error(`Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP`)
+    throw unsupportedDocumentType(`Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP`)
   }
   return mimeType
+}
+
+/**
+ * The upload tools archive underlag, a PDF or an image. A CSV, Excel, text or
+ * Markdown file was a plain Error, so the agent read UNKNOWN_ERROR, "Något
+ * gick fel. Försök igen." (22 calls in 30 days), for a file no retry makes
+ * one. The inbox upload route's code, with where such a file goes instead.
+ */
+function unsupportedDocumentType(messageEn: string): Error {
+  return codedRefusal('DOC_UPLOAD_UNSUPPORTED_TYPE', messageEn, {
+    description:
+      'Send the underlag as a PDF or an image (a text or spreadsheet underlag printed to PDF). A bank statement file ' +
+      '(CSV, Excel) is no underlag: send its rows with gnubok_create_transactions, or the user imports it in Accounted ' +
+      'under Importera bankfil (/import?mode=bank). A SIE file goes to gnubok_create_sie_upload.',
+  })
+}
+
+/**
+ * An inbox_item_id that names no inbox item of this company, in
+ * gnubok_create_voucher and gnubok_create_supplier_invoice_from_inbox. A plain
+ * Error, it answered UNKNOWN_ERROR (9 calls in 30 days); 2 of the 6 voucher
+ * ids were a document's id.
+ */
+function inboxItemNotFound(inboxItemId: string): Error {
+  return codedRefusal('INBOX_ITEM_NOT_FOUND', `Inbox item ${inboxItemId} not found for this company.`, {
+    description:
+      'gnubok_list_inbox_items lists the inbox items. A document id is no inbox item id: gnubok_get_document_content ' +
+      'with include ["links"] names the inbox item a document came with.',
+    tool: 'gnubok_list_inbox_items',
+  })
 }
 
 interface DocumentInboxResult {
@@ -7350,9 +7380,7 @@ export const tools: McpTool[] = [
       const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
         if (actor) emitSkillNotFound({ slug, actor, userId, companyId })
-        const all = await loadAllSkills(supabase)
-        const available = all.map((s) => s.slug).join(', ')
-        throw new Error(`Skill not found: "${slug}". Available skills: ${available}`)
+        throw await skillNotFoundError(slug, supabase, companyId)
       }
       // Every load, every tier: records which skill/atom bodies agents
       // actually pull (mcp.skill_loaded). Without this, "which atom was
@@ -17704,7 +17732,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const inboxItemId = args.inbox_item_id as string
-      if (!inboxItemId) throw new Error('inbox_item_id is required')
+      if (!inboxItemId) throw badArgument('inbox_item_id', 'inbox_item_id is required')
       const dryRun = args.dry_run === true
       const idempotencyKey = args.idempotency_key as string | undefined
 
@@ -17716,13 +17744,31 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (inboxErr || !inbox) throw new Error('Inbox item not found')
+      // The refusals below were plain Errors: UNKNOWN_ERROR, "try again", for
+      // calls that fail the same way until something else changes (13 in 30 days).
+      if (inboxErr || !inbox) throw inboxItemNotFound(inboxItemId)
       if (inbox.created_supplier_invoice_id) {
-        throw new Error(`Inbox item already converted to supplier invoice ${inbox.created_supplier_invoice_id}`)
+        throw codedRefusal(
+          'INBOX_ITEM_ALREADY_CONVERTED',
+          `Inbox item already converted to supplier invoice ${inbox.created_supplier_invoice_id}`,
+          { description: 'Do not stage it again: that supplier invoice registers this item (gnubok_list_supplier_invoices).' },
+        )
       }
 
       const extracted = (inbox.extracted_data as Record<string, unknown> | null) ?? null
-      if (!extracted) throw new Error('Inbox item has no extracted_data: re-run extraction first')
+      if (!extracted) {
+        throw codedRefusal(
+          'INBOX_ITEM_NO_READING',
+          'Inbox item has no extracted_data: its document has no reading yet (still being read, failed or skipped).',
+          {
+            description:
+              'If it was just uploaded, stage again in a minute. Otherwise read the document (gnubok_get_document_content), ' +
+              'write the reading with gnubok_set_inbox_extracted_data, then stage this call again.',
+            tool: 'gnubok_set_inbox_extracted_data',
+            args: { inbox_item_id: inboxItemId },
+          },
+        )
+      }
 
       const supplierExt = extracted.supplier as Record<string, unknown> | undefined
       const invoiceExt = extracted.invoice as Record<string, unknown> | undefined
@@ -17860,7 +17906,8 @@ export const tools: McpTool[] = [
           }>(),
       )
       if (!resolvedSupplier) {
-        throw new Error(
+        throw codedRefusal(
+          'SUPPLIER_NOT_FOUND',
           supplierResolution === 'override'
             ? `supplier_id_override ${supplierId} does not match any supplier in this company. Use a supplier_id from preview.candidates or gnubok_list_suppliers.`
             : `Resolved supplier ${supplierId} no longer exists in this company: re-run extraction or pass supplier_id_override.`,
@@ -17888,7 +17935,7 @@ export const tools: McpTool[] = [
       for (const key of ['invoice_date_override', 'due_date_override'] as const) {
         const value = args[key] as string | undefined
         if (value !== undefined && !ISO_DATE_RE.test(value)) {
-          throw new Error(`${key} must be an ISO date (YYYY-MM-DD), got "${value}"`)
+          throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD), got "${value}"`)
         }
       }
       const invoiceDate = (args.invoice_date_override as string | undefined) ?? (invoiceExt?.invoiceDate as string) ?? null
@@ -18179,10 +18226,10 @@ export const tools: McpTool[] = [
       const rateOverride = args.exchange_rate_override
       if (rateOverride !== undefined && rateOverride !== null) {
         if (typeof rateOverride !== 'number' || !Number.isFinite(rateOverride) || rateOverride <= 0) {
-          throw new Error(`exchange_rate_override must be a positive number (SEK per 1 ${currency}); got ${JSON.stringify(rateOverride)}`)
+          throw badArgument('exchange_rate_override', `exchange_rate_override must be a positive number (SEK per 1 ${currency}); got ${JSON.stringify(rateOverride)}`)
         }
         if (currency === 'SEK') {
-          throw new Error('exchange_rate_override only applies to a non-SEK invoice')
+          throw badArgument('exchange_rate_override', 'exchange_rate_override only applies to a non-SEK invoice')
         }
       }
       if (currency !== 'SEK' && invoiceDate) {
@@ -18195,7 +18242,7 @@ export const tools: McpTool[] = [
           exchangeRate = fx.rate.exchangeRate
           exchangeRateSource = fx.rate.source === 'supplied' ? 'supplied' : 'riksbanken'
         } else if (typeof rateOverride === 'number') {
-          throw new Error(`exchange_rate_override ${rateOverride} was refused as implausible; check the rate on the invoice`)
+          throw badArgument('exchange_rate_override', `exchange_rate_override ${rateOverride} was refused as implausible; check the rate on the invoice`)
         }
       }
 
@@ -26122,8 +26169,12 @@ export const tools: McpTool[] = [
       // Pre-flight: catch unbalanced lines before staging so the agent gets a
       // tight feedback loop instead of a rejected pending_operation later.
       const balance = validateBalance(lines)
+      // Coded, like the period and inbox refusals below: as plain Errors they
+      // answered UNKNOWN_ERROR, "try again", for calls that fail the same way
+      // until an argument changes (19 in 30 days).
       if (!balance.valid) {
-        throw new Error(
+        throw codedRefusal(
+          'JOURNAL_ENTRY_NOT_BALANCED',
           `Lines are not balanced: debits ${balance.totalDebit} SEK, credits ${balance.totalCredit} SEK. ` +
           'Both must be positive and equal.'
         )
@@ -26157,18 +26208,23 @@ export const tools: McpTool[] = [
       if (fiscalPeriodId) {
         const { data: period, error: periodErr } = await supabase
           .from('fiscal_periods')
-          .select('id, is_closed, period_start, period_end, name')
+          .select('id, is_closed, locked_at, period_start, period_end, name')
           .eq('id', fiscalPeriodId)
           .eq('company_id', companyId)
           .maybeSingle()
         if (periodErr || !period) {
-          throw new Error(`Fiscal period ${fiscalPeriodId} not found for this company.`)
+          throw codedRefusal('FISCAL_PERIOD_NOT_FOUND', `Fiscal period ${fiscalPeriodId} not found for this company.`, {
+            description: 'Leave fiscal_period_id out: it is resolved from entry_date.',
+          })
         }
-        if (period.is_closed) {
-          throw new Error(
-            `Räkenskapsperioden "${period.name ?? fiscalPeriodId}" är låst. ` +
-            'Lås upp perioden, eller välj en öppen period.'
-          )
+        // A year closed with a bokslut is never unlocked (reopen or correct in
+        // the open year); a locked period is, by its owner. The registry's
+        // text and remediation for each (founder decision 2026-11-08: the old
+        // sentence told the user to unlock a closed year). PERIOD_LOCKED is
+        // what the lock trigger answers the same voucher at commit.
+        const periodRefusal = period.is_closed ? 'TARGET_PERIOD_CLOSED' : period.locked_at ? 'PERIOD_LOCKED' : null
+        if (periodRefusal) {
+          throw codedRefusal(periodRefusal, `Fiscal period "${period.name ?? fiscalPeriodId}": ${getErrorEntry(periodRefusal)?.message_en ?? periodRefusal}`)
         }
         // Defense in depth: also verify the supplied period actually covers
         // entry_date so the engine's EntryDateOutsideFiscalPeriodError surfaces
@@ -26182,7 +26238,7 @@ export const tools: McpTool[] = [
         fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
       }
       if (!fiscalPeriodId) {
-        throw new Error(`No open fiscal period covers ${entryDate}. Open a period or pick a different date.`)
+        throw codedRefusal('NO_OPEN_PERIOD_FOR_DATE', `No open fiscal period covers ${entryDate}. Open a period or pick a different date.`)
       }
 
       // One IB per year (agent feedback seqs 892914, 897234, 897844): refuse
@@ -26293,19 +26349,20 @@ export const tools: McpTool[] = [
           .eq('id', inboxItemId)
           .eq('company_id', companyId)
           .single()
-        if (inboxErr || !inbox) {
-          throw new Error(`Inbox item ${inboxItemId} not found for this company.`)
-        }
+        if (inboxErr || !inbox) throw inboxItemNotFound(inboxItemId)
         if (inbox.created_journal_entry_id) {
-          throw new Error(
+          throw codedRefusal(
+            'INBOX_ITEM_ALREADY_BOOKED',
             `Inbox item is already booked as journal entry ${inbox.created_journal_entry_id}. ` +
-            'Use gnubok_correct_entry or gnubok_reverse_journal_entry if it needs to be changed.'
+            'Use gnubok_correct_entry or gnubok_reverse_journal_entry if it needs to be changed.',
+            { description: 'Do not book it again: that verifikat books it. Change it only through gnubok_correct_entry or gnubok_reverse_journal_entry.' },
           )
         }
         if (inbox.created_supplier_invoice_id) {
-          throw new Error(
+          throw codedRefusal(
+            'INBOX_ITEM_ALREADY_CONVERTED',
             `Inbox item is already converted to supplier invoice ${inbox.created_supplier_invoice_id}. ` +
-            'Cancel that path before booking it as a verifikat.'
+            'Cancel that path before booking it as a verifikat.',
           )
         }
         const heldBy = withDocumentHold(inbox as unknown as DocumentHoldRow).document_journal_entry_id
@@ -29631,6 +29688,40 @@ function emitSkillNotFound(payload: {
       },
     })
     .catch((err) => console.error('[mcp] skill_not_found emit failed:', err)))
+}
+
+/**
+ * gnubok_load_skill for a slug no skill has. It was a plain Error, so the
+ * agent read UNKNOWN_ERROR, "Något gick fel. Försök igen.", for a call no
+ * retry fixes (18 calls, 15 companies in 30 days). NOT_FOUND with the closest
+ * slugs first and the full list kept; an own/ draft says it waits for a
+ * person to add it.
+ */
+async function skillNotFoundError(slug: string, supabase: SupabaseClient, companyId: string): Promise<Error> {
+  const draft = await isOwnSkillDraft(supabase, companyId, slug).catch((err: unknown) => {
+    log.warn('load_skill: own skill draft check failed', { slug, err })
+    return false
+  })
+  if (draft) {
+    return codedRefusal(
+      'NOT_FOUND',
+      `Skill "${slug}" is a draft: an AI saved it and no person has added it yet, so it does not load.`,
+      { description: 'Ask the user to add it in Accounted under Instruktioner (/skills), then load it again.' },
+    )
+  }
+  const available = (await loadAllSkills(supabase)).map((s) => s.slug)
+  const closest = closestSkillSlugs(slug, available)
+  return codedRefusal(
+    'NOT_FOUND',
+    `Skill not found: "${slug}". ${closest.length ? `Closest: ${closest.join(', ')}. ` : ''}Available skills: ${available.join(', ')}`,
+    {
+      description: slug.startsWith('own/')
+        ? "No skill of this company has that id: gnubok_list_skills lists the company's own skills (tier own)."
+        : 'Load a slug exactly as listed, the closest first.',
+      tool: 'gnubok_list_skills',
+      args: { include_all: true },
+    },
+  )
 }
 
 /** How many ranked hits a mcp.tool_searched row keeps. */
