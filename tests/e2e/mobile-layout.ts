@@ -1,7 +1,7 @@
 /** Runs in the browser: include nested scroll regions, not just the outer page. */
 export function horizontalOverflow() {
   const root = document.documentElement
-  const main = document.querySelector('main') ?? document.body
+  const main = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(element => element.getClientRects().length) ?? document.querySelector('main') ?? document.body
   const regions = [...main.querySelectorAll<HTMLElement>('*')].filter(element => {
     if (!element.getClientRects().length || element.closest('[aria-hidden="true"], .sr-only')) return false
     const head = element.closest('thead')
