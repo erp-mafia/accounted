@@ -55,15 +55,16 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, 2026, 1, '2026-01-25', $3)`,
     [companyId, userId, entryId],
   )
-  // System dimensions (undeletable outside teardown) and a terminal-state
-  // pending operation (delete-protected per BFL 7 kap.): both exist in every
+  // System dimensions (undeletable outside teardown) and terminal-state
+  // pending operations (delete-protected per BFL 7 kap.): both exist in every
   // modern sandbox and both blocked the auth.users cascade before the
-  // gnubok.sandbox_cleanup bypass.
+  // gnubok.sandbox_cleanup bypass. 'unknown' (20261109170400) is terminal too.
   await getPool().query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
   await getPool().query(
     `INSERT INTO public.pending_operations
        (user_id, company_id, operation_type, title, status)
-     VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected')`,
+     VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected'),
+            ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'unknown')`,
     [userId, companyId],
   )
   // processing_history references companies with a plain NO ACTION FK and no

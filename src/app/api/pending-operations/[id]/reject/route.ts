@@ -73,9 +73,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               ? 'Operation already resolved as failed_partial: it failed after posting an ' +
                 'irreversible voucher. It can no longer be rejected; see result_data.posted_ids ' +
                 'for what was posted and correct it with a storno if needed.'
-              : `Operation already ${opStatus}: it was approved explicitly (most likely via the ` +
-                'Att göra / pending UI in parallel), not auto-committed. It can no longer be rejected; ' +
-                'reverse or correct the resulting verifikat instead.'
+              : opStatus === 'unknown'
+                ? 'Operation already resolved as unknown: an approval was interrupted and its outcome ' +
+                  'is unclear, so it may or may not have posted. It was not replayed and can no longer ' +
+                  'be rejected. Check the ledger and the records it names before acting or staging it again.'
+                : `Operation already ${opStatus}: it was approved explicitly (most likely via the ` +
+                  'Att göra / pending UI in parallel), not auto-committed. It can no longer be rejected; ' +
+                  'reverse or correct the resulting verifikat instead.'
       return NextResponse.json(
         { error: explained, status: opStatus },
         { status: 409 }

@@ -9,8 +9,7 @@
  * the row stays status='committing' forever: the expire cron only sweeps
  * status='pending', so stuck rows were invisible until this sweep.
  *
- * Semantics (deliberately conservative, no new status values; see #842 for
- * the failed_partial half):
+ * Semantics:
  *
  *  - Only rows whose updated_at is older than STUCK_COMMITTING_THRESHOLD_MINUTES
  *    are touched. The claim CAS is an UPDATE, and pending_operations has the
@@ -23,16 +22,12 @@
  *  - Rows with positive evidence that the side-effects posted are finalized
  *    to 'committed' with result_data.recovered=true. Evidence is per
  *    operation_type and only exists where the op's params identify a target
- *    row whose posted state is observable (see findPostedEvidence). There is
- *    no generic side-effect -> pending_op linkage today (that is #842's
- *    "record posted ids" work), so most types have no probe.
+ *    row whose posted state is observable (see findPostedEvidence).
  *
- *  - Rows with no detectable evidence go to terminal 'rejected' with a
- *    result_data explanation. NEVER back to 'pending': re-executing could
- *    duplicate side-effects that posted without leaving a detectable trace
- *    (sent emails, journal entries not referenced by the params). A rejected
- *    proposal is safe: nothing re-runs, and the user can re-stage after
- *    verifying manually.
+ *  - Rows with no detectable evidence go to terminal 'unknown'. NEVER back to
+ *    'pending': re-executing could duplicate side-effects that posted without
+ *    leaving a detectable trace (sent emails, journal entries not referenced
+ *    by the params). The person verifies the entities before staging anew.
  *
  *  - Every terminal write is CAS-guarded on status='committing' so a
  *    concurrent finalize (or a second sweep run) can never clobber a row that
@@ -43,10 +38,9 @@
  * Observability: one structured warn per recovered row with the constant
  * message 'pending_op_recovery' (metric-style; count by `outcome`).
  * Runbook: grep Vercel logs for pending_op_recovery. outcome='committed'
- * needs no action (side-effects verified present). outcome='rejected' means
- * side-effects could not be verified: check the entities named in params and,
- * if something did post, leave the rejected row as the audit record and do
- * not re-stage the operation.
+ * needs no action (side-effects verified present). outcome='unknown' means
+ * side-effects could not be verified: check the entities named in params and
+ * do not re-stage until that check is complete.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger, type Logger } from '@/lib/logger'
@@ -80,7 +74,7 @@ export type PostedEvidence =
 export interface RecoverySummary {
   scanned: number
   committed: number
-  rejected: number
+  unknown: number
   /** Probe errors + lost CAS races: rows left for the next run. */
   skipped: number
 }
@@ -180,26 +174,14 @@ export async function findPostedEvidence(
   }
 }
 
-/**
- * Pure builder for the terminal update payload. Exported so unit tests (and
- * the pg-real test, which mirrors the exact payload through real triggers)
- * pin the shape.
- *
- * The rejected shape reuses the { auto_rejected, reason } marker family the
- * dispatcher and expire cron already write; reason='stuck_committing' is
- * distinct from 'expired' so the /pending UI's "Utgick automatiskt" badge
- * (strict on reason === 'expired') never claims these rows. Its
- * rejection_category is 'failed': the approval did not complete, and no
- * person rejected the proposal.
- */
+/** Pure builder for the terminal update payload, pinned by unit and pg tests. */
 export function buildRecoveryUpdate(
   row: StuckCommittingRow,
   evidence: PostedEvidence | null,
   sweptAtIso: string,
 ): {
-  status: 'committed' | 'rejected'
+  status: 'committed' | 'unknown'
   resolved_at: string
-  rejection_category?: 'failed'
   result_data: Record<string, unknown>
 } {
   const recovery = {
@@ -216,16 +198,15 @@ export function buildRecoveryUpdate(
     }
   }
   return {
-    status: 'rejected',
+    status: 'unknown',
     resolved_at: sweptAtIso,
-    rejection_category: 'failed',
     result_data: {
-      auto_rejected: true,
+      outcome_unknown: true,
       reason: 'stuck_committing',
       recovery: {
         ...recovery,
         note:
-          'Operation was stuck in committing and no trace of posted side effects was found. ' +
+          'Operation was interrupted and no trace of posted side effects was found. ' +
           'Closed without re-execution; verify the target entities manually before re-staging.',
       },
     },
@@ -259,7 +240,7 @@ export async function recoverStuckCommittingOperations(
   const summary: RecoverySummary = {
     scanned: stuck.length,
     committed: 0,
-    rejected: 0,
+    unknown: 0,
     skipped: 0,
   }
 
@@ -309,7 +290,7 @@ export async function recoverStuckCommittingOperations(
     }
 
     if (update.status === 'committed') summary.committed++
-    else summary.rejected++
+    else summary.unknown++
 
     log.warn('pending_op_recovery', {
       ...baseCtx,

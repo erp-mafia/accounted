@@ -12716,6 +12716,18 @@ const PENDING_OPERATIONS: Record<string, StructuredErrorEntry> = {
         'Read details.pending_operation. task_state completed: it was committed and result holds the outcome. failed or cancelled: it was not committed. working with status committing: another approval is running it, so poll GET /pending-operations/{id}. Do not stage it again to retry.',
     },
   },
+  // A cron or system actor reached the approval dispatcher: only a person,
+  // or a key a person holds, approves.
+  PENDING_OPERATION_SYSTEM_APPROVAL_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'En schemalagd körning eller systemet kan inte godkänna ett förslag. Det väntar kvar på en person.',
+    message_en: 'A scheduled run or the system cannot approve a pending operation. It stays pending for a person.',
+    retryable: false,
+    remediation: {
+      description:
+        'Nothing was committed and the operation stays pending. Do not retry from a scheduled job; a person approves it in Accounted, under Att godkänna.',
+    },
+  },
   PENDING_OPERATION_CONFIRMATION_REQUIRED: {
     httpStatus: 400,
     message_sv: 'Åtgärden går inte att ångra (BFL 5 kap. 5 §): bekräfta godkännandet uttryckligen.',

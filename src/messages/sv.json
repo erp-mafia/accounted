@@ -1201,6 +1201,8 @@
     "badge_auto_expired": "Utgick automatiskt",
     "auto_expired_detail": "Utgick automatiskt efter 30 dagar utan åtgärd. Inget bokfördes.",
     "badge_failed_partial": "Delvis genomförd",
+    "badge_unknown": "Utfall oklart",
+    "unknown_detail": "Godkännandet avbröts och utfallet kunde inte bekräftas. Kontrollera de berörda posterna innan du skapar ett nytt förslag. Inget kördes om automatiskt.",
     "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt.",
     "approve_all": "Godkänn alla ({count})",
     "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",

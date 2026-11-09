@@ -5073,6 +5073,15 @@ function settledApprovalOutcome(
         operation_status: 'failed_partial',
         idempotency_replay: true,
       }
+    case 'unknown':
+      return {
+        status: 'failed',
+        operation_id: operation.id,
+        error: 'The approval was interrupted and its outcome could not be verified. Nothing was replayed; verify the affected records before staging again.',
+        error_code: 'PENDING_OPERATION_OUTCOME_UNKNOWN',
+        operation_status: 'unknown',
+        idempotency_replay: true,
+      }
     case 'rejected':
       return {
         status: 'rejected',
@@ -27704,7 +27713,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected', 'failed_partial'], description: 'Default: pending' },
+        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected', 'failed_partial', 'unknown'], description: 'Default: pending' },
         risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
         operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
         limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
@@ -27865,7 +27874,7 @@ export const tools: McpTool[] = [
         error: { type: 'string' },
         error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
-        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'], description: 'pending = not consumed, re-approvable' },
+        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial', 'unknown'], description: 'pending = not consumed, re-approvable; unknown = interrupted, verify before staging again' },
         batch_id: { type: 'string' },
         results: { type: 'array', items: { type: 'object' } },
         committed: { type: 'number' },
@@ -28080,7 +28089,7 @@ export const tools: McpTool[] = [
         error: { type: 'string' },
         error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
-        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'] },
+        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial', 'unknown'] },
       },
       required: ['status'],
     },
@@ -28195,8 +28204,12 @@ export const tools: McpTool[] = [
               ? 'Operation already resolved as failed_partial: it failed after posting an ' +
                 'irreversible voucher. See result_data.posted_ids for what was posted and ' +
                 'correct it with a storno if needed.'
-              : `Operation already ${outcome.status}: approved explicitly (likely via the pending UI), ` +
-                'not auto-committed. Reverse or correct the resulting verifikat instead.',
+              : outcome.status === 'unknown'
+                ? 'Operation already resolved as unknown: an approval was interrupted and its outcome ' +
+                  'is unclear, so it may or may not have posted. It was not replayed and can no longer ' +
+                  'be rejected. Check the ledger and the records it names before acting or staging it again.'
+                : `Operation already ${outcome.status}: approved explicitly (likely via the pending UI), ` +
+                  'not auto-committed. Reverse or correct the resulting verifikat instead.',
         )
       }
       if (outcome.outcome === 'lost_race') {

@@ -3097,7 +3097,7 @@ export interface CreateJournalEntryLineInput {
 import type { PendingOperationType } from '@/lib/pending-operations/risk-tiers'
 export type { PendingOperationType }
 
-export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial'
+export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial' | 'unknown'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
 // 20260519090000_actor_type_agent_chat). 'service_account' = a service

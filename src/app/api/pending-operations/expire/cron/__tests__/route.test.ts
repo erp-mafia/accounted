@@ -161,7 +161,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
     vi.mocked(recoverStuckCommittingOperations).mockResolvedValueOnce({
       scanned: 3,
       committed: 1,
-      rejected: 2,
+      unknown: 2,
       skipped: 0,
     })
 
@@ -172,7 +172,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
     const [client, opts] = vi.mocked(recoverStuckCommittingOperations).mock.calls[0]
     expect(client).toBe(vi.mocked(createServiceClient).mock.results[0].value)
     expect(opts?.log).toBeDefined()
-    expect(json.recovery).toEqual({ scanned: 3, committed: 1, rejected: 2, skipped: 0 })
+    expect(json.recovery).toEqual({ scanned: 3, committed: 1, unknown: 2, skipped: 0 })
   })
 
   it('a recovery sweep failure never masks a successful expiry pass', async () => {

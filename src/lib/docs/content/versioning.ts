@@ -139,7 +139,7 @@ The writes an agent stages over MCP (\`x-stage-supported: true\` in the OpenAPI 
 |---|---|
 | pending, committing | working |
 | committed | completed |
-| failed_partial, or rejected by the commit | failed |
+| failed_partial, unknown (an interrupted approval whose outcome could not be verified; never replayed), or rejected by the commit | failed |
 | rejected by a person, expired or superseded | cancelled |
 
 \`stage=true\` on an endpoint without \`x-stage-supported\` answers \`400 STAGE_NOT_SUPPORTED\`, and a value other than \`true\` or \`false\` is \`400\`, so a misspelt flag never commits. A write only a person may approve in the app (handing an invoice to collection, an escalating collection case action) is never committed from a key: without \`stage=true\` it answers \`400 STAGE_REQUIRED\` and does nothing. With \`dry_run=true\` or a test key the staging is previewed and nothing is stored. A staged request and a commit of the same body are different requests to the idempotency layer: reusing one's \`Idempotency-Key\` for the other answers \`409 IDEMPOTENCY_KEY_REUSE\`.

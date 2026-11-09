@@ -133,3 +133,24 @@ describe('commitPendingOperation: one commit per operation', () => {
     expect(row.status).toBe('committed')
   })
 })
+
+describe('commitPendingOperation: only a person approves', () => {
+  it.each(['cron', 'system'] as const)('never lets a %s turn approve; the op stays pending, untouched', async (type) => {
+    const row = { status: 'pending' }
+    const { client, applied } = rowBackedClient(row)
+
+    const result = await commitPendingOperation(client as never, 'user-1', 'company-1', pendingOperation(), {
+      actor: { type },
+    })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      http_status: 403,
+      code: 'PENDING_OPERATION_SYSTEM_APPROVAL_FORBIDDEN',
+      operation_status: 'pending',
+    })
+    expect(executor.setTransactionIgnored).not.toHaveBeenCalled()
+    expect(applied).toEqual([])
+    expect(row.status).toBe('pending')
+  })
+})

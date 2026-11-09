@@ -4483,7 +4483,7 @@ export const EventsQuerySchema = z.object({
 export const PendingOperationsQuerySchema = z.object({
   // 'failed_partial' is queryable directly; the UI folds it into the
   // rejected tab (see app/api/pending-operations/route.ts).
-  status: z.enum(['pending', 'committed', 'rejected', 'failed_partial']).default('pending'),
+  status: z.enum(['pending', 'committed', 'rejected', 'failed_partial', 'unknown']).default('pending'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
   // Newest first by default; a bokslut batch of fifty operations is worked

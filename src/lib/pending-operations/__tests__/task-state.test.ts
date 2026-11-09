@@ -13,6 +13,7 @@ describe('pendingOperationTaskState', () => {
     ['committing', 'working'],
     ['committed', 'completed'],
     ['failed_partial', 'failed'],
+    ['unknown', 'failed'],
   ] as const)('maps %s to %s', (status, taskState) => {
     expect(pendingOperationTaskState({ status })).toBe(taskState)
   })
