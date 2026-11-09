@@ -1886,7 +1886,12 @@ export interface Invoice {
   payments?: InvoicePayment[]
 }
 
-export type InvoiceDeliveryChannel = 'email' | 'manual'
+/**
+ * email: sent from Accounted. manual: marked sent, delivered elsewhere.
+ * import: the invoice's own PDF from the previous system (Fortnox), archived
+ * when the invoice was migrated; no recipients or message.
+ */
+export type InvoiceDeliveryChannel = 'email' | 'manual' | 'import'
 export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' | 'marked_sent'
 
 /**

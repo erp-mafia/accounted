@@ -15,6 +15,11 @@ import { FortnoxApiError, type FortnoxClient } from './client';
  * `supplierinvoice`. Customer-invoice files have no file-connection register
  * there: they live in the separate fileattachments service, keyed per
  * invoice id, so they are not read here.
+ *
+ * A customer invoice's own document is read here: its preview PDF
+ * (`/invoices/{DocumentNumber}/preview`, the action that renders without
+ * marking the invoice sent; `/print` and `/email` are never called) and the
+ * booking voucher its detail form names. Scope: invoice.
  */
 
 const PAGE_SIZE = 500;
@@ -297,6 +302,46 @@ export async function fetchFortnoxSupplierInvoiceBookingVoucher(
   const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
   if (invoice.Cancelled === true || invoice.Cancel === true) return null;
   return bookingVoucherFrom(invoice.VoucherSeries, invoice.VoucherNumber, invoice.VoucherYear);
+}
+
+/**
+ * The verifikat that booked one customer invoice, from its detail form
+ * (`/invoices/{DocumentNumber}`): VoucherSeries, VoucherNumber and
+ * VoucherYear, read as on the supplier-invoice detail form (VoucherYear is
+ * Fortnox's financial-year ID). Null when Fortnox names none: never booked
+ * (VoucherNumber 0 or absent), cancelled, or an invoice the register no
+ * longer has. Scope: invoice.
+ */
+export async function fetchFortnoxInvoiceBookingVoucher(
+  client: FortnoxClient,
+  accessToken: string,
+  documentNumber: string,
+): Promise<FortnoxBookingVoucher | null> {
+  let response: Record<string, unknown>;
+  try {
+    response = await client.get<Record<string, unknown>>(
+      accessToken,
+      `/invoices/${encodeURIComponent(documentNumber)}`,
+    );
+  } catch (error) {
+    if (error instanceof FortnoxApiError && error.statusCode === 404) return null;
+    throw error;
+  }
+  const invoice = (response?.Invoice ?? {}) as Record<string, unknown>;
+  if (invoice.Cancelled === true) return null;
+  return bookingVoucherFrom(invoice.VoucherSeries, invoice.VoucherNumber, invoice.VoucherYear);
+}
+
+/**
+ * A customer invoice rendered by Fortnox as PDF, through the preview action:
+ * unlike `/print` it does not mark the invoice sent. Scope: invoice.
+ */
+export async function fetchFortnoxInvoicePreview(
+  client: FortnoxClient,
+  accessToken: string,
+  documentNumber: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
+  return client.getBinary(accessToken, `/invoices/${encodeURIComponent(documentNumber)}/preview`);
 }
 
 /** Download a Fortnox archive object, including the inbox-compatible fallback. */

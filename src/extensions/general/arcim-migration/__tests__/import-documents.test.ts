@@ -13,15 +13,22 @@ import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
   fetchFortnoxFinancialYears,
+  fetchFortnoxInvoiceBookingVoucher,
+  fetchFortnoxInvoicePreview,
   type FortnoxFileConnection,
   type FortnoxFinancialYear,
 } from '@/lib/providers/fortnox/attachments'
 import {
   uploadDocument,
   computeSHA256,
+  deleteDocument,
   detectFileMagic,
   isArchivedForOwnJournalEntry,
 } from '@/lib/core/documents/document-service'
+import {
+  fetchInvoicesWithImportedCopy,
+  recordImportedInvoiceDelivery,
+} from '@/lib/invoices/invoice-deliveries'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import { importProviderDocuments, ProviderConnectionRefusedError } from '../lib/import-documents'
@@ -53,12 +60,19 @@ vi.mock('@/lib/providers/fortnox/attachments', () => ({
   fetchFortnoxSupplierInvoiceFileConnections: vi.fn(async () => []),
   fetchFortnoxSupplierInvoiceBookings: vi.fn(async () => new Map()),
   fetchFortnoxSupplierInvoiceBookingVoucher: vi.fn(async () => null),
+  fetchFortnoxInvoiceBookingVoucher: vi.fn(async () => null),
+  fetchFortnoxInvoicePreview: vi.fn(),
+}))
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  fetchInvoicesWithImportedCopy: vi.fn(async () => new Set()),
+  recordImportedInvoiceDelivery: vi.fn(),
 }))
 const { mockRecordDocumentArrival } = vi.hoisted(() => ({ mockRecordDocumentArrival: vi.fn() }))
 vi.mock('@/lib/intake/arrivals', () => ({ recordDocumentArrival: mockRecordDocumentArrival }))
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
   computeSHA256: vi.fn(),
+  deleteDocument: vi.fn(),
   detectFileMagic: vi.fn(),
   isArchivedForOwnJournalEntry: vi.fn(),
   ALLOWED_DOCUMENT_TYPES: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'],
@@ -75,6 +89,11 @@ const mockUpload = vi.mocked(uploadDocument)
 const mockSha256 = vi.mocked(computeSHA256)
 const mockDetectMagic = vi.mocked(detectFileMagic)
 const mockArchivedForOwnEntry = vi.mocked(isArchivedForOwnJournalEntry)
+const mockInvoiceBookingVoucher = vi.mocked(fetchFortnoxInvoiceBookingVoucher)
+const mockInvoicePreview = vi.mocked(fetchFortnoxInvoicePreview)
+const mockDeleteDocument = vi.mocked(deleteDocument)
+const mockInvoicesWithImportedCopy = vi.mocked(fetchInvoicesWithImportedCopy)
+const mockRecordImportedDelivery = vi.mocked(recordImportedInvoiceDelivery)
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -1485,5 +1504,387 @@ describe('importProviderDocuments', () => {
       expect(shouldContinue).toHaveBeenCalledTimes(2)
       expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+describe('Fortnox customer invoice copies (#165)', () => {
+  interface ImportedInvoiceRow {
+    id: string
+    status: string
+    journal_entry_id: string | null
+  }
+
+  /**
+   * The Fortnox wiring plus the migration's records: one salesInvoices source
+   * record per invoice (document number 1001 unless given), the invoice rows,
+   * and the anchoring update on document_attachments.
+   */
+  function withCustomerInvoices(
+    base: SupabaseClient,
+    invoices: ImportedInvoiceRow[],
+    opts: {
+      documentNumbers?: Record<string, string>
+      existingAttachments?: ExistingAttachment[]
+      anchorRefused?: boolean
+    } = {},
+  ) {
+    const anchors: { id: string; values: Record<string, unknown> }[] = []
+    const supabase = {
+      from(table: string) {
+        if (table === 'migration_source_records') {
+          const node = {
+            select: () => node,
+            eq: () => node,
+            order: () => node,
+            range: () =>
+              Promise.resolve({
+                data: invoices.map((invoice, index) => ({
+                  id: `msr-${index}`,
+                  source_id: opts.documentNumbers?.[invoice.id] ?? '1001',
+                  target_id: invoice.id,
+                })),
+                error: null,
+              }),
+          }
+          return node
+        }
+        if (table === 'invoices') {
+          let ids: string[] = []
+          const node = {
+            select: () => node,
+            eq: () => node,
+            in: (_column: string, values: string[]) => {
+              ids = values
+              return node
+            },
+            order: () => node,
+            range: () => Promise.resolve({ data: invoices.filter((invoice) => ids.includes(invoice.id)), error: null }),
+          }
+          return node
+        }
+        if (table === 'document_attachments') {
+          let updating: Record<string, unknown> | null = null
+          let documentId = ''
+          const node = {
+            select: (): unknown => {
+              if (!updating) return node
+              if (opts.anchorRefused) return Promise.resolve({ data: null, error: { message: 'period is locked' } })
+              anchors.push({ id: documentId, values: updating })
+              return Promise.resolve({ data: [{ id: documentId }], error: null })
+            },
+            update: (values: Record<string, unknown>) => {
+              updating = values
+              return node
+            },
+            eq: (column: string, value: unknown) => {
+              if (column === 'id') documentId = value as string
+              return node
+            },
+            is: () => node,
+            not: () => node,
+            in: () => node,
+            order: () => node,
+            range: () => Promise.resolve({ data: opts.existingAttachments ?? [], error: null }),
+          }
+          return node
+        }
+        return base.from(table)
+      },
+      rpc: base.rpc,
+    } as unknown as SupabaseClient
+    return { supabase, anchors }
+  }
+
+  const ENTRY_B7 = { id: 'je-b7', fiscal_period_id: 'fp-2021', entry_date: '2021-03-05', source_voucher_series: 'B', source_voucher_number: 7 }
+  const PAID: ImportedInvoiceRow = { id: 'inv-1', status: 'paid', journal_entry_id: 'je-b7' }
+
+  function wireCustomerInvoices(vouchers: typeof GNUBOK_VOUCHERS = [ENTRY_B7], periods: typeof PERIODS = PERIODS) {
+    // No voucher files: only the customer invoice copies are swept.
+    return wireFortnox({ connections: [], vouchers, periods })
+  }
+
+  async function run(supabase: SupabaseClient, dryRun = false) {
+    return importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun })
+  }
+
+  beforeEach(() => {
+    mockDetectMagic.mockReturnValue('application/pdf')
+    mockInvoicePreview.mockResolvedValue({ bytes: bytesOf('FORTNOX-PREVIEW'), contentType: 'application/pdf' })
+    mockInvoiceBookingVoucher.mockResolvedValue(null)
+    mockInvoicesWithImportedCopy.mockResolvedValue(new Set())
+    mockRecordImportedDelivery.mockResolvedValue('delivery-1')
+    mockDeleteDocument.mockResolvedValue({ ok: true } as never)
+  })
+
+  it('stores the copy unlinked, records the delivery, then anchors it on the verifikat the migration linked', async () => {
+    const { supabase, anchors } = withCustomerInvoices(wireCustomerInvoices(), [PAID])
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toEqual({ scanned: 1, linked: 1, invoiceOnly: 0, skipped: 0, locked: 0, failed: 0 })
+    expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0, failed: 0 })
+    // The invoice's own link is a live migrated verifikat: Fortnox is not asked.
+    expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
+    expect(mockInvoicePreview).toHaveBeenCalledWith(expect.anything(), 'fortnox-token', '1001')
+    const [, , , file, metadata] = mockUpload.mock.calls[0]
+    expect(file).toMatchObject({ name: 'Faktura 1001.pdf', type: 'application/pdf' })
+    expect(metadata).toEqual({ upload_source: 'api', idempotency_key: 'je-b7', extractionOwner: 'none' })
+    expect(mockRecordImportedDelivery).toHaveBeenCalledWith({
+      companyId: COMPANY,
+      userId: USER,
+      invoiceId: 'inv-1',
+      provider: 'fortnox',
+      providerMessageId: 'invoice:1001:inv-1',
+      documentId: 'doc-1',
+    })
+    expect(anchors).toEqual([
+      {
+        id: 'doc-1',
+        values: {
+          journal_entry_id: 'je-b7',
+          link_basis: 'import_carried_over',
+          link_evidence: { source_system: 'provider_migration' },
+        },
+      },
+    ])
+    // The delivery holds the file before it reaches the verifikat.
+    expect(mockUpload.mock.invocationCallOrder[0]).toBeLessThan(mockRecordImportedDelivery.mock.invocationCallOrder[0])
+    expect(mockDeleteDocument).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { label: 'a paid invoice', status: 'paid' },
+    { label: 'an unpaid invoice', status: 'sent' },
+    { label: 'a credit note', status: 'credited' },
+  ])('archives $label', async ({ status }) => {
+    const { supabase } = withCustomerInvoices(wireCustomerInvoices(), [{ ...PAID, status }])
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ linked: 1 })
+    expect(mockRecordImportedDelivery).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves out drafts and cancelled invoices: never issued, nothing to keep', async () => {
+    const { supabase } = withCustomerInvoices(
+      wireCustomerInvoices(),
+      [
+        { id: 'inv-draft', status: 'draft', journal_entry_id: null },
+        { id: 'inv-cancelled', status: 'cancelled', journal_entry_id: null },
+      ],
+    )
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({ total: 0, scanned: 0 })
+    expect(mockInvoicePreview).not.toHaveBeenCalled()
+  })
+
+  describe('an invoice without a live verifikat link', () => {
+    const UNLINKED: ImportedInvoiceRow = { id: 'inv-1', status: 'sent', journal_entry_id: null }
+
+    it('resolves the verifikat from the series, number and financial year Fortnox names, never the invoice number', async () => {
+      const { supabase, anchors } = withCustomerInvoices(
+        wireCustomerInvoices([
+          // The invoice number read as a voucher number: must never be picked.
+          { id: 'je-a1001', fiscal_period_id: 'fp-2021', entry_date: '2021-03-05', source_voucher_series: 'A', source_voucher_number: 1001 },
+          ENTRY_B7,
+          // B7 again in the next year: the financial year tells them apart.
+          { id: 'je-b7-2022', fiscal_period_id: 'fp-2022', entry_date: '2022-03-05', source_voucher_series: 'B', source_voucher_number: 7 },
+        ]),
+        [UNLINKED],
+      )
+      mockInvoiceBookingVoucher.mockResolvedValue({ series: 'B', number: 7, financialYearId: 3 })
+
+      const result = await run(supabase)
+
+      expect(mockInvoiceBookingVoucher).toHaveBeenCalledWith(expect.anything(), 'fortnox-token', '1001')
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 1, invoiceOnly: 0 })
+      expect(anchors.map((anchor) => anchor.values.journal_entry_id)).toEqual(['je-b7'])
+    })
+
+    it('asks Fortnox when the invoice links a reversed copy, and anchors on the live one', async () => {
+      const { supabase, anchors } = withCustomerInvoices(
+        wireCustomerInvoices([
+          { ...ENTRY_B7, id: 'je-b7-reversed', status: 'reversed' } as (typeof GNUBOK_VOUCHERS)[number],
+          ENTRY_B7,
+        ]),
+        [{ ...UNLINKED, journal_entry_id: 'je-b7-reversed' }],
+      )
+      mockInvoiceBookingVoucher.mockResolvedValue({ series: 'B', number: 7, financialYearId: 3 })
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 1 })
+      expect(anchors.map((anchor) => anchor.values.journal_entry_id)).toEqual(['je-b7'])
+    })
+
+    it.each([
+      {
+        label: 'two live verifikat carry the voucher in that year',
+        vouchers: [ENTRY_B7, { ...ENTRY_B7, id: 'je-b7-twin' }],
+        booking: { series: 'B', number: 7, financialYearId: 3 },
+      },
+      { label: 'no migrated verifikat carries it', vouchers: [], booking: { series: 'B', number: 7, financialYearId: 3 } },
+      { label: 'Fortnox names no voucher (never booked)', vouchers: [ENTRY_B7], booking: null },
+      { label: 'the financial year is not one Fortnox lists', vouchers: [ENTRY_B7], booking: { series: 'B', number: 7, financialYearId: 99 } },
+    ])('archives it on the invoice only when $label', async ({ vouchers, booking }) => {
+      const { supabase, anchors } = withCustomerInvoices(wireCustomerInvoices(vouchers), [UNLINKED])
+      mockInvoiceBookingVoucher.mockResolvedValue(booking)
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 0, invoiceOnly: 1, failed: 0 })
+      expect(result).toMatchObject({ linked: 1, unmatched: 0 })
+      // On the invoice, never on a guessed verifikat.
+      expect(mockRecordImportedDelivery).toHaveBeenCalledTimes(1)
+      expect(anchors).toEqual([])
+      const [, , , , metadata] = mockUpload.mock.calls[0]
+      expect(metadata).toEqual({ upload_source: 'api', extractionOwner: 'none' })
+    })
+
+    it('stops asking Fortnox after the invoice register is refused, and reports it once', async () => {
+      const { supabase } = withCustomerInvoices(
+        wireCustomerInvoices(),
+        [UNLINKED, { ...UNLINKED, id: 'inv-2' }],
+        { documentNumbers: { 'inv-1': '1001', 'inv-2': '1002' } },
+      )
+      mockInvoiceBookingVoucher.mockRejectedValue(new FortnoxApiError('forbidden', 403))
+
+      const result = await run(supabase)
+
+      expect(mockInvoiceBookingVoucher).toHaveBeenCalledTimes(1)
+      expect(result.unreachableSources).toEqual([
+        expect.objectContaining({ source: 'customer_invoice_files', scope: 'invoice', reason: 'permission' }),
+      ])
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 2, failed: 0 })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+  })
+
+  it('reports a verifikat in a locked year as locked, without downloading', async () => {
+    const { supabase } = withCustomerInvoices(
+      wireCustomerInvoices([ENTRY_B7], [{ ...PERIODS[0], locked_at: '2021-04-01T00:00:00Z' }]),
+      [PAID],
+    )
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, linked: 0, locked: 1 })
+    expect(result.lockedPeriods).toEqual(['2021'])
+    expect(mockInvoicePreview).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('puts the copy on the invoice only when the verifikat carries underlag from another path', async () => {
+    const { supabase, anchors } = withCustomerInvoices(wireCustomerInvoices(), [PAID], {
+      existingAttachments: [{ id: 'wizard-doc', sha256_hash: 'sha-OTHER', journal_entry_id: 'je-b7', upload_source: 'file_upload' }],
+    })
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ linked: 0, invoiceOnly: 1 })
+    expect(anchors).toEqual([])
+    expect(mockRecordImportedDelivery).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips an invoice that already holds its imported copy before any Fortnox call or write', async () => {
+    mockInvoicesWithImportedCopy.mockResolvedValue(new Set(['inv-1']))
+    const { supabase } = withCustomerInvoices(wireCustomerInvoices(), [{ ...PAID, journal_entry_id: null }])
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, skipped: 1, linked: 0, invoiceOnly: 0 })
+    expect(result.skipped).toBe(1)
+    expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
+    expect(mockInvoicePreview).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockRecordImportedDelivery).not.toHaveBeenCalled()
+  })
+
+  it('discards its unlinked copy when another run recorded the invoice first', async () => {
+    mockRecordImportedDelivery.mockResolvedValue(null)
+    const { supabase, anchors } = withCustomerInvoices(wireCustomerInvoices(), [PAID])
+
+    const result = await run(supabase)
+
+    expect(mockDeleteDocument).toHaveBeenCalledWith(supabase, COMPANY, 'doc-1')
+    expect(result.customerInvoicePdfs).toMatchObject({ skipped: 1, linked: 0, failed: 0 })
+    expect(anchors).toEqual([])
+  })
+
+  it('discards its unlinked copy when the delivery cannot be recorded, so no orphan is left', async () => {
+    mockRecordImportedDelivery.mockRejectedValue(new Error('Failed to persist imported invoice delivery'))
+    const { supabase, anchors } = withCustomerInvoices(wireCustomerInvoices(), [PAID])
+
+    const result = await run(supabase)
+
+    expect(mockDeleteDocument).toHaveBeenCalledWith(supabase, COMPANY, 'doc-1')
+    expect(result.customerInvoicePdfs).toMatchObject({ failed: 1, linked: 0 })
+    expect(anchors).toEqual([])
+  })
+
+  it('keeps a held copy on the invoice when the verifikat link is refused', async () => {
+    const { supabase } = withCustomerInvoices(wireCustomerInvoices(), [PAID], { anchorRefused: true })
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ linked: 0, invoiceOnly: 1, failed: 0 })
+    expect(mockDeleteDocument).not.toHaveBeenCalled()
+  })
+
+  it('stores nothing when Fortnox answers with something other than a PDF', async () => {
+    mockDetectMagic.mockReturnValue(null)
+    const { supabase } = withCustomerInvoices(wireCustomerInvoices(), [PAID])
+
+    const result = await run(supabase)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ failed: 1 })
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockRecordImportedDelivery).not.toHaveBeenCalled()
+  })
+
+  it('retries a copy the execution budget cut in flight, without counting it as failed (crm#1581)', async () => {
+    mockInvoicePreview
+      .mockResolvedValueOnce({ bytes: bytesOf('FORTNOX-PREVIEW-1'), contentType: 'application/pdf' })
+      .mockRejectedValueOnce(new ExecutionBudgetExceeded('underlag-test'))
+    const { supabase } = withCustomerInvoices(
+      wireCustomerInvoices(),
+      [PAID, { id: 'inv-2', status: 'paid', journal_entry_id: 'je-b7' }],
+      { documentNumbers: { 'inv-1': '1001', 'inv-2': '1002' } },
+    )
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({ partial: true, failed: 0, scanned: 1 })
+    expect(result.nextCursor).toMatch(/1001$/)
+    expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, failed: 0 })
+    expect(mockRecordImportedDelivery).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts a copy the hard stop cut as the first of its slice as failed', async () => {
+    mockInvoicePreview.mockRejectedValueOnce(new ExecutionBudgetExceeded('underlag-test'))
+    const { supabase } = withCustomerInvoices(wireCustomerInvoices(), [PAID])
+
+    const result = await run(supabase)
+
+    // A fresh slice could not finish it: retrying it again would never advance.
+    expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, failed: 1 })
+    expect(result.partial).toBe(false)
+  })
+
+  it('counts a linked invoice in the dry run without a download, and leaves an unlinked one for the real run', async () => {
+    const { supabase } = withCustomerInvoices(
+      wireCustomerInvoices(),
+      [PAID, { id: 'inv-2', status: 'sent', journal_entry_id: null }],
+      { documentNumbers: { 'inv-1': '1001', 'inv-2': '1002' } },
+    )
+
+    const result = await run(supabase, true)
+
+    expect(result.customerInvoicePdfs).toMatchObject({ scanned: 2, linked: 1, invoiceOnly: 0 })
+    expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
+    expect(mockInvoicePreview).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
   })
 })

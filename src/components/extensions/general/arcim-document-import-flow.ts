@@ -4,6 +4,7 @@ import {
   documentImportRunStartedAfter,
   type DocumentImportRunStatus,
 } from '@/extensions/general/arcim-migration/lib/document-import-run'
+import type { CustomerInvoiceCopyCounts } from '@/extensions/general/arcim-migration/lib/import-documents'
 
 export const ARCIM_DOCUMENT_IMPORT_ENDPOINT =
   '/api/extensions/ext/arcim-migration/import-documents'
@@ -122,9 +123,11 @@ export interface ArcimDocumentImportResult {
   partial: boolean
   /** Provider id of the last handled attachment, or null when complete. */
   nextCursor: string | null
+  /** Customer invoice copies among the counts (Fortnox); absent from other providers and older servers. */
+  customerInvoicePdfs?: CustomerInvoiceCopyCounts
   /**
-   * Attachment sources the provider refused (Fortnox supplier-invoice files),
-   * with the scope the refused call needs, so the panel can name it.
+   * Attachment sources the provider refused, with the scope the refused call
+   * needs, so the panel can name it.
    */
   unreachableSources: ArcimUnreachableDocumentSource[]
   /**
@@ -135,10 +138,10 @@ export interface ArcimDocumentImportResult {
   run?: string | null
 }
 
-export type ArcimDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice'
+export type ArcimDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice' | 'invoice'
 
 export interface ArcimUnreachableDocumentSource {
-  source: 'supplier_invoice_files'
+  source: 'supplier_invoice_files' | 'customer_invoice_files'
   scope: ArcimDocumentScope
   reason: 'license' | 'permission' | 'error'
   providerMessage: string | null
@@ -172,6 +175,8 @@ export function mergeArcimDocumentImportResults(
   next: ArcimDocumentImportResult,
 ): ArcimDocumentImportResult {
   if (!accumulated) return next
+  const previousPdfs = accumulated.customerInvoicePdfs
+  const nextPdfs = next.customerInvoicePdfs
   return {
     provider: next.provider,
     dryRun: next.dryRun,
@@ -190,6 +195,16 @@ export function mergeArcimDocumentImportResults(
     total: next.total,
     partial: next.partial,
     nextCursor: next.nextCursor,
+    customerInvoicePdfs: previousPdfs || nextPdfs
+      ? {
+          scanned: (previousPdfs?.scanned ?? 0) + (nextPdfs?.scanned ?? 0),
+          linked: (previousPdfs?.linked ?? 0) + (nextPdfs?.linked ?? 0),
+          invoiceOnly: (previousPdfs?.invoiceOnly ?? 0) + (nextPdfs?.invoiceOnly ?? 0),
+          skipped: (previousPdfs?.skipped ?? 0) + (nextPdfs?.skipped ?? 0),
+          locked: (previousPdfs?.locked ?? 0) + (nextPdfs?.locked ?? 0),
+          failed: (previousPdfs?.failed ?? 0) + (nextPdfs?.failed ?? 0),
+        }
+      : undefined,
     unreachableSources: mergeUnreachableSources(accumulated.unreachableSources, next.unreachableSources),
     run: next.run ?? accumulated.run ?? undefined,
   }
@@ -565,7 +580,7 @@ type WireDocumentImportResult = Omit<
     >
   >
 
-const DOCUMENT_SCOPES: readonly ArcimDocumentScope[] = ['archive', 'connectfile', 'supplierinvoice']
+const DOCUMENT_SCOPES: readonly ArcimDocumentScope[] = ['archive', 'connectfile', 'supplierinvoice', 'invoice']
 const UNREACHABLE_REASONS: readonly ArcimUnreachableDocumentSource['reason'][] = [
   'license',
   'permission',
@@ -576,10 +591,17 @@ function isUnreachableSource(value: unknown): value is ArcimUnreachableDocumentS
   if (!value || typeof value !== 'object') return false
   const entry = value as Partial<ArcimUnreachableDocumentSource>
   return (
-    entry.source === 'supplier_invoice_files' &&
+    (entry.source === 'supplier_invoice_files' || entry.source === 'customer_invoice_files') &&
     DOCUMENT_SCOPES.includes(entry.scope as ArcimDocumentScope) &&
     UNREACHABLE_REASONS.includes(entry.reason as ArcimUnreachableDocumentSource['reason'])
   )
+}
+
+function isCustomerInvoicePdfCounts(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const counts = value as Record<string, unknown>
+  return ['scanned', 'linked', 'invoiceOnly', 'skipped', 'locked', 'failed']
+    .every((key) => typeof counts[key] === 'number')
 }
 
 function isDocumentImportResult(value: unknown): value is WireDocumentImportResult {
@@ -593,7 +615,8 @@ function isDocumentImportResult(value: unknown): value is WireDocumentImportResu
     typeof result.unmatched === 'number' &&
     typeof result.failed === 'number' &&
     typeof result.dryRun === 'boolean' &&
-    Array.isArray(result.unmatchedSamples)
+    Array.isArray(result.unmatchedSamples) &&
+    (result.customerInvoicePdfs === undefined || isCustomerInvoicePdfCounts(result.customerInvoicePdfs))
   )
 }
 
