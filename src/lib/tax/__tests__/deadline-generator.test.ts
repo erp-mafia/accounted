@@ -4,12 +4,14 @@ import {
   ANNUAL_HORIZON_DAYS,
   RECURRING_HORIZON_DAYS,
   findSettingsMissingUpcomingDeadlines,
+  findSettingsWithStaleUpcomingDeadlines,
   generateTaxDeadlinesForUser,
   getExpectedUpcomingDeadlineKeys,
   shouldRegenerateTaxDeadlines,
   toDeadlineSettings,
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
+import { createRowsMockSupabase } from '@/tests/helpers'
 
 const SETTINGS: CompanySettingsForDeadlines = {
   entity_type: 'aktiebolag',
@@ -73,11 +75,21 @@ function makeRecordingSupabase(opts: {
   completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
   supersededRows?: SupersededRow[]
   fiscalPeriods?: Array<{ company_id: string; period_start: string; period_end: string }>
+  /** The AGI filing records, answered through the filters the generator applies. */
+  agiKvittenser?: Array<Record<string, unknown>>
+  agiDeclarations?: Array<Record<string, unknown>>
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
+  const filings = createRowsMockSupabase({
+    agi_kvittenser: opts.agiKvittenser ?? [],
+    agi_declarations: opts.agiDeclarations ?? [],
+  })
 
   const from = vi.fn((table: string) => {
+    if (table === 'agi_kvittenser' || table === 'agi_declarations') {
+      return filings.supabase.from(table)
+    }
     if (table === 'fiscal_periods') {
       // The generator's own fiscal-year lookup (paginated).
       const periods: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -506,6 +518,206 @@ describe('generateTaxDeadlinesForUser: what survives regeneration', () => {
 
     const keys = rows.map((row) => Object.keys(row).sort().join(','))
     expect(new Set(keys).size).toBe(1)
+  })
+})
+
+/**
+ * #201: a company files its AGI before it has any AGI deadline (a new
+ * company's first AGI), and the deadline the generator creates afterwards
+ * must not ask for a filing Skatteverket already has. Today is 9 November
+ * 2026: the October period is due 12 November, November's on 14 December.
+ */
+describe('generateTaxDeadlinesForUser: an AGI period filed before its deadline existed (#201)', () => {
+  const OCTOBER = 'arbetsgivardeklaration:2026-10'
+  const NOVEMBER = 'arbetsgivardeklaration:2026-11'
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 9, 12))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function kvittens(overrides: Record<string, unknown> = {}) {
+    return {
+      company_id: 'company-1',
+      period_year: 2026,
+      period_month: 10,
+      signerad_tid: '2026-11-07T09:15:00+00:00',
+      recorded_at: '2026-11-07T12:00:00+00:00',
+      ...overrides,
+    }
+  }
+
+  function declaration(overrides: Record<string, unknown> = {}) {
+    return {
+      company_id: 'company-1',
+      period_year: 2026,
+      period_month: 10,
+      status: 'submitted',
+      submitted_at: '2026-11-07T09:15:00+00:00',
+      ...overrides,
+    }
+  }
+
+  async function generate(
+    opts: Parameters<typeof makeRecordingSupabase>[0] = {},
+    settings: CompanySettingsForDeadlines = SETTINGS,
+  ) {
+    const recording = makeRecordingSupabase(opts)
+    await generateTaxDeadlinesForUser(recording.supabase, 'company-1', settings)
+    const rows = recording.getInsertPayload()!
+    const byKey = new Map(rows.map((row) => [`${row.tax_deadline_type}:${row.tax_period}`, row]))
+    return { ...recording, rows, byKey }
+  }
+
+  it('creates a period with a kvittens completed, at the signing moment', async () => {
+    const { byKey } = await generate({ agiKvittenser: [kvittens()] })
+
+    expect(byKey.get(OCTOBER)).toMatchObject({
+      due_date: '2026-11-12',
+      is_completed: true,
+      status: 'confirmed',
+      completed_at: '2026-11-07T09:15:00+00:00',
+    })
+  })
+
+  it('creates an unfiled period open, as before', async () => {
+    const { byKey } = await generate({ agiKvittenser: [kvittens()] })
+
+    expect(byKey.get(NOVEMBER)).toMatchObject({
+      due_date: '2026-12-14',
+      is_completed: false,
+      completed_at: null,
+      status: 'upcoming',
+    })
+  })
+
+  it('counts a submitted or accepted declaration as filed, and no other status', async () => {
+    const { byKey } = await generate({
+      agiDeclarations: [
+        declaration(),
+        declaration({ period_month: 11, status: 'pending_signature', submitted_at: null }),
+        declaration({ period_month: 12, status: 'exported', submitted_at: null }),
+        declaration({ period_year: 2027, period_month: 1, status: 'accepted', submitted_at: '2027-01-02T08:00:00+00:00' }),
+      ],
+    })
+
+    expect(byKey.get(OCTOBER)).toMatchObject({ is_completed: true, status: 'confirmed', completed_at: '2026-11-07T09:15:00+00:00' })
+    expect(byKey.get(NOVEMBER)).toMatchObject({ is_completed: false, status: 'upcoming' })
+    expect(byKey.get('arbetsgivardeklaration:2026-12')).toMatchObject({ is_completed: false })
+    expect(byKey.get('arbetsgivardeklaration:2027-01')).toMatchObject({ is_completed: true, completed_at: '2027-01-02T08:00:00+00:00' })
+  })
+
+  it('keeps the first filing when a correction was filed later', async () => {
+    const { byKey } = await generate({
+      agiKvittenser: [
+        kvittens({ signerad_tid: '2026-11-08T10:00:00+00:00', recorded_at: '2026-11-08T10:05:00+00:00' }),
+        kvittens(),
+      ],
+      // The declaration row holds the latest receipt: the correction's.
+      agiDeclarations: [declaration({ submitted_at: '2026-11-08T10:00:00+00:00' })],
+    })
+
+    expect(byKey.get(OCTOBER)!.completed_at).toBe('2026-11-07T09:15:00+00:00')
+  })
+
+  it('uses the moment the receipt was read when Skatteverket sent no signing time', async () => {
+    const { byKey } = await generate({ agiKvittenser: [kvittens({ signerad_tid: null })] })
+
+    expect(byKey.get(OCTOBER)!.completed_at).toBe('2026-11-07T12:00:00+00:00')
+  })
+
+  it('completes a submitted declaration without a recorded time as of now', async () => {
+    const { byKey } = await generate({ agiDeclarations: [declaration({ submitted_at: null })] })
+
+    expect(byKey.get(OCTOBER)).toMatchObject({ is_completed: true, completed_at: new Date().toISOString() })
+  })
+
+  it('does not count another company\'s filing', async () => {
+    const { byKey } = await generate({
+      agiKvittenser: [kvittens({ company_id: 'company-2' })],
+      agiDeclarations: [declaration({ company_id: 'company-2' })],
+    })
+
+    expect(byKey.get(OCTOBER)).toMatchObject({ is_completed: false, status: 'action_needed' })
+  })
+
+  it('leaves every other obligation open, the same period\'s tax payment too', async () => {
+    // Storföretag: the 26th filing and a separate payment deadline on the
+    // 12th for the same period. Filing the AGI does not pay it.
+    const storforetag = { ...SETTINGS, vat_taxable_base_over_40m: true }
+    const { rows, byKey } = await generate({ agiKvittenser: [kvittens()] }, storforetag)
+
+    expect(byKey.get(OCTOBER)).toMatchObject({ is_completed: true, due_date: '2026-11-26' })
+    expect(byKey.get('skatteinbetalning:2026-10')).toMatchObject({ is_completed: false, completed_at: null })
+    for (const row of rows.filter((r) => `${r.tax_deadline_type}:${r.tax_period}` !== OCTOBER)) {
+      expect(row).toMatchObject({ is_completed: false, completed_at: null })
+      expect(row.status).not.toBe('confirmed')
+    }
+  })
+
+  it('replaces an open row for a filed period, keeping what the user wrote on it', async () => {
+    // The 12 open October and November rows in production: an open row the
+    // generator replaces becomes completed, with its note.
+    const { byKey } = await generate({
+      agiKvittenser: [kvittens()],
+      supersededRows: [{ tax_deadline_type: 'arbetsgivardeklaration', tax_period: '2026-10', status: 'in_progress', notes: 'Lön utbetald 25:e' }],
+    })
+
+    expect(byKey.get(OCTOBER)).toMatchObject({ is_completed: true, status: 'confirmed', notes: 'Lön utbetald 25:e' })
+  })
+
+  it('still preserves an already completed or dismissed row instead of inserting another', async () => {
+    const { rows } = await generate({
+      agiKvittenser: [kvittens(), kvittens({ period_month: 11 })],
+      completedRows: [
+        { tax_deadline_type: 'arbetsgivardeklaration', tax_period: '2026-10' },
+        { tax_deadline_type: 'arbetsgivardeklaration', tax_period: '2026-11' },
+      ],
+    })
+
+    const keys = rows.map((row) => `${row.tax_deadline_type}:${row.tax_period}`)
+    expect(keys).not.toContain(OCTOBER)
+    expect(keys).not.toContain(NOVEMBER)
+  })
+
+  it('gives completed and open rows the identical key set (PGRST102)', async () => {
+    const { rows } = await generate({ agiKvittenser: [kvittens()] })
+
+    expect(rows.some((row) => row.is_completed)).toBe(true)
+    expect(rows.some((row) => !row.is_completed)).toBe(true)
+    expect(new Set(rows.map((row) => Object.keys(row).sort().join(','))).size).toBe(1)
+  })
+
+  it('does not read the filing records for a company without AGI deadlines', async () => {
+    const { supabase } = await generate({}, { ...SETTINGS, pays_salaries: false })
+
+    expect(supabase.from).not.toHaveBeenCalledWith('agi_kvittenser')
+    expect(supabase.from).not.toHaveBeenCalledWith('agi_declarations')
+  })
+
+  it('converges: the nightly backfill treats the completed row as satisfied', async () => {
+    const settingsRow = { company_id: 'company-1', ...SETTINGS, fiscal_years: [] }
+    const { rows } = await generate({ agiKvittenser: [kvittens()] })
+    const stored = rows.map((row, index) => ({
+      id: `row-${index}`,
+      company_id: 'company-1',
+      tax_deadline_type: row.tax_deadline_type as string,
+      tax_period: row.tax_period as string,
+      due_date: row.due_date as string,
+      is_completed: row.is_completed as boolean,
+      dismissed_at: null,
+    }))
+
+    // The completed row carries the date detection expects.
+    expect(stored.find((row) => `${row.tax_deadline_type}:${row.tax_period}` === OCTOBER))
+      .toMatchObject({ due_date: '2026-11-12', is_completed: true })
+    expect(getExpectedUpcomingDeadlineKeys(SETTINGS).has(`${OCTOBER}:2026-11-12`)).toBe(true)
+    expect(findSettingsMissingUpcomingDeadlines([settingsRow], stored)).toEqual([])
+    expect(findSettingsWithStaleUpcomingDeadlines([settingsRow], stored)).toEqual([])
   })
 })
 

@@ -26,6 +26,7 @@
  * that belongs to a declaration the correction supersedes. Everything below
  * therefore resolves the record against the run before trusting it.
  */
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 
 /**
  * Per-period submission state mirrored in extension_data under
@@ -108,9 +109,6 @@ function epoch(value: string | null | undefined): number | null {
   const parsed = Date.parse(value)
   return Number.isNaN(parsed) ? null : parsed
 }
-
-/** agi_declarations statuses that carry Skatteverket's filing receipt. */
-const AGI_RECEIPT_STATUSES: readonly string[] = ['submitted', 'accepted']
 
 /**
  * Whether the run's declaration is already filed: the one rule for every
