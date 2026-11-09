@@ -13,6 +13,7 @@ vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(), createCl
 vi.mock('@/lib/skatteverket/ombud-access', () => ({
   hasSkatteverketOmbudReadAccess: vi.fn(async () => false),
   isSkatteverketOmbudEnabled: vi.fn(async () => false),
+  getSkatteverketOmbudAppointment: vi.fn(async () => ({ state: 'none', predatesOptIn: false })),
 }))
 vi.mock('@/lib/providers/unfinished-connect', () => ({ findUnfinishedConnect: vi.fn(async () => null) }))
 vi.mock('@/components/onboarding/NewUserChecklist', () => ({ default: () => null }))

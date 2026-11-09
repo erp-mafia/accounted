@@ -229,7 +229,7 @@ export async function probeCompanyGrants(
   createdBy?: string
 ): Promise<GrantProbeResult> {
   // The opt-in day: when this company first opted in for this org number. A
-  // first Verifiera (no row yet) or a changed org number opts in today. A
+  // first check (no row yet) or a changed org number opts in today. A
   // failed read throws before anything is asked or recorded: guessing "no
   // row" would make today the opt-in day and deny a grant signed earlier.
   const stored = await getConnectionOrThrow(companyId, currentSkvEnvironment())
@@ -286,7 +286,7 @@ const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
  * A background read on system credentials was refused for this behorighet
  * (OMBUD_GRANT_MISSING). The api client names every unexplained system-mode
  * 403 so, which proves nothing about the grant by itself: the ombudsregister
- * decides, as in the nightly sync, and the outcome is recorded through
+ * decides, as in the hourly register sync, and the outcome is recorded through
  * recordProbeResult like any probe.
  *   - Withdrawn there: the behorighet is denied and the status follows the
  *     grants, so the next run uses the user token if there is one.
@@ -296,7 +296,7 @@ const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
  *   - Register unreachable or unreadable: nothing changes; the next run asks
  *     again.
  * It never writes 'revoked', the status of the user's own "Koppla från",
- * which the nightly sync skips for good (#115), and never grants anything.
+ * which the register sync skips for good (#115), and never grants anything.
  */
 export async function recordGrantRefusal(
   companyId: string,

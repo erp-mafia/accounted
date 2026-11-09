@@ -104,7 +104,7 @@
     },
     {
       "path": "/api/extensions/skatteverket/ombud/sync/cron",
-      "schedule": "30 3 * * *"
+      "schedule": "50 * * * *"
     },
     {
       "path": "/api/extensions/skatteverket/skattekonto/sync/cron",

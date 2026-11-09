@@ -39,9 +39,14 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
 /**
  * GET /api/extensions/skatteverket/ombud/sync/cron
  *
- * Daily ombudsregister sync (cron 30 3 * * *). The hourly skattekonto sync
- * picks a grant recorded here up on its next run; Verifiera in the settings
- * records one at once.
+ * Hourly ombudsregister sync (cron 50 * * * *), ten minutes before the
+ * hourly skattekonto sync, which picks a grant recorded here up on its next
+ * run; Kontrollera nu in the settings records one at once. Hourly because
+ * Skatteverket takes from minutes to over an hour to list a fresh grant
+ * (prod, 2026-11-08: 3, 18 and 52 minutes, one past the old nightly run), and
+ * the settings card, Hem and Kom igång promise a check every hour while they
+ * say "Väntar på Skatteverket". A run is one register call plus a write per
+ * row that changed, and the guards below hold per run whatever the cadence.
  *
  * Companies appoint Accounted as ombud in Skatteverket's e-service, and
  * nothing calls us back. One call to Ombudshantering v2
@@ -50,7 +55,7 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * against the company's OWN connection row:
  *
  *   - only rows that already exist are touched. A row exists because a
- *     member of that company pressed Verifiera or minted the deep link: the
+ *     member of that company pressed Kontrollera nu or minted the deep link: the
  *     tenant's explicit opt-in. Rows are never created here,
  *   - a row whose company may not hold the connection on its org number
  *     (ombudClaimStanding: another live company claims it and this one is
@@ -271,8 +276,8 @@ export function planDecisions(
         (predatesOptIn.length > 0 ? `; signerad före kopplingen ${optInDay}` : '')
       : `ombudsregister ${today}: huvudman saknas`
     // A row already showing exactly this state is left alone, so a never-listed
-    // company is written once (unknown -> denied, "Saknas" in settings) and
-    // then skipped every following night.
+    // company is written once (unknown -> denied, "Väntar på Skatteverket" in
+    // settings) and then skipped every following run.
     if (row.lasombud_status === lasombud && row.moms_ombud_status === momsOmbud) {
       decisions.push({ kind: 'unchanged', row })
       continue

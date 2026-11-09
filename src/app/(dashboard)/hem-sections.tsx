@@ -1,7 +1,11 @@
 import { after } from 'next/server'
 import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
-import { hasSkatteverketOmbudReadAccess, isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
+import {
+  getSkatteverketOmbudAppointment,
+  hasSkatteverketOmbudReadAccess,
+  isSkatteverketOmbudEnabled,
+} from '@/lib/skatteverket/ombud-access'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import type { AiClient, AiConnection } from '@/lib/onboarding/ai-clients'
 import ResumePane from '@/components/dashboard/ResumePane'
@@ -130,6 +134,8 @@ export async function HemChecklistSection({
     skvOmbudReadAccess,
     { data: receiptDocuments },
     { data: userPreferences },
+    skvOmbudEnabled,
+    skvOmbudAppointment,
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -190,6 +196,9 @@ export async function HemChecklistSection({
       .limit(1),
     // The Kom igång steps this user skipped for this company.
     supabase.from('user_preferences').select('ui_state').eq('user_id', userId).maybeSingle(),
+    isSkatteverketOmbudEnabled(),
+    // Appointed but not yet in Skatteverket's register: the step says it waits.
+    getSkatteverketOmbudAppointment(companyId),
   ])
 
   const connections = (bankConnections ?? []) as BankConnectionRow[]
@@ -225,7 +234,8 @@ export async function HemChecklistSection({
       hasBookkeepingImported={onboardingProgress.hasSIEImport}
       hasBankConnected={onboardingProgress.hasBankConnected}
       hasSkatteverketConnected={onboardingProgress.hasSkatteverketConnected}
-      skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
+      skvOmbudEnabled={skvOmbudEnabled}
+      skvOmbudWaiting={skvOmbudAppointment.state === 'waiting'}
       hasInboxItems={onboardingProgress.hasInboxItems}
       hasMcpKey={hasMcpKey}
       skippedSteps={skippedSetupSteps(userPreferences?.ui_state as UserUiState | null, companyId)}
@@ -382,6 +392,15 @@ export async function HemPanesSection({
     now,
   )
 
+  // The Skatteverket chip only shows for a company that is not connected, and
+  // says "väntar på Skatteverket" while the register has not listed its grant.
+  const skvOmbudEnabled = await isSkatteverketOmbudEnabled()
+  const skvOmbudWaiting =
+    skvOmbudEnabled &&
+    !setupOpen &&
+    !hasSkatteverketConnected &&
+    (await getSkatteverketOmbudAppointment(companyId)).state === 'waiting'
+
   return (
     <>
       <div className={resumeItems.length > 0 ? 'grid items-start gap-x-6 gap-y-8 md:grid-cols-2' : undefined}>
@@ -404,7 +423,8 @@ export async function HemPanesSection({
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}
           hasSkatteverketConnection={hasSkatteverketConnected}
-          skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
+          skvOmbudEnabled={skvOmbudEnabled}
+          skvOmbudWaiting={skvOmbudWaiting}
           aiConnection={aiConnection}
           firstTaskClient={firstTaskClient}
           // While the getting-started checklist is open it carries the bank

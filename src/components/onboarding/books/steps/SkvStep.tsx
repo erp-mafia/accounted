@@ -35,12 +35,16 @@ const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${en
  */
 export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const tOmbud = useTranslations('skatteverket_ombud')
   const errorLocale = useLocale() as ErrorLocale
   const { appName } = useBranding()
   const { state, dispatch, flags, findings, loadFindings, landedError } = ctx
   const phase = state.skvPhase
   const [saldo, setSaldo] = useState<number | null>(null)
   const [attn, setAttn] = useState<string | null>(landedError)
+  // Signed, but Skatteverket's register does not list the grant yet: a wait,
+  // said in the same words as settings, Hem and the toasts, not an error.
+  const [ombudWaiting, setOmbudWaiting] = useState(false)
   const timers = useRef<number[]>([])
   const watchRef = useRef<number | null>(null)
   const phaseRef = useRef(phase)
@@ -128,18 +132,16 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       if (document.visibilityState !== 'visible' || !awaitingOmbud.current) return
       if (phaseRef.current !== 'leaving' && phaseRef.current !== 'away') return
       awaitingOmbud.current = false
-      const outcome = await verifyOmbudGrant(errorLocale)
+      const outcome = await verifyOmbudGrant(errorLocale, { justSigned: true })
       if (outcome.result === 'granted') {
         arrive()
         return
       }
-      setAttn(
-        outcome.result === 'not_yet'
-          ? t('skv_ombud_not_yet')
-          : outcome.result === 'rate_limited'
-            ? t('skv_ombud_wait')
-            : (outcome.error ?? t('skv_failed')),
-      )
+      if (outcome.result === 'waiting') {
+        setOmbudWaiting(true)
+      } else {
+        setAttn(outcome.result === 'rate_limited' ? t('skv_ombud_wait') : (outcome.error ?? t('skv_failed')))
+      }
       dispatch({ type: 'SKV_PHASE', phase: 'open' })
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -148,6 +150,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
 
   async function appointOmbud() {
     setAttn(null)
+    setOmbudWaiting(false)
     dispatch({ type: 'SKV_PHASE', phase: 'leaving' })
     at(900, () => {
       if (phaseRef.current === 'leaving') dispatch({ type: 'SKV_PHASE', phase: 'away' })
@@ -201,7 +204,13 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       </h1>
       {open ? (
         <div className={`skv-body${bodyCls}`}>
-          <p className="jny-qsub">{ombudMode ? t('skv_ombud_sub', { appName }) : t('skv_sub')}</p>
+          <p className="jny-qsub">
+            {ombudWaiting
+              ? tOmbud('waiting_hint', { appName })
+              : ombudMode
+                ? t('skv_ombud_sub', { appName })
+                : t('skv_sub')}
+          </p>
           {attn ? <p className="jny-attn">{attn}</p> : null}
           {flags.hasSkatteverket ? (
             <button

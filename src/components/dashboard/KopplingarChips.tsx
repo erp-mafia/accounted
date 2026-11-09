@@ -47,6 +47,7 @@ export function KopplingarChips({
   hasBank,
   hasSkatteverket,
   skvOmbudEnabled = false,
+  skvOmbudWaiting = false,
 }: {
   aiConnection: AiConnection
   /** The connected client to ask for a first task (lib/onboarding/ai-clients firstTaskClient). */
@@ -60,6 +61,12 @@ export function KopplingarChips({
    * it at Skatteverket instead of starting an hourly BankID session.
    */
   skvOmbudEnabled?: boolean
+  /**
+   * The company appointed it and Skatteverket's register does not list the
+   * grant yet: the chip says it is waiting, and the pill opens the link again
+   * for someone who did not finish signing.
+   */
+  skvOmbudWaiting?: boolean
 }) {
   const t = useTranslations('dashboard')
   const { appName } = useBranding()
@@ -69,9 +76,8 @@ export function KopplingarChips({
   const isSandbox = useCompanyOptional()?.isSandbox ?? false
   const [connectAction, setConnectAction] = useState<ReturnType<typeof aiConnectAction> | null>(null)
   const router = useRouter()
-  const ombud = useOmbudAppointWithToasts((result) => {
-    if (result === 'granted') router.refresh()
-  })
+  // Every finished check re-renders: granted hides the chip, a wait shows it.
+  const ombud = useOmbudAppointWithToasts(() => router.refresh())
   const tOmbud = useTranslations('skatteverket_ombud')
 
   // Sandbox companies cannot reach Skatteverket (the sandbox blocks it), and
@@ -175,7 +181,7 @@ export function KopplingarChips({
           <Chip
             icon={<BuildingLibraryIcon className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
             name={t('kopplingar_skv_short')}
-            status={t('kopplingar_skv_off')}
+            status={skvOmbudEnabled && skvOmbudWaiting ? t('kopplingar_skv_waiting') : t('kopplingar_skv_off')}
             action={skvOmbudEnabled ? (
               <button
                 type="button"
@@ -183,9 +189,9 @@ export function KopplingarChips({
                 disabled={ombud.linking || ombud.checking}
                 className={pillClass}
                 aria-label={tOmbud('appoint', { appName })}
-                title={tOmbud('appoint_hint', { appName })}
+                title={skvOmbudWaiting ? tOmbud('waiting_hint', { appName }) : tOmbud('appoint_hint', { appName })}
               >
-                {t('kopplingar_connect')}
+                {skvOmbudWaiting ? t('kopplingar_skv_reopen') : t('kopplingar_connect')}
               </button>
             ) : (
               // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page; the authorize endpoint 302s to Skatteverket, which the client router cannot follow

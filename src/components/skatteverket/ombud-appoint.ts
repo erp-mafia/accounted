@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { ombudCheckOutcome, type OmbudCheckOutcome, type OmbudConnectionFacts } from '@/lib/skatteverket/ombud-appointment'
 
 /**
  * Appointing the app as the company's ombud at Skatteverket, shared by every
@@ -48,19 +49,26 @@ export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<Omb
   }
 }
 
-export type OmbudVerifyResult = 'granted' | 'not_yet' | 'rate_limited' | 'failed'
+/** What a check found (ombudCheckOutcome), or why it could not ask. */
+export type OmbudVerifyResult = OmbudCheckOutcome | 'rate_limited' | 'failed'
 
-/** Ask the ombudsregister whether the company has appointed the app (läsombud decides). */
-export async function verifyOmbudGrant(locale: ErrorLocale = 'sv'): Promise<{ result: OmbudVerifyResult; error: string | null }> {
+/**
+ * Ask the ombudsregister whether the company has appointed the app.
+ * `justSigned`: the user is back from signing through the deep link.
+ */
+export async function verifyOmbudGrant(
+  locale: ErrorLocale = 'sv',
+  { justSigned = false }: { justSigned?: boolean } = {},
+): Promise<{ result: OmbudVerifyResult; error: string | null }> {
   try {
     const res = await fetch(`${BASE}/verify`, { method: 'POST' })
     if (res.status === 429) return { result: 'rate_limited', error: null }
     const body = (await res.json().catch(() => ({}))) as {
-      data?: { connection?: { lasombud_status?: string } | null }
+      data?: { connection?: OmbudConnectionFacts | null }
       error?: unknown
     }
     if (!res.ok) return { result: 'failed', error: body.error ? getErrorMessage(body, { locale }) : null }
-    return { result: body.data?.connection?.lasombud_status === 'granted' ? 'granted' : 'not_yet', error: null }
+    return { result: ombudCheckOutcome(body.data?.connection ?? null, { justSigned }), error: null }
   } catch {
     return { result: 'failed', error: null }
   }
@@ -72,7 +80,10 @@ export type OmbudAppointOutcome = { result: OmbudVerifyResult | 'link_failed'; e
  * Appoint, then check once on return: `appoint()` opens the deep link, and the
  * next time this page becomes visible (the user is back from signing) the
  * grant is verified once and `onResult` hears the outcome. No polling: an
- * unfinished signature costs one register call per return.
+ * unfinished signature costs one register call per return, and the hourly
+ * ombud sync finds a grant Skatteverket registers later. `check()` runs the
+ * same check on demand, for a company that appointed the app directly at
+ * Skatteverket.
  */
 export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void) {
   const errorLocale = useLocale() as ErrorLocale
@@ -84,18 +95,26 @@ export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void
     onResultRef.current = onResult
   }, [onResult])
 
-  useEffect(() => {
-    async function onVisible() {
-      if (document.visibilityState !== 'visible' || !armed.current) return
-      armed.current = false
+  const runCheck = useCallback(
+    async (justSigned: boolean) => {
       setChecking(true)
-      const outcome = await verifyOmbudGrant(errorLocale)
+      const outcome = await verifyOmbudGrant(errorLocale, { justSigned })
       setChecking(false)
       onResultRef.current(outcome)
+    },
+    [errorLocale],
+  )
+  const check = useCallback(() => runCheck(false), [runCheck])
+
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || !armed.current) return
+      armed.current = false
+      void runCheck(true)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [errorLocale])
+  }, [runCheck])
 
   const appoint = useCallback(async () => {
     setLinking(true)
@@ -108,13 +127,13 @@ export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void
     armed.current = true
   }, [errorLocale])
 
-  return { appoint, linking, checking }
+  return { appoint, check, linking, checking }
 }
 
 /**
  * useOmbudAppoint with the shared toasts. `onVerified` hears every completed
- * check, so the surface can refresh what it shows (router.refresh on Hem when
- * granted, a state reload in settings either way).
+ * check, so the surface can refresh what it shows (router.refresh on Hem and
+ * in Kom igång, a state reload in settings).
  */
 export function useOmbudAppointWithToasts(onVerified: (result: OmbudVerifyResult) => void) {
   const t = useTranslations('skatteverket_ombud')
@@ -127,8 +146,14 @@ export function useOmbudAppointWithToasts(onVerified: (result: OmbudVerifyResult
         case 'granted':
           toast({ title: t('granted', { appName }) })
           return
-        case 'not_yet':
-          toast({ title: t('not_yet'), description: t('not_yet_hint', { appName }) })
+        case 'waiting':
+          toast({ title: t('waiting'), description: t('waiting_hint', { appName }) })
+          return
+        case 'withdrawn':
+          toast({ title: t('withdrawn'), description: t('withdrawn_hint', { appName }) })
+          return
+        case 'predates':
+          toast({ title: t('predates'), description: t('predates_hint', { appName }) })
           return
         case 'rate_limited':
           toast({ title: t('rate_limited') })
