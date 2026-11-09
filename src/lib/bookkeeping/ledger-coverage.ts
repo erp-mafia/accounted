@@ -24,7 +24,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
+import { fetchMigrationCoverageEnd } from '@/lib/bookkeeping/migration-coverage-end'
 
 /**
  * The latest day on or after `fromDay` that the books already hold, or null

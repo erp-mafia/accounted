@@ -67,6 +67,7 @@ import { bankNetAccountTest, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { isGeneratedVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { firstCoveredFeedRow, isFeedConnectorRow } from '@/lib/bookkeeping/feed-row-coverage'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -371,6 +372,25 @@ export async function bulkBookTransactions(
     const chart = await chartCheck(supabase, companyId, lines.map((l) => l.account_number), opLog)
     if (chart) return chart
     newEntryPayload = { description: body.entry_description, lines }
+  }
+
+  // A new samlingsverifikat over feed rows (Stripe) on days the books already
+  // hold books that money twice (accounted#101); linking them to the existing
+  // verifikat (existing_journal_entry_id) stays open. Bank rows are never read for.
+  if (newEntryPayload && txTyped.some(isFeedConnectorRow)) {
+    const ledgers = await rowLedgers()
+    const covered = await firstCoveredFeedRow(supabase, companyId, txTyped, (id) => ledgers.get(id))
+    if (covered) {
+      return {
+        ok: false,
+        code: 'BULK_BOOK_LEDGER_DAY_COVERED',
+        details: {
+          transaction_id: covered.transactionId,
+          covered_through: covered.coveredThrough,
+          settlement_account: covered.settlementAccount,
+        },
+      }
+    }
   }
 
   // Dimension policy: the RPC bypasses the TS engine, so it runs here.

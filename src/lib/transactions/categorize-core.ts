@@ -45,6 +45,7 @@ import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { firstCoveredFeedRow } from '@/lib/bookkeeping/feed-row-coverage'
 import { learnableBankPair } from '@/lib/bookkeeping/bank-leg'
 import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
@@ -906,7 +907,20 @@ export async function categorizeTransaction(
     loadChart: options.loadChart,
   })
   if (!mapped.ok) return { ...mapped, transaction }
-  const { mappingResult } = mapped
+  const { mappingResult, settlementAccount } = mapped
+  // A feed row (Stripe) on a day a samlingsverifikat or the migrated ledger
+  // already holds is the same money a second time (accounted#101): link it to
+  // that verifikat or ignore it. Bank rows are never read for.
+  if (wouldBook) {
+    const covered = await firstCoveredFeedRow(supabase, companyId, [transaction], () => settlementAccount)
+    if (covered) {
+      return refuseFor('TX_CATEGORIZE_LEDGER_DAY_COVERED', {
+        covered_through: covered.coveredThrough,
+        settlement_account: covered.settlementAccount,
+      })
+    }
+  }
+
   // The default would decide the box only where a basis pair is booked: a
   // cost account whose momskod reports ruta 20-24, or an override onto a
   // basis account, decides it itself (crm#1096).

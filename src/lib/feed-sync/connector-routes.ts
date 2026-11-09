@@ -24,7 +24,7 @@ import type { CapabilityKey } from '@/lib/entitlements/keys'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { backfillDateErrorMessage, parseBackfillFrom, type BackfillDateError } from './cursor-window'
-import { ledgerCoveredThrough } from './ledger-coverage'
+import { ledgerCoveredThrough } from '@/lib/bookkeeping/ledger-coverage'
 
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
 /** Per user and connector; the MCP door shares the panel's budget. */
@@ -259,7 +259,7 @@ export interface FeedBackfillInput {
  * books already hold (a migrated ledger, a hand-entered samlingsverifikat on
  * the settlement account) would come back as unbooked rows that book the
  * same money twice, so the start never reaches into it unless the caller
- * says includeBooked (crm#1386, ./ledger-coverage.ts). When every day asked
+ * says includeBooked (crm#1386, lib/bookkeeping/ledger-coverage.ts). When every day asked
  * for is already in the books the cursor stays where it is and the run is an
  * ordinary sync.
  *

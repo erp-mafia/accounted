@@ -10,7 +10,7 @@ vi.mock('@/lib/auth/rate-limit-http', () => ({
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
-vi.mock('../ledger-coverage', () => ({
+vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({
   ledgerCoveredThrough: vi.fn().mockResolvedValue(null),
 }))
 
@@ -18,7 +18,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { ExtensionContext } from '@/lib/extensions/types'
-import { ledgerCoveredThrough } from '../ledger-coverage'
+import { ledgerCoveredThrough } from '@/lib/bookkeeping/ledger-coverage'
 import {
   feedBackfillRoute,
   feedConnectorRoutes,
