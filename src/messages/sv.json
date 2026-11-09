@@ -1834,6 +1834,8 @@
     "remove_aria": "Ta bort periodisering",
     "preview": "{months} månader × {amount}, {first} till {last}",
     "preview_one_month": "Hela beloppet bokförs i {month}",
+    "preview_with_floor": "{months} månader × {amount}, {first} till {last}. Tidigare månader bokförs {date}.",
+    "deferral_period_past": "Perioden slutar före fakturamånaden och kan inte periodiseras som förutbetald. Välj {account} (upplupen) i stället.",
     "preview_invalid_period": "Periodens slut måste vara efter dess start",
     "invoice_month_only": "Perioden måste omfatta en annan månad än fakturamånaden",
     "k2_hint": "Belopp under {amount} kr behöver normalt inte periodiseras (K2).",

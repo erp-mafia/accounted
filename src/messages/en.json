@@ -1834,6 +1834,8 @@
     "remove_aria": "Remove deferral",
     "preview": "{months} months × {amount}, {first} to {last}",
     "preview_one_month": "The whole amount is booked in {month}",
+    "preview_with_floor": "{months} months × {amount}, {first} to {last}. Earlier months are booked {date}.",
+    "deferral_period_past": "The period ends before the invoice month and cannot be deferred. Choose {account} (accrued) instead.",
     "preview_invalid_period": "The period end must be after its start",
     "invoice_month_only": "The period must cover a month other than the invoice month",
     "k2_hint": "Amounts under SEK {amount} normally do not need to be deferred (K2).",
