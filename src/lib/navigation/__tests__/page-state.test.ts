@@ -13,6 +13,10 @@ describe('view state storage', () => {
     expect(decodePageState('{}', new Set<string>())).toEqual(new Set())
     expect(decodePageState('null', {})).toEqual({})
   })
+  it('restores numeric pagination and rejects incompatible saved values', () => {
+    expect(decodePageState('300', 100)).toBe(300)
+    expect(decodePageState('"x"', 100)).toBe(100)
+  })
   it('preserves cleared and selected nullable dimension filters', () => {
     expect(decodePageState('null', null)).toBeNull()
     expect(decodePageState('{"dimNo":"6","code":"P1"}', null)).toEqual({ dimNo: '6', code: 'P1' })
