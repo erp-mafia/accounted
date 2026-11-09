@@ -2,8 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
+// FROZEN on 2026-11-06 (docs/decisions/2026-11/2026-11-06-mcp-instructions-head-and-catalog-freeze.md).
+// These ceilings grew from 20K to 67.6K tokens, one justified raise at a time
+// (the history is in the cases below), and 140 tools are listed by default;
+// past a few dozen tool definitions models get worse at picking the right one.
+// Never raise any of the three. A new listed tool pays for itself: trim
+// descriptions, merge it into an existing tool, or give it
+// catalogVisibility: 'search'. The headroom left at the freeze is for wire
+// data on existing tools. A raise needs a founder decision under docs/decisions/.
+const FULL_CATALOG_CEILING = 67_600
 // Ceiling for the catalog a single-company key is served (see the second case).
 const SIMPLE_CATALOG_CEILING = 63_100
+const DEFAULT_CATALOG_TOOL_LIMIT = 140
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -785,7 +795,8 @@ describe('tools/list payload size guard', () => {
     //     properties, the rule in the tool description, which lost
     //     "samlingsbetalning" and two "the"s to stay under 280. +81, measured
     //     66 322 (single-company 61 892). Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(67_600)
+    //   * FROZEN at 67 600 on 2026-11-06: see FULL_CATALOG_CEILING.
+    expect(approxTokens).toBeLessThan(FULL_CATALOG_CEILING)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -928,6 +939,15 @@ describe('tools/list payload size guard', () => {
     // 2026-10-28, fee rows on gnubok_match_batch_allocate (issue #131): +80,
     // measured 61 892. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
+  })
+
+  it('keeps the number of listed tools frozen', () => {
+    const listed = tools.filter(isDefaultCatalogTool).map((t) => t.name)
+    expect(
+      listed.length,
+      `tools/list is frozen at ${DEFAULT_CATALOG_TOOL_LIMIT} listed tools. A new listed tool merges into ` +
+        `an existing one or takes another's place (catalogVisibility: 'search'); never raise the limit.`,
+    ).toBeLessThanOrEqual(DEFAULT_CATALOG_TOOL_LIMIT)
   })
 
   /**
