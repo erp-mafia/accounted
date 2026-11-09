@@ -3,6 +3,7 @@ import {
   agentDisplayName,
   attributionWordsFrom,
   formatActorAttribution,
+  mcpClientDisplayName,
   RESERVED_OAUTH_KEY_NAME,
   SV_ATTRIBUTION_WORDS,
 } from '../format-actor'
@@ -134,5 +135,33 @@ describe('the words', () => {
     const words = attributionWordsFrom(translator(en.attribution))
     expect(formatActorAttribution({ actorType: 'agent_chat', personName: 'Jonas Ek' }, words)).toBe('The assistant for Jonas Ek')
     expect(formatActorAttribution({ actorType: 'api_key', actorLabel: 'Claude (Anthropic)', personName: 'Jonas Ek' }, words)).toBe('Claude for Jonas Ek')
+  })
+})
+
+describe('mcpClientDisplayName', () => {
+  it('names the product behind a stored MCP client label', () => {
+    expect(mcpClientDisplayName('claude-connector')).toBe('Claude')
+    expect(mcpClientDisplayName('claude-desktop')).toBe('Claude')
+    expect(mcpClientDisplayName('claude-code')).toBe('Claude Code')
+    expect(mcpClientDisplayName('chatgpt')).toBe('ChatGPT')
+    expect(mcpClientDisplayName('Cursor')).toBe('Cursor')
+  })
+
+  it('shows no free-text marker: anything unknown is no name', () => {
+    expect(mcpClientDisplayName('other')).toBeNull()
+    expect(mcpClientDisplayName('jonas-run-17')).toBeNull()
+    expect(mcpClientDisplayName(null)).toBeNull()
+    expect(mcpClientDisplayName('')).toBeNull()
+  })
+
+  it('reads as the agent and the person it saved a fact for', () => {
+    const inline = { inline: true }
+    const svWords = attributionWordsFrom(translator(sv.attribution))
+    const enWords = attributionWordsFrom(translator(en.attribution))
+    expect(formatActorAttribution({ actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName('claude-connector'), personName: 'Jonas Ek' }, svWords, inline)).toBe('Claude åt Jonas Ek')
+    expect(formatActorAttribution({ actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName('other'), personName: 'Jonas Ek' }, svWords, inline)).toBe('AI-anslutning åt Jonas Ek')
+    expect(formatActorAttribution({ actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName('chatgpt'), personName: en.settings.memory_creator_deleted }, enWords, inline)).toBe('ChatGPT for a deleted user')
+    expect(formatActorAttribution({ actorType: 'user', personName: null }, svWords, inline)).toBe('en användare')
+    expect(translator(sv.settings)('memory_saved_by', { who: 'Claude åt Jonas Ek' })).toBe('Sparad av Claude åt Jonas Ek')
   })
 })

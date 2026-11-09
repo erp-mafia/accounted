@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
+import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/person-names'
 
 /**
  * Every fact agents were told about a company (agent_memory, written by
@@ -29,6 +30,8 @@ export interface RememberedFact {
   origin: string | null
   /** MCP client label of the connection that wrote it; null outside MCP. */
   client: string | null
+  /** Who saved it (the person, or the person the agent acted for); null when the row records no one. Never an e-mail. */
+  created_by: Creator | null
 }
 
 export interface RememberedFacts {
@@ -42,16 +45,21 @@ interface Row {
   content: string
   relevance_score: number | null
   created_at: string | null
+  created_by_user_id?: string | null
   origin?: string | null
   client?: string | null
 }
 
-/** Reads the company's active facts. Throws when the read fails. */
+/**
+ * Reads the company's active facts. Throws when the read fails. The creators'
+ * names are read with the same client (profiles RLS is self-only): both
+ * callers, the MCP briefing and the agent bundle, pass the service-role client.
+ */
 export async function loadRememberedFacts(supabase: SupabaseClient, companyId: string): Promise<RememberedFacts> {
   // Literal selects, twice, so the schema guard (tests/schema) can check them.
   let result: { data: unknown; error: { code?: string; message: string } | null } = await supabase
     .from('agent_memory')
-    .select('id, kind, content, relevance_score, created_at, origin, client')
+    .select('id, kind, content, relevance_score, created_at, created_by_user_id, origin, client')
     .eq('company_id', companyId)
     .eq('is_active', true)
     .is('superseded_by', null)
@@ -62,7 +70,7 @@ export async function loadRememberedFacts(supabase: SupabaseClient, companyId: s
   if (isMissingColumnError(result.error)) {
     result = await supabase
       .from('agent_memory')
-      .select('id, kind, content, relevance_score, created_at')
+      .select('id, kind, content, relevance_score, created_at, created_by_user_id')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .is('superseded_by', null)
@@ -71,7 +79,7 @@ export async function loadRememberedFacts(supabase: SupabaseClient, companyId: s
   }
   if (result.error) throw new Error(`Failed to load agent memory: ${result.error.message}`)
 
-  const facts: RememberedFact[] = []
+  const kept: Row[] = []
   let used = 0
   let truncated = false
   for (const row of (result.data ?? []) as unknown as Row[]) {
@@ -80,16 +88,19 @@ export async function loadRememberedFacts(supabase: SupabaseClient, companyId: s
       truncated = true
       break
     }
-    facts.push({
-      fact_id: row.id,
-      kind: row.kind,
-      content: row.content,
-      relevance_score: row.relevance_score,
-      saved_at: row.created_at,
-      origin: row.origin ?? null,
-      client: row.client ?? null,
-    })
+    kept.push(row)
   }
+  const creators = await resolveCreators(supabase, kept.map((row) => row.created_by_user_id))
+  const facts: RememberedFact[] = kept.map((row) => ({
+    fact_id: row.id,
+    kind: row.kind,
+    content: row.content,
+    relevance_score: row.relevance_score,
+    saved_at: row.created_at,
+    origin: row.origin ?? null,
+    client: row.client ?? null,
+    created_by: creatorOf(creators, row.created_by_user_id),
+  }))
   return { facts, truncated }
 }
 

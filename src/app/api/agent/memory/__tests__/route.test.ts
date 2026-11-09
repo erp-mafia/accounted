@@ -6,9 +6,12 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+// The service-role client reads only the creators' profiles (profiles RLS is self-only).
+const service = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
+  createServiceClient: () => service.supabase,
 }))
 
 const getActiveCompanyIdMock = vi.fn()
@@ -30,6 +33,7 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  service.reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   getActiveCompanyIdMock.mockResolvedValue('company-1')
   requireWritePermissionMock.mockResolvedValue({ ok: true })
@@ -73,6 +77,49 @@ describe('GET /api/agent/memory', () => {
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
     expect(body.data[0].id).toBe('mem-1')
+  })
+
+  it('names who saved each fact through the service-role client, never by e-mail', async () => {
+    enqueue({
+      data: [
+        { id: 'mem-1', kind: 'fact', content: 'A', created_by_user_id: 'u-named', client: 'claude-connector' },
+        { id: 'mem-2', kind: 'fact', content: 'B', created_by_user_id: 'u-noname', client: null },
+        { id: 'mem-3', kind: 'fact', content: 'C', created_by_user_id: 'u-deleted', client: null },
+        { id: 'mem-4', kind: 'fact', content: 'D', created_by_user_id: 'u-unread', client: null },
+        { id: 'mem-5', kind: 'fact', content: 'E', created_by_user_id: null, client: null },
+      ],
+    })
+    service.enqueue({
+      data: [
+        { id: 'u-named', full_name: ' Anna Andersson ', deleted_at: null, anonymized_at: null },
+        { id: 'u-noname', full_name: '  ', deleted_at: null, anonymized_at: null },
+        { id: 'u-deleted', full_name: null, deleted_at: '2026-10-01T00:00:00Z', anonymized_at: '2026-10-01T00:00:00Z' },
+      ],
+    })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; created_by: unknown }> }>(response)
+    expect(status).toBe(200)
+    expect(body.data.map((row) => [row.id, row.created_by])).toEqual([
+      ['mem-1', { name: 'Anna Andersson', deleted: false }],
+      ['mem-2', { name: null, deleted: false }],
+      ['mem-3', { name: null, deleted: true }],
+      // A profile that was not read is not "deleted".
+      ['mem-4', { name: null, deleted: false }],
+      ['mem-5', null],
+    ])
+    expect(service.findCalls('profiles', 'select')).toEqual([['id, full_name, deleted_at, anonymized_at']])
+    expect(service.findCalls('profiles', 'in')).toEqual([['id', ['u-named', 'u-noname', 'u-deleted', 'u-unread']]])
+    expect(findCalls('profiles', 'select')).toEqual([])
+    expect(findCalls('agent_memory', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('never labels a creator deleted when the profiles read fails', async () => {
+    enqueue({ data: [{ id: 'mem-1', kind: 'fact', content: 'A', created_by_user_id: 'u-1', client: null }] })
+    service.enqueue({ data: null, error: { message: 'boom' } })
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ created_by: unknown }> }>(response)
+    expect(status).toBe(200)
+    expect(body.data[0].created_by).toEqual({ name: null, deleted: false })
   })
 
   it('does not require write permission for read', async () => {
@@ -135,7 +182,10 @@ describe('POST /api/agent/memory', () => {
       last_accessed_at: null,
       created_at: '2026-05-18T10:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
+      created_by_user_id: 'user-1',
+      client: null,
     }
+    service.enqueue({ data: [{ id: 'user-1', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null }] })
     // Defense-in-depth: body company_id membership re-check happens after
     // requireWritePermission. POST flow now is: (1) company_members lookup,
     // (2) insert.
@@ -148,9 +198,10 @@ describe('POST /api/agent/memory', () => {
       }),
       createMockRouteParams({}),
     )
-    const { status, body } = await parseJsonResponse<{ data: typeof inserted }>(response)
+    const { status, body } = await parseJsonResponse<{ data: typeof inserted & { created_by: unknown } }>(response)
     expect(status).toBe(200)
     expect(body.data.id).toBe('mem-2')
+    expect(body.data.created_by).toEqual({ name: 'Anna Andersson', deleted: false })
   })
 
   it('rejects when user is a viewer in the target company', async () => {

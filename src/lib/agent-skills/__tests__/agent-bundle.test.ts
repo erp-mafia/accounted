@@ -144,6 +144,27 @@ describe('loadAgentBundle: remembered facts', () => {
     expect(findCalls('agent_memory', 'limit')).toContainEqual([500])
   })
 
+  it('says who saved each fact by name, or that the account is gone, never by e-mail', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [
+      { id: 'm-2', kind: 'fact', content: 'Bolaget tillämpar K3.', relevance_score: 0.8, created_at: '2026-09-10T08:00:00Z', created_by_user_id: 'u-anna' },
+      { id: 'm-1', kind: 'fact', content: 'Hyran är 14 000 kr.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z', created_by_user_id: 'u-gone' },
+    ] })
+    enqueue({ data: [
+      { id: 'u-anna', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null },
+      { id: 'u-gone', full_name: null, deleted_at: '2026-10-01T00:00:00Z', anonymized_at: '2026-10-01T00:00:00Z' },
+    ] })
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
+    expect(bundle.company_knowledge.remembered).toEqual([
+      { fact_id: 'm-2', text: 'Bolaget tillämpar K3.', saved_at: '2026-09-10T08:00:00Z', created_by: 'Anna Andersson' },
+      { fact_id: 'm-1', text: 'Hyran är 14 000 kr.', saved_at: '2026-06-02T08:00:00Z', created_by_deleted: true },
+    ])
+    expect(findCalls('profiles', 'select')).toEqual([['id, full_name, deleted_at, anonymized_at']])
+  })
+
   it('still starts the workflow, with nothing remembered, when the memory read fails', async () => {
     vi.mocked(buildArkivMap).mockResolvedValue(null as never)
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })

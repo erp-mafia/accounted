@@ -672,6 +672,8 @@
     "backfill_done_title": "Older purchases fetched"
   },
   "settings": {
+    "memory_saved_by": "Saved by {who}",
+    "memory_creator_deleted": "a deleted user",
     "group_profile": "Profile",
     "name_label": "Your name",
     "name_description": "Used when we address you and shown as the contact person on some documents.",

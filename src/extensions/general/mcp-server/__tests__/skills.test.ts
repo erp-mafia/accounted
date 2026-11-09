@@ -29,6 +29,7 @@ function makeSupabaseWithEmptyAtomRegistry(
   overrides: { entityType?: string | null; vatRegistered?: boolean; employeeCount?: number } = {},
   refRow: unknown = null,
   companySkillRows: unknown[] = [],
+  profileRows: unknown[] = [],
 ) {
   const entityType = overrides.entityType ?? 'aktiebolag'
   const vatRegistered = overrides.vatRegistered ?? true
@@ -36,6 +37,10 @@ function makeSupabaseWithEmptyAtomRegistry(
 
   return {
     from: vi.fn((table: string) => {
+      // The own items' creators (resolveCreators).
+      if (table === 'profiles') {
+        return { select: vi.fn(() => ({ in: vi.fn().mockResolvedValue({ data: profileRows, error: null }) })) }
+      }
       if (['company_skills', 'companies', 'agent_profiles'].includes(table)) {
         const chain: Record<string, ReturnType<typeof vi.fn>> = {
           select: vi.fn(() => chain), eq: vi.fn(() => chain), order: vi.fn(() => chain),
@@ -486,6 +491,30 @@ describe('gnubok_list_skills tool', () => {
     expect(kindOf('analys-kassaprognos')).toBe('analysis')
     // A curated workflow has no kind to tell apart, so it carries none.
     expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('item_kind')
+  })
+
+  it('says who saved each own item, by name only', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const own = (n: number, createdBy: string) => ({
+      id: `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${n}`, name: `Own ${n}`, description: 'd', body: 'Steps.', share_status: 'private',
+      atom_id: null, company_id: 'company-1', team_id: null, created_by: createdBy,
+    })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, null, [own(1, 'u-anna'), own(2, 'u-gone'), own(3, 'u-noname')], [
+      { id: 'u-anna', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null },
+      { id: 'u-gone', full_name: null, deleted_at: '2026-10-01T00:00:00Z', anonymized_at: '2026-10-01T00:00:00Z' },
+      { id: 'u-noname', full_name: null, deleted_at: null, anonymized_at: null },
+    ])
+    const result = (await tool.execute({ include_all: true, __keyScopes: ['agent:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<Record<string, unknown> & { slug: string }>
+    }
+    const item = (n: number) => result.skills.find((s) => s.slug === `own/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${n}`)
+    expect(item(1)).toMatchObject({ created_by: 'Anna Andersson' })
+    expect(item(2)).toMatchObject({ created_by_deleted: true })
+    expect(item(2)).not.toHaveProperty('created_by')
+    expect(item(3)).not.toHaveProperty('created_by')
+    expect(item(3)).not.toHaveProperty('created_by_deleted')
+    // A curated workflow has no creator.
+    expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('created_by')
   })
 })
 

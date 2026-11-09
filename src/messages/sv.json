@@ -672,6 +672,8 @@
     "backfill_done_title": "Äldre köp hämtade"
   },
   "settings": {
+    "memory_saved_by": "Sparad av {who}",
+    "memory_creator_deleted": "en borttagen användare",
     "group_profile": "Profil",
     "name_label": "Ditt namn",
     "name_description": "Används när vi tilltalar dig och visas som kontaktperson på vissa underlag.",

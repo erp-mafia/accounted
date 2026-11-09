@@ -4,7 +4,7 @@ import { workflowSkills as coreWorkflowSkills } from '@/lib/agent-skills/workflo
 import { kvittojaktenSkills } from '@/lib/agent-skills/workflows/kvittojakten'
 import { loadAtomsAsSkills, loadReferenceById } from '@/lib/agent-skills/atoms'
 import { loadCompanySkillRows, resolveOwnSkill } from '@/lib/agent-skills/company-skills'
-import { loadSkillCatalog } from '@/lib/agent-skills/catalog'
+import { loadSkillCatalog, type CatalogOptions } from '@/lib/agent-skills/catalog'
 
 /** Static workflow skills the server ships with. Tier: 'workflow'. */
 export const workflowSkills: Skill[] = [...coreWorkflowSkills, ...kvittojaktenSkills]
@@ -28,9 +28,9 @@ export async function findSkill(slug: string, supabase?: SupabaseClient, company
   return loadReferenceById(supabase, slug)
 }
 
-/** Workflow skills + registry-loaded atoms in one list. */
-export async function loadAllSkills(supabase: SupabaseClient, companyId?: string | null, includeAll = false): Promise<Skill[]> {
-  if (companyId) return (await loadSkillCatalog(supabase, companyId)).filter((skill) => !skill.draft && (includeAll || skill.active || skill.tier === 'community'))
+/** Workflow skills + registry-loaded atoms in one list. `options.creators` adds who saved each own item. */
+export async function loadAllSkills(supabase: SupabaseClient, companyId?: string | null, includeAll = false, options: CatalogOptions = {}): Promise<Skill[]> {
+  if (companyId) return (await loadSkillCatalog(supabase, companyId, options)).filter((skill) => !skill.draft && (includeAll || skill.active || skill.tier === 'community'))
   const atoms = await loadAtomsAsSkills(supabase)
   return [...workflowSkills, ...atoms]
 }

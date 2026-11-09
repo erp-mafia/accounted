@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { readOnlyResponse } from '@/lib/auth/require-write'
 import { validateBody, validateQuery } from '@/lib/api/validate'
+import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/person-names'
+import { createServiceClient } from '@/lib/supabase/server'
 
 // GET /api/agent/memory
 //
@@ -28,7 +30,18 @@ const KIND = ['fact', 'preference', 'pattern', 'correction'] as const
 const SOURCE = ['composer', 'user_taught', 'agent_learned', 'derived'] as const
 
 const MEMORY_COLUMNS =
-  'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at'
+  'id, kind, content, source, source_ref, relevance_score, is_pinned, is_active, last_accessed_at, created_at, updated_at, created_by_user_id, client'
+
+/**
+ * Adds who saved each row as `created_by` ({ name, deleted }, null when the
+ * row records no one): the name, never the e-mail; the UI words the rest.
+ * profiles RLS is self-only, so the names are read with the service-role
+ * client, for exactly the ids on rows this company's read returned.
+ */
+async function withCreators<T extends { created_by_user_id?: string | null }>(rows: T[]): Promise<Array<T & { created_by: Creator | null }>> {
+  const creators = await resolveCreators(createServiceClient(), rows.map((row) => row.created_by_user_id))
+  return rows.map((row) => ({ ...row, created_by: creatorOf(creators, row.created_by_user_id) }))
+}
 
 const ListQuerySchema = z.object({
   include_dismissed: z.enum(['true', 'false']).optional(),
@@ -75,7 +88,7 @@ export const GET = withRouteContext('agent.memory.list', async (request, ctx) =>
 
   const { data, error } = await query
   if (error) throw error
-  return NextResponse.json({ data: data ?? [] })
+  return NextResponse.json({ data: await withCreators(data ?? []) })
 })
 
 export const POST = withRouteContext(
@@ -119,7 +132,7 @@ export const POST = withRouteContext(
       .single()
     if (error) throw error
 
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: (await withCreators([data]))[0] })
   },
   { requireWrite: true },
 )

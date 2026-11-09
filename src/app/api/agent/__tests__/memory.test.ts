@@ -7,6 +7,10 @@ import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => supabase,
+}))
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -54,15 +58,17 @@ describe('GET /api/agent/memory', () => {
     expect(status).toBe(400)
   })
 
-  it('lists memory entries', async () => {
-    enqueue({ data: [{ id: 'mem-1', kind: 'fact', content: 'Fakturerar i SEK' }] })
+  it('lists memory entries with who saved them', async () => {
+    enqueue({ data: [{ id: 'mem-1', kind: 'fact', content: 'Fakturerar i SEK', created_by_user_id: 'user-1' }] })
+    enqueue({ data: [{ id: 'user-1', full_name: 'Anna Andersson', deleted_at: null, anonymized_at: null }] })
 
-    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(
+    const { status, body } = await parseJsonResponse<{ data: Array<{ created_by: unknown }> }>(
       await GET(createMockRequest('/api/agent/memory'), routeParams)
     )
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
+    expect(body.data[0]?.created_by).toEqual({ name: 'Anna Andersson', deleted: false })
   })
 })
 

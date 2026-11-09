@@ -5,18 +5,23 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 import { loadCatalogSkill, loadSkillCatalog } from '@/lib/agent-skills/catalog'
 import { attachCommunityMeta } from '@/lib/agent-skills/community'
 import { CreateCompanySkillSchema } from '@/lib/agent-skills/validation'
+import { createServiceClient } from '@/lib/supabase/server'
 
 const QuerySchema = z.object({ slug: z.string().min(1).max(250).optional() }).strict()
 
 export const GET = withRouteContext('skills.list', async (request, { supabase, companyId, user }) => {
   const query = validateQuery(request, QuerySchema)
   if (!query.success) return query.response
+  // Who saved each own item, by name: profiles RLS is self-only, so the
+  // service-role client reads exactly the creators of the company_skills
+  // rows the RLS client returned for this company and its firm.
+  const options = { creators: createServiceClient() }
   if (query.data.slug) {
-    const skill = await loadCatalogSkill(supabase, companyId, query.data.slug, true)
+    const skill = await loadCatalogSkill(supabase, companyId, query.data.slug, true, options)
     if (!skill) return NextResponse.json({ error: { code: 'NOT_FOUND', message: 'Skillen hittades inte.', message_en: 'Skill not found.' } }, { status: 404 })
     return NextResponse.json({ data: skill }, { headers: { 'Cache-Control': 'private, no-store' } })
   }
-  const skills = await attachCommunityMeta(supabase, await loadSkillCatalog(supabase, companyId), user.id)
+  const skills = await attachCommunityMeta(supabase, await loadSkillCatalog(supabase, companyId, options), user.id)
   return NextResponse.json({ data: skills.map(({ body: _body, ...skill }) => skill) }, { headers: { 'Cache-Control': 'private, no-store' } })
 })
 

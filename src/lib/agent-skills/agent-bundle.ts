@@ -10,6 +10,7 @@ import { loadCompanySkillRows, ownSkill } from './company-skills'
 import type { Skill } from './types'
 import { buildArkivMap, type ArkivMap } from '@/lib/arkiv/map'
 import { loadRememberedFacts, type RememberedFact } from '@/lib/agent-context/remembered-facts'
+import { creatorFields } from '@/lib/attribution/person-names'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('agent-skills.bundle')
@@ -282,8 +283,8 @@ export interface CompanyKnowledge {
   onboarding_summary: string | null
   facts: Array<{ label: string; value: string; valid_from: string | null }>
   agreements?: ArkivMap['agreements']
-  /** What agents were told (remember_fact), all of it, newest first, so a later fact can settle an earlier one. fact_id goes into remember_fact's replaces. */
-  remembered: Array<{ fact_id: string; text: string; saved_at: string | null }>
+  /** What agents were told (remember_fact), all of it, newest first, so a later fact can settle an earlier one. fact_id goes into remember_fact's replaces. created_by names who saved it (never an e-mail); created_by_deleted says that person's account is gone. */
+  remembered: Array<{ fact_id: string; text: string; saved_at: string | null; created_by?: string; created_by_deleted?: true }>
   documents: { total: number; look_up: string[] }
 }
 
@@ -336,7 +337,7 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
 /** The memories, dated and newest first: without dates two that disagree could not be told apart. */
 function newestFirst(facts: readonly RememberedFact[]): CompanyKnowledge['remembered'] {
   return facts
-    .map((m) => ({ fact_id: m.fact_id, text: m.content, saved_at: m.saved_at }))
+    .map((m) => ({ fact_id: m.fact_id, text: m.content, saved_at: m.saved_at, ...creatorFields(m.created_by) }))
     .sort((a, b) => (b.saved_at ?? '').localeCompare(a.saved_at ?? ''))
 }
 
