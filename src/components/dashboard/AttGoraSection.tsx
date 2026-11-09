@@ -202,6 +202,8 @@ interface AttGoraSectionProps {
   hasSkatteverketConnection?: boolean
   /** Accounted can be appointed as ombud at Skatteverket (system auth on). */
   skvOmbudEnabled?: boolean
+  /** Appointed, and Skatteverket has not registered the grant yet (KopplingarChips). */
+  skvOmbudWaiting?: boolean
   /**
    * Whether to render the kopplingar row under the list. Off while the
    * getting-started checklist is open: it carries the bank and Skatteverket
@@ -312,6 +314,7 @@ export default function AttGoraSection({
   missingUnderlag,
   hasSkatteverketConnection = false,
   skvOmbudEnabled = false,
+  skvOmbudWaiting = false,
   showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
@@ -1050,6 +1053,7 @@ export default function AttGoraSection({
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
           skvOmbudEnabled={skvOmbudEnabled}
+          skvOmbudWaiting={skvOmbudWaiting}
         />
       )}
       {collectionsRun.run && collectionsRunOpen && (

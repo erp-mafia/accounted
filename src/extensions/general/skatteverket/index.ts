@@ -65,6 +65,7 @@ import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
+import { ombudAppointment } from '@/lib/skatteverket/ombud-appointment'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { createUtseOmbudDeepLink, OMBUD_COMPANY_GUIDE_URL, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
@@ -272,7 +273,7 @@ const SkattekontoGroupMatchSchema = z.object({
  *      fallback and still need their 403 bodies validated (shadow mode in
  *      the test environment first).
  *   6. Godkännandetest per API, then SKATTEVERKET_SYSTEM_AUTH_MODE=on in
- *      prod. User tokens remain the fallback indefinitely. The daily ombud
+ *      prod. User tokens remain the fallback indefinitely. The hourly ombud
  *      sync cron (/api/extensions/skatteverket/ombud/sync/cron) runs from
  *      shadow mode on: it only records grant state.
  *
@@ -1026,6 +1027,9 @@ export const skatteverketExtension: Extension = {
           ],
           cert: getSystemCertInfo(),
           connection,
+          // What the settings card shows: not appointed, waiting on
+          // Skatteverket, appointed or withdrawn, per behörighet.
+          appointment: ombudAppointment(connection),
         })
       },
     },
@@ -1146,14 +1150,16 @@ export const skatteverketExtension: Extension = {
             OMBUD_ROLE_KEYS
           )
           // Minting the link is the tenant's opt-in: record a pending row
-          // (no grant state yet) so the nightly ombud sync, which only ever
-          // touches existing rows, picks the signed grant up on its own.
+          // (no grant state yet) so the hourly ombud sync, which only ever
+          // touches existing rows, picks the signed grant up on its own. A
+          // grant Skatteverket withdrew is awaited again from here on.
           const optIn = await recordProbeResult({
             companyId: ctx.companyId,
             environment: currentSkvEnvironment(),
             orgNumber,
             createdBy: ctx.userId,
             error: null,
+            reopened: true,
           })
           if (!optIn) {
             // Handing out the link without the row would let the company
@@ -2580,6 +2586,8 @@ export const skatteverketExtension: Extension = {
     // Contract in lib/skatteverket/ombud-access.ts.
     isOmbudEnabled: async () => isSystemReadActive(),
     hasOmbudReadAccess,
+    getOmbudAppointment: async (companyId: string) =>
+      ombudAppointment(await getConnection(companyId, currentSkvEnvironment())),
   },
 }
 

@@ -55,7 +55,7 @@ export interface SkvCompanyConnection {
   last_error: string | null
   /**
    * The company's opt-in for THIS org number: the first deep link or
-   * Verifiera on it (reset when the org number changes, see
+   * check (Kontrollera nu) on it (reset when the org number changes, see
    * recordProbeResult). A grant only counts when it was signed on or after
    * this day (ombudGrantCounts in ombud-client.ts).
    */
@@ -128,6 +128,41 @@ export interface ProbeResultInput {
   lasombud?: { status: GrantStatus; detail?: unknown; reason?: string }
   momsOmbud?: { status: GrantStatus; detail?: unknown; reason?: string }
   error?: string | null
+  /**
+   * The company opened the deep link again: a grant Skatteverket withdrew is
+   * awaited anew from now on, so its 'withdrawn' mark goes (see storedDetail).
+   */
+  reopened?: boolean
+}
+
+type StoredDetail = { status?: GrantStatus; detail?: unknown; reason?: string } | null
+
+/**
+ * The detail stored for one behorighet. A grant that was there on this opt-in
+ * and is not any more is marked `reason: 'withdrawn'`, and the mark stays
+ * while the behorighet is not granted. The register answers a withdrawn grant
+ * and one it has not registered yet the same way (nothing listed), so the
+ * mark is what tells them apart: red in settings, against a wait
+ * (lib/skatteverket/ombud-appointment.ts). A grant the sync holds back on a
+ * contested org number is marked the same way: it no longer counts either. A
+ * grant clears the mark, and so does a new deep link (`reopened`); a reason
+ * the probe gives itself (predates_opt_in) wins.
+ */
+function storedDetail(
+  previous: { status: GrantStatus; detail: StoredDetail },
+  next: GrantStatus,
+  probe: ProbeResultInput['lasombud'],
+  reopened: boolean
+): StoredDetail {
+  const kept: StoredDetail = probe ?? previous.detail ?? null
+  if (!kept) return null
+  const wasGranted = previous.status === 'granted' || previous.detail?.reason === 'withdrawn'
+  if (wasGranted && next !== 'granted' && !reopened && !probe?.reason) {
+    return { ...kept, reason: 'withdrawn' }
+  }
+  if (kept.reason !== 'withdrawn') return kept
+  const { reason: _withdrawn, ...rest } = kept
+  return rest
 }
 
 /**
@@ -170,6 +205,8 @@ export async function recordProbeResult(
   const lasombudStatus = nextGrant(existing?.lasombud_status ?? 'unknown', input.lasombud)
   const momsOmbudStatus = nextGrant(existing?.moms_ombud_status ?? 'unknown', input.momsOmbud)
   const status = aggregateStatus(lasombudStatus, momsOmbudStatus)
+  const previousDetail = (key: SkvBehorighet): StoredDetail =>
+    (existing?.last_probe_detail?.[key] as StoredDetail | undefined) ?? null
 
   const row: Record<string, unknown> = {
     company_id: input.companyId,
@@ -181,8 +218,18 @@ export async function recordProbeResult(
     last_probe_at: now,
     // A behorighet this probe did not ask about keeps its detail, as it keeps its status.
     last_probe_detail: {
-      lasombud: input.lasombud ?? existing?.last_probe_detail?.lasombud ?? null,
-      moms_ombud: input.momsOmbud ?? existing?.last_probe_detail?.moms_ombud ?? null,
+      lasombud: storedDetail(
+        { status: existing?.lasombud_status ?? 'unknown', detail: previousDetail('lasombud') },
+        lasombudStatus,
+        input.lasombud,
+        input.reopened === true
+      ),
+      moms_ombud: storedDetail(
+        { status: existing?.moms_ombud_status ?? 'unknown', detail: previousDetail('moms_ombud') },
+        momsOmbudStatus,
+        input.momsOmbud,
+        input.reopened === true
+      ),
     },
     last_error: input.error ?? null,
   }
@@ -332,7 +379,7 @@ export async function listConnections(environment: SkvEnvironment): Promise<SkvC
 
 /**
  * Where a company stands on the org number it asks Accounted's ombud
- * connection for (deep link, Verifiera, the nightly sync):
+ * connection for (deep link, Kontrollera nu, the hourly register sync):
  *
  *   'clear'        : it may hold the connection. Either no other live
  *                    company claims the number, or it is the ONE claimant a

@@ -12,6 +12,7 @@
  */
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
+import type { OmbudAppointment } from './ombud-appointment'
 
 const log = createLogger('skatteverket-ombud-access')
 
@@ -21,6 +22,8 @@ export interface SkatteverketOmbudServices {
   isOmbudEnabled: () => Promise<boolean>
   /** This company's background reads run on its verified ombud grant. */
   hasOmbudReadAccess: (companyId: string) => Promise<boolean>
+  /** Where the company's appointment stands (./ombud-appointment.ts). */
+  getOmbudAppointment: (companyId: string) => Promise<OmbudAppointment>
 }
 
 async function services(): Promise<Partial<SkatteverketOmbudServices> | undefined> {
@@ -54,5 +57,25 @@ export async function hasSkatteverketOmbudReadAccess(companyId: string): Promise
       error: err instanceof Error ? err.message : String(err),
     })
     return false
+  }
+}
+
+/**
+ * Where the company's appointment of the app as ombud stands, so Hem and Kom
+ * igång say "Väntar på Skatteverket" while the register has not listed a
+ * fresh grant yet. Best-effort like the read-access answer: a failure reads
+ * as not appointed, the state those surfaces showed before.
+ */
+export async function getSkatteverketOmbudAppointment(companyId: string): Promise<OmbudAppointment> {
+  const check = (await services())?.getOmbudAppointment
+  if (!check) return { state: 'none', predatesOptIn: false }
+  try {
+    return await check(companyId)
+  } catch (err) {
+    log.warn('ombud appointment lookup failed', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { state: 'none', predatesOptIn: false }
   }
 }

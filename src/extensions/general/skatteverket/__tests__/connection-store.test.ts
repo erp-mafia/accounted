@@ -129,6 +129,90 @@ describe('recordProbeResult', () => {
   })
 })
 
+/**
+ * The register answers a grant it has not registered yet and one that was
+ * withdrawn the same way: nothing listed. Only the row knows which, so the
+ * write marks a grant that was there and is gone, and settings shows red for
+ * that alone (lib/skatteverket/ombud-appointment.ts).
+ */
+describe('recordProbeResult: a withdrawn grant is marked, a grant not registered yet is not', () => {
+  const record = (input: Partial<Parameters<typeof recordProbeResult>[0]> = {}) =>
+    recordProbeResult({ companyId: 'company-1', environment: 'production', orgNumber: ORG, ...input })
+  const gone = { status: 'denied' as const, detail: 'ombudsregister 2026-11-09: huvudman saknas' }
+  const detail = () => upsertPayload().last_probe_detail as Record<string, Record<string, unknown> | null>
+
+  it('a granted behorighet the register no longer lists is marked withdrawn', async () => {
+    queued.enqueue({ data: storedRow() })
+    queued.enqueue({ data: UPSERTED })
+
+    await record({ lasombud: gone, momsOmbud: gone })
+
+    expect(upsertPayload()).toMatchObject({ lasombud_status: 'denied', moms_ombud_status: 'denied', status: 'pending' })
+    expect(detail().lasombud).toEqual({ ...gone, reason: 'withdrawn' })
+    expect(detail().moms_ombud).toEqual({ ...gone, reason: 'withdrawn' })
+  })
+
+  it('a behorighet never granted on this opt-in is not marked: Skatteverket has not registered it yet', async () => {
+    const notListed = { status: 'denied' as const, detail: 'OMBUD_GRANT_MISSING (ombudsregister otillgängligt: OBR_HTTP_ERROR: 404)' }
+    queued.enqueue({ data: storedRow({ status: 'pending', lasombud_status: 'unknown', moms_ombud_status: 'unknown', verified_at: null }) })
+    queued.enqueue({ data: UPSERTED })
+
+    await record({ lasombud: notListed, momsOmbud: notListed })
+
+    expect(detail()).toEqual({ lasombud: notListed, moms_ombud: notListed })
+  })
+
+  it('the mark stays through later checks that find nothing or cannot ask, and a grant clears it', async () => {
+    const withdrawn = { ...gone, reason: 'withdrawn' }
+    const denied = storedRow({ status: 'pending', lasombud_status: 'denied', moms_ombud_status: 'denied', last_probe_detail: { lasombud: withdrawn, moms_ombud: withdrawn } })
+
+    queued.enqueue({ data: denied })
+    queued.enqueue({ data: UPSERTED })
+    await record({ lasombud: { status: 'denied', detail: 'again' }, momsOmbud: { status: 'error', detail: 'timeout' } })
+    expect(detail()).toEqual({
+      lasombud: { status: 'denied', detail: 'again', reason: 'withdrawn' },
+      moms_ombud: { status: 'error', detail: 'timeout', reason: 'withdrawn' },
+    })
+
+    queued.reset()
+    queued.enqueue({ data: denied })
+    queued.enqueue({ data: UPSERTED })
+    await record({ lasombud: { status: 'granted', detail: 'ombudsregister: lasombud aktiv 2026-11-10' } })
+    expect(upsertPayload()).toMatchObject({ lasombud_status: 'granted', status: 'partial' })
+    expect(detail()).toEqual({ lasombud: { status: 'granted', detail: 'ombudsregister: lasombud aktiv 2026-11-10' }, moms_ombud: withdrawn })
+  })
+
+  it('a new deep link (reopened) clears the mark: the new grant is awaited, statuses untouched', async () => {
+    const withdrawn = { ...gone, reason: 'withdrawn' }
+    queued.enqueue({ data: storedRow({ status: 'pending', lasombud_status: 'denied', moms_ombud_status: 'denied', last_probe_detail: { lasombud: withdrawn, moms_ombud: withdrawn } }) })
+    queued.enqueue({ data: UPSERTED })
+
+    await record({ createdBy: 'user-1', error: null, reopened: true })
+
+    expect(upsertPayload()).toMatchObject({ lasombud_status: 'denied', moms_ombud_status: 'denied', status: 'pending' })
+    expect(detail()).toEqual({ lasombud: gone, moms_ombud: gone })
+  })
+
+  it("the probe's own reason wins: a grant that only predates the opt-in is not called withdrawn", async () => {
+    const predates = { status: 'denied' as const, detail: 'ombudsregister: lasombud signerad 2026-06-01, före kopplingen 2026-07-01', reason: 'predates_opt_in' }
+    queued.enqueue({ data: storedRow() })
+    queued.enqueue({ data: UPSERTED })
+
+    await record({ lasombud: predates })
+
+    expect(detail().lasombud).toEqual(predates)
+  })
+
+  it('a changed org number starts over: nothing granted on the old one is withdrawn on the new one', async () => {
+    queued.enqueue({ data: storedRow({ org_number: OTHER_ORG }) })
+    queued.enqueue({ data: UPSERTED })
+
+    await record({ lasombud: gone, momsOmbud: gone })
+
+    expect(detail()).toEqual({ lasombud: gone, moms_ombud: gone })
+  })
+})
+
 describe('keepRowsOnCurrentOrgNumber', () => {
   it('keeps only rows whose company still answers for the recorded org number', async () => {
     queued.enqueue({

@@ -183,8 +183,9 @@ describe('POST /system-connection/deeplink', () => {
       { companyId: 'company-1', userId: 'user-1' },
       ['lasombud', 'moms_ombud'],
     )
+    // A new link is a new wait: a grant Skatteverket withdrew is awaited again.
     expect(mockRecordProbeResult).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'company-1', orgNumber: '165560000000', createdBy: 'user-1', error: null })
+      expect.objectContaining({ companyId: 'company-1', orgNumber: '165560000000', createdBy: 'user-1', error: null, reopened: true })
     )
     // No grant state is asserted by minting a link.
     expect(mockRecordProbeResult.mock.calls[0][0]).not.toHaveProperty('lasombud')

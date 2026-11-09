@@ -45,6 +45,11 @@ interface NewUserChecklistProps {
    * step appoints it instead of starting an hourly BankID session.
    */
   skvOmbudEnabled?: boolean
+  /**
+   * The company appointed it and Skatteverket's register does not list the
+   * grant yet: the step says it is waiting and offers the link again.
+   */
+  skvOmbudWaiting?: boolean
   hasInboxItems?: boolean
   /** The user holds a live OAuth-minted MCP key, i.e. a Claude (or other
    *  MCP client) connection completed its first sign-in. This is the only
@@ -104,6 +109,7 @@ export default function NewUserChecklist({
   hasBankConnected = false,
   hasSkatteverketConnected = false,
   skvOmbudEnabled = false,
+  skvOmbudWaiting = false,
   hasInboxItems = false,
   hasMcpKey = false,
   skippedSteps = [],
@@ -144,9 +150,9 @@ export default function NewUserChecklist({
   // so the one-click Claude path stays the visual primary; at most one open.
   const [sideDoor, setSideDoor] = useState<SideDoor | null>(null)
   const [serverUrlCopied, setServerUrlCopied] = useState(false)
-  const ombud = useOmbudAppointWithToasts((result) => {
-    if (result === 'granted') router.refresh()
-  })
+  const tOmbud = useTranslations('skatteverket_ombud')
+  // Every finished check re-renders: granted ticks the step, a wait shows it.
+  const ombud = useOmbudAppointWithToasts(() => router.refresh())
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -205,6 +211,8 @@ export default function NewUserChecklist({
   const receiptsSkipped = skipped.includes('receipts') && !hasInboxItems
   const claudeSkipped = skipped.includes('claude') && !hasMcpKey
   const step3Done = !hasSkatteverket || hasSkatteverketConnected || skvSkipped
+  // A done step collapses to its title, so the wait shows only before that.
+  const ombudWaiting = skvOmbudEnabled && skvOmbudWaiting && !step3Done
   const step4Done = !hasInbox || hasInboxItems || receiptsSkipped
   const step5Done = !hasClaudeStep || hasMcpKey || claudeSkipped
 
@@ -504,6 +512,7 @@ export default function NewUserChecklist({
             done={step3Done}
             active={activeStep === 3}
             title={t('step_skv_title')}
+            badge={ombudWaiting ? tOmbud('waiting') : undefined}
             last={lastStep === 'skv'}
             onSkip={skipStep && (() => skipStep('skatteverket'))}
             skipLabel={t('step_skip')}
@@ -519,7 +528,7 @@ export default function NewUserChecklist({
                     void ombud.appoint()
                   }}
                 >
-                  {t('step_skv_action')}
+                  {ombudWaiting ? tOmbud('reopen') : t('step_skv_action')}
                 </Button>
               ) : (
                 <Button size="sm" variant={variant} asChild>
@@ -535,7 +544,11 @@ export default function NewUserChecklist({
               )
             }
           >
-            {skvOmbudEnabled ? t('step_skv_description_ombud', { appName }) : t('step_skv_description')}
+            {ombudWaiting
+              ? tOmbud('waiting_hint', { appName })
+              : skvOmbudEnabled
+                ? t('step_skv_description_ombud', { appName })
+                : t('step_skv_description')}
             {vatLine?.kind === 'date' && (
               <>
                 {' '}

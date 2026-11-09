@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations, useLocale } from 'next-intl'
+import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -24,9 +24,10 @@ import {
   CheckCircleIcon,
   ShieldExclamationIcon,
 } from '@/components/icons'
-import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
+import type { OmbudAppointment, OmbudRoleState } from '@/lib/skatteverket/ombud-appointment'
 
 type Environment = 'test' | 'prod'
 
@@ -438,8 +439,6 @@ function SkatteverketPersonalConnectionCard() {
   )
 }
 
-type GrantStatus = 'unknown' | 'granted' | 'denied' | 'error'
-
 interface SystemConnectionState {
   available: boolean
   mode?: string
@@ -447,17 +446,19 @@ interface SystemConnectionState {
   ombud_org_number?: string | null
   grant_url?: string
   cert?: { notAfter: string; daysUntilExpiry: number; expiresSoon: boolean } | null
-  connection?: {
-    status: string
-    lasombud_status: GrantStatus
-    moms_ombud_status: GrantStatus
-    verified_at: string | null
-    last_probe_at: string | null
-    last_probe_detail?: {
-      lasombud?: { reason?: string } | null
-      moms_ombud?: { reason?: string } | null
-    } | null
-  } | null
+  /** Where the appointment stands (lib/skatteverket/ombud-appointment.ts). */
+  appointment?: OmbudAppointment
+}
+
+const NOT_APPOINTED: OmbudAppointment = { state: 'none', predatesOptIn: false }
+
+/** One quiet line inside a settings group, for a state that needs no action. */
+function NoteLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+      {children}
+    </p>
+  )
 }
 
 /**
@@ -465,14 +466,17 @@ interface SystemConnectionState {
  * grant that lets background syncs run without a personal BankID session.
  * Renders nothing until SKATTEVERKET_SYSTEM_AUTH_MODE is switched on
  * server-side, so the whole section is invisible during Phase 1.
+ *
+ * Skatteverket's register can take from minutes to hours to list a fresh
+ * grant, and the hourly ombud sync picks it up: until then the card says it
+ * is waiting on Skatteverket, not that anything is missing. Red is kept for
+ * a grant that counted and no longer does.
  */
 function SkatteverketSystemConnectionCard() {
   const t = useTranslations('settings_skatteverket_connect')
-  const errorLocale = useLocale() as ErrorLocale
+  const tOmbud = useTranslations('skatteverket_ombud')
   const { appName } = useBranding()
-  const { toast } = useToast()
   const [state, setState] = useState<SystemConnectionState | null>(null)
-  const [verifying, setVerifying] = useState(false)
   async function loadState() {
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
@@ -492,41 +496,21 @@ function SkatteverketSystemConnectionCard() {
 
   // Appoint via the deep link, then re-check the register when the user is
   // back from signing at Skatteverket (shared with Hem and onboarding).
-  const { appoint, linking, checking } = useOmbudAppointWithToasts(() => {
+  // `check` is the same check on demand ("Kontrollera nu").
+  const { appoint, check, linking, checking } = useOmbudAppointWithToasts(() => {
     void loadState()
   })
 
-  async function verify() {
-    setVerifying(true)
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection/verify', {
-        method: 'POST',
-      })
-      const body = await res.json().catch(() => ({}))
-      if (res.status === 429) {
-        toast({ title: t('system_verify_rate_limited') })
-        return
-      }
-      if (!res.ok) {
-        toast({
-          title: t('system_verify_failed'),
-          description: body?.error ? getUserErrorMessage(body, { locale: errorLocale }) : undefined,
-          variant: 'destructive',
-        })
-        return
-      }
-      await loadState()
-    } catch {
-      toast({ title: t('system_verify_failed'), variant: 'destructive' })
-    } finally {
-      setVerifying(false)
-    }
-  }
-
   if (!state?.available) return null
 
-  const grantBadge = (status: GrantStatus | undefined) => {
-    switch (status) {
+  const appointment = state.appointment ?? NOT_APPOINTED
+  const fullyGranted =
+    appointment.state === 'appointed' &&
+    appointment.roles.lasombud === 'granted' &&
+    appointment.roles.moms_ombud === 'granted'
+
+  const roleBadge = (role: OmbudRoleState) => {
+    switch (role) {
       case 'granted':
         return (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -534,12 +518,12 @@ function SkatteverketSystemConnectionCard() {
             {t('system_status_granted')}
           </span>
         )
-      case 'denied':
-        return <Badge variant="destructive">{t('system_status_denied')}</Badge>
+      case 'withdrawn':
+        return <Badge variant="destructive">{t('system_status_withdrawn')}</Badge>
       case 'error':
         return <Badge variant="warning">{t('system_status_error')}</Badge>
       default:
-        return <Badge variant="outline">{t('system_status_unknown')}</Badge>
+        return <SettingsRowNote>{t('system_status_not_included')}</SettingsRowNote>
     }
   }
 
@@ -551,17 +535,28 @@ function SkatteverketSystemConnectionCard() {
         </SettingsRow>
       )}
 
-      <SettingsRow label={t('system_behorighet_lasombud')}>
-        {grantBadge(state.connection?.lasombud_status)}
-      </SettingsRow>
-      <SettingsRow label={t('system_behorighet_moms')}>
-        {grantBadge(state.connection?.moms_ombud_status)}
-      </SettingsRow>
-
-      {(state.connection?.last_probe_detail?.lasombud?.reason === 'predates_opt_in' ||
-        state.connection?.last_probe_detail?.moms_ombud?.reason === 'predates_opt_in') && (
-        <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>
+      {appointment.state === 'none' || appointment.state === 'waiting' ? (
+        <SettingsRow label={t('system_status_label')}>
+          {appointment.state === 'waiting' ? (
+            <Badge variant="secondary">{tOmbud('waiting')}</Badge>
+          ) : (
+            <SettingsRowNote>{tOmbud('none')}</SettingsRowNote>
+          )}
+        </SettingsRow>
+      ) : (
+        <>
+          <SettingsRow label={t('system_behorighet_lasombud')}>
+            {roleBadge(appointment.roles.lasombud)}
+          </SettingsRow>
+          <SettingsRow label={t('system_behorighet_moms')}>
+            {roleBadge(appointment.roles.moms_ombud)}
+          </SettingsRow>
+        </>
       )}
+
+      {appointment.state === 'waiting' && <NoteLine>{tOmbud('waiting_hint', { appName })}</NoteLine>}
+
+      {appointment.predatesOptIn && <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>}
 
       {state.cert?.expiresSoon && (
         <WarningLine>
@@ -570,7 +565,14 @@ function SkatteverketSystemConnectionCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-4 px-1 py-3">
-        <Button size="sm" variant="outline" onClick={() => void appoint()} loading={linking || checking} title={t('system_deeplink_hint', { appName })}>
+        <Button
+          size="sm"
+          variant={fullyGranted ? 'outline' : 'default'}
+          onClick={() => void appoint()}
+          loading={linking}
+          disabled={checking}
+          title={t('system_deeplink_hint', { appName })}
+        >
           {!linking && <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />}
           {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
         </Button>
@@ -585,10 +587,23 @@ function SkatteverketSystemConnectionCard() {
             {t('system_open_ombud')}
           </a>
         )}
-        <Button size="sm" onClick={verify} loading={verifying}>
-          {verifying ? t('system_verifying') : t('system_verify')}
-        </Button>
       </div>
+
+      {/* Only for a company that appointed the app at Skatteverket without
+          the link above and does not want to wait for the hourly check. */}
+      {!fullyGranted && (
+        <p className="px-1 pb-3 text-[12.5px] text-muted-foreground">
+          {t('system_check_lead', { appName })}{' '}
+          <button
+            type="button"
+            onClick={() => void check()}
+            disabled={checking || linking}
+            className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            {checking ? t('system_checking') : t('system_check_now')}
+          </button>
+        </p>
+      )}
     </SettingsGroup>
   )
 }
