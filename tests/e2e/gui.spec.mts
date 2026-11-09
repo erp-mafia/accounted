@@ -405,7 +405,7 @@ test('mobile calendar weeks show seven readable days and retain day navigation',
   const label = await days.first().locator('span').first().textContent()
   await measured(info, 'Open a mobile week day', BUDGET.interaction, async () => {
     await days.first().click()
-    await page.getByRole('heading', { name: label!, exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('heading', { name: label!, exact: true, level: 2 }).waitFor({ state: 'visible' })
     await expect(page.getByRole('tab', { name: 'Dag', exact: true })).toHaveAttribute('aria-selected', 'true')
   })
   expect(await page.evaluate(horizontalOverflow)).toEqual({ page: false, main: false, regions: [] })
