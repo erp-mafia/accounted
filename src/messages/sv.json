@@ -6469,6 +6469,7 @@
     "skattekonto": "Skattekonto"
   },
   "journal_detail": {
+    "company_required": "Välj ett företag eller ladda om sidan innan du öppnar verifikatet.",
     "title": "Verifikat {label}",
     "title_draft": "Utkast till verifikat",
     "field_voucher": "Verifikationsnummer",

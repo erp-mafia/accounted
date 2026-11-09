@@ -39,13 +39,17 @@ describe('journal entry detail read', () => {
   })
 
   it('rejects malformed entry identifiers before database reads', async () => {
-    expect((await get('invalid')).status).toBe(400)
+    const response = await get('invalid')
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toMatchObject({ code: 'VALIDATION_ERROR', message: expect.any(String), message_en: expect.any(String) })
     expect(reads.chain).not.toHaveBeenCalled()
   })
 
   it('returns 404 before reading metadata for a foreign or missing entry', async () => {
     reads.chain.mockResolvedValue(null)
-    expect((await get()).status).toBe(404)
+    const response = await get()
+    expect(response.status).toBe(404)
+    expect((await response.json()).error).toMatchObject({ code: 'JOURNAL_ENTRY_NOT_FOUND', message: expect.any(String), message_en: expect.any(String) })
     expect(reads.references).not.toHaveBeenCalled()
     expect(reads.rattelse).not.toHaveBeenCalled()
     expect(reads.period).not.toHaveBeenCalled()

@@ -6469,6 +6469,7 @@
     "skattekonto": "Tax account"
   },
   "journal_detail": {
+    "company_required": "Select a company or reload the page before opening the journal entry.",
     "title": "Voucher {label}",
     "title_draft": "Draft voucher",
     "field_voucher": "Voucher number",

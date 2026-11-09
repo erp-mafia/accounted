@@ -6,6 +6,7 @@ import { getJournalEntryChain } from '@/lib/core/bookkeeping/journal-entry-chain
 import { getJournalEntryUnderlagReferences } from '@/lib/core/bookkeeping/journal-entry-references'
 import { getJournalEntryRattelseLog } from '@/lib/core/bookkeeping/journal-entry-corrections'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
 
 ensureInitialized()
@@ -13,13 +14,13 @@ ensureInitialized()
 /** Read the voucher's initial view through one authenticated request. */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.detail',
-  async (_request, { supabase, companyId, user, log }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     if (!z.uuid().safeParse(id).success) {
-      return NextResponse.json({ error: 'Invalid journal entry id' }, { status: 400 })
+      return errorResponseFromCode('VALIDATION_ERROR', log, { requestId })
     }
     const chain = await getJournalEntryChain(supabase, companyId, id)
-    if (!chain) return NextResponse.json({ error: 'Entry not found' }, { status: 404 })
+    if (!chain) return errorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', log, { requestId })
 
     // Optional history can fail independently. Unknown period status keeps
     // inline corrections gated until the server can confirm an open period.

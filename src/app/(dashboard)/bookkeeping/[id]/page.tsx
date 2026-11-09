@@ -346,6 +346,18 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     }
   }, [id, toast, fetchData, t])
 
+  if (!company) {
+    return (
+      <div className="space-y-4 py-12 text-center">
+        <p className="text-sm text-muted-foreground">{t('company_required')}</p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="outline" onClick={() => router.push('/')}>{tCommon('back')}</Button>
+          <Button onClick={() => router.refresh()}>{tCommon('retry')}</Button>
+        </div>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return <DetailPageSkeleton />
   }

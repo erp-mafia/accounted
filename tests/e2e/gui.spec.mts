@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { root } from '../../scripts/e2e/runtime.mjs'
+import { root, runtimeDir } from '../../scripts/e2e/runtime.mjs'
 import { test } from './fixtures'
 import { BUDGET, withinBudget } from './budget'
 import { expect, type TestInfo } from '@playwright/test'
@@ -183,3 +183,30 @@ test('back from a voucher restores expanded accounts, filters and scroll', async
     await expect(page.getByRole('checkbox', { name: 'Dölj inaktiva' })).toBeChecked()
   })
 })
+
+
+for (const dimension of ['P1', null]) {
+  test(`explicit account drill overrides a stored dimension with ${dimension ?? 'no dimension'}`, async ({ page }, info) => {
+    const fixture = JSON.parse(readFileSync(path.join(runtimeDir, 'fixture.json'), 'utf8'))
+    const key = `Accounted:view:${fixture.company}:/reports/huvudbok:report-dimension`
+    await page.addInitScript(storageKey => sessionStorage.setItem(storageKey, JSON.stringify({ dimNo: '6', code: 'SAVED' })), key)
+    const dimensions: (string | null)[] = []
+    await page.route('**/api/reports/general-ledger?*', async route => {
+      const url = new URL(route.request().url())
+      dimensions.push(url.searchParams.get('dim_code'))
+      // Use real fixture ledger rows while keeping this UI test independent
+      // of whether the fake project is registered in the dimension catalog.
+      url.searchParams.delete('dim_no')
+      url.searchParams.delete('dim_code')
+      const response = await page.request.get(url.toString())
+      expect(response.ok()).toBe(true)
+      await route.fulfill({ response })
+    })
+    await measured(info, 'Apply explicit account drill', BUDGET.navigation, async () => {
+      await page.goto(`/reports/huvudbok?account=1930${dimension ? '&dim_no=6&dim_code=P1' : ''}`)
+      await page.getByRole('button', { name: 'Kollapsa konto 1930', exact: true }).waitFor({ state: 'visible' })
+    })
+    expect(dimensions.length).toBeGreaterThan(0)
+    expect(dimensions.every(value => value === dimension)).toBe(true)
+  })
+}
