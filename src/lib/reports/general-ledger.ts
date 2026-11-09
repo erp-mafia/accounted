@@ -69,6 +69,9 @@ export async function generateGeneralLedger(
      *  (parseReportDateRange). */
     fromDate?: string
     toDate?: string
+    /** Also retain ledger accounts with zero balances and no lines in the
+     * selected range, including accounts used elsewhere in the fiscal year. */
+    includeInactive?: boolean
   }
 ): Promise<GeneralLedgerReport> {
   const dimensionFilter =
@@ -180,6 +183,9 @@ export async function generateGeneralLedger(
     const debit = Math.round((Number(line.debit_amount) || 0) * 100) / 100
     const credit = Math.round((Number(line.credit_amount) || 0) * 100) / 100
 
+    if (options?.includeInactive && !accountLines.has(accNum)) {
+      accountLines.set(accNum, [])
+    }
     if (toDate && entry.entry_date > toDate) continue
     if (fromDate && entry.entry_date < fromDate) {
       preRangeMovements.set(accNum, (preRangeMovements.get(accNum) || 0) + debit - credit)
@@ -216,7 +222,7 @@ export async function generateGeneralLedger(
 
   // Include accounts that carry a balance into the range but have no lines in it
   for (const [accNum, balance] of effectiveOpening) {
-    if (!accountLines.has(accNum) && Math.abs(balance) > 0.005) {
+    if (!accountLines.has(accNum) && (options?.includeInactive || Math.abs(balance) > 0.005)) {
       accountLines.set(accNum, [])
     }
   }

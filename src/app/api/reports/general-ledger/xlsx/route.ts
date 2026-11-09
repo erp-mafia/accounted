@@ -33,6 +33,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
   const periodId = searchParams.get('period_id')
   const accountFrom = searchParams.get('account_from') || undefined
   const accountTo = searchParams.get('account_to') || undefined
+  const hideInactive = searchParams.get('hide_inactive') === 'true'
 
   if (!periodId) {
     return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
@@ -71,13 +72,18 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       dimensions: dimFilter.dimensions,
       fromDate: range.fromDate,
       toDate: range.toDate,
+      ...(searchParams.get('hide_inactive') === 'false' ? { includeInactive: true } : {}),
     })
+
+    const accounts = report.accounts.filter(
+      account => !hideInactive || account.closing_balance !== 0 || account.lines.length > 0,
+    )
 
     // The web huvudbok shows each line's tags; the file carries them too, in
     // a last column so the existing columns keep their positions. Only when
     // some exported line is tagged: a company without dimensions gets the
     // same file as before, and no registry read.
-    const tagged = report.accounts.some((acc) =>
+    const tagged = accounts.some((acc) =>
       acc.lines.some((line) => line.dimensions && Object.keys(line.dimensions).length > 0),
     )
     const dimensionNames = tagged
@@ -88,7 +94,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
     // an opening-balance row, its lines (with running balance), and a closing
     // row: matching how huvudbok is read in Fortnox/Visma.
     const rows: FlatRow[] = []
-    for (const acc of report.accounts) {
+    for (const acc of accounts) {
       rows.push({
         account_number: acc.account_number,
         account_name: acc.account_name,

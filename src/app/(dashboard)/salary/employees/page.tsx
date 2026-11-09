@@ -158,6 +158,7 @@ export default function EmployeesPage() {
           onCreated={() => {
             closeNewEmployee()
             setRefreshKey((k) => k + 1)
+            router.refresh()
           }}
         />
       )}
