@@ -44,7 +44,7 @@ export interface SuggestableTool {
   name: string
   description: string
   keywords?: readonly string[]
-  annotations?: { readOnlyHint?: boolean }
+  annotations?: { effect: 'read_only' | 'additive' | 'destructive' }
 }
 
 /**
@@ -69,7 +69,7 @@ export function suggestToolNames<T extends SuggestableTool>(
   return candidates
     .map((tool, idx) => {
       const nameWords = words(tool.name)
-      const read = tool.annotations?.readOnlyHint === true
+      const read = tool.annotations?.effect === 'read_only'
       const keywordText = (tool.keywords ?? []).join(' ').toLowerCase()
       const descriptionWords = new Set(words(tool.description))
       let hits = 0

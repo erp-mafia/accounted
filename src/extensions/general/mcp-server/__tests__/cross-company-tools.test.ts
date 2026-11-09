@@ -138,7 +138,7 @@ const fakeRead = {
   description: 'test read',
   inputSchema: { type: 'object', additionalProperties: false, properties: { limit: { type: 'number' } } },
   outputSchema: { type: 'object' },
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { effect: 'read_only' as const, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   execute: vi.fn(),
 }
 const fakeStaged = {
@@ -146,7 +146,7 @@ const fakeStaged = {
   description: 'test staged write',
   inputSchema: { type: 'object', additionalProperties: false, properties: { note: { type: 'string' }, dry_run: { type: 'boolean' } } },
   outputSchema: stagedSchema,
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  annotations: { effect: 'additive' as const, readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   execute: vi.fn(),
 }
 tools.push(fakeRead as never, fakeStaged as never)

@@ -43,6 +43,7 @@ import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { DIRECT_WRITE_SCOPES } from '@/lib/auth/scope-catalog'
 import { createLogger } from '@/lib/logger'
 import type { ActorContext, McpTool, McpToolAnnotations } from './server'
+import { annotationsForEffect, withToolEffect } from './tool-effects'
 import type { NextActionHint } from './tool-result'
 import { withRetryKey } from './retry-key'
 
@@ -245,8 +246,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       inputSchema: { ...inputSchema, type: 'object', additionalProperties: false, properties },
       outputSchema: deps.stagedSchema,
       annotations: {
-        ...deps.stagedWrite,
-        ...(binding.hints?.destructive ? { destructiveHint: true } : {}),
+        ...withToolEffect(deps.stagedWrite, binding.hints?.destructive ? 'destructive' : 'additive'),
         ...(binding.hints?.idempotent ? { idempotentHint: true } : {}),
       },
       catalogVisibility: binding.visibility ?? 'search',
@@ -316,12 +316,10 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
 }
 
 /** A direct write: it reaches no ledger, and a repeat with the same key and input replays the first answer. */
-const DIRECT_WRITE_ANNOTATIONS: McpToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: false,
+const DIRECT_WRITE_ANNOTATIONS: McpToolAnnotations = annotationsForEffect('additive', {
   idempotentHint: true,
   openWorldHint: false,
-}
+})
 
 /**
  * The tool of a write that commits on the call (OperationMcpBinding.direct):

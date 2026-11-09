@@ -309,6 +309,7 @@ import {
   toolCallableVia,
   type ToolCallableVia,
 } from './tool-reach'
+import { annotationsForEffect, isReadOnlyTool, publicToolAnnotations, type McpToolEffect } from './tool-effects'
 import {
   VIEW_APPROVAL_TOOL,
   approvalViewFor,
@@ -1085,6 +1086,7 @@ interface JsonRpcResponse {
 // ── MCP Tool definition ──────────────────────────────────────
 
 export interface McpToolAnnotations {
+  effect: McpToolEffect
   readOnlyHint?: boolean
   destructiveHint?: boolean
   idempotentHint?: boolean
@@ -1155,12 +1157,10 @@ async function requireOwnPrivateSkill(supabase: SupabaseClient, companyId: strin
   }
 }
 
-const ANNOTATIONS_READ_ONLY = {
-  readOnlyHint: true,
-  destructiveHint: false,
+const ANNOTATIONS_READ_ONLY = annotationsForEffect('read_only', {
   idempotentHint: true,
   openWorldHint: false,
-} as const satisfies McpToolAnnotations
+}) satisfies McpToolAnnotations
 /** A verifikat a supplier invoice points at, as gnubok_get_supplier_invoice returns it. */
 const SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA = {
   type: ['object', 'null'],
@@ -1183,44 +1183,32 @@ const STAGING_ARGS_PROPERTIES = {
 } as const
 
 /** Stages a pending operation or writes once; retries are not idempotent. */
-const ANNOTATIONS_STAGED_WRITE = {
-  readOnlyHint: false,
-  destructiveHint: false,
+const ANNOTATIONS_STAGED_WRITE = annotationsForEffect('additive', {
   idempotentHint: false,
   openWorldHint: false,
-} as const satisfies McpToolAnnotations
-const ANNOTATIONS_IDEMPOTENT_WRITE = {
-  readOnlyHint: false,
-  destructiveHint: false,
+}) satisfies McpToolAnnotations
+const ANNOTATIONS_IDEMPOTENT_WRITE = annotationsForEffect('additive', {
   idempotentHint: true,
   openWorldHint: false,
-} as const satisfies McpToolAnnotations
-const ANNOTATIONS_DESTRUCTIVE_WRITE = {
-  readOnlyHint: false,
-  destructiveHint: true,
+}) satisfies McpToolAnnotations
+const ANNOTATIONS_DESTRUCTIVE_WRITE = annotationsForEffect('destructive', {
   idempotentHint: false,
   openWorldHint: false,
-} as const satisfies McpToolAnnotations
-const ANNOTATIONS_DESTRUCTIVE_IDEMPOTENT_WRITE = {
-  readOnlyHint: false,
-  destructiveHint: true,
+}) satisfies McpToolAnnotations
+const ANNOTATIONS_DESTRUCTIVE_IDEMPOTENT_WRITE = annotationsForEffect('destructive', {
   idempotentHint: true,
   openWorldHint: false,
-} as const satisfies McpToolAnnotations
+}) satisfies McpToolAnnotations
 /** Read-only tools that call an external system (Skatteverket, Riksbanken). */
-const ANNOTATIONS_READ_ONLY_OPEN_WORLD = {
-  readOnlyHint: true,
-  destructiveHint: false,
+const ANNOTATIONS_READ_ONLY_OPEN_WORLD = annotationsForEffect('read_only', {
   idempotentHint: true,
   openWorldHint: true,
-} as const satisfies McpToolAnnotations
+}) satisfies McpToolAnnotations
 /** Writes that also reach an external system. */
-const ANNOTATIONS_WRITE_OPEN_WORLD = {
-  readOnlyHint: false,
-  destructiveHint: false,
+const ANNOTATIONS_WRITE_OPEN_WORLD = annotationsForEffect('additive', {
   idempotentHint: false,
   openWorldHint: true,
-} as const satisfies McpToolAnnotations
+}) satisfies McpToolAnnotations
 
 /**
  * A domain failure carrying a structured-errors registry code, so the dispatch
@@ -3566,7 +3554,7 @@ export function isStagingTool(t: { outputSchema?: Record<string, unknown> }): bo
 export function toolPermissionDoor(t: {
   name: string
   outputSchema?: Record<string, unknown>
-  annotations?: { readOnlyHint?: boolean }
+  annotations?: { effect?: McpToolEffect; readOnlyHint?: boolean }
 }): DoorRule | null {
   return mcpToolDoor(t, { stageable: isStagingTool(t), operation: OPERATION_BY_TOOL.get(t.name) })
 }
@@ -3667,7 +3655,7 @@ function bridgeRefusalReason(
     return `${bridgeName} requires a "tool" argument naming the tool to invoke (${got}). A working call looks like: {"tool": "<tool name>", "arguments": {...}}.`
   }
   if (!target) return null
-  const isRead = target.annotations.readOnlyHint === true
+  const isRead = isReadOnlyTool(target)
   const directCall = (lead: string): string =>
     `${lead} ${directCallAdvice(requestedToolName, target, keyScopes)}`
   if (isRead) {
@@ -5511,7 +5499,7 @@ export const tools: McpTool[] = [
               ...reach,
               inputSchema: projectToolInputSchema(t, { omitCompanyId: simpleCompanyMode }),
               ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-              annotations: t.annotations,
+              annotations: publicToolAnnotations(t.annotations),
               ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
             },
             namespace
@@ -5989,7 +5977,7 @@ export const tools: McpTool[] = [
       if (!inner) {
         throw codedError('NOT_FOUND', `Unknown tool "${String(args.tool ?? '')}". Find the name with gnubok_search_tools.`)
       }
-      if (inner.annotations.readOnlyHint !== true) {
+      if (inner.annotations.effect !== 'read_only') {
         throw codedError('VALIDATION_ERROR', `${innerName} is a write tool: stage it per company with gnubok_stage_across_companies.`)
       }
       if (!isCompanyDependentTool(innerName) || isScopedTool(innerName)) {
@@ -7602,15 +7590,12 @@ export const tools: McpTool[] = [
       },
       required: ['recorded', 'message'],
     },
-    annotations: {
-      // Not read-only: this writes a telemetry event to the bus and mutates the
-      // in-process rate-limit map. readOnlyHint is about side effects, not whether
-      // business state changes: so it must be false even though no ledger is touched.
-      readOnlyHint: false,
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
+      // This writes a telemetry event to the bus and mutates the in-process
+      // rate-limit map even though no ledger is touched.
       idempotentHint: false,
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, userId, supabase, actor) {
       const context = (args.context as string | undefined)?.trim()
       if (!context) throw badArgument('context', 'context is required')
@@ -9391,12 +9376,10 @@ export const tools: McpTool[] = [
       },
       required: ['name', 'customer_type'],
     },
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
       idempotentHint: true, // safe to retry with idempotency_key
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, userId, supabase, actor) {
       // The register's one rule set (CreateCustomerSchema, shared with the
       // dashboard, v1 and the approval) and the approval's own checks on the
@@ -13270,15 +13253,13 @@ export const tools: McpTool[] = [
       },
       required: ['dimensions'],
     },
-    annotations: {
+    annotations: annotationsForEffect('read_only', {
       // The lazy ensure_company_dimensions seed is an idempotent get-or-create
       // of the two system registry rows: semantically a read (the dashboard
       // GET /api/dimensions does the same).
-      readOnlyHint: true,
-      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
-    },
+    }),
     async execute(_args, companyId, _userId, supabase) {
       // The dashboard's and v1's registry read: seeds the system dims and
       // pages the values past PostgREST's 1000-row cap.
@@ -15709,12 +15690,10 @@ export const tools: McpTool[] = [
       },
       required: ['dry_run', 'scanned_transactions', 'proposed_matches', 'proposals'],
     },
-    annotations: {
-      readOnlyHint: false,  // can stage when dry_run=false
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
       idempotentHint: true, // replays with idempotency_key
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, userId, supabase, actor) {
       const dateFrom = args.date_from as string
       const dateTo = args.date_to as string
@@ -22527,12 +22506,10 @@ export const tools: McpTool[] = [
       },
       required: ['deduction_type', 'generated'],
     },
-    annotations: {
-      readOnlyHint: false, // records a rot_rut_payout_requests row when generating
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
       idempotentHint: true, // replays with idempotency_key; without one a second call conflicts (one active begäran per invoice)
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, userId, supabase) {
       const type = args.deduction_type as 'rot' | 'rut'
       if (type !== 'rot' && type !== 'rut') {
@@ -23109,12 +23086,10 @@ export const tools: McpTool[] = [
       },
       required: ['imported', 'already_imported', 'errors', 'results'],
     },
-    annotations: {
-      readOnlyHint: false, // records beslut on rot_rut_payout_requests
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
       idempotentHint: true, // re-importing the same file reports already_imported
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, _userId, supabase) {
       const raw = args.file_content as string
       if (typeof raw !== 'string' || raw.trim() === '') {
@@ -23185,12 +23160,10 @@ export const tools: McpTool[] = [
       },
       required: ['file_name', 'size_bytes', 'period', 'generated_at', 'estimate_only'],
     },
-    annotations: {
-      readOnlyHint: false,  // produces a Storage artifact
-      destructiveHint: false,
+    annotations: annotationsForEffect('additive', {
       idempotentHint: true,  // repeat calls produce equivalent archives, fresh URL
       openWorldHint: false,
-    },
+    }),
     // Archive generation is the one genuinely long-running synchronous call
     // in the catalog: task-capable clients get a durable handle instead of a
     // multi-minute blocking response. Size estimates stay synchronous.
@@ -25191,20 +25164,18 @@ export const tools: McpTool[] = [
       required: ['upload_id', 'upload_url', 'expires_at'],
     },
     _meta: { ui: { resourceUri: 'ui://sie-drop/app.html' } },
-    annotations: {
-      // readOnlyHint MUST stay true on widget-bearing tools: Claude.ai
-      // accepts always-render widgets only on read-only tools and DROPS a
+    annotations: annotationsForEffect('read_only', {
+      // Widget-bearing tools must stay read-only: Claude.ai accepts
+      // always-render widgets only on read-only tools and DROPS a
       // write-annotated one from the connector entirely (the tool flapped
       // into the Interactive list and vanished, E2E #9 2026-08-26; every
       // surviving widget tool was readOnly). Honest too: this only mints a
       // short-lived upload URL; the actual write is the staged
       // gnubok_import_sie, same shape as receipt_matcher (read-only tool,
       // writes via separate approval-gated tools).
-      readOnlyHint: true,
-      destructiveHint: false,
       idempotentHint: false,
       openWorldHint: false,
-    },
+    }),
     async execute(args, companyId, userId, supabase) {
       const fileName = args.filename as string
       if (!hasSIEFileExtension(fileName)) {
@@ -28894,7 +28865,7 @@ assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))
  * pass-through outputSchema is not the staged envelope.
  */
 export const STAGE_BRIDGE_TARGETS: readonly McpTool[] = tools.filter(
-  (t) => isStagingTool(t) && !isDefaultCatalogTool(t) && t.annotations.readOnlyHint !== true,
+  (t) => isStagingTool(t) && !isDefaultCatalogTool(t) && t.annotations.effect !== 'read_only',
 )
 
 /**
@@ -30095,7 +30066,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 description: t.description,
                 inputSchema: projectToolInputSchema(t, { omitCompanyId: simpleCompanyMode }),
                 ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-                annotations: t.annotations,
+                annotations: publicToolAnnotations(t.annotations),
                 ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
               },
               toolNamespace
@@ -30585,7 +30556,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // gnubok_sk_test_ key (which is bound to the real active company) could
       // stage real pending_operations here and, with the approve scope, commit
       // them. Runs before execute() so nothing is ever staged for a test key.
-      if (keyMode === 'test' && tool.annotations?.readOnlyHint === false) {
+      if (keyMode === 'test' && tool.annotations?.effect !== 'read_only') {
         const props = (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)
           ?.properties
         if (props && 'dry_run' in props) {
@@ -30650,7 +30621,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // A mark that cannot be read counts as set: when the server cannot tell
       // whether an unattended run is active, commits over MCP wait (a person
       // can still approve in Accounted), rather than slipping past the guard.
-      if (tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch((err) => {
+      if (tool.annotations?.effect !== 'read_only' && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch((err) => {
         log.warn('Could not read unattended marks; holding the write back', { error: err instanceof Error ? err.message : String(err) })
         return true
       })) {

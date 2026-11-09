@@ -23,6 +23,7 @@ async function call(args: Record<string, unknown>, keyScopes: string[] = ALL_SCO
       note?: string
       inputSchema?: unknown
       outputSchema?: unknown
+      annotations?: Record<string, unknown>
     }>
     count: number
     total_matched: number
@@ -67,6 +68,9 @@ describe('gnubok_search_tools', () => {
     expect(
       (tool.inputSchema as { properties: Record<string, unknown> }).properties
     ).toHaveProperty('company_id')
+    // The MCP hints go out; the server's own effect class does not.
+    expect(tool.annotations).toHaveProperty('readOnlyHint', true)
+    expect(tool.annotations).not.toHaveProperty('effect')
   })
 
   it('does not add company_id to company-independent discovery tools', async () => {

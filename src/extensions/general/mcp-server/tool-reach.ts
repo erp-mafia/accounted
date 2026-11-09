@@ -21,6 +21,8 @@
  * to server.ts, and isStagingTool there is the single source of truth.
  */
 
+import { isReadOnlyTool, type McpToolEffect } from './tool-effects'
+
 export type ToolCallableVia = 'tools_list' | 'call_tool' | 'stage_tool' | 'none'
 
 /** The MCP Apps marker a host reads (`_meta.ui.visibility`); absent means model and app. */
@@ -67,12 +69,12 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 export function toolCallableVia(
   tool: {
     catalogVisibility?: 'default' | 'search'
-    annotations: { readOnlyHint?: boolean }
+    annotations: { effect: McpToolEffect }
   } & ToolUiVisibility,
   reach: { listed: boolean; stages: boolean },
 ): ToolCallableVia {
   if (reach.listed) return 'tools_list'
-  if (tool.annotations.readOnlyHint === true) return 'call_tool'
+  if (isReadOnlyTool(tool)) return 'call_tool'
   return reach.stages && !isDefaultCatalogTool(tool) ? 'stage_tool' : 'none'
 }
 
