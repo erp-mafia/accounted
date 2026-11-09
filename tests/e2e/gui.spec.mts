@@ -324,7 +324,7 @@ for (const theme of ['light', 'dark'] as const) {
 test('forms, workflow steps and register toolbars fit narrow mobile widths', async ({ page }, info) => {
   const routes = [
     '/reports', '/chart-of-accounts', '/customers', '/suppliers', '/invoices/new', '/supplier-invoices?new=1',
-    '/sales-orders/new', '/bookkeeping/year-end', '/rules', '/settings/security', '/dpa',
+    '/sales-orders/new', '/bookkeeping/year-end', '/rules', '/settings/security', '/reports/kassaflodesanalys', '/dpa',
   ]
   for (const route of routes) {
     await page.setViewportSize({ width: 390, height: 844 })
@@ -338,6 +338,8 @@ test('forms, workflow steps and register toolbars fit narrow mobile widths', asy
         await page.getByRole('dialog').waitFor({ state: 'visible' })
       } else if (route === '/bookkeeping/year-end') {
         await page.getByRole('tablist', { name: 'Bokslutets steg' }).waitFor({ state: 'visible' })
+      } else if (route === '/reports/kassaflodesanalys') {
+        await page.getByText('Årets kassaflöde', { exact: true }).waitFor({ state: 'visible' })
       } else if (route === '/dpa') {
         await page.getByRole('heading', { name: 'Personuppgiftsbiträdesavtal (DPA)', exact: true }).waitFor({ state: 'visible' })
       } else {
