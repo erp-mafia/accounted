@@ -54,7 +54,7 @@ export function CalendarHeader({
   }
 
   return (
-    <div className="flex items-center justify-between mb-4">
+    <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={onPrevious}>
           <ChevronLeft className="h-4 w-4" />
@@ -67,7 +67,7 @@ export function CalendarHeader({
         </Button>
       </div>
 
-      <h2 className="text-xl font-semibold capitalize">
+      <h2 className="min-w-0 max-w-full text-xl font-semibold capitalize [overflow-wrap:anywhere]">
         {getTitle()}
       </h2>
 

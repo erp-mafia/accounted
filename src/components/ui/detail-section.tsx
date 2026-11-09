@@ -54,14 +54,14 @@ export function DefRow({
     <div
       {...props}
       className={cn(
-        'grid grid-cols-[8rem_1fr] gap-x-6 py-2 text-sm sm:grid-cols-[10rem_1fr]',
+        'grid grid-cols-1 gap-x-6 gap-y-1 py-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]',
         className,
       )}
     >
       {/* data-ph-unmask on the label only: values (children) are user data
           and stay masked in session replays. */}
       <div data-ph-unmask="" className="text-muted-foreground">{label}</div>
-      <div className="min-w-0">{children}</div>
+      <div className="min-w-0 [overflow-wrap:anywhere]">{children}</div>
     </div>
   )
 }

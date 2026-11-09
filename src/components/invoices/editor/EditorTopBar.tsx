@@ -140,10 +140,10 @@ export function EditorTopBar({
       )}
       <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
         {paneSwitch}
-        <div className="inline-flex items-stretch">
+        <div className="inline-flex min-h-8 min-w-0 max-w-full items-stretch">
           <Button
             size="sm"
-            className={menu ? 'rounded-r-none' : undefined}
+            className={menu ? 'h-auto min-w-0 whitespace-normal rounded-r-none' : 'h-auto min-w-0 whitespace-normal'}
             onClick={primary.onClick}
             onKeyDown={handlePrimaryKeyDown}
             disabled={primary.disabled}
