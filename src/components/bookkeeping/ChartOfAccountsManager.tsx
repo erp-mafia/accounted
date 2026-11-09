@@ -1,12 +1,11 @@
 'use client'
 
-import { ResponsiveTable } from '@/components/ui/responsive-table'
-
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { usePageState } from '@/lib/hooks/use-page-state'
 import { Badge } from '@/components/ui/badge'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -700,7 +699,8 @@ export default function ChartOfAccountsManager() {
                 </button>
               </div>
             )}
-          <ResponsiveTable>
+          <div className="overflow-x-auto">
+            <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -874,6 +874,7 @@ export default function ChartOfAccountsManager() {
             </table>
           </ResponsiveTable>
           </div>
+          </div>
         )
       ) : (
         <div>
@@ -886,6 +887,7 @@ export default function ChartOfAccountsManager() {
           ) : filteredReference.length === 0 ? (
             <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
           ) : (
+            <div className="overflow-x-auto">
             <ResponsiveTable>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
@@ -965,6 +967,7 @@ export default function ChartOfAccountsManager() {
                 </tbody>
               </table>
             </ResponsiveTable>
+          </div>
           )}
         </div>
       )}
