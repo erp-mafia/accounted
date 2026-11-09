@@ -79,6 +79,7 @@ export function useHistoryScroll(companyId: string | null, pathname: string) {
     window.addEventListener('keydown', stop)
     frame = requestAnimationFrame(() => { frame = requestAnimationFrame(restore) })
     cancel.current = stop
+    return stop
   }, [companyId, pathname, key])
 
   return contentRef
