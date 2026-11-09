@@ -1234,3 +1234,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-09] Mobile tables reuse one native table DOM with bordered, spaced row cards. Infer titles and selection columns from existing headers; place final actions in a full-width footer. Expanded details share their row outline.
 
 [2026-11-09] Reuse wrapping workflow steps and labelled responsive form rows for narrow screens; preserve native controls and desktop columns. Mobile audits check the document client width and nested scroll regions, while external docs redirects stay outside the self-hosted audit.
+
+[2026-11-09] Show calendar weeks as seven day cards on phones; the time matrix clipped days at narrow widths. Both views use the same dates and event arrays and preserve the existing day-navigation callback.

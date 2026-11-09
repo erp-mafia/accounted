@@ -1081,3 +1081,10 @@ input[type="number"] {
 }
 
 [data-expandable-surface] { cursor: pointer; }
+
+/* A week matrix needs more space than seven readable phone-sized day cards. */
+.calendar-week-agenda { display: none; }
+@container calendar-week (max-width: 36rem) {
+  .calendar-week-agenda { display: block; }
+  .calendar-week-grid { display: none; }
+}
