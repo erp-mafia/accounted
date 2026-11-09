@@ -1232,3 +1232,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-09] Responsive report tables keep one DOM and derive narrow-screen labels from their headers. Disclosure surfaces preserve native controls and selection. Per-tab, per-company view state and delayed scroll restoration retain context after voucher navigation.
 
 [2026-11-09] Mobile tables reuse one native table DOM with bordered, spaced row cards. Infer titles and selection columns from existing headers; place final actions in a full-width footer. Expanded details share their row outline.
+
+[2026-11-09] Reuse wrapping workflow steps and labelled responsive form rows for narrow screens; preserve native controls and desktop columns. Mobile audits check the document client width and nested scroll regions, while external docs redirects stay outside the self-hosted audit.

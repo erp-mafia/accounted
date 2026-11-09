@@ -61,4 +61,19 @@ describe('responsive table headers', () => {
     expect(html).not.toContain('data-leading-control')
   })
 
+  it('keeps conditional fragment columns aligned and forwards the region label', () => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { role: 'region', 'aria-label': 'Editable rows', children: h('table', null,
+      h('thead', null, h('tr', null,
+        h('th', null, 'Account'),
+        h(React.Fragment, null, h('th', null, 'VAT rate'), h('th', null, 'VAT amount')),
+        h('th', null, 'Total'),
+      )),
+    ) }))
+    expect(html).toContain('role="region"')
+    expect(html).toContain('aria-label="Editable rows"')
+    expect(html).toContain('--table-column-2:&quot;VAT rate&quot;')
+    expect(html).toContain('--table-column-3:&quot;VAT amount&quot;')
+    expect(html).toContain('--table-column-4:&quot;Total&quot;')
+  })
+
 })

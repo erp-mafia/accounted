@@ -928,6 +928,31 @@ input[type="number"] {
   width: auto;
 }
 
+@media (max-width: 639px) {
+  .page-header { flex-wrap: wrap; padding-block: 0.25rem; }
+  .page-header > :is(div, span) { min-width: 0; max-width: 100%; }
+  .page-header-title { white-space: normal; overflow-wrap: anywhere; }
+  .page-header-action > .flex { flex-wrap: wrap; }
+}
+
+/* Editable rows keep their desktop columns and stack the same controls on phones. */
+.responsive-form-editor { container-type: inline-size; container-name: form-editor; }
+.responsive-form-row { container-type: inline-size; container-name: form-row; }
+.responsive-form-cell { display: contents; }
+@container form-editor (max-width: 38rem) {
+  .responsive-form-header { display: none; }
+}
+@container form-row (max-width: 36rem) {
+  .responsive-form-row-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; padding-block: 0.75rem; }
+  .responsive-form-cell { display: flex; flex-direction: column; min-width: 0; gap: 0.25rem; }
+  .responsive-form-cell::before { content: attr(data-label); font-size: 11px; color: hsl(var(--muted-foreground)); }
+  .responsive-form-cell[data-label=""]::before { content: none; }
+  .responsive-form-cell:first-child { grid-column: 1 / -1; }
+  .responsive-form-cell:last-child { align-items: flex-end; justify-content: flex-end; }
+  .responsive-form-cell:has(> div:only-child:empty) { display: none; }
+  .responsive-form-cell > * { min-width: 0; max-width: 100%; }
+}
+
 /* One mobile card per data row, sized by the table container rather than the viewport. */
 @container responsive-table (max-width: 36rem) {
   .responsive-table > table { width: 100%; min-width: 0 !important; }

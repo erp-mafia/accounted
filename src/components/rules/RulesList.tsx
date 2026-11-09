@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
@@ -99,7 +101,7 @@ export default function RulesList() {
         </span>
       </div>
 
-      <div className="mb-3 flex overflow-hidden rounded-lg border border-border" role="tablist" aria-label={t('ladder_label')}>
+      <div className="mb-3 grid grid-cols-2 overflow-hidden rounded-lg border border-border sm:flex" role="tablist" aria-label={t('ladder_label')}>
         {LADDER.map((m) => (
           <button
             key={m}
@@ -109,7 +111,7 @@ export default function RulesList() {
             title={t(`ladder_${m}_help`)}
             onClick={() => setStep(step === m ? null : m)}
             className={cn(
-              'flex h-10 flex-1 items-center justify-center gap-2 border-r border-border px-2 text-[12.5px] transition-colors duration-150 last:border-r-0',
+              'flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-r border-border px-2 text-[12.5px] transition-colors duration-150 last:border-r-0',
               step === m ? 'bg-secondary text-foreground shadow-[inset_0_-2px_0_hsl(var(--foreground))]' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
             )}
           >
@@ -121,7 +123,7 @@ export default function RulesList() {
         ))}
       </div>
 
-      <div className="-mx-5 overflow-x-auto px-5 md:-mx-6 md:px-6">
+      <ResponsiveTable>
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -210,7 +212,7 @@ export default function RulesList() {
             )}
           </tbody>
         </table>
-      </div>
+      </ResponsiveTable>
     </div>
   )
 }

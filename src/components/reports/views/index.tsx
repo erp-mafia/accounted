@@ -1,5 +1,8 @@
 'use client'
 
+import { WorkflowSteps } from '@/components/ui/workflow-steps'
+
+
 // Report view components, extracted verbatim from app/(dashboard)/reports/page.tsx.
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
@@ -1403,9 +1406,7 @@ function VatStepper({
   ]
 
   return (
-    <div
-      className="flex w-full items-center gap-3 overflow-x-auto px-1"
-      role="tablist"
+    <WorkflowSteps
       aria-label="Momsdeklarationens steg"
     >
       {steps.map((step, i) => (
@@ -1455,7 +1456,7 @@ function VatStepper({
           </button>
         </React.Fragment>
       ))}
-    </div>
+    </WorkflowSteps>
   )
 }
 

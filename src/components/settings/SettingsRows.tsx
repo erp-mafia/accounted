@@ -47,15 +47,15 @@ interface SettingsSectionHeaderProps {
 
 export function SettingsSectionHeader({ title, intro, action, mark }: SettingsSectionHeaderProps) {
   return (
-    <header className="flex min-h-9 items-center justify-between gap-4">
-      <div className="flex items-center gap-2">
+    <header className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-4">
+      <div className="flex min-w-0 items-center gap-2">
         {mark ? <span className="shrink-0 leading-none">{mark}</span> : null}
         {/* data-ph-unmask: settings chrome (titles, labels) is static i18n
             text in session replays; values and controls stay masked. */}
-        <h2 data-ph-unmask="" className="font-display text-2xl tracking-tight">{title}</h2>
+        <h2 data-ph-unmask="" className="min-w-0 font-display text-2xl tracking-tight [overflow-wrap:anywhere]">{title}</h2>
         {intro ? <HelpPopover className="shrink-0">{intro}</HelpPopover> : null}
       </div>
-      {action ? <div className="flex shrink-0 items-center gap-3">{action}</div> : null}
+      {action ? <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">{action}</div> : null}
     </header>
   )
 }
@@ -160,7 +160,7 @@ export function SettingsRow({
 
 /** Right-aligned slot inside a row (quiet actions, secondary values). */
 export function SettingsRowEnd({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn('ml-auto flex shrink-0 items-center gap-3', className)}>{children}</div>
+  return <div className={cn('ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-3', className)}>{children}</div>
 }
 
 /** Muted secondary text inside a row. */

@@ -194,7 +194,7 @@ export function BookingTemplatesPanel() {
           <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
         </p>
         {canWrite && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
             <Button
               variant="outline"
               size="sm"

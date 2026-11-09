@@ -16,7 +16,7 @@ export default function DPAPage() {
     <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="font-display text-3xl md:text-4xl tracking-tight text-foreground">
+          <h1 className="font-display text-3xl md:text-4xl tracking-tight text-foreground [overflow-wrap:anywhere]">
             Personuppgiftsbiträdesavtal (DPA)
           </h1>
           <p className="text-sm text-muted-foreground">

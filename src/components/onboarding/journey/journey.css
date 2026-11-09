@@ -54,7 +54,11 @@
 .jny-ans { display: block; margin-top: 3px; font-size: 11px; color: hsl(var(--muted-foreground)); line-height: 1.45; }
 .jny-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 @keyframes jnyDotPop { 0% { transform: scale(1); } 45% { transform: scale(1.8); } 100% { transform: scale(1); } }
-@media (max-width: 640px) { .jny-lbl, .jny-ans { display: none; } }
+@media (max-width: 640px) {
+  .jny-lbl, .jny-ans { display: none; }
+  .jny-journey { width: 100%; max-width: 100%; }
+  .jny-pt { width: 12%; }
+}
 
 /* ── fact line (lookup results ink in under the band) ────────────── */
 .jny-facts { flex: none; margin: 18px 0 0; min-height: 48px; max-width: 540px; transition: opacity 300ms var(--ease-out); }

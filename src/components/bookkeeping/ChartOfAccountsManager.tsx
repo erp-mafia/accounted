@@ -571,7 +571,7 @@ export default function ChartOfAccountsManager() {
           <p>{t('help_text')}</p>
         </HelpPopover>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
           {t('prune_button')}

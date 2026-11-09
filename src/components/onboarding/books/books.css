@@ -332,6 +332,8 @@ body.bks-theater [data-onboarding-backdrop] { opacity: 0.3; }
 .bks .jny-journey, .bks .jny-canvas { max-width: 100%; }
 
 /* ── reduced motion: every rule lands on its end state at once ────── */
+@media (max-width: 640px) { .bks .jny-pt { width: 12%; } }
+
 @media (prefers-reduced-motion: reduce) {
   .bks *, .bks *::before, .bks *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
   .stamp.is-away .wait { animation: none; opacity: 0.55; }
