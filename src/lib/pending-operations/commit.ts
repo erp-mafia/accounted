@@ -329,7 +329,7 @@ export interface CommitResult {
   // (recoverable refusal: capability, chart accounts, Skatteverket, or an
   // authorization failure that happened before any side-effect). Agents
   // used to infer "consumed" from status 'failed' and were wrong both ways.
-  operation_status?: 'pending' | 'committed' | 'rejected' | 'failed_partial'
+  operation_status?: 'pending' | 'committed' | 'rejected' | 'failed_partial' | 'unknown'
 }
 
 export interface CommitOptions {
@@ -6440,6 +6440,21 @@ async function commitPendingOperationInner(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
+  // ── A scheduled or system turn never approves: approval is a person's act,
+  //    in their own session or through a key they hold. First, before any
+  //    gate or the claim, so the op stays 'pending' for a person.
+  if (opts.actor?.type === 'cron' || opts.actor?.type === 'system') {
+    return {
+      status: 'failed',
+      error:
+        getErrorEntry('PENDING_OPERATION_SYSTEM_APPROVAL_FORBIDDEN')?.message_sv ??
+        'En schemalagd körning eller systemet kan inte godkänna ett förslag.',
+      http_status: 403,
+      code: 'PENDING_OPERATION_SYSTEM_APPROVAL_FORBIDDEN',
+      operation_status: 'pending',
+    }
+  }
+
   // ── Web-only approvals (collections). Handing an invoice over and
   //    escalating a case rest on a person's own word (attestations, the
   //    bank check they saw); an agent may stage them but only a person

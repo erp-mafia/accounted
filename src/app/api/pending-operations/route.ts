@@ -29,7 +29,7 @@ export const GET = withRouteContext(
     // operator, but a dedicated tab for a rare state would bury it. A direct
     // ?status=failed_partial query still returns only those rows.
     const statusesFor = (candidate: string): string[] =>
-      candidate === 'rejected' ? ['rejected', 'failed_partial'] : [candidate]
+      candidate === 'rejected' ? ['rejected', 'failed_partial', 'unknown'] : [candidate]
 
     const listPromise = supabase
       .from('pending_operations')

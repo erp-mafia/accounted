@@ -501,6 +501,20 @@ describe('gnubok_reject_pending_operation', () => {
     ).rejects.toThrow(/already committed/i)
   })
 
+  it('says an unknown op may have posted and points at the ledger, not at a verifikat to reverse', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'unknown', operation_type: 'x', risk_level: 'low' }], error: null })
+
+    const message = await rejectTool
+      .execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)
+      .then(() => '', (err: Error) => err.message)
+    expect(message).toMatch(/resolved as unknown/)
+    expect(message).toMatch(/may or may not have posted/)
+    expect(message).toMatch(/Check the ledger/)
+    expect(message).not.toMatch(/approved explicitly|verifikat/)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('throws when the op is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [], error: null })

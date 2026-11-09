@@ -1235,7 +1235,7 @@ export default function PendingOperationsPage() {
                         variant={
                           isAutoExpired(op)
                             ? 'secondary'
-                            : op.status === 'failed_partial'
+                            : op.status === 'failed_partial' || op.status === 'unknown'
                               ? 'warning'
                               : 'destructive'
                         }
@@ -1245,7 +1245,9 @@ export default function PendingOperationsPage() {
                           ? t('badge_auto_expired')
                           : op.status === 'failed_partial'
                             ? t('badge_failed_partial')
-                            : t('badge_rejected')}
+                            : op.status === 'unknown'
+                              ? t('badge_unknown')
+                              : t('badge_rejected')}
                       </Badge>
                     )}
                     <div className="min-w-0 flex-1">
@@ -1265,6 +1267,9 @@ export default function PendingOperationsPage() {
                             <span className="font-mono"> ({failedPartialPostedIds(op)})</span>
                           )}
                         </p>
+                      )}
+                      {op.status === 'unknown' && (
+                        <p className="mt-1 text-xs text-muted-foreground">{t('unknown_detail')}</p>
                       )}
                     </div>
                     <ChevronRightIcon
@@ -1518,6 +1523,11 @@ export default function PendingOperationsPage() {
                         <span className="font-mono"> ({failedPartialPostedIds(detailOp)})</span>
                       )}
                     </p>
+                  </div>
+                )}
+                {detailOp.status === 'unknown' && (
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-xs leading-snug text-muted-foreground">{t('unknown_detail')}</p>
                   </div>
                 )}
               </SlideOverBody>

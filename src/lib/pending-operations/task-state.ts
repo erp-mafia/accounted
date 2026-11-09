@@ -15,6 +15,7 @@
  *   committing      -                         working
  *   committed       -                         completed
  *   failed_partial  -                         failed
+ *   unknown         -                         failed (outcome could not be verified)
  *   rejected        failed                    failed
  *   rejected        null, commit failure row  failed     (rows from before the category)
  *   rejected        a person's, expired,      cancelled
@@ -70,6 +71,7 @@ export function pendingOperationTaskState(op: TaskStateSource): PendingOperation
     case 'committed':
       return 'completed'
     case 'failed_partial':
+    case 'unknown':
       return 'failed'
     case 'rejected':
       return rejectedByCommit(op) ? 'failed' : 'cancelled'

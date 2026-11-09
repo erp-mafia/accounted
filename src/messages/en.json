@@ -1207,6 +1207,8 @@
     "badge_auto_expired": "Expired automatically",
     "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked.",
     "badge_failed_partial": "Partially completed",
+    "badge_unknown": "Outcome unknown",
+    "unknown_detail": "The approval was interrupted and its outcome could not be verified. Check the affected records before staging again. Nothing was replayed automatically.",
     "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction.",
     "approve_all": "Approve all ({count})",
     "bulkbar_selected": "selected",

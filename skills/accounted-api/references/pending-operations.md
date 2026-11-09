@@ -12,7 +12,7 @@ are in SKILL.md and are not repeated per endpoint.
 **List pending operations (staged writes waiting for approval).**
 `scope:pending_operations:read · risk:low · idempotent`
 
-Returns the company's pending operations newest first: writes staged for approval by an agent, an integration (`?stage=true` on a write) or the app, with what approving each will do (`preview`), its risk level and, once resolved, its `result`. Every row carries `status` (pending, committing, committed, rejected, failed_partial) and `task_state` in the MCP Tasks / A2A vocabulary: working (pending, committing), completed (committed), failed (the approved commit did not go through), cancelled (rejected by a person, expired or superseded). Defaults to `status=pending`, the approval queue; `status=all` lists every status. Same rows as the app's review list and the MCP tool gnubok_list_pending_operations.
+Returns the company's pending operations newest first: writes staged for approval by an agent, an integration (`?stage=true` on a write) or the app, with what approving each will do (`preview`), its risk level and, once resolved, its `result`. Every row carries `status` (pending, committing, committed, rejected, failed_partial, unknown) and `task_state` in the MCP Tasks / A2A vocabulary: working (pending, committing), completed (committed), failed (the approved commit did not go through, or was interrupted and its outcome is unknown: check the ledger, it is never replayed), cancelled (rejected by a person, expired or superseded). Defaults to `status=pending`, the approval queue; `status=all` lists every status. Same rows as the app's review list and the MCP tool gnubok_list_pending_operations.
 
 **Use when:** You run an approval or attest flow outside Accounted and need the queue of operations waiting for a decision, or the outcome of the ones you staged.
 **Do not use for:** Supplier-invoice attest (GET /supplier-invoices and POST /supplier-invoices/{id}/approve, governed by the attest policy). Polling one operation you staged (GET /pending-operations/{id}).
@@ -25,7 +25,7 @@ Returns the company's pending operations newest first: writes staged for approva
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `status` | query | `"pending" \| "committing" \| "committed" \| "rejected" \| "failed_partial" \| "all"` | no | Default pending (the approval queue). all = every status. |
+| `status` | query | `"pending" \| "committing" \| "committed" \| "rejected" \| "failed_partial" \| "unknown" \| "all"` | no | Default pending (the approval queue). all = every status. |
 | `risk_level` | query | `"low" \| "medium" \| "high"` | no |  |
 | `operation_type` | query | `string` | no | One operation type, e.g. create_invoice. |
 | `batch_id` | query | `string` | no | Only the operations staged together under this batch. |
@@ -35,7 +35,7 @@ Returns the company's pending operations newest first: writes staged for approva
 Response `200`:
 ```ts
 {
-  data: { pending_operation_id: string, handle?: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, agent_reason: string | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
+  data: { pending_operation_id: string, handle?: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial" | "unknown", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, agent_reason: string | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -119,7 +119,7 @@ Response `200`:
     company_id: string,
     operation_type: string,
     title: string,
-    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial",
+    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial" | "unknown",
     task_state: "working" | "completed" | "failed" | "cancelled",
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,
@@ -229,7 +229,7 @@ Response `200`:
     company_id: string,
     operation_type: string,
     title: string,
-    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial",
+    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial" | "unknown",
     task_state: "working" | "completed" | "failed" | "cancelled",
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,
@@ -344,7 +344,7 @@ Response `200`:
     company_id: string,
     operation_type: string,
     title: string,
-    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial",
+    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial" | "unknown",
     task_state: "working" | "completed" | "failed" | "cancelled",
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,

@@ -8,8 +8,9 @@ import { seedCompany, setActiveCompany } from './fixtures'
  * and respects the company's answers, which sync_company_suggestion_decision
  * reads off every door's decision on the pending operation: committed is
  * accepted, a rejection with the reason "Visa aldrig" is declined for good,
- * any other rejection (Inte nu, the expiry, a refused approval) snoozes the
- * key for 30 days. An operation type the database does not know yet raises
+ * any other rejection (Inte nu, the expiry, a refused approval) or an
+ * interrupted approval the sweep closed as unknown (20261109170400) snoozes
+ * the key for 30 days. An operation type the database does not know yet raises
  * check_violation and writes nothing (the deploy-order safety the caller
  * relies on).
  */
@@ -165,6 +166,25 @@ describe('stage_company_suggestion and the decision trigger', () => {
     )
     expect((await suggestion(companyId)).state).toBe('accepted')
     expect((await stage(companyId, userId)).staged).toBe(true)
+  })
+
+  it('an interrupted approval the sweep closes as unknown snoozes it, like a refused one', async () => {
+    const first = await stage(companyId, userId)
+    await getPool().query(`UPDATE public.pending_operations SET status = 'committing' WHERE id = $1`, [first.pending_operation_id])
+    expect((await suggestion(companyId)).state).toBe('open')
+    // The payload shape buildRecoveryUpdate writes when it finds no posted trace.
+    await getPool().query(
+      `UPDATE public.pending_operations SET status = 'unknown', resolved_at = now(),
+              result_data = '{"outcome_unknown": true, "reason": "stuck_committing"}' WHERE id = $1`,
+      [first.pending_operation_id],
+    )
+    const snoozed = await suggestion(companyId)
+    expect(snoozed.state).toBe('snoozed')
+    const days = (new Date(snoozed.snoozed_until).getTime() - Date.now()) / 86_400_000
+    expect(days).toBeGreaterThan(29.9)
+    expect(days).toBeLessThan(30.1)
+    expect(await stage(companyId, userId)).toMatchObject({ staged: false, reason: 'snoozed' })
+    expect(await pendingCount(companyId)).toBe(0)
   })
 
   it('an approval handed back to pending leaves it open', async () => {

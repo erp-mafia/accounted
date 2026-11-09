@@ -16,7 +16,7 @@ import { z } from 'zod'
 import { isMissingColumnError } from './agent-reason'
 import { pendingOperationTaskState, PENDING_OPERATION_TASK_STATES } from './task-state'
 
-export const PENDING_OPERATION_STATUSES = ['pending', 'committing', 'committed', 'rejected', 'failed_partial'] as const
+export const PENDING_OPERATION_STATUSES = ['pending', 'committing', 'committed', 'rejected', 'failed_partial', 'unknown'] as const
 
 /** The columns the view reads; never `params`. */
 export const PENDING_OPERATION_VIEW_COLUMNS =
@@ -94,7 +94,7 @@ export const PendingOperationView = z.object({
   status: z
     .enum(PENDING_OPERATION_STATUSES)
     .describe(
-      'pending: waiting for a decision. committing: an approval is running it. committed: done. rejected: not done (a person said no, it expired, it was handled another way, or the commit refused it). failed_partial: the commit failed after posting something; result.posted_ids names it.',
+      'pending: waiting for a decision. committing: an approval is running it. committed: done. rejected: not done (a person said no, it expired, it was handled another way, or the commit refused it). failed_partial: the commit failed after posting something; result.posted_ids names it. unknown: the commit was interrupted and its effects could not be verified; it is never replayed.',
     ),
   task_state: z
     .enum(PENDING_OPERATION_TASK_STATES)

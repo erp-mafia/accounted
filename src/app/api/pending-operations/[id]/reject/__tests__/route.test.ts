@@ -107,6 +107,20 @@ describe('POST /api/pending-operations/:id/reject', () => {
     expect(body.error).toContain('already committed')
   })
 
+  it('returns 409 for an unknown outcome, pointing at the ledger instead of a verifikat to reverse', async () => {
+    enqueue({ data: [{ ...PENDING_ROW, status: 'unknown' }] })
+
+    const response = await POST(rejectRequest(), routeParams)
+    const { status, body } = await parseJsonResponse<{ error: string; status: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.status).toBe('unknown')
+    expect(body.error).toMatch(/may or may not have posted/)
+    expect(body.error).toMatch(/Check the ledger/)
+    expect(body.error).not.toMatch(/approved explicitly|verifikat/)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('rejects successfully', async () => {
     enqueueMany([
       { data: [PENDING_ROW] },                         // fetch op

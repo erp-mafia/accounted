@@ -48,7 +48,7 @@ describe('GET /api/pending-operations', () => {
   it('returns 400 for an invalid status', async () => {
     const response = await GET(
       createMockRequest('/api/pending-operations', {
-        searchParams: { status: 'unknown' },
+        searchParams: { status: 'bogus' },
       }),
       { params: Promise.resolve({}) },
     )
