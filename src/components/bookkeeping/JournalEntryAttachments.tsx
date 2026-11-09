@@ -165,7 +165,7 @@ export default function JournalEntryAttachments({
 
   useEffect(() => {
     fetchDocuments()
-    return () => { documentReadGeneration.current++ }
+    return () => { documentReadGeneration.current += 1 }
   }, [fetchDocuments])
 
   // Refresh documents when uploads complete
