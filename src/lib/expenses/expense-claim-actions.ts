@@ -38,7 +38,7 @@ import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-
 import { roundOre, sumOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, BookingReviewRequiredError } from '@/lib/bookkeeping/errors'
 import {
   createPayoutBatch,
   deleteExpenseClaim,
@@ -332,6 +332,7 @@ export async function createExpenseClaim(
     if (!result.ok) return registerFailure(ctx, result)
     return { ok: true, data: result.claim, created: true }
   } catch (err) {
+    if (err instanceof BookingReviewRequiredError) return { ok: false, code: 'BOOKING_REVIEW_REQUIRED' }
     ctx.log.error('failed to register expense claim', err as Error)
     return failed(err)
   }

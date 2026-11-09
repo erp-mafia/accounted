@@ -76,6 +76,20 @@ describe('operationBookingReview', () => {
     expect(review?.matched).toHaveLength(1)
   })
 
+  it('judges a staged utlägg on its seller, lines and gross', async () => {
+    mock.setTable('invoice_inbox_items', { data: { extracted_data: { supplier: { name: 'Spotify AB' } } } })
+    const review = await operationBookingReview(mock.supabase as never, 'c-1', {
+      operation_type: 'create_expense_claim',
+      params: {},
+      preview_data: {
+        amount_sek: 119,
+        inbox_item_id: 'item-1',
+        verifikat: { lines: OP.preview_data.lines },
+      },
+    } as never)
+    expect(review).toEqual({ matched: [{ id: 'r-1', rule_id: 'r-1', version: 1 }], amountSek: 119 })
+  })
+
   it('reads no rules table that is not there yet as no rules', async () => {
     mock.setTable('booking_review_rules', { data: null, error: { code: '42P01', message: 'relation does not exist' } })
     expect(await operationBookingReview(mock.supabase as never, 'c-1', OP as never)).toBeNull()

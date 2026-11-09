@@ -519,6 +519,7 @@ export async function registerExpenseClaim(
       expense_account: input.expense_account,
       liability_account: plan.liabilityAccount,
       document_id: input.document_id ?? null,
+      metadata: { inbox_item_id: input.inbox_item_id ?? null },
       status: 'registered',
     })
     .select('*')

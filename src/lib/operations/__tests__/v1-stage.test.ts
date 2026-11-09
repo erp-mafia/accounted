@@ -36,6 +36,10 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 // An in-memory idempotency_keys table: the stage/commit separation only shows
 // when a stored key carries state from one request to the next.
 const idempotency = vi.hoisted(() => ({ store: new Map<string, { hash: string; status: string; body: unknown }>() }))
+const review = vi.hoisted(() => ({ rules: vi.fn(), judge: vi.fn() }))
+vi.mock('@/lib/booking-review/rules', () => ({ loadActiveBookingReviewRules: review.rules }))
+vi.mock('@/lib/booking-review/operation-gate', () => ({ operationBookingReview: review.judge }))
+
 vi.mock('@/lib/api/idempotency', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api/idempotency')>('@/lib/api/idempotency')
   return {
@@ -110,6 +114,7 @@ const widgetsCreate = defineOperation({
   docs: DOCS,
   input: z.object({ name: z.string().min(1), pay_to: z.string().optional() }),
   output: z.object({ widget_id: z.string() }),
+  stageOnErrorCodes: ['BOOKING_REVIEW_REQUIRED'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/widgets' },
   mcp: {
     name: 'gnubok_create_widget',
@@ -281,6 +286,8 @@ function auth(mode: 'live' | 'test' = 'live') {
 beforeEach(() => {
   vi.clearAllMocks()
   idempotency.store.clear()
+  review.rules.mockResolvedValue([])
+  review.judge.mockResolvedValue(null)
   mockValidate.mockResolvedValue(auth())
   stagedRun.mockImplementation(async (_ctx, input, options) =>
     (options as { dryRun: boolean }).dryRun
@@ -388,6 +395,46 @@ describe("v1 stage mode: the stager's reason", () => {
 })
 
 describe('v1 stage mode', () => {
+  it('stages a write a hard block matches before anything is written (accounted#166)', async () => {
+    const mock = client()
+    review.rules.mockResolvedValue([{ id: 'rule-1' }])
+    review.judge.mockResolvedValue({ matched: [{ id: 'rule-1' }], amountSek: 500 })
+
+    const res = await POST_STAGED(post('widgets', { name: 'Acme' }), params)
+
+    expect(res.status).toBe(202)
+    // Dry runs only: the judge's, then the stager's. The write never runs.
+    expect(stagedRun.mock.calls.map((call) => call[2])).not.toContainEqual({ dryRun: false })
+    expect(review.judge).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ preview_data: { name: 'Acme', pay_to: '5050-1055' } }),
+    )
+    expect(mock.payloads('pending_operations', 'insert')).toHaveLength(1)
+  })
+
+  it('writes directly when the company has no hard blocks, without a dry run to judge', async () => {
+    client()
+
+    await POST_STAGED(post('widgets', { name: 'Acme' }), params)
+
+    expect(review.judge).not.toHaveBeenCalled()
+    expect(stagedRun.mock.calls.map((call) => call[2])).toEqual([{ dryRun: false }])
+  })
+
+  it('stages a direct write refused for review, using the same pending operation as MCP', async () => {
+    const mock = client()
+    stagedRun
+      .mockResolvedValueOnce({ ok: false, code: 'BOOKING_REVIEW_REQUIRED' })
+      .mockResolvedValueOnce({ ok: true, dryRun: true, preview: { name: 'Acme', pay_to: '5050-1055' } })
+
+    const res = await POST_STAGED(post('widgets', { name: 'Acme' }), params)
+
+    expect(res.status).toBe(202)
+    expect(stagedRun.mock.calls.map((call) => call[2])).toEqual([{ dryRun: false }, { dryRun: true }])
+    expect(mock.payloads('pending_operations', 'insert')).toHaveLength(1)
+  })
+
   it('?stage=true stages exactly one pending operation as the key, commits nothing and answers 202', async () => {
     const mock = client()
 

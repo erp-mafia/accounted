@@ -70,13 +70,13 @@ const STAGED = {
 }
 
 describe('which journal entries a block judges', () => {
-  it('judges bank rows, supplier invoices and Inkorg documents, nothing else', () => {
+  it('judges bank rows, supplier invoices, Inkorg documents and utlägg, nothing else', () => {
     const judged = Object.entries(BOOKING_REVIEW_SOURCES)
       .filter(([, source]) => source !== null)
       .map(([type]) => type)
       .sort()
-    // The list booking_review_entry_matches holds (migration 20261031231512).
-    expect(judged).toEqual(['bank_transaction', 'inbox_item', 'manual', 'supplier_invoice_cash_payment', 'supplier_invoice_registered'])
+    // The list booking_review_entry_matches holds (migration 20261109170100).
+    expect(judged).toEqual(['bank_transaction', 'expense_claim', 'inbox_item', 'manual', 'supplier_invoice_cash_payment', 'supplier_invoice_registered'])
     expect(BOOKING_REVIEW_SOURCES.supplier_invoice_paid).toBeNull()
     expect(BOOKING_REVIEW_SOURCES.invoice_created).toBeNull()
   })
