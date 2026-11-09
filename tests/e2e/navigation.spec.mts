@@ -101,7 +101,7 @@ test('authenticated client navigation can return to cached registers', async ({ 
   })
 })
 
-test('journal entry details load once within budget', async ({ page }, info) => {
+test('journal entry details render before their background refresh within budget', async ({ page }, info) => {
   const response = await page.request.get('/api/bookkeeping/journal-entries?status=posted&limit=1&include_related=false')
   expect(response.ok()).toBe(true)
   const entry = (await response.json()).data[0]
@@ -111,12 +111,48 @@ test('journal entry details load once within budget', async ({ page }, info) => 
     const path = new URL(request.url()).pathname
     if (path.startsWith(`/api/bookkeeping/journal-entries/${entry.id}/`)) detailRequests.push(path)
   })
-  await measured(info, 'Open journal entry details', BUDGET.navigation, async () => {
-    await page.goto(`/bookkeeping/${entry.id}`)
-    await page.getByRole('heading', { name: 'Kontorader', exact: true }).waitFor({ state: 'visible' })
+  let releaseRefresh!: () => void
+  const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve })
+  await page.route(`**/api/bookkeeping/journal-entries/${entry.id}/detail`, async route => {
+    await heldRefresh
+    await route.continue()
   })
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/${entry.id}/detail`)).catch(() => null)
+  const note = `E2E note before refresh ${info.project.name}`
+  await page.route(`**/api/bookkeeping/journal-entries/${entry.id}/notes`, route => route.fulfill({ json: { data: {} } }))
+  try {
+    await measured(info, 'Open journal entry details', BUDGET.navigation, async () => {
+      await page.goto(`/bookkeeping/${entry.id}`)
+      await page.getByRole('heading', { name: 'Kontorader', exact: true }).waitFor({ state: 'visible' })
+    })
+    // Editing immediately must work even before SWR's background read has
+    // populated its cache from the server-rendered seed.
+    await page.getByRole('button', { name: 'Redigera anteckning', exact: true }).click()
+    await page.getByPlaceholder('Intern anteckning...').fill(note)
+    await measured(info, 'Save note before background refresh', BUDGET.interaction, async () => {
+      await page.getByRole('button', { name: 'Spara', exact: true }).click()
+      await expect(page.getByText(note, { exact: true })).toBeVisible()
+    })
+  } finally { releaseRefresh() }
+  expect((await refreshed)?.ok()).toBe(true)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(page.getByText(note, { exact: true })).toBeVisible()
   expect(detailRequests.filter(path => path.endsWith('/detail'))).toHaveLength(1)
   expect(detailRequests.filter(path => /\/(chain|references|retag-log|rattelse-log)$/.test(path))).toHaveLength(0)
+})
+
+test('voucher rows exist in server HTML without executing client JavaScript', async ({ page, browser }, info) => {
+  const response = await page.request.get('/api/bookkeeping/journal-entries?status=posted&limit=1&include_related=false')
+  expect(response.ok()).toBe(true)
+  const entry = (await response.json()).data[0]
+  const noJavaScript = await browser.newContext({ storageState: await page.context().storageState(), javaScriptEnabled: false, viewport: page.viewportSize() })
+  try {
+    const document = await noJavaScript.newPage()
+    await measured(info, 'Server-render voucher rows', BUDGET.navigation, async () => {
+      await document.goto(new URL(`/bookkeeping/${entry.id}`, response.url()).href)
+      await expect(document.locator('table tbody tr').first()).toBeAttached()
+    })
+  } finally { await noJavaScript.close() }
 })
 
 test('failed reference reads recover both voucher links and referenced attachments', async ({ page }, info) => {
