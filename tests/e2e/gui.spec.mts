@@ -362,3 +362,30 @@ test('forms, workflow steps and register toolbars fit narrow mobile widths', asy
     }
   }
 })
+
+test('loaded customer, invoice and credit views fit narrow screens', async ({ page }, info) => {
+  const customers = await page.request.get('/api/customers')
+  expect(customers.ok()).toBe(true)
+  const customer = (await customers.json()).data[0] as { id: string; name: string }
+  const invoices = await page.request.get('/api/invoices?pageSize=2')
+  expect(invoices.ok()).toBe(true)
+  const invoice = (await invoices.json()).data[0] as { id: string; invoice_number: string }
+  const routes = [`/customers/${customer.id}`, `/invoices/${invoice.id}`, `/invoices/${invoice.id}/credit`]
+  for (const route of routes) {
+    await page.setViewportSize({ width: 320, height: 844 })
+    await measured(info, `Ready mobile detail ${route.split('/').slice(0, 2).join('/')}${route.endsWith('/credit') ? '/credit' : ''}`, BUDGET.navigation, async () => {
+      await page.goto(route)
+      if (route.startsWith('/customers/')) {
+        await page.getByRole('heading', { name: customer.name, exact: true }).waitFor({ state: 'visible' })
+      } else if (route.endsWith('/credit')) {
+        await page.waitForFunction(() => [...document.querySelectorAll('main tbody > tr')].some(row => row.getClientRects().length > 0))
+      } else {
+        await page.locator('main h1').filter({ hasText: invoice.invoice_number }).waitFor({ state: 'visible' })
+      }
+    })
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ width, height: 844 })
+      expect(await page.evaluate(horizontalOverflow), `Detail at ${width}px`).toEqual({ page: false, main: false, regions: [] })
+    }
+  }
+})
