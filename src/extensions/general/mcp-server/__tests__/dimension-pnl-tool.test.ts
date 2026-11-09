@@ -52,7 +52,7 @@ beforeEach(() => {
 describe('gnubok_get_dimension_pnl: registration', () => {
   it('is registered, read-only, and mapped to reports:read (unmapped = any key)', () => {
     expect(tool).toBeDefined()
-    expect(tool.annotations).toEqual({
+    expect(tool.annotations).toMatchObject({
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,

@@ -10,6 +10,7 @@ import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/fact
 import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
 import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/arkiv-propose-fact'
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
+import { annotationsForEffect } from './tool-effects'
 import { askDocument } from '@/lib/arkiv/ask'
 import { captureArkivEvent } from '@/lib/arkiv/events'
 import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
@@ -824,7 +825,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_resolve_missing',
       keywords: ['arkiv', 'saknas', 'hämta dokument', 'finns inte', 'gäller inte'],
       title: 'Resolve Missing Document',
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: false }),
       description:
         'Close one item from Accounted://arkiv/missing: uploaded (with the document record_ref) after you put the document in, not_exists or not_applicable when the person says so. The two latter answers are remembered and never asked again.',
       inputSchema: {

@@ -106,6 +106,17 @@ describe('tools/list reads the resolved capabilities', () => {
     expect(PAYROLL_LISTED.length).toBeGreaterThan(0)
   })
 
+  it('lists the MCP hints and keeps the server-side effect class off the wire', async () => {
+    connect({})
+    const json = await (await handleMcpRequest(rpc('tools/list'))).json()
+    const listedTools = json.result.tools as Array<{ name: string; annotations: Record<string, unknown> }>
+    expect(listedTools.length).toBeGreaterThan(0)
+    for (const tool of listedTools) {
+      expect(tool.annotations, tool.name).not.toHaveProperty('effect')
+      expect(typeof tool.annotations.readOnlyHint, tool.name).toBe('boolean')
+    }
+  })
+
   it('leaves out the tools of a switched-off package on a single-company connection', async () => {
     connect({ switchedOff: ['payroll'] })
     const names = await listed()

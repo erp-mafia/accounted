@@ -87,7 +87,10 @@ export const MCP_TOOL_DOORS: Readonly<Record<string, DoorSpec | OutsideDoor>> = 
 
 export interface McpToolLike {
   readonly name: string
-  readonly annotations?: { readonly readOnlyHint?: boolean }
+  readonly annotations?: {
+    readonly effect?: 'read_only' | 'additive' | 'destructive'
+    readonly readOnlyHint?: boolean
+  }
 }
 
 /**
@@ -106,6 +109,6 @@ export function mcpToolDoor(
   if (override) return isOutsideDoor(override) ? override : { ...override, stageable: options.stageable }
   const scope = TOOL_SCOPE_MAP[tool.name]
   if (!scope) return null
-  const found = scopeDoorSpec(scope, tool.annotations?.readOnlyHint === true)
+  const found = scopeDoorSpec(scope, tool.annotations?.effect === 'read_only')
   return found ? { ...found, stageable: options.stageable } : null
 }

@@ -121,7 +121,7 @@ describe('withRetryKey', () => {
         name: 'gnubok_fake_write',
         description: 'A direct write.',
         inputSchema: { type: 'object', additionalProperties: false, properties: { amount: { type: 'number' }, dry_run: { type: 'boolean' } } },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        annotations: { effect: 'additive', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         execute,
       },
       options,
