@@ -8,6 +8,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isEntityType } from '@/lib/company/entity-type'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 
 const log = createLogger('deadline-generator')
 import {
@@ -307,6 +308,65 @@ interface SupersededDeadlineRow {
 const MANUAL_STATUSES = new Set<DeadlineStatus>(['in_progress', 'submitted', 'confirmed'])
 
 /**
+ * The AGI periods of `years` already filed at Skatteverket, keyed like the
+ * generator's rows (`arbetsgivardeklaration:YYYY-MM`), each with the earliest
+ * filing moment known (`now` when none is recorded). Filed means the period
+ * has a kvittens (agi_kvittenser) or its declaration carries one
+ * (AGI_RECEIPT_STATUSES). The earliest filing is the one that met the
+ * deadline: a correction filed later does not move it.
+ *
+ * The generator reads this because every filing signal (the kvittens
+ * reconcile through completeTaxDeadline) only completes a row that already
+ * exists. A company that files before it has any AGI deadline, typically a
+ * new company's first AGI, got the filed period created open afterwards and
+ * nothing ever completed it (#201). Reading the filing here, where the row
+ * is born, makes the order irrelevant. (VAT closes the same gap at the other
+ * end: recording a moms filing creates the period's missing row completed,
+ * lib/vat/filing-record-store.ts.)
+ */
+async function fetchFiledAgiPeriods(
+  supabase: SupabaseClient,
+  companyId: string,
+  years: number[],
+  now: string,
+): Promise<Map<string, string>> {
+  const [kvittenser, declarations] = await Promise.all([
+    fetchAllRows<{ period_year: number; period_month: number; signerad_tid: string | null; recorded_at: string }>(
+      ({ from, to }) =>
+        supabase
+          .from('agi_kvittenser')
+          .select('period_year, period_month, signerad_tid, recorded_at')
+          .eq('company_id', companyId)
+          .in('period_year', years)
+          .order('id', { ascending: true })
+          .range(from, to),
+    ),
+    fetchAllRows<{ period_year: number; period_month: number; submitted_at: string | null }>(({ from, to }) =>
+      supabase
+        .from('agi_declarations')
+        .select('period_year, period_month, submitted_at')
+        .eq('company_id', companyId)
+        .in('period_year', years)
+        .in('status', [...AGI_RECEIPT_STATUSES])
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+  ])
+
+  const filedAt = new Map<string, string>()
+  const record = (year: number, month: number, at: string) => {
+    const key = `arbetsgivardeklaration:${year}-${String(month).padStart(2, '0')}`
+    const current = filedAt.get(key)
+    if (!current || Date.parse(at) < Date.parse(current)) filedAt.set(key, at)
+  }
+  // signerad_tid is Skatteverket's signing moment; recorded_at, when it is
+  // missing, is when the receipt was read (an upper bound).
+  for (const row of kvittenser) record(row.period_year, row.period_month, row.signerad_tid ?? row.recorded_at)
+  for (const row of declarations) record(row.period_year, row.period_month, row.submitted_at ?? now)
+  return filedAt
+}
+
+/**
  * Generate all tax deadlines for a user based on their company settings
  */
 export async function generateTaxDeadlinesForUser(
@@ -428,11 +488,18 @@ export async function generateTaxDeadlinesForUser(
     supersededByKey.set(`${row.tax_deadline_type}:${row.tax_period}`, row)
   }
 
+  const nowIso = new Date().toISOString()
+
+  // A period already filed at Skatteverket is created completed, keyed like
+  // completedKeys. Read only when the company has AGI deadlines at all.
+  const filedAtByKey = applicableConfigs.some((config) => config.type === 'arbetsgivardeklaration')
+    ? await fetchFiledAgiPeriods(supabase, companyId, years, nowIso)
+    : new Map<string, string>()
+
   // Generate new deadlines. Every row carries the identical key set: a
   // PostgREST bulk insert rejects objects whose keys differ (PGRST102), so
   // inherited columns are always present, null when there is nothing to
   // inherit.
-  const nowIso = new Date().toISOString()
   const deadlines: Array<{
     company_id: string
     title: string
@@ -441,6 +508,7 @@ export async function generateTaxDeadlinesForUser(
     deadline_type: 'tax'
     priority: 'critical' | 'important' | 'normal'
     is_completed: boolean
+    completed_at: string | null
     source: 'system'
     status: DeadlineStatus
     status_changed_at: string
@@ -491,14 +559,21 @@ export async function generateTaxDeadlinesForUser(
         // manually reported progress carry across (see SUPERSEDED_ROW_SELECT).
         const superseded = supersededByKey.get(deadlineKey)
 
+        // A period Skatteverket already has a filing for is born completed,
+        // with the status the kvittens path sets (completeTaxDeadline).
+        const filedAt = filedAtByKey.get(deadlineKey)
+        const filed = filedAt !== undefined
+
         // Determine initial status based on days until deadline, keeping a
         // manually reported status from the row being replaced.
         const daysUntil = Math.ceil((adjustedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
         const keepsManualStatus =
-          superseded?.status != null && MANUAL_STATUSES.has(superseded.status)
-        const status: DeadlineStatus = keepsManualStatus
-          ? superseded!.status!
-          : daysUntil <= 14 ? 'action_needed' : 'upcoming'
+          !filed && superseded?.status != null && MANUAL_STATUSES.has(superseded.status)
+        const status: DeadlineStatus = filed
+          ? 'confirmed'
+          : keepsManualStatus
+            ? superseded!.status!
+            : daysUntil <= 14 ? 'action_needed' : 'upcoming'
 
         // Generate title from template
         const title = config.titleTemplate.replace('{periodLabel}', instance.periodLabel)
@@ -513,7 +588,8 @@ export async function generateTaxDeadlinesForUser(
           due_time: superseded?.due_time ?? null,
           deadline_type: 'tax',
           priority: superseded?.priority ?? config.priority,
-          is_completed: false,
+          is_completed: filed,
+          completed_at: filedAt ?? null,
           source: 'system',
           status,
           // Only meaningful alongside a carried status; a recomputed status

@@ -1,0 +1,1 @@
+[2026-11-09] A generated AGI deadline for a period Skatteverket already has a filing for (a kvittens, or a submitted or accepted declaration) is created completed, status confirmed, at the first filing time: filing signals only complete existing rows, so a filing made first was lost (#201).

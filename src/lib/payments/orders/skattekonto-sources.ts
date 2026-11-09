@@ -37,6 +37,7 @@ import { computeVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 import { hasEnded } from '@/lib/dates/iso'
 import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 import { vatPeriodDeadline, type VatPeriodDeadline } from '@/lib/vat/filing-record-store'
 
 /** The declaration a skattekonto payment pays. */
@@ -203,7 +204,7 @@ export type SkattekontoSourceResolution =
   | { ok: false; code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND' | 'VAT_REPORT_GENERATION_FAILED'; details?: Record<string, unknown> }
 
 /** The AGI statuses that mean the declaration reached Skatteverket. */
-const AGI_FILED_STATUSES = new Set(['submitted', 'accepted'])
+const AGI_FILED_STATUSES = new Set(AGI_RECEIPT_STATUSES)
 
 function nothingDueFor(declared: number): SkattekontoSourceNothingDue | null {
   if (declared < 0) return 'refund'
