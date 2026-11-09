@@ -36,6 +36,7 @@
   "compositionSeams": {
     "importers": [
       "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks",
+      "lib/cash-accounts/ledger-change.ts -> lib/composition/ledger-move-twins",
       "lib/events/outbox-dispatcher.ts -> lib/composition/async-event-consumers",
       "lib/init.ts -> lib/composition/event-consumers",
       "lib/payments/batch-service.ts -> lib/composition/payment-attest-gate",
@@ -82,6 +83,7 @@
       "lib/composition/ingest-matchers.ts -> lib/invoices/rot-rut-ingest-matchers",
       "lib/composition/ingest-matchers.ts -> lib/invoices/supplier-invoice-ingest-matcher",
       "lib/composition/ingest-matchers.ts -> lib/payments/orders/ingest-matcher",
+      "lib/composition/ledger-move-twins.ts -> lib/transactions/channel-twins",
       "lib/composition/open-invoices.ts -> lib/invoices/bank-open-invoices",
       "lib/composition/payment-attest-gate.ts -> lib/supplier-invoices/attest-policy-read",
       "lib/composition/reconciliation-signoffs.ts -> lib/reconciliation/schemas",
