@@ -25,6 +25,7 @@ function createStoreSupabase(
     insert?: Record<string, unknown>
     update?: Record<string, unknown>
     filters: unknown[][]
+    orders?: unknown[][]
   }[] = []
   let idx = 0
   const from = (table: string) => {
@@ -37,8 +38,12 @@ function createStoreSupabase(
     if (!isYears) captured.push(entry)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'order', 'limit', 'maybeSingle', 'single']) {
+    for (const m of ['select', 'limit', 'maybeSingle', 'single']) {
       b[m] = () => b
+    }
+    b.order = (...args: unknown[]) => {
+      ;(entry.orders ??= []).push(args)
+      return b
     }
     for (const m of ['eq', 'in', 'is', 'or']) {
       b[m] = (...args: unknown[]) => {
@@ -461,6 +466,30 @@ describe('markVatPeriodFiled', () => {
       'or',
       'is_completed.eq.false,status.is.null,status.neq.confirmed',
     ])
+  })
+
+  it('returns a confirmation that another writer inserted between its read and its insert', async () => {
+    const confirmed = { ...pendingRow, is_completed: true, completed_at: '2026-09-08T09:00:00.000Z', status: 'confirmed' }
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null }, // read: no row for the period
+      {
+        error: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "idx_deadlines_vat_filing_period_unique"',
+        },
+      },
+      CALENDAR_AB,
+      { data: confirmed }, // read again: the kvittens read won
+    ])
+    const result = await markVatPeriodFiled(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2, filedOn: '2026-08-10' },
+      { today: TODAY },
+    )
+    expect(result).toMatchObject({ ok: true, created: false, changed: false, record: { source: 'skatteverket' } })
+    expect(captured.filter((c) => c.update)).toHaveLength(0)
   })
 
   it('yields to a Skatteverket confirmation that lands between the read and the write', async () => {
@@ -1058,6 +1087,85 @@ describe('recordVatFilingConfirmed', () => {
     )
     expect(result).toMatchObject({ created: false, changed: false })
     expect(captured).toHaveLength(2)
+  })
+
+  const PERIOD_CONFLICT = {
+    error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_deadlines_vat_filing_period_unique"' },
+  }
+  const confirmedQ2 = {
+    ...pendingRow,
+    is_completed: true,
+    completed_at: '2026-09-08T09:00:00.000Z',
+    status: 'confirmed',
+  }
+  const submittedQ2 = {
+    ...pendingRow,
+    is_completed: true,
+    completed_at: '2026-08-10T12:00:00.000Z',
+    status: 'submitted',
+  }
+
+  it('returns the record unchanged when another kvittens read inserted it first', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null }, // read: no row yet
+      PERIOD_CONFLICT, // insert: the other read won
+      CALENDAR_AB,
+      { data: confirmedQ2 }, // read again: its confirmation
+    ])
+    const result = await recordVatFilingConfirmed(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2 },
+      { now: NOW },
+    )
+    expect(result).toMatchObject({ created: false, changed: false, record: { source: 'skatteverket' } })
+    expect(captured.filter((c) => c.insert)).toHaveLength(1)
+    expect(captured.filter((c) => c.update)).toHaveLength(0)
+  })
+
+  it('upgrades a manual mark that was inserted between its read and its insert', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null },
+      PERIOD_CONFLICT,
+      CALENDAR_AB,
+      { data: submittedQ2 }, // read again: the manual mark won the insert
+      { data: { ...submittedQ2, status: 'confirmed' } },
+    ])
+    const result = await recordVatFilingConfirmed(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2 },
+      { now: NOW },
+    )
+    expect(result).toMatchObject({ created: false, changed: true, record: { source: 'skatteverket' } })
+    // The user's filed-on date stays: the kvittens confirms that filing.
+    expect(captured[5].update).toMatchObject({
+      is_completed: true,
+      completed_at: '2026-08-10T12:00:00.000Z',
+      status: 'confirmed',
+    })
+  })
+
+  it('rethrows any other insert failure', async () => {
+    const { supabase } = createStoreSupabase([
+      CALENDAR_AB,
+      { data: null },
+      { error: { code: '23505', message: 'duplicate key value violates unique constraint "some_other_index"' } },
+    ])
+    await expect(
+      recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 }, { now: NOW }),
+    ).rejects.toMatchObject({ code: '23505' })
+  })
+
+  it('reads the completed row first, so a stale pending duplicate never shadows the record', async () => {
+    const { supabase, captured } = createStoreSupabase([CALENDAR_AB, { data: confirmedQ2 }])
+    await recordVatFilingConfirmed(supabase, COMPANY, { periodType: 'quarterly', year: 2026, period: 2 }, { now: NOW })
+    expect(captured[1].orders).toEqual([
+      ['is_completed', { ascending: false }],
+      ['created_at', { ascending: true }],
+    ])
   })
 
   it('throws on a read error', async () => {
