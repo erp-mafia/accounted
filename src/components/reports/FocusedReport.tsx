@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePageState } from '@/lib/hooks/use-page-state'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -14,7 +14,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
-import { huvudbokDrilldownHref, parseDrilldownParams } from '@/lib/reports/report-drilldown'
+import { huvudbokDrilldownHref, parseDrilldownParams, claimReportDrilldown } from '@/lib/reports/report-drilldown'
 import type { FiscalPeriod } from '@/types'
 
 import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
@@ -92,8 +92,8 @@ function FocusedReportInner({
   // A drill-down arrives with the clicked report's window and dimension
   // filter in the URL (lib/reports/report-drilldown.ts). Read once: after
   // that the page's own controls own the state.
-  const [drilldown] = useState(() => parseDrilldownParams(searchParams))
-  const [dimensionFilter, setDimensionFilter] = usePageState<DimensionFilterValue | null>('report-dimension', DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null)
+  const drilldown = useMemo(() => parseDrilldownParams(searchParams), [searchParams])
+  const [dimensionFilter, setDimensionFilter, viewReady] = usePageState<DimensionFilterValue | null>('report-dimension', DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null)
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
@@ -108,6 +108,17 @@ function FocusedReportInner({
   const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
   const accountFilter = searchParams.get('account')
+  const drillIdentity = slug === 'huvudbok' && accountFilter ? `${company?.id}:${searchParams.toString()}` : null
+  const [appliedDrill, setAppliedDrill] = useState<string | null>(null)
+  useEffect(() => {
+    if (!viewReady || !drillIdentity) return
+    if (claimReportDrilldown(window.history, drillIdentity)) {
+      setDimensionFilter(drilldown.dimension)
+      setDateRange(drilldown.range)
+    }
+    setAppliedDrill(drillIdentity)
+  }, [viewReady, drillIdentity, drilldown, setDimensionFilter, setDateRange])
+
 
   const isEnskildFirma = company?.entity_type === 'enskild_firma'
   const filesInk2 = isEntityType(company?.entity_type) && usesInk2(company.entity_type)
@@ -181,7 +192,7 @@ function FocusedReportInner({
         </div>
       )}
 
-      {!isReady && !isPeriodless ? (
+      {(!isReady && !isPeriodless) || (drillIdentity !== null && appliedDrill !== drillIdentity) ? (
         <ReportBodyLoading />
       ) : isPeriodless || selectedPeriod ? (
         <FocusedView

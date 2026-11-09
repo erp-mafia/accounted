@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  claimReportDrilldown,
   huvudbokDrilldownHref,
   parseDrilldownParams,
   sameWindow,
@@ -72,5 +73,26 @@ describe('sameWindow', () => {
     expect(sameWindow({}, { fromDate: '2026-01-01', toDate: '2026-12-31' }, '2026-01-01', '2026-12-31')).toBe(true)
     expect(sameWindow({ toDate: '2026-06-30' }, { fromDate: '2026-01-01', toDate: '2026-06-30' }, '2026-01-01', '2026-12-31')).toBe(true)
     expect(sameWindow({ fromDate: '2026-07-01' }, { fromDate: '2026-07-02' }, '2026-01-01', '2026-12-31')).toBe(false)
+  })
+})
+
+
+describe('report drill history', () => {
+  it('applies explicit URL filters once and preserves framework state', () => {
+    let state: Record<string, unknown> = { __NA: true, tree: ['reports'] }
+    const history = { get state() { return state }, replaceState(next: unknown) { state = next as Record<string, unknown> } }
+    expect(claimReportDrilldown(history, 'company:account:project')).toBe(true)
+    expect(state).toMatchObject({ __NA: true, tree: ['reports'] })
+    expect(claimReportDrilldown(history, 'company:account:project')).toBe(false)
+  })
+  it('applies the same drill on a new entry while preserving edits when going back', () => {
+    let state: Record<string, unknown> = { __NA: true }
+    const history = { get state() { return state }, replaceState(next: unknown) { state = next as Record<string, unknown> } }
+    claimReportDrilldown(history, 'company:account:no-dimension')
+    const previousEntry = state
+    state = { __NA: true }
+    expect(claimReportDrilldown(history, 'company:account:no-dimension')).toBe(true)
+    state = previousEntry
+    expect(claimReportDrilldown(history, 'company:account:no-dimension')).toBe(false)
   })
 })

@@ -43,6 +43,7 @@ export function useHistoryScroll(companyId: string | null, pathname: string) {
     const panel = document.getElementById('main-content')
     if (pending.current !== targetKey) {
       panel?.scrollTo(0, 0)
+      window.scrollTo(0, 0)
       return
     }
     pending.current = null

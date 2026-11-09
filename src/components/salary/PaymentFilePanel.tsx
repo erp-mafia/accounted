@@ -206,7 +206,7 @@ export function PaymentFilePanel({
       </div>
 
       {!readOnly && (
-        <div className="mt-3 space-y-3 cursor-pointer" {...expandableSurface(() => setShowInstructions(value => !value))}>
+        <div className="mt-3 space-y-3">
           {/* One attention sentence per section (convention 6). A missing
               sender account outranks the format caveat: without it the
               download fails outright. The caveat then drops to a muted line
@@ -228,6 +228,7 @@ export function PaymentFilePanel({
 
           {/* The one action row: the bank instructions are an appendix that
               folds out under it, so the button stays where the section ends. */}
+          <div className="space-y-3 cursor-pointer" {...expandableSurface(() => setShowInstructions(value => !value))}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
@@ -262,6 +263,7 @@ export function PaymentFilePanel({
               <p className="pt-2 text-muted-foreground">{t('instructions_footer')}</p>
             </div>
           )}
+          </div>
         </div>
       )}
     </DetailSection>

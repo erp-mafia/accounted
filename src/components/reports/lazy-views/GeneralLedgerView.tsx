@@ -76,6 +76,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   // and the superseded request must not overwrite the ledger it was
   // replaced by when it happens to finish last.
   const requestSeq = React.useRef(0)
+  useEffect(() => () => { requestSeq.current++ }, [])
 
   const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
     const seq = ++requestSeq.current
