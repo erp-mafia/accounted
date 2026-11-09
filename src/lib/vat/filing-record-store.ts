@@ -276,7 +276,10 @@ export async function listVatFilings(
  * The deadline row that represents the period, completed or not. Every moms
  * cadence is searched on purpose: tax_period formats differ per cadence, so
  * the period key alone is unambiguous, and a row left behind by a cadence
- * change is still the period's record.
+ * change is still the period's record. A completed row wins over a pending
+ * one: the generator can leave a stale pending row next to the filing record
+ * (it inserts the replacement before deleting, and never deletes a past-due
+ * row), and the filing record is the one every writer must see.
  */
 async function findPeriodRow(
   supabase: SupabaseClient,
@@ -291,11 +294,26 @@ async function findPeriodRow(
     .in('tax_deadline_type', [...VAT_FILING_DEADLINE_TYPES])
     .eq('tax_period', vatFilingTaxPeriod(input.periodType, input.year, input.period, settings.fiscalYearEndMonth(input.year)))
     .is('dismissed_at', null)
+    .order('is_completed', { ascending: false })
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle()
   if (error) throw error
   return (data as DeadlineRow | null) ?? null
+}
+
+/** The partial unique index that allows one live filing record per period (20261109060000). */
+const VAT_FILING_PERIOD_UNIQUE_INDEX = 'idx_deadlines_vat_filing_period_unique'
+
+/**
+ * Another writer completed the period between our read and our write (two
+ * kvittens reads, or a manual mark racing one): the database kept one filing
+ * record and refused ours. The caller reads again and takes the existing-row
+ * path, which returns a confirmation unchanged or upgrades a manual mark.
+ */
+function isPeriodRecordConflict(error: unknown): boolean {
+  const e = error as { code?: string; message?: string } | null
+  return e?.code === '23505' && (e.message ?? '').includes(VAT_FILING_PERIOD_UNIQUE_INDEX)
 }
 
 /**
@@ -362,6 +380,20 @@ export async function markVatPeriodFiled(
   companyId: string,
   input: MarkVatPeriodFiledInput,
   opts: { today?: string } = {},
+): Promise<MarkVatPeriodFiledResult> {
+  try {
+    return await markVatPeriodFiledOnce(supabase, companyId, input, opts)
+  } catch (error) {
+    if (!isPeriodRecordConflict(error)) throw error
+    return markVatPeriodFiledOnce(supabase, companyId, input, opts)
+  }
+}
+
+async function markVatPeriodFiledOnce(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: MarkVatPeriodFiledInput,
+  opts: { today?: string },
 ): Promise<MarkVatPeriodFiledResult> {
   const resolved = await resolveMark(supabase, companyId, input, opts.today ?? todayIsoStockholm())
   if (!resolved.ok) return resolved
@@ -550,6 +582,20 @@ export async function recordVatFilingConfirmed(
   companyId: string,
   input: VatFilingPeriodInput,
   opts: { now?: Date; userId?: string | null } = {},
+): Promise<{ record: VatFilingRecord; created: boolean; changed: boolean }> {
+  try {
+    return await recordVatFilingConfirmedOnce(supabase, companyId, input, opts)
+  } catch (error) {
+    if (!isPeriodRecordConflict(error)) throw error
+    return recordVatFilingConfirmedOnce(supabase, companyId, input, opts)
+  }
+}
+
+async function recordVatFilingConfirmedOnce(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: VatFilingPeriodInput,
+  opts: { now?: Date; userId?: string | null },
 ): Promise<{ record: VatFilingRecord; created: boolean; changed: boolean }> {
   const nowIso = (opts.now ?? new Date()).toISOString()
   const settings = await loadFilingSettings(supabase, companyId)
