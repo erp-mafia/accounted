@@ -75,6 +75,7 @@ const RETAINED = new Set([
   'assets.user_id',
   'asset_components.user_id', // Who registered a K3 component; the anläggningsregister is the company's.
   'asset_value_adjustments.user_id', // Who posted a nedskrivning; räkenskapsinformation tied to its verifikat.
+  'company_announcement_mails.user_id', // That an announcement about the company went to this member; the send log keeps the tombstone id, which carries no personal data.
   'deferred_tax_assessments.updated_by', // Who last edited the deferred tax inputs of a fiscal year (SET NULL on a hard delete).
   'k3_transitions.created_by', // Who started the company's transition to K3 (SET NULL on a hard delete).
   'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.

@@ -1,0 +1,1 @@
+[2026-11-09] The ombud announcement mail sends people to Inställningar, Skatteverket, not Hem: Hem shows only "Anslut", and only while the viewer has no BankID session. One mail per person and brand lists all their due companies, so byrå admins are not sent dozens.
