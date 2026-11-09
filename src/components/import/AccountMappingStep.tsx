@@ -133,6 +133,8 @@ export default function AccountMappingStep({
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
+  const [openTargetAccount, setOpenTargetAccount] = useState<string | null>(null)
+  const [focusedTargetAccount, setFocusedTargetAccount] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Targets the dropdown can name: the caller's list (the company chart, or
@@ -145,6 +147,11 @@ export default function AccountMappingStep({
   // "created on import" option.
   const knownTargets = useMemo(
     () => new Set(basAccounts.map((a) => a.account_number)),
+    [basAccounts],
+  )
+
+  const targetsByNumber = useMemo(
+    () => new Map(basAccounts.map((account) => [account.account_number, account])),
     [basAccounts],
   )
 
@@ -193,13 +200,26 @@ export default function AccountMappingStep({
     return filteredMappings.slice(start, start + PAGE_SIZE)
   }, [filteredMappings, currentPage])
 
+  const resetPickerState = () => {
+    setOpenTargetAccount(null)
+    setFocusedTargetAccount(null)
+  }
+
+  // Mapping and VAT edits can remove a row without a filter transition.
+  // Clear its picker before committing the render, preserving visible rows.
+  const visibleAccounts = new Set(paginatedMappings.map((mapping) => mapping.sourceAccount))
+  if (openTargetAccount !== null && !visibleAccounts.has(openTargetAccount)) setOpenTargetAccount(null)
+  if (focusedTargetAccount !== null && !visibleAccounts.has(focusedTargetAccount)) setFocusedTargetAccount(null)
+
   // Reset page when filter or search changes
   const handleFilterChange = (newFilter: FilterType) => {
+    resetPickerState()
     setFilter(newFilter)
     setCurrentPage(1)
   }
 
   const handleSearchChange = (term: string) => {
+    resetPickerState()
     setSearchTerm(term)
     setCurrentPage(1)
   }
@@ -462,6 +482,10 @@ export default function AccountMappingStep({
                     </TableCell>
                     <TableCell>
                       <Select
+                        open={openTargetAccount === mapping.sourceAccount}
+                        onOpenChange={(open) => setOpenTargetAccount((current) =>
+                          open ? mapping.sourceAccount : current === mapping.sourceAccount ? null : current
+                        )}
                         value={mapping.targetAccount || 'none'}
                         onValueChange={(value) => {
                           const account = basAccounts.find((a) => a.account_number === value)
@@ -477,7 +501,13 @@ export default function AccountMappingStep({
                           )
                         }}
                       >
-                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
+                        <SelectTrigger
+                          className={!mapping.targetAccount ? 'border-destructive' : ''}
+                          onFocus={() => setFocusedTargetAccount(mapping.sourceAccount)}
+                          onBlur={() => setFocusedTargetAccount((current) =>
+                            current === mapping.sourceAccount ? null : current
+                          )}
+                        >
                           <SelectValue placeholder="Välj konto..." />
                         </SelectTrigger>
                         <SelectContent className="max-h-80">
@@ -491,7 +521,10 @@ export default function AccountMappingStep({
                               </span>
                             </SelectItem>
                           ))}
-                          {Object.entries(accountsByClass).map(([className, accounts]) => (
+                          {/* Radix mounts closed content in a DocumentFragment.
+                              Keep its selected item for the label, but only
+                              mount the full chart for the open or focused row. */}
+                          {openTargetAccount === mapping.sourceAccount || focusedTargetAccount === mapping.sourceAccount ? Object.entries(accountsByClass).map(([className, accounts]) => (
                             <div key={className}>
                               <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
                                 {className}
@@ -506,7 +539,12 @@ export default function AccountMappingStep({
                                 </SelectItem>
                               ))}
                             </div>
-                          ))}
+                          )) : mapping.targetAccount && knownTargets.has(mapping.targetAccount) ? (
+                            <SelectItem value={mapping.targetAccount}>
+                              <span className="font-mono mr-2">{mapping.targetAccount}</span>
+                              {targetsByNumber.get(mapping.targetAccount)?.account_name}
+                            </SelectItem>
+                          ) : null}
                         </SelectContent>
                       </Select>
                     </TableCell>
@@ -687,7 +725,7 @@ export default function AccountMappingStep({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  onClick={() => { resetPickerState(); setCurrentPage((p) => Math.max(1, p - 1)) }}
                   disabled={currentPage === 1}
                 >
                   Föregående
@@ -698,7 +736,7 @@ export default function AccountMappingStep({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  onClick={() => { resetPickerState(); setCurrentPage((p) => Math.min(totalPages, p + 1)) }}
                   disabled={currentPage === totalPages}
                 >
                   Nästa
