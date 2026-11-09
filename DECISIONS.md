@@ -1231,3 +1231,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 
 
 [2026-11-08] Browser latency tests use an isolated Podman Supabase stack and deterministic ten-year synthetic SIE history. Production source snapshots exclude environment files. Measured cold requests have a 5 s cap, then navigation has 3 s and interactions 1 s, with no retries.
+[2026-11-10] Browser fixtures use Europe/Stockholm like the isolated server: mismatched UTC dates after Swedish midnight selected an empty historical reskontra while readiness expected live open invoices. Keep real clocks, row assertions and 5/3/1-second budgets.

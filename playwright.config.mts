@@ -15,6 +15,8 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }], ['json', { outputFile: '.e2e/results.json' }]],
   use: {
     baseURL: runtime.appUrl,
+    // Match the app server's calendar date, including Swedish midnight.
+    timezoneId: 'Europe/Stockholm',
     storageState: path.join(runtimeDir, 'auth.json'),
     actionTimeout: 3000,
     navigationTimeout: 5000,
