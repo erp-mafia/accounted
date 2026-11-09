@@ -29,6 +29,7 @@ import {
   DEFAULT_ACCRUED_REVENUE_ACCOUNT,
   accrualValueAfterEdit,
   isAccruedBalanceAccount,
+  pastPeriodDeferralSuggestion,
   periodEndsBeforeInvoiceMonth,
   type AccrualPanelValue,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -137,6 +138,20 @@ export default function AccrualPeriodControl({
     accrued && Boolean(value.end && invoiceDate) &&
     !periodEndsBeforeInvoiceMonth(value.end, invoiceDate as string)
 
+  // A deferral (förutbetald) of a period that ends before the invoice month is
+  // refused by the API (DeferralPeriodPastError, #113): it needs the upplupen
+  // account this names. One that starts before the invoice month but runs into
+  // it is booked: its earlier months land on the invoice date, the deferral's
+  // posting floor, and the preview says so.
+  const pastDeferralAccount = pastPeriodDeferralSuggestion(
+    { direction, targetAccount },
+    value.balanceAccount,
+    value.end,
+    invoiceDate,
+  )
+  const deferralFloor =
+    !accrued && Boolean(invoiceDate) && value.start < `${(invoiceDate as string).slice(0, 7)}-01`
+
   let preview: string | null = null
   let previewInvalid: string | null = null
   if (value.start && value.end) {
@@ -147,16 +162,26 @@ export default function AccrualPeriodControl({
         const months = countCalendarMonths(value.start, value.end)
         if (invoiceDate && accrualCoversOnlyInvoiceMonth(invoiceDate, value.start, value.end)) {
           previewInvalid = t('invoice_month_only')
+        } else if (pastDeferralAccount) {
+          previewInvalid = t('deferral_period_past', { account: pastDeferralAccount })
         } else if (months === 1) {
           preview = t('preview_one_month', { month: formatPeriodMonth(value.start, locale) })
         } else if (amount > 0) {
           const amounts = computeInstallmentAmounts(amount, months)
-          preview = t('preview', {
-            months,
-            amount: formatCurrency(amounts[0], currency || 'SEK'),
-            first: formatPeriodMonth(value.start, locale),
-            last: formatPeriodMonth(value.end, locale),
-          })
+          preview = deferralFloor
+            ? t('preview_with_floor', {
+                months,
+                amount: formatCurrency(amounts[0], currency || 'SEK'),
+                first: formatPeriodMonth(value.start, locale),
+                last: formatPeriodMonth(value.end, locale),
+                date: invoiceDate as string,
+              })
+            : t('preview', {
+                months,
+                amount: formatCurrency(amounts[0], currency || 'SEK'),
+                first: formatPeriodMonth(value.start, locale),
+                last: formatPeriodMonth(value.end, locale),
+              })
         }
       } catch {
         previewInvalid = t('preview_invalid_period')
