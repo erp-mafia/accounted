@@ -323,7 +323,7 @@ for (const theme of ['light', 'dark'] as const) {
 
 test('forms, workflow steps and register toolbars fit narrow mobile widths', async ({ page }, info) => {
   const routes = [
-    '/reports', '/chart-of-accounts', '/invoices/new', '/supplier-invoices?new=1',
+    '/reports', '/chart-of-accounts', '/customers', '/suppliers', '/invoices/new', '/supplier-invoices?new=1',
     '/sales-orders/new', '/bookkeeping/year-end', '/rules', '/settings/security', '/dpa',
   ]
   for (const route of routes) {
@@ -332,6 +332,8 @@ test('forms, workflow steps and register toolbars fit narrow mobile widths', asy
       await page.goto(route)
       if (route === '/invoices/new') {
         await page.getByRole('combobox', { name: 'Ny fakturarad', exact: true }).waitFor({ state: 'visible' })
+      } else if (['/chart-of-accounts', '/customers', '/suppliers'].includes(route)) {
+        await page.waitForFunction(() => [...document.querySelectorAll('main tbody > tr')].some(row => row.children.length > 1 && row.getClientRects().length > 0))
       } else if (route === '/supplier-invoices?new=1') {
         await page.getByRole('dialog').waitFor({ state: 'visible' })
       } else if (route === '/bookkeeping/year-end') {
