@@ -119,6 +119,56 @@ test('journal entry details load once within budget', async ({ page }, info) => 
   expect(detailRequests.filter(path => /\/(chain|references|retag-log|rattelse-log)$/.test(path))).toHaveLength(0)
 })
 
+test('failed reference reads recover both voucher links and referenced attachments', async ({ page }, info) => {
+  const entries = await page.request.get('/api/bookkeeping/journal-entries?status=posted&limit=1&include_related=false')
+  expect(entries.ok()).toBe(true)
+  const entry = (await entries.json()).data[0]
+  const suppliers = await page.request.get('/api/supplier-invoices?limit=1')
+  expect(suppliers.ok()).toBe(true)
+  const invoice = (await suppliers.json()).data[0]
+  const documentId = 'edbe895e-cbc5-4b85-8f52-9c698d1b83e0'
+  let retries = 0
+  let documentReads = 0
+  let releaseFirstRead!: () => void
+  const firstReadHeld = new Promise<void>(resolve => { releaseFirstRead = resolve })
+  let firstReadStarted!: () => void
+  const firstReadRequested = new Promise<void>(resolve => { firstReadStarted = resolve })
+  await page.route(`**/api/bookkeeping/journal-entries/${entry.id}/detail`, async route => {
+    const response = await route.fetch()
+    const body = await response.json()
+    body.data.references = null
+    await route.fulfill({ response, json: body })
+  })
+  await page.route(`**/api/bookkeeping/journal-entries/${entry.id}/references`, async route => {
+    retries++
+    await firstReadRequested
+    await route.fulfill({ json: { data: { references: [{ type: 'supplier_invoice', id: invoice.id, number: 'E2E-RECOVERED', document_id: documentId }] } } })
+  })
+  await page.route(`**/api/documents?journal_entry_id=${entry.id}&current_only=true`, async route => {
+    const read = ++documentReads
+    if (read === 1) { firstReadStarted(); await firstReadHeld }
+    await route.fulfill({ json: { data: [] }, headers: { 'X-E2E-Document-Read': String(read) } })
+  })
+  await page.route(`**/api/documents/${documentId}`, route => route.fulfill({ json: { data: {
+    id: documentId, file_name: 'recovered-source-document.pdf', file_size_bytes: 128,
+    mime_type: 'application/pdf', storage_path: 'synthetic/recovered.pdf', created_at: '2026-01-01T00:00:00Z',
+  } } }))
+  await measured(info, 'Recover optional voucher references', BUDGET.navigation, async () => {
+    await page.goto(`/bookkeeping/${entry.id}`)
+    await page.getByRole('heading', { name: 'Kontorader', exact: true }).waitFor({ state: 'visible' })
+    await page.locator(`a[href="/supplier-invoices/${invoice.id}"]`).filter({ hasText: 'E2E-RECOVERED' }).waitFor({ state: 'visible' })
+    await page.getByText('recovered-source-document.pdf', { exact: true }).waitFor({ state: 'visible' })
+    const olderRead = page.waitForResponse(response => response.headers()['x-e2e-document-read'] === '1')
+    releaseFirstRead()
+    await olderRead
+    // Allow the late fetch and React update to settle before checking that
+    // an earlier empty read cannot erase the recovered source document.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page.getByText('recovered-source-document.pdf', { exact: true })).toBeVisible()
+  })
+  expect(retries).toBe(1)
+})
+
 test.describe('password login', () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 

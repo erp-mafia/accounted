@@ -105,7 +105,7 @@ type JournalEntryDetailRead = {
   entry: JournalEntry
   chain: JournalEntry[]
   is_last_in_series: boolean
-  references: UnderlagReference[]
+  references: UnderlagReference[] | null
   rattelse_log: RattelseLogRow[]
   retag_log: {
     id: string; line_id: string; old_dimensions: Record<string, string>
@@ -169,10 +169,21 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     },
     { revalidateOnFocus: false, shouldRetryOnError: false },
   )
+  // A failed optional read is distinct from an empty list. Retry just this
+  // reader and share the recovered references with links and attachments.
+  const { data: retriedReferences } = useSWR<UnderlagReference[]>(
+    company?.id && detail?.references === null ? ['journal-entry-references', company.id, id] : null,
+    async () => {
+      const response = await fetch(`/api/bookkeeping/journal-entries/${id}/references`)
+      if (!response.ok) throw new Error(t('error_load_failed'))
+      return (await response.json()).data.references
+    },
+    { revalidateOnFocus: false, errorRetryCount: 2 },
+  )
   const entry = detail?.entry ?? null
   const chain = detail?.chain ?? []
   const error = detailError ? t('error_load_failed') : null
-  const references = detail?.references ?? []
+  const references = detail?.references ?? retriedReferences ?? []
   const retagLog = detail?.retag_log ?? []
   const rattelseLog = detail?.rattelse_log ?? []
   const periodStatus = detail?.period_status ?? null

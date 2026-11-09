@@ -43,7 +43,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     return NextResponse.json({ data: {
       ...chain,
-      references: references ?? [],
+      references,
       retag_log: retag.error ? [] : retag.data ?? [],
       rattelse_log: rattelse?.ok && !rattelse.dryRun ? rattelse.data : [],
       period_status: period?.status ?? null,

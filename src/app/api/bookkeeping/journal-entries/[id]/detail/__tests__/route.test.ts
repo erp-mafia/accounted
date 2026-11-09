@@ -68,6 +68,18 @@ describe('journal entry detail read', () => {
     expect(db.supabase.from).toHaveBeenCalledWith('dimension_retag_log')
   })
 
+  it('distinguishes a successful empty reference read from a failed read', async () => {
+    reads.references.mockResolvedValue([])
+    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get())
+    expect(body.data.references).toEqual([])
+    reads.references.mockRejectedValue(new Error('unavailable'))
+    db.enqueue({ data: [], error: null })
+    const { status, body: failed } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get())
+    expect(status).toBe(200)
+    expect(failed.data.references).toBeNull()
+    expect(failed.data.period_status).toBe('open')
+  })
+
   it('keeps the voucher readable and period-sensitive actions closed when optional reads fail', async () => {
     reads.references.mockRejectedValue(new Error('unavailable'))
     reads.rattelse.mockResolvedValue({ ok: false, code: 'JOURNAL_RATTELSE_LOG_FAILED' })
@@ -76,6 +88,6 @@ describe('journal entry detail read', () => {
     db.enqueue({ data: null, error: { message: 'unavailable' } })
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get())
     expect(status).toBe(200)
-    expect(body.data).toMatchObject({ entry, references: [], retag_log: [], rattelse_log: [], period_status: null })
+    expect(body.data).toMatchObject({ entry, references: null, retag_log: [], rattelse_log: [], period_status: null })
   })
 })

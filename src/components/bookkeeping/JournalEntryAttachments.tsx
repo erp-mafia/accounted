@@ -111,7 +111,9 @@ export default function JournalEntryAttachments({
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
 
+  const documentReadGeneration = useRef(0)
   const fetchDocuments = useCallback(async () => {
+    const generation = ++documentReadGeneration.current
     try {
       const [documentsRes, referencesData] = await Promise.all([
         fetch(`/api/documents?journal_entry_id=${journalEntryId}&current_only=true`),
@@ -151,17 +153,19 @@ export default function JournalEntryAttachments({
       }
 
       const allDocuments = [...direct, ...referenced]
+      if (generation !== documentReadGeneration.current) return
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
     } catch {
       // Non-critical: silently ignore
     } finally {
-      setLoading(false)
+      if (generation === documentReadGeneration.current) setLoading(false)
     }
   }, [journalEntryId, references])
 
   useEffect(() => {
     fetchDocuments()
+    return () => { documentReadGeneration.current++ }
   }, [fetchDocuments])
 
   // Refresh documents when uploads complete
