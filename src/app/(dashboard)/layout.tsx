@@ -276,7 +276,6 @@ export default async function DashboardLayout({
     navFlags,
     { data: seedFiscalPeriods },
     { data: seedCashAccounts },
-    { data: reportEmployees },
     hostBrand,
     brandByTeam,
   ] = await Promise.all([
@@ -312,7 +311,6 @@ export default async function DashboardLayout({
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),
-    supabase.from('employees').select('id').eq('company_id', companyId).limit(1),
     hostHeader ? resolveBrandByHost(hostHeader) : Promise.resolve(null),
     resolveBrandsForTeams(
       // The byrå team's own id rides along so its brand resolves even when
@@ -585,7 +583,6 @@ export default async function DashboardLayout({
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}
             paysSalaries={paysSalaries}
-            hasEmployees={(reportEmployees?.length ?? 0) > 0}
             dimensionsEnabled={dimensionsEnabled}
             salesOrdersEnabled={salesOrdersEnabled}
             quotesEnabled={quotesEnabled}

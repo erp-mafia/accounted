@@ -1,6 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, use } from 'react'
+import { useState, useCallback, use } from 'react'
+import useSWR, { useSWRConfig } from 'swr'
+import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -41,15 +43,8 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
-import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
-import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
-import SplitOpeningBalanceDialog from '@/components/bookkeeping/SplitOpeningBalanceDialog'
-import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
-import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
-import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
-import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
-import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import type { RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -64,6 +59,15 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+
+const CorrectionEntryDialog = dynamic(() => import('@/components/bookkeeping/CorrectionEntryDialog'))
+const CorrectOpeningBalanceDialog = dynamic(() => import('@/components/bookkeeping/CorrectOpeningBalanceDialog'))
+const SplitOpeningBalanceDialog = dynamic(() => import('@/components/bookkeeping/SplitOpeningBalanceDialog'))
+const StrikeLinesDialog = dynamic(() => import('@/components/bookkeeping/StrikeLinesDialog'))
+const CorrectMetadataDialog = dynamic(() => import('@/components/bookkeeping/CorrectMetadataDialog'))
+const EditDraftEntryDialog = dynamic(() => import('@/components/bookkeeping/EditDraftEntryDialog'))
+const RecordateEntryDialog = dynamic(() => import('@/components/bookkeeping/RecordateEntryDialog'))
+const RetagLineDialog = dynamic(() => import('@/components/dimensions/RetagLineDialog'))
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
 type StruckLineSnapshot = {
@@ -96,6 +100,20 @@ type RattelseLogRow = {
 }
 
 type PeriodStatus = 'open' | 'locked' | 'closed'
+
+type JournalEntryDetailRead = {
+  entry: JournalEntry
+  chain: JournalEntry[]
+  is_last_in_series: boolean
+  references: UnderlagReference[]
+  rattelse_log: RattelseLogRow[]
+  retag_log: {
+    id: string; line_id: string; old_dimensions: Record<string, string>
+    new_dimensions: Record<string, string>; reason: string; created_at: string
+  }[]
+  period_status: PeriodStatus | null
+}
+
 
 /**
  * Human "who committed this" line from the committed_actor_* snapshot
@@ -140,26 +158,30 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const tCommon = useTranslations('common')
   const tCorrection = useTranslations('journal_correction')
   const sourceTypeLabels = useSourceTypeLabels()
-  const [entry, setEntry] = useState<JournalEntry | null>(null)
-  const [chain, setChain] = useState<JournalEntry[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { mutate: mutateDetail } = useSWRConfig()
+  const { data: detail, error: detailError, isLoading } = useSWR<JournalEntryDetailRead>(
+    company?.id ? ['journal-entry-detail', company.id, id] : null,
+    async () => {
+      const response = await fetch(`/api/bookkeeping/journal-entries/${id}/detail`)
+      if (!response.ok) throw new Error(t('error_load_failed'))
+      const payload = await response.json()
+      return payload.data
+    },
+    { revalidateOnFocus: false, shouldRetryOnError: false },
+  )
+  const entry = detail?.entry ?? null
+  const chain = detail?.chain ?? []
+  const error = detailError ? t('error_load_failed') : null
+  const references = detail?.references ?? []
+  const retagLog = detail?.retag_log ?? []
+  const rattelseLog = detail?.rattelse_log ?? []
+  const periodStatus = detail?.period_status ?? null
+  const isLastInSeries = detail?.is_last_in_series ?? false
   const [showCorrection, setShowCorrection] = useState(false)
   const [showCorrectIB, setShowCorrectIB] = useState(false)
   const [showSplitIB, setShowSplitIB] = useState(false)
   const [showStrikeLines, setShowStrikeLines] = useState(false)
   const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
-  const [rattelseLog, setRattelseLog] = useState<RattelseLogRow[]>([])
-  // Lock state of the period covering entry_date, from the period-status
-  // preview endpoint. Gates the visible "Stryk rader" button: inline rättelse
-  // only applies while the period is open, so the promoted button hides
-  // (and the ⋯ item stays) whenever the status is anything else or unknown.
-  const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null)
-  // Monotonic id of the latest fetchData run. The period-status fetch is not
-  // awaited, and fetchData re-runs on every id change and after every dialog
-  // success, so an earlier response can resolve last; only the response that
-  // belongs to the most recent run may set periodStatus.
-  const periodStatusRequestRef = useRef(0)
   const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -174,9 +196,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // action; the detail page used to fire the commit straight from the button.
   const [showCommitConfirm, setShowCommitConfirm] = useState(false)
   const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
-  const [isLastInSeries, setIsLastInSeries] = useState(false)
   const [attachmentCount, setAttachmentCount] = useState(0)
-  const [references, setReferences] = useState<UnderlagReference[]>([])
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
@@ -194,71 +214,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const { settings } = useCompanySettings()
   const dimensionsEnabled = settings?.dimensions_enabled === true
   const [retagLine, setRetagLine] = useState<RetagLine | null>(null)
-  const [retagLog, setRetagLog] = useState<
-    { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
-  >([])
-
   const fetchData = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
     try {
-      const [chainRes, refsRes, retagRes, rattelseRes] = await Promise.all([
-        fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
-        fetch(`/api/bookkeeping/journal-entries/${id}/references`),
-        fetch(`/api/bookkeeping/journal-entries/${id}/retag-log`),
-        fetch(`/api/bookkeeping/journal-entries/${id}/rattelse-log`),
-      ])
-      if (retagRes.ok) {
-        const retagPayload = await retagRes.json()
-        setRetagLog(Array.isArray(retagPayload.data) ? retagPayload.data : [])
-      }
-      if (rattelseRes.ok) {
-        const rattelsePayload = await rattelseRes.json()
-        setRattelseLog(Array.isArray(rattelsePayload.data) ? rattelsePayload.data : [])
-      }
-      if (!chainRes.ok) {
-        const { error: msg } = await chainRes.json()
-        setError(msg || t('error_load_failed'))
-        return
-      }
-      const { data } = await chainRes.json()
-      setEntry(data.entry)
-      setChain(data.chain)
-      setIsLastInSeries(data.is_last_in_series ?? false)
-      // Period lock state for the entry's date, best-effort and not awaited
-      // (the page paints without it): the endpoint fails closed (a lookup
-      // failure reads as 'locked'), and a missing answer just keeps the
-      // strike button in the ⋯ menu only.
-      setPeriodStatus(null)
-      const periodRequest = ++periodStatusRequestRef.current
-      void fetch(
-        `/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(data.entry.entry_date)}`,
-      )
-        .then(async (periodRes) => {
-          if (!periodRes.ok) return
-          const { data: period } = await periodRes.json()
-          // A newer fetchData has run since; its own response owns the state.
-          if (periodRequest !== periodStatusRequestRef.current) return
-          const status = period?.status
-          setPeriodStatus(status === 'open' || status === 'locked' || status === 'closed' ? status : null)
-        })
-        .catch(() => {
-          if (periodRequest === periodStatusRequestRef.current) setPeriodStatus(null)
-        })
-      // Underlag references (linked invoices), best-effort; the verifikat still
-      // renders if this fails, it just falls back to documents-only.
-      if (refsRes.ok) {
-        const { data: refData } = await refsRes.json()
-        setReferences(refData?.references ?? [])
-      } else {
-        setReferences([])
-      }
-    } catch {
-      setError(t('error_load_failed'))
-    } finally {
-      setIsLoading(false)
-    }
-  }, [id, t])
+      await mutateDetail(['journal-entry-detail', company?.id, id])
+    } catch { /* SWR exposes the failed refresh through detailError. */ }
+  }, [mutateDetail, company?.id, id])
 
   const saveNotes = useCallback(async (value: string) => {
     setSavingNotes(true)
@@ -269,7 +229,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         body: JSON.stringify({ notes: value || null }),
       })
       if (res.ok) {
-        setEntry(prev => prev ? { ...prev, notes: value || null } : prev)
+        await mutateDetail<JournalEntryDetailRead>(['journal-entry-detail', company?.id, id], previous => previous ? {
+          ...previous, entry: { ...previous.entry, notes: value || null },
+        } : previous, { revalidate: false })
         setEditingNotes(false)
       } else {
         toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
@@ -279,7 +241,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     } finally {
       setSavingNotes(false)
     }
-  }, [id, toast, t])
+  }, [id, company?.id, toast, t, mutateDetail])
 
   // Open the confirm dialog and fetch the predicted voucher number. The
   // prediction is indicative (numbers are assigned atomically at commit); the
@@ -383,10 +345,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setIsReversing(false)
     }
   }, [id, toast, fetchData, t])
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
 
   if (isLoading) {
     return <DetailPageSkeleton />
@@ -1029,6 +987,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         )}
         <JournalEntryAttachments
           journalEntryId={entry.id}
+          references={references}
           onCountChange={setAttachmentCount}
           variant="section"
         />
@@ -1159,14 +1118,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       )}
 
       {/* Retag dialog (Tier-2 retro-tagging) */}
-      <RetagLineDialog
+      {retagLine && <RetagLineDialog
         open={retagLine !== null}
         onOpenChange={(open) => {
           if (!open) setRetagLine(null)
         }}
         line={retagLine}
         onRetagged={fetchData}
-      />
+      />}
 
       {/* Inline rättelse dialogs (strike lines / metadata) */}
       {showStrikeLines && entry && (

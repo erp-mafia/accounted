@@ -85,3 +85,8 @@ test as well.
 Skatteverket is disabled in the isolated preset. Its two status/transaction
 reads may return 503 only with the explicit `EXTENSION_DISABLED` code. The
 report records that expected integration state. Other server errors still fail.
+
+The GUI integration cases run when the companion navigation/ledger UI module is
+present in the checkout. The performance PR can run its core navigation suite
+independently; the combined branch also exercises the GUI PR's folding, mobile
+headers and nested menu behavior.

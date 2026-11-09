@@ -4,7 +4,7 @@
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useDimensions, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -98,7 +98,50 @@ import type {
   VatPeriodType,
 } from '@/types'
 
-import { ReportLoadingCard, ReportErrorCard, ReportEmptyState, reportQuery } from '../report-view-shells'
+// Shared shells for the report bodies, so all views read as the same
+// instrument: Skeleton while loading, EmptyState when the period has no data,
+// a quiet destructive card on fetch errors (design.md primitives).
+function ReportLoadingCard() {
+  return (
+    <Card>
+      <CardContent className="p-6 space-y-2">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <Skeleton key={i} className="h-4 w-full" />
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ReportErrorCard({ message }: { message: string }) {
+  return (
+    <Card>
+      <CardContent className="p-8 text-center text-destructive">
+        <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+        {message}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ReportEmptyState({ title, description }: { title: string; description: string }) {
+  return <EmptyState icon={FileText} title={title} description={description} />
+}
+
+function reportQuery(
+  periodId: string,
+  range?: DateRangeValue,
+  dimensionFilter?: DimensionFilterValue | null,
+): string {
+  const params = new URLSearchParams({ period_id: periodId })
+  if (range?.fromDate) params.set('from_date', range.fromDate)
+  if (range?.toDate) params.set('to_date', range.toDate)
+  if (dimensionFilter) {
+    params.set('dim_no', dimensionFilter.dimNo)
+    params.set('dim_code', dimensionFilter.code)
+  }
+  return params.toString()
+}
 
 export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<{
@@ -2874,7 +2917,223 @@ function SupplierLedgerRow({
   )
 }
 
-export { default as GeneralLedgerView } from '../lazy-views/GeneralLedgerView'
+// --- General Ledger (Huvudbok) ---
+
+interface GeneralLedgerData {
+  accounts: {
+    account_number: string
+    account_name: string
+    opening_balance: number
+    lines: {
+      date: string
+      voucher_series: string
+      voucher_number: number
+      journal_entry_id: string
+      description: string
+      source_type: string
+      debit: number
+      credit: number
+      balance: number
+      dimensions?: Record<string, string>
+    }[]
+    closing_balance: number
+    total_debit: number
+    total_credit: number
+  }[]
+  period: { start: string; end: string }
+}
+
+// Stable default: an inline `= {}` would change identity every render and
+// re-trigger the fetch effect for callers that omit the prop.
+const EMPTY_DATE_RANGE: DateRangeValue = {}
+
+export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
+  const [data, setData] = useState<GeneralLedgerData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [accountFrom, setAccountFrom] = useState('')
+  const [accountTo, setAccountTo] = useState('')
+  // Only the newest request may land. The window changes right after mount
+  // (the date-range control resolves its preset, or a drill-down's window),
+  // and the superseded request must not overwrite the ledger it was
+  // replaced by when it happens to finish last.
+  const requestSeq = React.useRef(0)
+
+  const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
+    const seq = ++requestSeq.current
+    const from = fromOverride ?? accountFrom
+    const to = toOverride ?? accountTo
+    setLoading(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({ period_id: periodId })
+      if (from) params.set('account_from', from)
+      if (to) params.set('account_to', to)
+      if (dateRange.fromDate) params.set('from_date', dateRange.fromDate)
+      if (dateRange.toDate) params.set('to_date', dateRange.toDate)
+      if (dimensionFilter) {
+        params.set('dim_no', dimensionFilter.dimNo)
+        params.set('dim_code', dimensionFilter.code)
+      }
+      const res = await fetch(`/api/reports/general-ledger?${params}`)
+      const result = await res.json()
+      if (seq !== requestSeq.current) return
+      if (result.error) {
+        // Envelope object, not a string: see the note on the other report
+        // fetches. Rendering it bare blanks the page.
+        setError(getErrorMessage(result))
+      } else {
+        setData(result.data)
+      }
+    } catch {
+      if (seq === requestSeq.current) setError('Kunde inte hämta huvudbok')
+    } finally {
+      if (seq === requestSeq.current) setLoading(false)
+    }
+  }, [periodId, accountFrom, accountTo, dimensionFilter, dateRange])
+
+  // When initialAccountFilter changes (drill-down from another report), apply it
+  useEffect(() => {
+    if (initialAccountFilter) {
+      setAccountFrom(initialAccountFilter)
+      setAccountTo(initialAccountFilter)
+      fetchData(initialAccountFilter, initialAccountFilter)
+    } else {
+      fetchData()
+    }
+  }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
+
+  if (loading) {
+    return <ReportLoadingCard />
+  }
+
+  if (error) {
+    return <ReportErrorCard message={error} />
+  }
+
+  if (!data || data.accounts.length === 0) {
+    return (
+      <ReportEmptyState
+        title="Inga verifikationer i perioden"
+        description="Det finns inga bokförda verifikationer i den valda perioden."
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
+      {/* Account range filter: flat toolbar on the panel, no box. The labels
+          are hidden (field-label) and the placeholders say what the fields are. */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
+          <Input
+            id="gl-account-from"
+            type="text"
+            value={accountFrom}
+            onChange={(e) => setAccountFrom(e.target.value)}
+            placeholder="Från konto"
+            aria-label="Konto från"
+            className="mt-1 w-32"
+          />
+        </div>
+        <div>
+          <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
+          <Input
+            id="gl-account-to"
+            type="text"
+            value={accountTo}
+            onChange={(e) => setAccountTo(e.target.value)}
+            placeholder="Till konto"
+            aria-label="Konto till"
+            className="mt-1 w-32"
+          />
+        </div>
+        <Button onClick={() => fetchData()} variant="outline">
+          Filtrera
+        </Button>
+      </div>
+
+      {data.period.start && (
+        <p className="text-sm text-muted-foreground tabular-nums">
+          Period {data.period.start} till {data.period.end} · {data.accounts.length} konton
+        </p>
+      )}
+
+      {data.accounts.map((account) => (
+        <Card key={account.account_number}>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              {/* data-ph-mask: account number and name are user chart data */}
+              <CardTitle data-ph-mask="" className="text-base">
+                <AccountNumber number={account.account_number} name={account.account_name} showName />
+              </CardTitle>
+              <span className="text-sm text-muted-foreground">
+                IB: {formatAmount(account.opening_balance)} kr
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
+                  <th className="py-2 w-16">Ver.nr</th>
+                  <th className="py-2 w-24">Datum</th>
+                  <th className="py-2">Beskrivning</th>
+                  <th className="py-2 w-24 text-right">Debet</th>
+                  <th className="py-2 w-24 text-right">Kredit</th>
+                  <th className="py-2 w-28 text-right">Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {account.lines.map((line, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="py-1.5 font-mono text-xs">
+                      <Link
+                        href={`/bookkeeping/${line.journal_entry_id}`}
+                        className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors"
+                      >
+                        {formatVoucher(line)}
+                      </Link>
+                    </td>
+                    <td className="py-1.5">{formatDate(line.date)}</td>
+                    <td className="py-1.5 max-w-[240px]">
+                      <span className="truncate block">{line.description}</span>
+                      {line.dimensions && Object.keys(line.dimensions).length > 0 && (
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {Object.entries(line.dimensions)
+                            .sort(([a], [b]) => Number(a) - Number(b))
+                            .map(([, code]) => code)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums">
+                      {line.debit > 0 ? formatAmount(line.debit) : ''}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums">
+                      {line.credit > 0 ? formatAmount(line.credit) : ''}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums">{formatAmount(line.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-semibold border-t-2">
+                  <td colSpan={3} className="py-2">Summa / Utgående balans</td>
+                  <td className="py-2 text-right tabular-nums">{formatAmount(account.total_debit)}</td>
+                  <td className="py-2 text-right tabular-nums">{formatAmount(account.total_credit)}</td>
+                  <td className="py-2 text-right tabular-nums">{formatAmount(account.closing_balance)}</td>
+                </tr>
+              </tfoot>
+            </table></div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
 
 // --- Journal Register (Grundbok) ---
 

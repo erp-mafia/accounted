@@ -5,7 +5,6 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 
-/** Read the fiscal-period ledger, optionally retaining inactive accounts for display filtering. */
 export const GET = withRouteContext(
   'report.general_ledger',
   async (request, ctx) => {
@@ -47,7 +46,6 @@ export const GET = withRouteContext(
         dimensions: dimFilter.dimensions,
         fromDate: range.fromDate,
         toDate: range.toDate,
-        ...(searchParams.get('include_inactive') === 'true' ? { includeInactive: true } : {}),
       })
       return NextResponse.json({ data })
     } catch (err) {
