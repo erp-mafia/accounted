@@ -58,6 +58,8 @@ import { moduleForOperationId } from '@/lib/modules/resolve'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { exceedsUnattendedLimit, unattendedCeiling } from '@/lib/pending-operations/unattended-limit'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
+import { operationBookingReview } from '@/lib/booking-review/operation-gate'
+import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
 import { planStagedOperation, splitStagedAgentReason, stageOperation } from './stage'
 import type { AnyOperation, OperationContext, OperationOutcome } from './types'
@@ -203,7 +205,30 @@ export function v1OperationHandler(op: AnyOperation) {
         if (ctx.dryRun) return dryRunPreview(dry.preview, { requestId: ctx.requestId, log: ctx.log, previewToken })
       }
 
+      // A write a hard block can hold (accounted#166): a key is never a
+      // person's review, so judge the dry run against the company's rules
+      // first and stage a matched write for a person before anything is
+      // written (no claim row, draft or event to undo). The refusal after the
+      // write below stays the fallback for a rule added in between.
+      if (op.mcp?.stage && op.stageOnErrorCodes?.includes('BOOKING_REVIEW_REQUIRED')) {
+        const rules = await loadActiveBookingReviewRules(opCtx.supabase, opCtx.companyId)
+        if (rules.length > 0) {
+          const dry = await op.run(opCtx, input, { dryRun: true })
+          if (dry.ok && dry.dryRun) {
+            const held = await operationBookingReview(opCtx.supabase, opCtx.companyId, {
+              operation_type: op.mcp.stage.pendingType,
+              params: input as Record<string, unknown>,
+              preview_data: dry.preview as Record<string, unknown>,
+            })
+            if (held) return v1StageResponse(op, opCtx, input, ctx, agentReason)
+          }
+        }
+      }
+
       const outcome = await op.run(opCtx, input, { dryRun: false })
+      if (!outcome.ok && op.mcp?.stage && op.stageOnErrorCodes?.includes(outcome.code)) {
+        return v1StageResponse(op, opCtx, input, ctx, agentReason)
+      }
       return v1OutcomeResponse(outcome, ctx)
     },
     {

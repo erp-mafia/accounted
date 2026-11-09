@@ -14,9 +14,12 @@
  *      bank row's when it has one.
  *   3. inbox_item: an Inkorg document booked without a bank row, judged on
  *      its matched supplier, the reading's seller and the verifikat's gross.
- *   4. Never judged: the payment of a registered invoice, a supplier credit
- *      note, a customer invoice, an utlägg. And every source type agrees
- *      with BOOKING_REVIEW_SOURCES in src/lib/booking-review/match.ts.
+ *   4. expense_claim: an utlägg is judged on its cost, VAT, gross and the
+ *      seller its Inkorg reading names, never on the claimant (accounted#166).
+ *      Its repayment stays exempt.
+ *   5. Never judged: the payment of a registered invoice, a supplier credit
+ *      note, a customer invoice. And every source type agrees with
+ *      BOOKING_REVIEW_SOURCES in src/lib/booking-review/match.ts.
  *
  * Every test runs in one transaction on the connection's own (superuser)
  * role, which stands in for the service role, and is rolled back; a step
@@ -362,7 +365,65 @@ describe('inbox_item', () => {
   })
 })
 
-// ── 4. What a block never judges, and the TypeScript mirror ──────────
+// ── 4. An utlägg, with its repayment exempt ──────────────────────────
+
+describe('expense_claim', () => {
+  const CLAIM_LINES: Line[] = [
+    { account_number: '6540', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+    { account_number: '2893', debit_amount: 0, credit_amount: 1250 },
+  ]
+
+  async function claim() {
+    const id = randomUUID()
+    await db.query(
+      `INSERT INTO public.expense_claims (id, company_id, user_id, claimant_name, description, expense_date,
+                                          amount_sek, vat_sek, expense_account, liability_account)
+       VALUES ($1, $2, $3, 'Anna Anställd', 'PG utlägg', $4, 1250, 250, '6540', '2893')`,
+      [id, w.companyId, w.ownerId, DATE],
+    )
+    return id
+  }
+
+  it('refuses an unreviewed claim, passes a reviewed one and ignores the payout', async () => {
+    await saveRule({ accounts: ['6540'] })
+    const entryId = await draft('expense_claim', CLAIM_LINES, { sourceId: await claim() })
+    await expectUnreviewedRefused(entryId)
+    expect((await step(w.ownerId, REVIEWED_SQL, [w.companyId, entryId, null])).error).toBeNull()
+    expect(await stamp(entryId)).toMatchObject({ reviewed_by: w.ownerId, amount_sek: 1250 })
+
+    const payoutId = await draft('expense_payout', [
+      { account_number: '2893', debit_amount: 1250, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+    ])
+    expect(await matches(payoutId)).toEqual([])
+    expect((await commitAs(payoutId, 'api_key', 'api_key')).error).toBeNull()
+  })
+
+  it('matches the seller in the Inkorg reading and the gross, never the claimant', async () => {
+    const claimId = await claim()
+    const entryId = await draft('expense_claim', CLAIM_LINES, { sourceId: claimId })
+    await db.query(
+      `INSERT INTO public.invoice_inbox_items (company_id, user_id, source, status, extracted_data)
+       VALUES ($1, $2, 'upload', 'received', '{"supplier":{"name":"Wispr Flow"}}'::jsonb)
+       RETURNING id::text`,
+      [w.companyId, w.ownerId],
+    )
+    const { rows: items } = await db.query('SELECT id::text FROM public.invoice_inbox_items WHERE company_id = $1', [w.companyId])
+    await db.query(`UPDATE public.expense_claims SET metadata = jsonb_build_object('inbox_item_id', $1::text)
+      WHERE id = $2`, [items[0].id, claimId])
+    await db.query('SAVEPOINT seller_case')
+    await saveRule({ counterparty: 'Wispr Flow', amountFrom: 1250 })
+    expect((await matches(entryId)).length).toBeGreaterThan(0)
+    await db.query('ROLLBACK TO SAVEPOINT seller_case')
+
+    await saveRule({ counterparty: 'Anna Anställd' })
+    await saveRule({ counterparty: 'Wispr Flow', amountFrom: 1251 })
+    expect(await matches(entryId)).toEqual([])
+  })
+})
+
+// ── 5. What a block never judges, and the TypeScript mirror ──────────
 
 describe('the source types a block judges', () => {
   it.each([
@@ -380,11 +441,6 @@ describe('the source types a block judges', () => {
       { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
       { account_number: '2611', debit_amount: 0, credit_amount: 250 },
     ]],
-    ['an utlägg', 'expense_claim', [
-      { account_number: '6540', debit_amount: 1000, credit_amount: 0 },
-      { account_number: '2641', debit_amount: 250, credit_amount: 0 },
-      { account_number: '2893', debit_amount: 0, credit_amount: 1250 },
-    ]],
   ] as Array<[string, string, Line[]]>)('never judges %s: a key commits it as before', async (_case, sourceType, lines) => {
     await saveRule({ amountFrom: 1 })
     await saveRule({ accounts: [...new Set(lines.map((l) => l.account_number))] })
@@ -401,15 +457,11 @@ describe('the source types a block judges', () => {
     const judged: string[] = []
     const checked: string[] = []
     for (const [sourceType, source] of Object.entries(BOOKING_REVIEW_SOURCES)) {
-      // A draft with the blocked account and no bank row or document behind
-      // it: the lines alone decide, for every source type a block judges.
       await db.query('SAVEPOINT source_case')
       let entryId: string
       try {
         entryId = await draft(sourceType, REGISTRATION_25)
       } catch {
-        // A source type the schema refuses on a bare draft (an import needs
-        // its batch): nothing can be judged on it here.
         await db.query('ROLLBACK TO SAVEPOINT source_case')
         continue
       }
@@ -419,7 +471,7 @@ describe('the source types a block judges', () => {
       checked.push(sourceType)
       await db.query('ROLLBACK TO SAVEPOINT source_case')
     }
-    expect(judged.sort()).toEqual(['inbox_item', 'supplier_invoice_cash_payment', 'supplier_invoice_registered'])
+    expect(judged.sort()).toEqual(['expense_claim', 'inbox_item', 'supplier_invoice_cash_payment', 'supplier_invoice_registered'])
     expect(checked).toEqual(expect.arrayContaining(['bank_transaction', 'manual', 'supplier_invoice_paid', 'invoice_created', 'storno']))
   })
 })

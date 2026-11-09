@@ -172,6 +172,7 @@ export const expenseClaimsCreate = defineOperation({
   },
   input: CreateExpenseClaimSchema,
   output: ExpenseClaimOut,
+  stageOnErrorCodes: ['BOOKING_REVIEW_REQUIRED'],
   errorCodes: [
     'PERIOD_LOCKED',
     'EMPLOYEE_NOT_FOUND',

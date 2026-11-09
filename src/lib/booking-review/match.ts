@@ -5,7 +5,7 @@
  * names what a person always reviews before it is booked: accounts, a
  * counterparty, an amount from, a VAT treatment, or any mix. A booking of a
  * purchase (BOOKING_REVIEW_SOURCES: a bank row, a supplier invoice, an
- * Inkorg underlag) matches when every criterion the rule sets matches:
+ * Inkorg underlag or an utlägg) matches when every criterion the rule sets matches:
  *
  *   accounts         the verifikat touches any of them;
  *   counterparty     a party it books (a bank row, the supplier invoice's
@@ -53,16 +53,16 @@ export interface BookingReviewRule {
 /**
  * What a rule judges a journal entry by, per source type: the parties it
  * books, besides its lines (mirror of booking_review_entry_matches and
- * booking_review_entry_parties, migration 20261031231512):
+ * booking_review_entry_parties, migration 20261109170100):
  *
  *   bank_rows         the bank rows it books (bank_booking_context); a draft
  *                     that books none is never matched;
  *   supplier_invoice  the supplier invoice it registers, or under
  *                     kontantmetoden pays (then also its bank rows): the
  *                     supplier card's name and the invoice total in SEK;
- *   inbox_item        the Inkorg underlag booked without a bank row: its
- *                     matched supplier and the reading's seller, and the
- *                     verifikat's gross;
+ *   inbox_item        the Inkorg underlag booked without a bank row or as an
+ *                     utlägg: the reading's seller when present, never the
+ *                     claimant, and the gross;
  *   null              never matched (the reason beside each).
  *
  * A Record over every source type: a new one does not compile until someone
@@ -98,10 +98,12 @@ export const BOOKING_REVIEW_SOURCES: Readonly<Record<JournalEntrySourceType, Boo
   stripe_payout: null,
   webshop_order: null,
   pos_daily_sales: null,
-  // An utlägg (a supplier invoice paid privately books one too): the claim a
-  // person files, keyed to them, never to a seller.
-  expense_claim: null,
+  // An utlägg is judged on its cost lines and gross. Its seller comes from the
+  // Inkorg reading when there is one; the claimant is never a counterparty.
+  expense_claim: 'inbox_item',
   supplier_invoice_privately_paid: null,
+  // Repaying a booked claim, directly or on a payslip, moves only the liability
+  // and the bank. The purchase was judged when the claim was registered.
   expense_payout: null,
   salary_payment: null,
   // Corrections and history: storno and rättelse (BFL 5 kap 5 §), imports.

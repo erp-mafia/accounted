@@ -244,6 +244,8 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
   output: z.ZodType<O>
   /** Stable error codes the operation can answer (documentation). */
   errorCodes?: string[]
+  /** A direct v1 write with one of these refusals is staged through its MCP binding instead. */
+  stageOnErrorCodes?: readonly string[]
   http?: OperationHttpBinding
   mcp?: OperationMcpBinding
   /**
