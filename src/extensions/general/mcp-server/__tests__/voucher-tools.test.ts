@@ -201,9 +201,71 @@ describe('gnubok_create_voucher: staging gates', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/låst/i)
+    ).rejects.toMatchObject({ code: 'TARGET_PERIOD_CLOSED' })
     // findFiscalPeriod must NOT be called when an explicit ID was supplied.
     expect(findFiscalPeriod).not.toHaveBeenCalled()
+  })
+
+  // Founder decision 2026-11-08: a year closed with a bokslut is never
+  // unlocked, so its refusal no longer says "Lås upp perioden"; a period that
+  // is only locked says it can be unlocked.
+  describe('a supplied fiscal_period_id that takes no verifikat', () => {
+    const stageIn = async (period: Record<string, unknown>) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'fp-1', period_start: '2025-01-01', period_end: '2025-12-31', name: '2025', ...period }, error: null })
+      const err = await createVoucher
+        .execute(
+          { entry_date: '2025-06-15', description: 'Rättelse', fiscal_period_id: 'fp-1', lines: balancedLines },
+          'company-1',
+          'user-1',
+          supabase as never,
+        )
+        .then(() => null, (e: unknown) => e)
+      return toToolError(err).error
+    }
+
+    it('closed with a bokslut: TARGET_PERIOD_CLOSED, the registry text and remediation, never unlock', async () => {
+      const error = await stageIn({ is_closed: true, locked_at: '2026-02-01T00:00:00Z' })
+      expect(error).toMatchObject({ code: 'TARGET_PERIOD_CLOSED', retryable: false })
+      expect(error.message_sv).toMatch(/^Räkenskapsåret som täcker datumet är stängt med bokslut/)
+      expect(error.message_en).toMatch(/^Fiscal period "2025": The fiscal year covering the date is closed with a year-end closing/)
+      expect(error.remediation?.description).toMatch(/^Do not retry and do not unlock/)
+      expect(`${error.message_sv} ${error.message_en}`).not.toMatch(/Lås upp perioden/)
+    })
+
+    it('only locked: PERIOD_LOCKED, the code the lock trigger answers at commit: unlock it or pick an open date', async () => {
+      const error = await stageIn({ is_closed: false, locked_at: '2026-02-01T00:00:00Z' })
+      expect(error).toMatchObject({
+        code: 'PERIOD_LOCKED',
+        message_sv: 'Bokföringen är låst för denna period.',
+        message_en: 'Fiscal period "2025": Period is locked or closed; entries cannot be added.',
+        remediation: { tool: 'gnubok_unlock_period' },
+        retryable: false,
+      })
+    })
+
+    it('open and unlocked: stages', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' }, error: null })
+      enqueue({
+        data: [
+          { account_number: '1010', account_name: 'Balanserade utgifter', is_active: true },
+          { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+        ],
+        error: null,
+      })
+      enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+      enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+      enqueue({ data: { id: 'op-open' }, error: null }) // pending_operations insert
+      const result = (await createVoucher.execute(
+        { entry_date: '2026-05-12', description: 'Öppen period', fiscal_period_id: 'fp-1', lines: balancedLines },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as { staged: boolean; preview: Record<string, unknown> }
+      expect(result.staged).toBe(true)
+      expect(result.preview.fiscal_period_id).toBe('fp-1')
+    })
   })
 
   it('rejects when an explicit fiscal_period_id does not exist', async () => {

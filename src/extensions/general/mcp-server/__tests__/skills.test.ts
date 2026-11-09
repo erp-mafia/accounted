@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
-import { workflowSkills, findSkill, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
+import { workflowSkills, findSkill, closestSkillSlugs, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
+import { toToolError } from '../tool-result'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -521,6 +522,31 @@ describe('gnubok_load_skill tool', () => {
     ).rejects.toThrow(/Skill not found.*Available skills/)
   })
 
+  // A plain Error answered UNKNOWN_ERROR, "Något gick fel. Försök igen.",
+  // for a slug no retry finds (18 calls, 15 companies in 30 days).
+  it('answers NOT_FOUND with the closest slugs first and the full list kept', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const err = await tool
+      .execute({ slug: 'payroll' }, 'company-1', 'user-1', makeSupabaseWithEmptyAtomRegistry() as never, { type: 'api_key' })
+      .then(() => null, (e: unknown) => e)
+    const { error } = toToolError(err)
+    expect(error).toMatchObject({ code: 'NOT_FOUND', retryable: false, remediation: { tool: 'gnubok_list_skills' } })
+    expect(error.message_en).toMatch(/^Skill not found: "payroll"\. Closest: payroll-monthly\. Available skills: .*month-end-close/)
+    expect(error.message_sv).toBe('Resursen kunde inte hittas.')
+  })
+
+  it('says an own/ draft waits for a person to add it, instead of not found', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const id = '00000000-0000-4000-8000-0000000000aa'
+    const draft = { id, company_id: 'company-1', team_id: null, atom_id: null, name: 'Momsrutiner', description: '', body: '# Momsrutiner', share_status: 'private', created_by: 'user-1', updated_at: '2026-11-01T00:00:00Z', reviewed_at: null, published_atom_id: null, draft: true, kind: 'rules' }
+    const err = await tool
+      .execute({ slug: `own/${id}` }, 'company-1', 'user-1', makeSupabaseWithEmptyAtomRegistry([], {}, null, [draft]) as never, { type: 'api_key' })
+      .then(() => null, (e: unknown) => e)
+    const { error } = toToolError(err)
+    expect(error).toMatchObject({ code: 'NOT_FOUND', remediation: { description: expect.stringContaining('Instruktioner (/skills)') } })
+    expect(error.message_en).toContain('is a draft')
+  })
+
   it('throws when slug is missing or empty', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
     const supabase = makeSupabaseWithEmptyAtomRegistry()
@@ -839,5 +865,36 @@ describe('Skills via MCP protocol', () => {
     const names = result.tools.map((t: { name: string }) => t.name)
     expect(names).toContain('gnubok_list_skills')
     expect(names).toContain('gnubok_load_skill')
+  })
+})
+
+describe('closestSkillSlugs', () => {
+  const SLUGS = [
+    'bookkeep', 'month-end-close', 'quarterly-vat-review', 'year-end-close', 'invoicing-rules', 'payroll-monthly',
+    'bank-reconciliation', 'reconcile-month', 'kvittojakten', 'kvittojakten-claude', 'horizontal/swedish-vat',
+    'horizontal/swedish-payroll', 'horizontal/swedish-accounting-compliance', 'horizontal/swedish-year-end-closing',
+    'horizontal/swedish-daily-bookkeeping',
+  ]
+
+  // The slugs agents sent in 30 days to 2026-11-08, and the skill each meant.
+  it.each([
+    ['payroll', 'payroll-monthly'],
+    ['month-close', 'month-end-close'],
+    ['year-end-closing', 'year-end-close'],
+    ['invoicing', 'invoicing-rules'],
+    ['agent/kvittojakten', 'kvittojakten'],
+    ['horizontal/bank-reconciliation', 'bank-reconciliation'],
+    ['swedish-vat', 'horizontal/swedish-vat'],
+    ['swedish-accounting-compliance', 'horizontal/swedish-accounting-compliance'],
+    ['horizontal/swedish-daily-bookkeeping/references/cost-types-and-underlag.md', 'horizontal/swedish-daily-bookkeeping'],
+  ])('%s leads with %s', (wanted, first) => {
+    expect(closestSkillSlugs(wanted, SLUGS)[0]).toBe(first)
+  })
+
+  it('names at most three and nothing for a slug that shares no word', () => {
+    expect(closestSkillSlugs('vat-rules', SLUGS)).toHaveLength(3)
+    expect(closestSkillSlugs('vat-rules', SLUGS)).toEqual(expect.arrayContaining(['horizontal/swedish-vat', 'quarterly-vat-review']))
+    expect(closestSkillSlugs('stripe', SLUGS)).toEqual([])
+    expect(closestSkillSlugs('own/00000000-0000-4000-8000-0000000000aa', SLUGS)).toEqual([])
   })
 })

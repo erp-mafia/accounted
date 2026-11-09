@@ -2,6 +2,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
@@ -78,6 +79,23 @@ function readerFailure(reason: string): Error {
   return transient
     ? coded('TRANSIENT_ERROR', `The document reader is unavailable right now (${reason}). Ask the same question again after a short wait.`)
     : coded('INTERNAL_ERROR', `The document reader failed: ${reason}`)
+}
+
+/**
+ * gnubok_ask_document on a document with no text to read: no page has a text
+ * layer (a scan or photo the reader got nothing from), or none of the pages
+ * asked for has text. It said only "no readable text" (13 calls, 4 companies
+ * in 30 days), so the agent could not tell what to do instead.
+ */
+function noReadableText(documentId: string, pages: number[] | undefined): Error {
+  if (pages) {
+    return invalid(`The document has no readable text on pages ${pages.join(', ')}: ask again without pages, or with pages the document has.`)
+  }
+  return codedRefusal('VALIDATION_ERROR', 'The document has no readable text: no page has a text layer (a scan or photo the reader could not read).', {
+    description: 'Look at the file itself: gnubok_get_document_content returns its signed URL to read as an image. Or ask the user what it says.',
+    tool: 'gnubok_get_document_content',
+    args: { document_id: documentId },
+  })
 }
 
 /**
@@ -739,7 +757,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         if (out.status === 'skipped') {
           if (out.reason === 'not_found') throw notFound('No such document in this company')
           if (out.reason === 'ai_unconfigured') throw coded('EXTENSION_DISABLED', 'The reader is not configured on this installation')
-          throw invalid('The document has no readable text')
+          throw noReadableText(ref.id, pages)
         }
         if (out.status === 'error') throw readerFailure(out.reason)
         return {
