@@ -29,7 +29,12 @@
     "test": "vitest run --project unit",
     "test:pg": "vitest run --project pg-real",
     "tools:pg:reset": "bash scripts/tool-pg/reset.sh",
-    "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg"
+    "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg",
+    "test:e2e": "node scripts/e2e/run.mjs test",
+    "test:e2e:prepare": "node scripts/e2e/run.mjs prepare",
+    "test:e2e:check": "node scripts/e2e/run.mjs check",
+    "test:e2e:reset": "node scripts/e2e/run.mjs reset",
+    "test:e2e:down": "node scripts/e2e/run.mjs down"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.69",
@@ -94,6 +99,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@tailwindcss/postcss": "^4",
     "@types/heic-convert": "^2.1.1",
     "@types/js-yaml": "4.0.9",

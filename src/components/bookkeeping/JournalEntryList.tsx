@@ -197,6 +197,7 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
+/** Page through vouchers and load their document metadata under the same request generation. */
 export default function JournalEntryList({
   pristineSlot,
   refreshToken,
@@ -233,10 +234,13 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  const tCommon = useTranslations('common')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
   const [entries, setEntries] = useState<JournalEntry[]>([])
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
   const [committingId, setCommittingId] = useState<string | null>(null)
   // Confirm-before-posting (convention 10): the draft the user is about to
   // commit, plus the predicted voucher label ("A-218") for the dialog copy.
@@ -277,6 +281,7 @@ export default function JournalEntryList({
   // (BFL 5 kap 5 §), not only on the detail page.
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
+  const [noDocRequiredStatus, setNoDocRequiredStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the click that precedes it
@@ -439,24 +444,29 @@ export default function JournalEntryList({
     }
   }, [])
 
-  const fetchNoDocRequired = useCallback(async () => {
+  /** Load complete page exemptions before enabling their indicators and editing controls. */
+  const fetchNoDocRequired = useCallback(async (entryIds: string[], isCurrent: () => boolean) => {
+    if (!isCurrent()) return
+    setNoDocRequiredStatus('loading')
+    const batches: string[][] = []
+    for (let index = 0; index < entryIds.length; index += 100) {
+      batches.push(entryIds.slice(index, index + 100))
+    }
     try {
-      const res = await fetch('/api/bookkeeping/no-doc-required')
-      if (!res.ok) return
-      const { data } = await res.json()
-      const map = new Map<string, string | null>()
-      for (const row of (data || []) as { journal_entry_id: string; reason: string | null }[]) {
-        map.set(row.journal_entry_id, row.reason)
-      }
-      setNoDocRequired(map)
+      const results = await Promise.all(batches.map(async ids => {
+        const response = await fetch(`/api/bookkeeping/no-doc-required?journal_entry_ids=${ids.join(',')}`)
+        if (!response.ok) throw new Error('Unable to read document exemptions')
+        return await response.json() as { data: { journal_entry_id: string; reason: string | null }[] }
+      }))
+      if (!isCurrent()) return
+      setNoDocRequired(new Map(results.flatMap(result => result.data.map(row => [row.journal_entry_id, row.reason] as const))))
+      setNoDocRequiredStatus('ready')
     } catch {
-      // Non-critical: silently ignore
+      if (isCurrent()) setNoDocRequiredStatus('error')
+      // Preserve the last successful metadata while disconnected.
     }
   }, [])
 
-  useEffect(() => {
-    fetchNoDocRequired()
-  }, [fetchNoDocRequired])
 
   // Restore the persisted sort order (per company). Read in an effect rather
   // than the useState initializer to avoid an SSR/client hydration mismatch.
@@ -596,7 +606,9 @@ export default function JournalEntryList({
   async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
+    let listRefreshed = false
     setLoading(true)
+    setNoDocRequiredStatus('loading')
     if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
@@ -638,6 +650,7 @@ export default function JournalEntryList({
       const { data, count: total } = await res.json()
       if (!isCurrent()) return
       const loadedEntries = data || []
+      listRefreshed = true
       setEntries(loadedEntries)
       setCount(total || 0)
       setMissingCount(showMissingOnly && listMode === 'committed' ? total || 0 : null)
@@ -678,6 +691,7 @@ export default function JournalEntryList({
       // carrying the generation guard so their late completions can't
       // overwrite metadata a newer request just rendered.
       const ids = loadedEntries.map((e: JournalEntry) => e.id)
+      fetchNoDocRequired(ids, isCurrent)
       fetchAttachmentCounts(ids, isCurrent)
       fetchRattelseFlags(ids, isCurrent)
     } catch {
@@ -689,6 +703,11 @@ export default function JournalEntryList({
       setHasLoaded(true)
       toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {
+      // A failed list refresh leaves the previous rows visible. Their metadata
+      // must still reflect a successful bulk update, guarded against navigation.
+      if (!listRefreshed && isCurrent()) {
+        await fetchNoDocRequired(entriesRef.current.map(entry => entry.id), isCurrent)
+      }
       if (isCurrent()) setLoading(false)
     }
   }
@@ -814,7 +833,7 @@ export default function JournalEntryList({
           title: t('toast_posted_title'),
           description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
         })
-        await fetchEntries()
+        await fetchEntriesRef.current()
       } else {
         toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -843,7 +862,7 @@ export default function JournalEntryList({
           description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
         })
         setReverseEntryTarget(null)
-        await fetchEntries()
+        await fetchEntriesRef.current()
       } else {
         toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -859,12 +878,14 @@ export default function JournalEntryList({
   // batch-marked "Inget underlag krävs".
   const isEligibleForExempt = useCallback(
     (entry: JournalEntry) =>
+      noDocRequiredStatus === 'ready' &&
+      attachmentCountsLoaded &&
       entry.status === 'posted' &&
       NEEDS_ATTACHMENT.has(entry.source_type) &&
       !attachmentCounts[entry.id] &&
       !invoiceReferenced.has(entry.id) &&
       !noDocRequired.has(entry.id),
-    [attachmentCounts, invoiceReferenced, noDocRequired],
+    [attachmentCounts, attachmentCountsLoaded, invoiceReferenced, noDocRequired, noDocRequiredStatus],
   )
 
   const handleBatchExempt = async () => {
@@ -906,7 +927,7 @@ export default function JournalEntryList({
       // With the server-side saknade-underlag filter on, the exempted rows no
       // longer belong to the filtered set: refetch so they leave the list and
       // the count updates (the pre-server-filter behavior).
-      if (showMissingOnly) await fetchEntries()
+      if (showMissingOnlyRef.current) await fetchEntriesRef.current()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -942,6 +963,7 @@ export default function JournalEntryList({
     }
   }
 
+  /** Apply the confirmed bulk action and refresh whichever page is currently displayed. */
   const handleBulkConfirm = async () => {
     setBulkSubmitting(true)
     try {
@@ -967,8 +989,9 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
       })
-      await fetchNoDocRequired()
-      await fetchEntries()
+      // A bulk request can finish after navigation. Refresh the current page
+      // through its guarded list request, including that page's metadata.
+      await fetchEntriesRef.current()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -1493,7 +1516,7 @@ export default function JournalEntryList({
               <option value={t('no_doc_required_suggestion_tax_payment')} />
               <option value={t('no_doc_required_suggestion_salary')} />
             </datalist>
-            <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
+            <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting} disabled={noDocRequiredStatus !== 'ready'}>
               {t('batch_mark_no_doc')}
             </Button>
             {!allEligibleSelected && (
@@ -1704,7 +1727,7 @@ export default function JournalEntryList({
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
-                            attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && !invoiceReferenced.has(entry.id) && (
+                            attachmentCountsLoaded && noDocRequiredStatus === 'ready' && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && !invoiceReferenced.has(entry.id) && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
                                   <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1849,27 +1872,41 @@ export default function JournalEntryList({
                               />
 
                               {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
-                                <NoDocRequiredToggle
-                                  entryId={entry.id}
-                                  initialExempt={noDocRequired.has(entry.id)}
-                                  initialReason={noDocRequired.get(entry.id) ?? null}
-                                  canWrite={canWrite}
-                                  onChange={(exempted, reason) => {
-                                    setNoDocRequired((prev) => {
-                                      const next = new Map(prev)
-                                      if (exempted) next.set(entry.id, reason ?? null)
-                                      else next.delete(entry.id)
-                                      return next
-                                    })
-                                    // Server-side saknade-underlag filter on: an
-                                    // exempted row leaves the filtered set, so
-                                    // refetch in place (keeps expansion state
-                                    // semantics of a background refresh).
-                                    if (exempted && showMissingOnly) {
-                                      void fetchEntries({ preserveSelection: true })
-                                    }
-                                  }}
-                                />
+                                noDocRequiredStatus === 'ready' ? (
+                                  <NoDocRequiredToggle
+                                    entryId={entry.id}
+                                    initialExempt={noDocRequired.has(entry.id)}
+                                    initialReason={noDocRequired.get(entry.id) ?? null}
+                                    canWrite={canWrite}
+                                    onChange={(exempted, reason) => {
+                                      setNoDocRequired((prev) => {
+                                        const next = new Map(prev)
+                                        if (exempted) next.set(entry.id, reason ?? null)
+                                        else next.delete(entry.id)
+                                        return next
+                                      })
+                                      // Server-side saknade-underlag filter on: an
+                                      // exempted row leaves the filtered set, so
+                                      // refetch in place (keeps expansion state
+                                      // semantics of a background refresh).
+                                      if (exempted && showMissingOnlyRef.current) {
+                                        void fetchEntriesRef.current({ preserveSelection: true })
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                                    <span>{noDocRequiredStatus === 'loading' ? tCommon('loading') : t('no_doc_required_load_failed')}</span>
+                                    {noDocRequiredStatus === 'error' && (
+                                      <Button size="sm" variant="outline" onClick={() => {
+                                        const gen = fetchGenRef.current
+                                        void fetchNoDocRequired(entriesRef.current.map(row => row.id), () => fetchGenRef.current === gen)
+                                      }}>
+                                        {tCommon('retry')}
+                                      </Button>
+                                    )}
+                                  </div>
+                                )
                               )}
 
                               {/* Quiet link actions (concept vact); posting keeps
@@ -1990,7 +2027,7 @@ export default function JournalEntryList({
           entry={correctionEntry}
           open={!!correctionEntry}
           onOpenChange={(open) => { if (!open) setCorrectionEntry(null) }}
-          onCorrected={() => { setCorrectionEntry(null); fetchEntries() }}
+          onCorrected={() => { setCorrectionEntry(null); void fetchEntriesRef.current() }}
         />
       )}
 

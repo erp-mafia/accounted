@@ -41,9 +41,12 @@ class ExtensionRegistry {
    * a Supabase client created from the current request cookies.
    */
   register(extension: Extension): void {
-    if (this.extensions.has(extension.id)) {
-      // Extension already registered: skip silently (expected during hot reloads)
-      return
+    const existing = this.extensions.get(extension.id)
+    if (existing) {
+      if (process.env.NODE_ENV !== 'development' || existing === extension) return
+      // HMR supplies a new definition object. Replace stale routes and
+      // unsubscribe its old listeners before installing the new handlers.
+      this.unregister(extension.id)
     }
 
     this.extensions.set(extension.id, extension)

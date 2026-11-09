@@ -1,0 +1,51 @@
+name: Browser performance
+
+on: [pull_request, workflow_dispatch]
+
+concurrency:
+  group: browser-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 26
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns
+          if ! rg -q "^$(id -un):" /etc/subuid; then
+            sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
+          fi
+          podman info > /dev/null
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Seed ten years, build and test latency
+        run: npm run test:e2e
+      - name: Show isolated service diagnostics
+        if: failure()
+        run: node scripts/e2e/diagnostics.mjs
+      - name: Remove owned test services
+        if: always()
+        run: npm run test:e2e:down
+      - name: Upload browser results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-performance
+          include-hidden-files: true
+          path: |
+            playwright-report/
+            test-results/
+            .e2e/results.json
+          retention-days: 7

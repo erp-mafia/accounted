@@ -1226,3 +1226,9 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-03] Skatteverket refusals log only status, period and SKV kod, not the response body: an EF body can echo the owner's personnummer, and the full body already reaches the user in the error response; no-console is an error in the extension.
 [2026-10-03] Bank booking doors refuse via one assertTransactionBookable (pointer or bank_line link to a posted verifikat): code-only fix approved; no DB trigger guarded this before and none is removed, a trigger backstop is deferred to its own PR; categorize fast path stays pointer-keyed, book route now rebooks a reversed pointer like the core.
 [2026-10-03] MCP create_invoice staging and commit both build through buildStagedInvoice (the shared buildInvoiceWriteData) instead of adding the 1660-on-a-VAT-line check to the hand copy: one definition, so ROT/RUT, accrual, preview VAT and the reverse-charge notice cannot drift again.
+
+[2026-11-08] Keep full dev compiler eviction after the route audit exhausted its memory budget. Reuse reference caches and load only visible ledger metadata. Render the chart in batches of 100; search and selection still cover the full chart.
+
+
+[2026-11-08] Browser latency tests use an isolated Podman Supabase stack and deterministic ten-year synthetic SIE history. Production source snapshots exclude environment files. Measured cold requests have a 5 s cap, then navigation has 3 s and interactions 1 s, with no retries.
+[2026-11-10] Browser fixtures use Europe/Stockholm like the isolated server: mismatched UTC dates after Swedish midnight selected an empty historical reskontra while readiness expected live open invoices. Keep real clocks, row assertions and 5/3/1-second budgets.

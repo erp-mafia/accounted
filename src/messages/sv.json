@@ -6317,6 +6317,7 @@
     "no_doc_required_reason_add": "Lägg till skäl (frivilligt)",
     "no_doc_required_reason_placeholder": "T.ex. bankavgift, ränta, intern överföring",
     "no_doc_required_save_reason": "Spara",
+    "no_doc_required_load_failed": "Kunde inte läsa uppgifter om underlag.",
     "no_doc_required_save_failed": "Kunde inte spara",
     "no_doc_required_suggestion_bank_fee": "Bankavgift",
     "no_doc_required_suggestion_interest": "Ränta",
@@ -6468,6 +6469,7 @@
     "skattekonto": "Skattekonto"
   },
   "journal_detail": {
+    "company_required": "Välj ett företag eller ladda om sidan innan du öppnar verifikatet.",
     "title": "Verifikat {label}",
     "title_draft": "Utkast till verifikat",
     "field_voucher": "Verifikationsnummer",
@@ -6665,6 +6667,7 @@
     "row_dimensions_aria": "Dimensioner för raden"
   },
   "chart_of_accounts": {
+    "visible_accounts": "Visar {visible} av {total} konton",
     "class_1": "Tillgångar",
     "class_2": "Eget kapital och skulder",
     "class_3": "Rörelseintäkter",
@@ -6727,7 +6730,7 @@
     "prune_empty": "Inga oanvända konton att rensa — din kontoplan är redan ren.",
     "prune_confirm": "Ta bort {count} konton",
     "prune_select_all": "Markera alla oanvända konton",
-    "select_all_aria": "Markera alla visade konton",
+    "select_all_aria": "Markera alla matchande konton i hela kontoplanen, även konton som inte har laddats",
     "select_row_aria": "Markera konto {number}",
     "usage_filter_label": "Filtrera på verifikat",
     "usage_filter_all": "Alla konton",
@@ -6735,7 +6738,7 @@
     "usage_filter_unused": "Utan verifikat",
     "usage_filter_used": "Med verifikat",
     "bulkbar_selected": "{count, plural, one {konto markerat} other {konton markerade}}",
-    "bulk_select_all": "Markera alla visade ({count})",
+    "bulk_select_all": "Markera alla matchande ({count})",
     "bulk_clear_selection": "Avmarkera",
     "bulk_deactivate_confirm_title": "Inaktivera {count} konton?",
     "bulk_deactivate_confirm": "{count} konton utan verifikat inaktiveras. Befintlig bokföring påverkas inte, och kontona kan aktiveras igen från BAS-katalogen.",

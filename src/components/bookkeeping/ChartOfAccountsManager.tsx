@@ -1,8 +1,9 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { usePageState } from '@/lib/hooks/use-page-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -43,7 +44,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
@@ -103,6 +105,8 @@ function UsageCount({ accountNumber, count }: { accountNumber: string; count: nu
 // Component
 // ---------------------------------------------------------------------------
 
+/** Search and select the full cached chart while mounting its visible accounts in batches. */
+/** Manage the company chart with full-chart search, selection and paginated row rendering. */
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
   const t = useTranslations('chart_of_accounts')
@@ -146,12 +150,12 @@ export default function ChartOfAccountsManager() {
   // The usage map loads after first paint; until it has, "utan verifikat"
   // would match every account, so the filter stays disabled.
   const [usageLoaded, setUsageLoaded] = useState(false)
+  const [visibleAccountCount, setVisibleAccountCount] = usePageState('chart-visible-count', 100)
 
   // Data state
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const { accounts, isLoading: loading } = useAccounts(!showInactive)
   const [referenceAccounts, setReferenceAccounts] = useState<ReferenceAccount[]>([])
   const [usageCounts, setUsageCounts] = useState<Map<string, number>>(new Map())
-  const [loading, setLoading] = useState(true)
   // The BAS catalog + K2 default are fetched lazily the first time the user
   // opens that tab, so they never block the default "Mina konton" view.
   const [referenceLoaded, setReferenceLoaded] = useState(false)
@@ -170,23 +174,6 @@ export default function ChartOfAccountsManager() {
   // -------------------------------------------
   // Data fetching
   // -------------------------------------------
-
-  // Read through a ref, not the state value: making fetchAccounts depend on
-  // showInactive would put it in the mount effect's dep list and re-run the
-  // whole blocking load on every toggle (the same double-fetch the comment
-  // below warns about for hideK2Excluded).
-  const showInactiveRef = useRef(showInactive)
-  showInactiveRef.current = showInactive
-
-  const fetchAccounts = useCallback(async () => {
-    // `?active=false` disables the filter entirely (active + inactive), it does
-    // not select inactive rows only — see list_company_accounts.
-    const res = await fetch(
-      showInactiveRef.current ? '/api/bookkeeping/accounts?active=false' : '/api/bookkeeping/accounts',
-    )
-    const { data } = await res.json()
-    setAccounts(data || [])
-  }, [])
 
   // The server sends only the company's per-account activation status; the BAS
   // catalog is static and already bundled here, so we merge client-side rather
@@ -235,36 +222,9 @@ export default function ChartOfAccountsManager() {
     }
   }, [])
 
-  // First paint blocks only on the user's own chart (the default view). Usage
-  // counts drive the informational "Verifikat" column and load in the
-  // background; the BAS catalog + K2 setting are deferred to tab open. This
-  // must NOT depend on hideK2Excluded: doing so re-ran the whole load a second
-  // time once the K2 default was set, doubling every fetch on each visit.
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setLoading(true)
-      await fetchAccounts()
-      if (!cancelled) setLoading(false)
-    }
-    load()
     void fetchUsage()
-    return () => {
-      cancelled = true
-    }
-  }, [fetchAccounts, fetchUsage])
-
-  // Refetch when the inactive filter flips. Skips the first run (the mount
-  // effect above already fetched) and deliberately does not raise `loading`:
-  // swapping a filter should not blank the table back to the skeleton.
-  const showInactiveInitial = useRef(true)
-  useEffect(() => {
-    if (showInactiveInitial.current) {
-      showInactiveInitial.current = false
-      return
-    }
-    void fetchAccounts()
-  }, [showInactive, fetchAccounts])
+  }, [fetchUsage])
 
   // Loads the BAS catalog and the K2 default on demand, once, the first time
   // the user opens the "BAS-katalog" tab.
@@ -291,12 +251,12 @@ export default function ChartOfAccountsManager() {
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
-      fetchAccounts(),
+      invalidateReferenceData('ref:accounts'),
       fetchUsage(),
       // Only refresh the catalog if the user has actually opened that tab.
       ...(referenceLoaded ? [fetchReference()] : []),
     ])
-  }, [fetchAccounts, fetchUsage, fetchReference, referenceLoaded])
+  }, [fetchUsage, fetchReference, referenceLoaded])
 
   // -------------------------------------------
   // Actions
@@ -520,13 +480,13 @@ export default function ChartOfAccountsManager() {
 
   const groupedAccounts = useMemo(() => {
     const grouped: Record<number, BASAccount[]> = {}
-    for (const a of filteredAccounts) {
+    for (const a of filteredAccounts.slice(0, visibleAccountCount)) {
       const cls = a.account_class
       if (!grouped[cls]) grouped[cls] = []
       grouped[cls].push(a)
     }
     return grouped
-  }, [filteredAccounts])
+  }, [filteredAccounts, visibleAccountCount])
 
   const filteredReference = useMemo(() => {
     let filtered = referenceAccounts
@@ -556,7 +516,9 @@ export default function ChartOfAccountsManager() {
   // Render
   // -------------------------------------------
 
-  const shownCount = view === 'my-accounts' ? filteredAccounts.length : filteredReference.length
+  const shownCount = view === 'my-accounts'
+    ? Math.min(filteredAccounts.length, visibleAccountCount)
+    : filteredReference.length
   const totalCount = view === 'my-accounts' ? accounts.length : referenceAccounts.length
 
   // Page header + toolbar render even while loading so the chrome is stable.
@@ -633,14 +595,20 @@ export default function ChartOfAccountsManager() {
         <ToolbarSearch
           placeholder={t('search_placeholder')}
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setVisibleAccountCount(100)
+          }}
           containerClassName="min-w-[190px] max-w-xs flex-1"
         />
         {view === 'my-accounts' && (
           <label className="ml-auto flex items-center gap-2 text-sm">
             <Switch
               checked={showInactive}
-              onCheckedChange={setShowInactive}
+              onCheckedChange={(checked) => {
+                setShowInactive(checked)
+                setVisibleAccountCount(100)
+              }}
               className="scale-75"
             />
             <span className="text-muted-foreground">{t('show_inactive')}</span>
@@ -735,7 +703,10 @@ export default function ChartOfAccountsManager() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuRadioGroup
                           value={usageFilter}
-                          onValueChange={(v) => setUsageFilter(v as UsageFilter)}
+                          onValueChange={(v) => {
+                            setUsageFilter(v as UsageFilter)
+                            setVisibleAccountCount(100)
+                          }}
                         >
                           {(['all', 'unused', 'used'] as const).map((value) => (
                             <DropdownMenuRadioItem key={value} value={value}>
@@ -870,6 +841,16 @@ export default function ChartOfAccountsManager() {
               </tbody>
             </table>
           </div>
+          {filteredAccounts.length > visibleAccountCount && (
+            <div className="flex items-center gap-4 py-4">
+              <Button variant="outline" onClick={() => setVisibleAccountCount(count => count + 100)}>
+                {tCommon('load_more')}
+              </Button>
+              <span className="text-sm tabular-nums text-muted-foreground">
+                {t('visible_accounts', { visible: visibleAccountCount, total: filteredAccounts.length })}
+              </span>
+            </div>
+          )}
           </div>
         )
       ) : (

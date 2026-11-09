@@ -1,0 +1,1281 @@
+'use client'
+
+import { useState, useCallback } from 'react'
+import useSWR, { useSWRConfig } from 'swr'
+import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useTranslations } from 'next-intl'
+import { Button } from '@/components/ui/button'
+import { AccountNumber } from '@/components/ui/account-number'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  ArrowLeft,
+  Lock,
+  Pencil,
+  Copy,
+  CalendarClock,
+  FileText,
+  RotateCcw,
+  Scissors,
+  PenLine,
+  Bot,
+  MoreHorizontal,
+  Trash2,
+  Users,
+  Split,
+} from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
+import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
+import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
+import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
+import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
+import type { RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
+import { useCompanySettings } from '@/components/settings/useSettings'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Badge } from '@/components/ui/badge'
+import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useDimensions } from '@/lib/reference-data/hooks'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import type { JournalEntryLine } from '@/types'
+import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+
+const CorrectionEntryDialog = dynamic(() => import('@/components/bookkeeping/CorrectionEntryDialog'))
+const CorrectOpeningBalanceDialog = dynamic(() => import('@/components/bookkeeping/CorrectOpeningBalanceDialog'))
+const SplitOpeningBalanceDialog = dynamic(() => import('@/components/bookkeeping/SplitOpeningBalanceDialog'))
+const StrikeLinesDialog = dynamic(() => import('@/components/bookkeeping/StrikeLinesDialog'))
+const CorrectMetadataDialog = dynamic(() => import('@/components/bookkeeping/CorrectMetadataDialog'))
+const EditDraftEntryDialog = dynamic(() => import('@/components/bookkeeping/EditDraftEntryDialog'))
+const RecordateEntryDialog = dynamic(() => import('@/components/bookkeeping/RecordateEntryDialog'))
+const RetagLineDialog = dynamic(() => import('@/components/dimensions/RetagLineDialog'))
+
+import type { JournalEntryDetailRead, StruckLineSnapshot } from '@/lib/bookkeeping/journal-entry-detail-types'
+
+
+/**
+ * Human "who committed this" line from the committed_actor_* snapshot
+ * (WHO relayed the commit; commit_method records HOW). The claude.ai MCP
+ * connector mints a gnubok_sk_ API key, so MCP traffic arrives as
+ * actor_type='api_key' with the key name as the label.
+ */
+function committedByLabel(
+  actorType: string,
+  actorLabel: string | null,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  switch (actorType) {
+    case 'user':
+      return actorLabel || t('committed_by_user')
+    case 'api_key':
+    case 'mcp_oauth':
+      return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
+    case 'agent_chat':
+      return t('committed_by_agent_chat')
+    case 'cron':
+      return t('committed_by_cron')
+    case 'system':
+      return t('committed_by_system')
+    default:
+      return actorType
+  }
+}
+
+const NO_REFERENCES: UnderlagReference[] = []
+
+// Ledger amounts render as plain sv-SE numbers with two decimals (no currency
+// suffix), the same way the verifikat list's line tables do.
+const fmtAmount = (value: number | string): string =>
+  Number(value).toLocaleString('sv-SE', { minimumFractionDigits: 2 })
+
+export default function JournalEntryDetail({ id, initialCompanyId, initialData }: {
+  id: string
+  initialCompanyId?: string
+  initialData?: JournalEntryDetailRead
+}) {
+  const router = useRouter()
+  const { canWrite } = useCanWrite()
+  const company = useCompanyOptional()?.company ?? null
+  const { toast } = useToast()
+  const t = useTranslations('journal_detail')
+  const tCommon = useTranslations('common')
+  const tCorrection = useTranslations('journal_correction')
+  const sourceTypeLabels = useSourceTypeLabels()
+  const { mutate: mutateDetail } = useSWRConfig()
+  const seed = company?.id === initialCompanyId ? initialData : undefined
+  const { data: detail, error: detailError, isLoading } = useSWR<JournalEntryDetailRead>(
+    company?.id ? ['journal-entry-detail', company.id, id] : null,
+    async () => {
+      const response = await fetch(`/api/bookkeeping/journal-entries/${id}/detail`)
+      if (!response.ok) throw new Error(t('error_load_failed'))
+      const payload = await response.json()
+      return payload.data
+    },
+    { fallbackData: seed, revalidateOnFocus: false, shouldRetryOnError: false },
+  )
+  // A failed optional read is distinct from an empty list. Retry just this
+  // reader and share the recovered references with links and attachments.
+  const { data: retriedReferences } = useSWR<UnderlagReference[]>(
+    company?.id && detail?.references === null ? ['journal-entry-references', company.id, id] : null,
+    async () => {
+      const response = await fetch(`/api/bookkeeping/journal-entries/${id}/references`)
+      if (!response.ok) throw new Error(t('error_load_failed'))
+      return (await response.json()).data.references
+    },
+    { revalidateOnFocus: false, errorRetryCount: 2 },
+  )
+  const entry = detail?.entry ?? null
+  const chain = detail?.chain ?? []
+  const error = detailError ? t('error_load_failed') : null
+  const references = detail?.references ?? retriedReferences ?? NO_REFERENCES
+  const retagLog = detail?.retag_log ?? []
+  const rattelseLog = detail?.rattelse_log ?? []
+  const periodStatus = detail?.period_status ?? null
+  const isLastInSeries = detail?.is_last_in_series ?? false
+  const [showCorrection, setShowCorrection] = useState(false)
+  const [showCorrectIB, setShowCorrectIB] = useState(false)
+  const [showSplitIB, setShowSplitIB] = useState(false)
+  const [showStrikeLines, setShowStrikeLines] = useState(false)
+  const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
+  const [showRecordate, setShowRecordate] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showReverseConfirm, setShowReverseConfirm] = useState(false)
+  const [isReversing, setIsReversing] = useState(false)
+  // Non-null when the server refused the storno with CORRECTION_CHAIN_TOO_DEEP:
+  // holds the reported chain depth and opens the bypass confirm ("Återför ändå").
+  const [reverseDeepChainDepth, setReverseDeepChainDepth] = useState<number | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [isCommitting, setIsCommitting] = useState(false)
+  // Confirm-before-posting (convention 10). The list already gates this exact
+  // action; the detail page used to fire the commit straight from the button.
+  const [showCommitConfirm, setShowCommitConfirm] = useState(false)
+  const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
+  const [attachmentCount, setAttachmentCount] = useState(0)
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notesValue, setNotesValue] = useState('')
+  const [savingNotes, setSavingNotes] = useState(false)
+  // Dimension registry, fetched once when any line carries a dimensions map:
+  // used to resolve display names for the per-line dimension text
+  // ('Kostnadsställe: Butik') and the retag history; it falls back to raw
+  // codes when the fetch fails or a code is unregistered.
+  // Dimension names for tagged lines, from the session-cached registry
+  // (lib/reference-data); null until it is there, raw codes render meanwhile.
+  const { dimensions } = useDimensions()
+  const registryDims = dimensions.length > 0 ? dimensions : null
+  // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
+  // the audited retag dialog; the log renders as a history section below.
+  // Both render only when dimensions are enabled for the company.
+  const { settings } = useCompanySettings()
+  const dimensionsEnabled = settings?.dimensions_enabled === true
+  const [retagLine, setRetagLine] = useState<RetagLine | null>(null)
+  const fetchData = useCallback(async () => {
+    try {
+      await mutateDetail(['journal-entry-detail', company?.id, id])
+    } catch { /* SWR exposes the failed refresh through detailError. */ }
+  }, [mutateDetail, company?.id, id])
+
+  const saveNotes = useCallback(async (value: string) => {
+    setSavingNotes(true)
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/notes`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: value || null }),
+      })
+      if (res.ok) {
+        await mutateDetail<JournalEntryDetailRead>(['journal-entry-detail', company?.id, id], previous => {
+          const current = previous ?? seed
+          return current ? { ...current, entry: { ...current.entry, notes: value || null } } : current
+        }, { revalidate: false })
+        setEditingNotes(false)
+      } else {
+        toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: t('toast_save_note_failed'), variant: 'destructive' })
+    } finally {
+      setSavingNotes(false)
+    }
+  }, [id, company?.id, toast, t, mutateDetail, seed])
+
+  // Open the confirm dialog and fetch the predicted voucher number. The
+  // prediction is indicative (numbers are assigned atomically at commit); the
+  // success toast always shows the real one. Mirrors JournalEntryList.
+  const openCommitConfirm = useCallback(() => {
+    setShowCommitConfirm(true)
+    setCommitVoucherPreview(null)
+    fetch('/api/bookkeeping/voucher-sequences/next')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (data?.next != null) setCommitVoucherPreview(`${data.series}${data.next}`)
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleCommit = useCallback(async () => {
+    setIsCommitting(true)
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/commit`, { method: 'POST' })
+      const result = await res.json()
+      if (res.ok) {
+        const posted = result.data
+        toast({
+          title: t('toast_posted_title'),
+          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
+        })
+        await fetchData()
+      } else {
+        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
+    } finally {
+      setIsCommitting(false)
+    }
+  }, [id, toast, fetchData, t])
+
+  const handleDelete = useCallback(async () => {
+    setIsDeleting(true)
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}`, { method: 'DELETE' })
+      const result = await res.json()
+      if (res.ok) {
+        const wasDraft = result.data?.was_draft === true
+        toast({
+          title: wasDraft ? t('toast_delete_draft_title') : t('toast_delete_entry_title'),
+          description: wasDraft
+            ? t('toast_delete_draft_description')
+            : t('toast_delete_entry_description', { voucher: formatVoucher(result.data ?? {}) }),
+        })
+        router.push('/bookkeeping')
+      } else {
+        toast({ title: t('toast_delete_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+        setShowDeleteConfirm(false)
+      }
+    } catch {
+      toast({ title: t('toast_delete_failed_generic'), variant: 'destructive' })
+      setShowDeleteConfirm(false)
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [id, router, toast, t])
+
+  // Pure reversal (storno): cancels the verifikat with a stornoverifikation and
+  // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
+  // a replacement entry. Routes through the engine's reverseEntry (storno +
+  // reverses_id link; original → 'reversed', never deleted).
+  const handleReverse = useCallback(async (allowDeepChain = false) => {
+    setIsReversing(true)
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, {
+        method: 'POST',
+        ...(allowDeepChain
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ allow_deep_chain: true }),
+            }
+          : {}),
+      })
+      const result = await res.json()
+      if (res.ok) {
+        const storno = result.data
+        toast({
+          title: t('toast_reverse_done_title'),
+          description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
+        })
+        setShowReverseConfirm(false)
+        setReverseDeepChainDepth(null)
+        await fetchData()
+      } else if (result?.error?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+        // Chain-depth guard: swap into the bypass confirm instead of a
+        // dead-end toast. "Återför ändå" resubmits with allow_deep_chain.
+        setShowReverseConfirm(false)
+        setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
+      } else {
+        toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: t('toast_reverse_failed'), variant: 'destructive' })
+    } finally {
+      setIsReversing(false)
+    }
+  }, [id, toast, fetchData, t])
+
+  if (!company) {
+    return (
+      <div className="space-y-4 py-12 text-center">
+        <p className="text-sm text-muted-foreground">{t('company_required')}</p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="outline" onClick={() => router.push('/')}>{tCommon('back')}</Button>
+          <Button onClick={() => router.refresh()}>{tCommon('retry')}</Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (isLoading && !detail) {
+    return <DetailPageSkeleton />
+  }
+
+  if (error || !entry) {
+    return (
+      <div className="space-y-8">
+        <Link
+          href="/bookkeeping"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <p className="py-12 text-center text-sm text-muted-foreground">{error || t('error_not_found')}</p>
+      </div>
+    )
+  }
+
+  const lines = ((entry.lines || []) as JournalEntryLine[])
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+
+  const totalDebit = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+  const totalCredit = lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0)
+
+  const foreignLines = lines.filter(l => l.currency && l.currency !== 'SEK' && l.amount_in_currency != null)
+  const hasForeignCurrency = foreignLines.length > 0
+  // For the summary: use the first foreign line's data (the settlement line)
+  const foreignCurrency = hasForeignCurrency ? foreignLines[0].currency! : null
+  const foreignTotal = hasForeignCurrency ? Math.abs(Number(foreignLines[0].amount_in_currency) || 0) : 0
+  const foreignExchangeRate = hasForeignCurrency ? (Number(foreignLines[0].exchange_rate) || null) : null
+
+  // A correction is itself a regular posted verifikation and can be corrected
+  // again (BFL 5 kap. 5 §, the chain just grows). Storno entries are pure
+  // reversals and cannot be corrected directly; the user walks to the latest
+  // correction (or the original) and corrects that one.
+  const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
+
+  // Inline rättelse (strike lines in the same verifikat) keeps structural
+  // entry types on their dedicated flows: storno mirrors its original, IB
+  // feeds opening_balance_entry_id, year-end feeds dispositions. The RPC
+  // enforces the same rule server-side; this just hides the dead menu item.
+  const canInlineRattelse =
+    entry.status === 'posted' &&
+    !['storno', 'opening_balance', 'year_end', 'vat_settlement'].includes(entry.source_type)
+
+  // Struck lines (from the immutable rättelse log) render inline in the
+  // lines table with strikethrough, Fortnox-style: the original stays
+  // visible per BFL 5 kap 5 § even though it no longer counts.
+  const struckDisplayLines = rattelseLog
+    .filter((r) => r.rattelse_type === 'lines')
+    .flatMap((r) =>
+      (r.struck_lines ?? []).map((s) => ({
+        ...s,
+        struck_at: r.created_at,
+        struck_by: r.source === 'sie_import' ? (r.external_signature ?? null) : r.actor_label,
+        imported: r.source === 'sie_import',
+      }))
+    )
+
+  // The struck marker beside a struck row: who and when at a glance, the
+  // date alone when the actor could not be resolved. Imported history has no
+  // "when" (SIE carries only the signature), so it says where instead.
+  const struckMarker = (s: { struck_at: string; struck_by: string | null; imported?: boolean }) => {
+    if (s.imported) {
+      return s.struck_by
+        ? t('struck_marker_imported_by', { actor: s.struck_by })
+        : t('struck_marker_imported')
+    }
+    return s.struck_by
+      ? t('struck_marker_by', { date: formatDate(s.struck_at), actor: s.struck_by })
+      : t('struck_marker', { date: formatDate(s.struck_at) })
+  }
+
+  // Live and struck lines interleaved by original position.
+  const displayRows: Array<
+    | { kind: 'live'; line: JournalEntryLine }
+    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string; struck_by: string | null; imported?: boolean } }
+  > = [
+    ...lines.map((l) => ({ kind: 'live' as const, line: l })),
+    ...struckDisplayLines.map((s) => ({ kind: 'struck' as const, line: s })),
+  ].sort(
+    (a, b) =>
+      (a.line.sort_order ?? 0) - (b.line.sort_order ?? 0) ||
+      // On a sort_order tie the struck original renders above its replacement.
+      (a.kind === 'struck' ? -1 : 0) - (b.kind === 'struck' ? -1 : 0)
+  )
+
+  // An opening-balance verifikat must be corrected through the IB-aware flow
+  // (storno + rebook + relink the period's opening_balance_entry_id), never the
+  // generic "Rätta rader": that books a `correction` entry but leaves the
+  // period pointing at the stornoed IB, so the Balansrapport "Ingående balans"
+  // column goes stale. Only surface it on the *active* IB (posted; stornoed
+  // predecessors are `reversed`, so exactly one posted IB exists per period).
+  const isOpeningBalance = entry.source_type === 'opening_balance' && entry.status === 'posted'
+
+  // Include current entry in the chain for the visualization
+  const fullChain = [entry, ...chain]
+
+  // Display-only dimension text for a line (e.g. 'Kostnadsställe: Butik ·
+  // Projekt: P001'). Every dimension is prefixed by its registry name
+  // (dimensionDisplayName), the system pair included, so a custom dimension
+  // reads like the built-in ones. Value names resolve through the registry
+  // when loaded; raw codes otherwise. Muted text, not chips: dimensions are
+  // normal data on a line, and chips mark exceptions only. Stays Swedish per
+  // .claude/rules/i18n.md.
+  const renderDimensions = (line: JournalEntryLine) => {
+    const entries = Object.entries(line.dimensions ?? {})
+      .filter(([, code]) => code)
+      .sort(([a], [b]) => Number(a) - Number(b))
+    if (entries.length === 0) return null
+    const text = entries
+      .map(([dimNo, code]) => {
+        const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
+        const value = dim?.values.find((v) => v.code === code)
+        const hasName = !!value && value.name !== '' && value.name !== value.code
+        return `${dimensionDisplayName(registryDims, dimNo)}: ${hasName ? value.name : code}`
+      })
+      .join(' · ')
+    return (
+      // data-ph-mask: dimension names and codes are user data. No title
+      // attribute: replay masking covers text nodes, not attributes, so
+      // a title tooltip would ship the masked content in the clear.
+      <span data-ph-mask="" className="block text-xs text-muted-foreground">
+        {text}
+      </span>
+    )
+  }
+
+  const retagButton = (line: JournalEntryLine) =>
+    dimensionsEnabled && canWrite && entry.status === 'posted' ? (
+      <button
+        type="button"
+        onClick={() => setRetagLine(line as unknown as RetagLine)}
+        className="rounded-sm p-1 text-muted-foreground/50 transition-colors hover:bg-secondary/60 hover:text-foreground"
+        aria-label="Ändra dimensioner"
+        title="Ändra dimensioner (påverkar endast internredovisningen)"
+      >
+        <Pencil className="h-3 w-3" />
+      </button>
+    ) : null
+
+  // Title in the serif: the voucher label for posted entries, a plain
+  // "Utkast till verifikat" while the number is still unassigned.
+  const title = entry.status === 'draft' ? t('title_draft') : t('title', { label: formatVoucher(entry) })
+
+  // The posting date lives once, in Detaljer ("Bokförd"), not also here.
+  const metaParts = [formatDate(entry.entry_date), entry.description].filter(Boolean)
+
+  // Header actions (convention 9): the one next step as a filled button, at
+  // most a couple of quiet secondaries, everything else in the ⋯ menu. The
+  // old surface offered no actions at all on reversed/cancelled entries; keep
+  // that gate.
+  const showActions = entry.status === 'posted' || entry.status === 'draft'
+  const showDelete = entry.status === 'draft' || isLastInSeries
+  const showRattelseGroup = canCorrect && !isOpeningBalance
+  // Inline rättelse is the normal correction path while the period is open,
+  // so "Stryk rader" is promoted to a visible secondary button there (#1554:
+  // a user who never opens the ⋯ menu concluded the feature did not exist).
+  // The ⋯ item stays, so the menu remains the complete action list.
+  const showStrikeButton = showRattelseGroup && canInlineRattelse && periodStatus === 'open'
+
+  const underlagAside = (() => {
+    if (attachmentCount === 0 && references.length === 0) {
+      return <AttnLine>{t('no_attachments')}</AttnLine>
+    }
+    const parts = [
+      attachmentCount > 0 ? t('attachments_count', { count: attachmentCount }) : null,
+      references.length > 0 ? t('references_count', { count: references.length }) : null,
+    ].filter(Boolean)
+    return <span className="text-[11px] tabular-nums text-muted-foreground">{parts.join(' · ')}</span>
+  })()
+
+  return (
+    <div className="space-y-8 stagger-enter">
+      {/* Header: title, status chips only for deviations (a plain posted
+          verifikat carries none), a quiet meta line, the next step right.
+          The page-header hooks turn it into the top bar, like the invoice
+          detail page: the sidebar says where we are, so there is no back
+          link, and the prev/next pager sits in the bar. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* data-ph-mask: the title carries the voucher number */}
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            {/* Convention 7: which correction track applies when, behind the "?" */}
+            <HelpPopover>
+              <p>{t('help_rattelse_tracks_open')}</p>
+              <p className="mt-2">{t('help_rattelse_tracks_locked')}</p>
+            </HelpPopover>
+            <JournalEntryStatusBadge entry={entry} showStatus={entry.status !== 'posted'} />
+            {rattelseLog.length > 0 && (
+              <Badge variant="outline" title={t('rattelse_history_title')}>
+                Rättad
+              </Badge>
+            )}
+          </div>
+          {/* data-ph-mask: the meta line carries the entry description */}
+          <p data-ph-mask="" className="page-header-meta mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+        </div>
+
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          <DetailPager
+            contextKey={listContextKey('bookkeeping', company?.id)}
+            basePath="/bookkeeping"
+            currentId={id}
+            className="shrink-0"
+            // Arrow paging unmounts the page and would destroy an unsaved notes
+            // draft; the textarea only guards arrows while it has focus, so gate
+            // the keyboard bindings on the editing state itself.
+            keyboard={!editingNotes}
+          />
+          {showActions && (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {entry.status === 'draft' && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowEdit(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {t('edit_draft')}
+                </Button>
+              )}
+              {entry.status === 'draft' && (
+                <Button size="sm"
+                  onClick={openCommitConfirm}
+                  disabled={!canWrite}
+                  loading={isCommitting}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite && !isCommitting && <Lock className="mr-2 h-4 w-4" />}
+                  {t('post')}
+                </Button>
+              )}
+              {canCorrect && isOpeningBalance && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowCorrectIB(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {t('correct_opening_balances')}
+                </Button>
+              )}
+              {showStrikeButton && (
+                <Button size="sm"
+                  variant="outline"
+                  onClick={() => setShowStrikeLines(true)}
+                  disabled={!canWrite}
+                  title={!canWrite ? t('read_only_tooltip') : undefined}
+                >
+                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Scissors className="mr-2 h-4 w-4" />}
+                  {t('strike_lines')}
+                </Button>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[240px]">
+                  {/* Copy is not status-gated: it only prefills a fresh manual
+                      draft (no voucher number, date or attachments carried over),
+                      so it is offered on drafts too, matching the list surfaces. */}
+                  <DropdownMenuItem asChild disabled={!canWrite}>
+                    <Link href={`/bookkeeping?copy_from=${entry.id}`}>
+                      <Copy className="h-4 w-4" />
+                      {t('copy_entry')}
+                    </Link>
+                  </DropdownMenuItem>
+                  {/* "Dela upp IB per projekt" (#3313): the IB verifikat's
+                      own inline rättelse; the dialog previews first and the
+                      server refuses a year that does not allow it. */}
+                  {canCorrect && isOpeningBalance && entry.fiscal_period_id && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setShowSplitIB(true)} disabled={!canWrite}>
+                        <Split className="h-4 w-4" />
+                        {t('split_opening_balance_per_project')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {showRattelseGroup && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t('correct_menu')}</DropdownMenuLabel>
+                      {canInlineRattelse && (
+                        <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
+                          <Scissors className="h-4 w-4" />
+                          {t('strike_lines')}
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
+                        <PenLine className="h-4 w-4" />
+                        {t('correct_metadata')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite}>
+                        <Pencil className="h-4 w-4" />
+                        {t('correct_lines')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite}>
+                        <CalendarClock className="h-4 w-4" />
+                        {t('correct_date')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite}>
+                        <RotateCcw className="h-4 w-4" />
+                        {t('reverse_action')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {showDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => setShowDeleteConfirm(true)}
+                        disabled={!canWrite}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Facts on the left, the internal note on the right. */}
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
+        <DetailSection kicker={t('details_title')}>
+          <DefRow label={t('field_voucher')}>
+            {entry.status === 'draft' ? <DefEmpty /> : <span className="tabular-nums">{formatVoucher(entry)}</span>}
+          </DefRow>
+          <DefRow label={t('field_date')}>
+            <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
+          </DefRow>
+          <DefRow label={t('field_type')}>{sourceTypeLabels[entry.source_type] || entry.source_type}</DefRow>
+          {/* The bank / skattekonto händelse behind the entry, when there is
+              one: followable in the other direction from "Visa verifikat". */}
+          <JournalEntryTransactionLinks journalEntryId={entry.id} variant="detail" />
+          {entry.source_voucher_series && entry.source_voucher_number != null && (
+            <DefRow label={t('field_source_voucher')}>
+              <span className="tabular-nums">
+                {formatVoucher({ voucher_series: entry.source_voucher_series, voucher_number: entry.source_voucher_number })}
+              </span>
+            </DefRow>
+          )}
+          {entry.committed_at && (
+            <DefRow label={t('field_posted_at')}>
+              <span className="tabular-nums">{formatDate(entry.committed_at)}</span>
+            </DefRow>
+          )}
+          {entry.committed_at && entry.committed_actor_type && (
+            <DefRow label={t('field_committed_by')}>
+              <span className="inline-flex items-center gap-1">
+                {entry.committed_actor_type !== 'user' && <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
+              </span>
+            </DefRow>
+          )}
+          {/* Foreign-currency conversion audit: rate and original amount from
+              the settlement line, as plain facts beside the other details. */}
+          {hasForeignCurrency && foreignCurrency && (
+            <>
+              <DefRow label={t('currency_rate')}>
+                <span className="tabular-nums">
+                  {foreignExchangeRate
+                    ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
+                    : '-'}
+                </span>
+              </DefRow>
+              <DefRow label={t('currency_original_amount')}>
+                <span className="tabular-nums">{fmtAmount(foreignTotal)} {foreignCurrency}</span>
+              </DefRow>
+            </>
+          )}
+        </DetailSection>
+
+        {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
+        <DetailSection
+          kicker={t('field_note')}
+          aside={
+            !editingNotes && canWrite ? (
+              <button
+                type="button"
+                onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
+                aria-label={t('edit_note_aria')}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+              >
+                {tCommon('edit')}
+              </button>
+            ) : undefined
+          }
+        >
+          {editingNotes ? (
+            <div className="space-y-2">
+              <Textarea
+                value={notesValue}
+                onChange={(e) => setNotesValue(e.target.value)}
+                placeholder={t('note_placeholder')}
+                className="resize-none text-sm"
+                rows={3}
+                maxLength={2000}
+                autoFocus
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingNotes(false)}
+                  disabled={savingNotes}
+                >
+                  {tCommon('cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => saveNotes(notesValue)}
+                  loading={savingNotes}
+                >
+                  {tCommon('save')}
+                </Button>
+              </div>
+            </div>
+          ) : entry.notes ? (
+            <p className="py-2 text-sm whitespace-pre-wrap">{entry.notes}</p>
+          ) : (
+            <p className="py-2 text-sm text-muted-foreground">{t('no_note')}</p>
+          )}
+        </DetailSection>
+      </div>
+
+      {/* Lines: the list-page table idiom straight on the panel. */}
+      <DetailSection
+        kicker={t('lines_title')}
+        aside={
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {t('lines_count', { count: lines.length })}
+          </span>
+        }
+      >
+        <table className="hidden w-full border-collapse text-[13px] sm:table">
+          <thead>
+            <tr>
+              <th className={cn(TH_CLASS, 'pl-0')}>{t('col_account')}</th>
+              <th className={TH_CLASS}>{t('col_description')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_debit')}</th>
+              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_credit')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row) => {
+              if (row.kind === 'struck') {
+                const s = row.line
+                return (
+                  <tr key={`struck-${s.id}`} className="text-muted-foreground">
+                    <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      <AccountNumber number={s.account_number} showName />
+                    </td>
+                    <td className={TD_CLASS}>
+                      <span className="line-through decoration-muted-foreground/70">
+                        {s.line_description || ''}
+                      </span>
+                      <span data-ph-mask="" className="ml-2 text-xs">{struckMarker(s)}</span>
+                    </td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      {Number(s.debit_amount) > 0 && fmtAmount(s.debit_amount)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      {Number(s.credit_amount) > 0 && fmtAmount(s.credit_amount)}
+                    </td>
+                  </tr>
+                )
+              }
+              const line = row.line
+              const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+              return (
+                <tr key={line.id}>
+                  <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap')}>
+                    <AccountNumber number={line.account_number} showName />
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>
+                    <span className="inline-flex items-center gap-1">
+                      {line.line_description || ''}
+                      {retagButton(line)}
+                    </span>
+                    {renderDimensions(line)}
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
+                    {Number(line.debit_amount) > 0 && (
+                      <>
+                        {fmtAmount(line.debit_amount)}
+                        {lineHasForeignCurrency && (
+                          <span className="block text-xs text-muted-foreground">
+                            {fmtAmount(line.amount_in_currency!)} {line.currency}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap')}>
+                    {Number(line.credit_amount) > 0 && (
+                      <>
+                        {fmtAmount(line.credit_amount)}
+                        {lineHasForeignCurrency && (
+                          <span className="block text-xs text-muted-foreground">
+                            {fmtAmount(line.amount_in_currency!)} {line.currency}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="font-medium">
+              <td colSpan={2} className="pl-0 pr-4 pt-3">{t('sum')}</td>
+              <td className="px-4 pt-3 text-right tabular-nums">{fmtAmount(totalDebit)}</td>
+              <td className="pl-4 pr-0 pt-3 text-right tabular-nums">{fmtAmount(totalCredit)}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        {/* Mobile: one flat row per line, no numeric columns to cram. */}
+        <div className="divide-y divide-border text-sm sm:hidden">
+          {displayRows.map((row) => {
+            if (row.kind === 'struck') {
+              const s = row.line
+              return (
+                <div key={`struck-${s.id}`} className="flex items-start justify-between gap-4 py-3 text-muted-foreground">
+                  <div className="min-w-0 flex-1">
+                    <div className="line-through decoration-muted-foreground/70">
+                      <AccountNumber number={s.account_number} showName />
+                    </div>
+                    {s.line_description && (
+                      <p className="truncate text-xs line-through decoration-muted-foreground/70">{s.line_description}</p>
+                    )}
+                    <p data-ph-mask="" className="text-xs">{struckMarker(s)}</p>
+                  </div>
+                  <div className="shrink-0 text-right tabular-nums line-through decoration-muted-foreground/70">
+                    {Number(s.debit_amount) > 0 && <p>{fmtAmount(s.debit_amount)} D</p>}
+                    {Number(s.credit_amount) > 0 && <p>{fmtAmount(s.credit_amount)} K</p>}
+                  </div>
+                </div>
+              )
+            }
+            const line = row.line
+            const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+            return (
+              <div key={line.id} className="flex items-start justify-between gap-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1">
+                    <AccountNumber number={line.account_number} showName />
+                    {retagButton(line)}
+                  </div>
+                  {line.line_description && (
+                    <p className="truncate text-xs text-muted-foreground">{line.line_description}</p>
+                  )}
+                  {renderDimensions(line)}
+                </div>
+                <div className="shrink-0 text-right tabular-nums">
+                  {Number(line.debit_amount) > 0 && (
+                    <p>
+                      {fmtAmount(line.debit_amount)} D
+                      {lineHasForeignCurrency && (
+                        <span className="block text-xs text-muted-foreground">
+                          {fmtAmount(line.amount_in_currency!)} {line.currency}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  {Number(line.credit_amount) > 0 && (
+                    <p>
+                      {fmtAmount(line.credit_amount)} K
+                      {lineHasForeignCurrency && (
+                        <span className="block text-xs text-muted-foreground">
+                          {fmtAmount(line.amount_in_currency!)} {line.currency}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+          <div className="flex items-start justify-between gap-4 py-3 font-medium">
+            <span>{t('sum')}</span>
+            <div className="text-right tabular-nums">
+              <p>{t('summary_debit')} {fmtAmount(totalDebit)}</p>
+              <p>{t('summary_credit')} {fmtAmount(totalCredit)}</p>
+            </div>
+          </div>
+        </div>
+      </DetailSection>
+
+      {/* Underlag: linked invoices and lönekörningar as rows, then the
+          document list. Each row is the followable half of a link the app
+          already stores (BFL 5 kap 7 §, hänvisning till underlag). */}
+      <DetailSection kicker={t('attachments_title')} aside={underlagAside}>
+        {references.length > 0 && (
+          <DefRow label={t('references_title')} className="items-baseline">
+            <ul className="divide-y divide-border">
+              {references.map((ref) => {
+                const href =
+                  ref.type === 'invoice'
+                    ? `/invoices/${ref.id}`
+                    : ref.type === 'supplier_invoice'
+                      ? `/supplier-invoices/${ref.id}`
+                      : `/salary/runs/${ref.id}`
+                const label =
+                  ref.type === 'invoice'
+                    ? t('reference_invoice', { number: ref.number })
+                    : ref.type === 'supplier_invoice'
+                      ? t('reference_supplier_invoice', { number: ref.number })
+                      : t('reference_salary_run', { number: ref.number })
+                const Icon = ref.type === 'salary_run' ? Users : FileText
+                return (
+                  <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
+                    <Link href={href} className="inline-flex items-center gap-2 hover:underline">
+                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{label}</span>
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          </DefRow>
+        )}
+        <JournalEntryAttachments
+          journalEntryId={entry.id}
+          references={references}
+          onCountChange={setAttachmentCount}
+          variant="section"
+        />
+      </DetailSection>
+
+      {/* Correction chain (storno/rättelse pairs). The explanatory copy sits
+          behind the kicker's "?" instead of an always-visible info box. */}
+      {chain.length > 0 && (
+        <DetailSection
+          kicker={t('history_title')}
+          help={
+            <HelpPopover>
+              <p>{tCorrection('info')}</p>
+            </HelpPopover>
+          }
+        >
+          <CorrectionChain currentEntryId={id} chain={fullChain} />
+        </DetailSection>
+      )}
+
+      {/* Rättelsehistorik (BFL 5 kap 5 § / 9 §): the immutable who/when trail
+          behind inline rättelser. Stays Swedish (voucher detail surface). */}
+      {rattelseLog.length > 0 && (
+        <DetailSection kicker={t('rattelse_history_title')}>
+          <ul className="divide-y divide-border text-sm">
+            {rattelseLog.map((row) => (
+              <li key={row.id} className="py-2">
+                <div className="flex items-center justify-between gap-3">
+                  {/* data-ph-mask: the actor label is a person's e-mail or name */}
+                  <span data-ph-mask="" className="text-muted-foreground">
+                    <span className="tabular-nums">{formatDate(row.created_at)}</span>
+                    {row.source === 'sie_import'
+                      ? row.external_signature
+                        ? ` · ${t('rattelse_imported_signature', { actor: row.external_signature })}`
+                        : ''
+                      : row.actor_label
+                        ? ` · ${row.actor_label}`
+                        : ''}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {row.source === 'sie_import'
+                      ? t('rattelse_kind_imported')
+                      : row.rattelse_type === 'metadata'
+                        ? t('rattelse_kind_metadata')
+                        : t('rattelse_kind_lines')}
+                  </span>
+                </div>
+                {row.rattelse_type === 'metadata' ? (
+                  <div className="space-y-1">
+                    {row.old_description !== row.new_description && (
+                      <p>
+                        <span className="text-muted-foreground line-through">{row.old_description}</span>
+                        {' → '}
+                        <span>{row.new_description}</span>
+                      </p>
+                    )}
+                    {row.old_entry_date !== row.new_entry_date && (
+                      <p className="tabular-nums">
+                        <span className="text-muted-foreground line-through">{formatDate(row.old_entry_date || '')}</span>
+                        {' → '}
+                        <span>{formatDate(row.new_entry_date || '')}</span>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {(row.struck_lines ?? []).map((s) => (
+                      <p key={s.id} className="tabular-nums text-muted-foreground">
+                        <span className="line-through decoration-muted-foreground/70">
+                          {s.account_number}
+                          {' '}
+                          {Number(s.debit_amount) > 0
+                            ? `${fmtAmount(s.debit_amount)} D`
+                            : `${fmtAmount(s.credit_amount)} K`}
+                        </span>
+                      </p>
+                    ))}
+                    {(row.added_lines ?? []).map((a) => (
+                      <p key={a.id} className="tabular-nums">
+                        {a.account_number}
+                        {' '}
+                        {Number(a.debit_amount) > 0
+                          ? `${fmtAmount(a.debit_amount)} D`
+                          : `${fmtAmount(a.credit_amount)} K`}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </DetailSection>
+      )}
+
+      {/* Dimension retag history (dimensions plan PR6): the immutable
+          before/after trail. Stays Swedish (voucher detail surface). Each
+          side shows the dimension's registry name and the code as logged:
+          codes are what the trail recorded, names can change later. */}
+      {dimensionsEnabled && retagLog.length > 0 && (
+        <DetailSection kicker="Ändringshistorik för dimensioner">
+          <ul className="divide-y divide-border text-sm">
+            {retagLog.map((row) => {
+              const lineForRow = lines.find((l) => l.id === row.line_id)
+              const fmt = (dims: Record<string, string>) => {
+                const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
+                return entries.length > 0
+                  ? entries.map(([no, code]) => `${dimensionDisplayName(registryDims, no)}: ${code}`).join(', ')
+                  : '-'
+              }
+              return (
+                <li key={row.id} className="py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
+                    {lineForRow && <AccountNumber number={lineForRow.account_number} />}
+                  </div>
+                  {/* data-ph-mask: dimension names and codes are user data */}
+                  <p data-ph-mask="" className="tabular-nums">
+                    <span className="text-muted-foreground line-through">{fmt(row.old_dimensions)}</span>
+                    {' → '}
+                    <span>{fmt(row.new_dimensions)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">{row.reason}</p>
+                </li>
+              )
+            })}
+          </ul>
+        </DetailSection>
+      )}
+
+      {/* Retag dialog (Tier-2 retro-tagging) */}
+      {retagLine && <RetagLineDialog
+        open={retagLine !== null}
+        onOpenChange={(open) => {
+          if (!open) setRetagLine(null)
+        }}
+        line={retagLine}
+        onRetagged={fetchData}
+      />}
+
+      {/* Inline rättelse dialogs (strike lines / metadata) */}
+      {showStrikeLines && entry && (
+        <StrikeLinesDialog
+          entry={entry}
+          open={showStrikeLines}
+          onOpenChange={setShowStrikeLines}
+          onCorrected={() => {
+            setShowStrikeLines(false)
+            fetchData()
+          }}
+        />
+      )}
+      {showCorrectMetadata && entry && (
+        <CorrectMetadataDialog
+          entry={entry}
+          open={showCorrectMetadata}
+          onOpenChange={setShowCorrectMetadata}
+          onCorrected={() => {
+            setShowCorrectMetadata(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Correction dialog */}
+      {showCorrection && entry && (
+        <CorrectionEntryDialog
+          entry={entry}
+          open={showCorrection}
+          onOpenChange={setShowCorrection}
+          onCorrected={() => {
+            setShowCorrection(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Opening-balance correction dialog: IB-aware (storno + rebook + relink) */}
+      {showCorrectIB && entry && (
+        <CorrectOpeningBalanceDialog
+          entry={entry}
+          open={showCorrectIB}
+          onOpenChange={setShowCorrectIB}
+          onCorrected={() => {
+            setShowCorrectIB(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Split the IB per project: inline rättelse of the same verifikat */}
+      {showSplitIB && entry?.fiscal_period_id && (
+        <SplitOpeningBalanceDialog
+          fiscalPeriodId={entry.fiscal_period_id}
+          open={showSplitIB}
+          onOpenChange={setShowSplitIB}
+          onApplied={() => {
+            setShowSplitIB(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Recordate (move to correct date) dialog */}
+      {showRecordate && entry && (
+        <RecordateEntryDialog
+          entry={entry}
+          open={showRecordate}
+          onOpenChange={setShowRecordate}
+          onMoved={() => {
+            setShowRecordate(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Edit draft dialog: drafts only; PATCHes the entry in place */}
+      {showEdit && entry && entry.status === 'draft' && (
+        <EditDraftEntryDialog
+          entry={entry}
+          open={showEdit}
+          onOpenChange={setShowEdit}
+          onUpdated={() => {
+            setShowEdit(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Confirm-before-posting for drafts (convention 10): describes the
+          outcome ("Bokförs som A-218 ...") before the commit runs, matching
+          the same action on the list. */}
+      <ConfirmDialog
+        open={showCommitConfirm}
+        onOpenChange={setShowCommitConfirm}
+        title={t('confirm_post_title')}
+        description={
+          commitVoucherPreview
+            ? t('confirm_post_description', {
+                voucher: commitVoucherPreview,
+                description: entry?.description || '',
+                amount: formatCurrency(totalDebit),
+              })
+            : t('confirm_post_description_generic', { description: entry?.description || '' })
+        }
+        confirmLabel={t('post')}
+        onConfirm={handleCommit}
+      />
+
+      {/* Delete confirmation dialog */}
+      <ConfirmationDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        onConfirm={handleDelete}
+        isSubmitting={isDeleting}
+        title={entry?.status === 'draft' ? t('delete_draft') : t('delete_entry')}
+        warningText={
+          entry?.status === 'draft'
+            ? t('delete_warning_draft')
+            : t('delete_warning_entry', { voucher: entry ? formatVoucher(entry) : '' })
+        }
+        confirmLabel={t('delete_confirm_label')}
+      >
+        {/* Plain consequence text: the title names the action and the attn
+            line carries the warning, so no second boxed banner. */}
+        <p className="text-sm text-muted-foreground">
+          {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
+        </p>
+      </ConfirmationDialog>
+
+      {/* Reverse (storno) confirmation dialog */}
+      <ConfirmationDialog
+        open={showReverseConfirm}
+        onOpenChange={setShowReverseConfirm}
+        onConfirm={() => handleReverse()}
+        isSubmitting={isReversing}
+        title={t('reverse_confirm_title')}
+        warningText={t('reverse_warning')}
+        confirmLabel={t('reverse_confirm_label')}
+      >
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
+        </div>
+      </ConfirmationDialog>
+
+      {/* Chain-depth guard confirm: the storno was refused because this entry
+          already sits deep in a rättelse chain. Advisory, never a dead end. */}
+      <ConfirmationDialog
+        open={reverseDeepChainDepth != null}
+        onOpenChange={(next) => { if (!next) setReverseDeepChainDepth(null) }}
+        onConfirm={() => handleReverse(true)}
+        isSubmitting={isReversing}
+        title={t('deep_chain_title')}
+        warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
+        confirmLabel={t('deep_chain_reverse_anyway')}
+      >
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
+        </div>
+      </ConfirmationDialog>
+    </div>
+  )
+}

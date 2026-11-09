@@ -6317,6 +6317,7 @@
     "no_doc_required_reason_add": "Add reason (optional)",
     "no_doc_required_reason_placeholder": "E.g. bank fee, interest, internal transfer",
     "no_doc_required_save_reason": "Save",
+    "no_doc_required_load_failed": "Could not load supporting-document information.",
     "no_doc_required_save_failed": "Could not save",
     "no_doc_required_suggestion_bank_fee": "Bank fee",
     "no_doc_required_suggestion_interest": "Interest",
@@ -6468,6 +6469,7 @@
     "skattekonto": "Tax account"
   },
   "journal_detail": {
+    "company_required": "Select a company or reload the page before opening the journal entry.",
     "title": "Voucher {label}",
     "title_draft": "Draft voucher",
     "field_voucher": "Voucher number",
@@ -6665,6 +6667,7 @@
     "row_dimensions_aria": "Dimensions for this row"
   },
   "chart_of_accounts": {
+    "visible_accounts": "Showing {visible} of {total} accounts",
     "class_1": "Assets",
     "class_2": "Equity and liabilities",
     "class_3": "Operating revenue",
@@ -6727,7 +6730,7 @@
     "prune_empty": "No unused accounts to clean up — your chart of accounts is already clean.",
     "prune_confirm": "Delete {count} accounts",
     "prune_select_all": "Select all unused accounts",
-    "select_all_aria": "Select all listed accounts",
+    "select_all_aria": "Select all matching accounts across the full chart, including accounts not yet loaded",
     "select_row_aria": "Select account {number}",
     "usage_filter_label": "Filter by vouchers",
     "usage_filter_all": "All accounts",
@@ -6735,7 +6738,7 @@
     "usage_filter_unused": "Without vouchers",
     "usage_filter_used": "With vouchers",
     "bulkbar_selected": "{count, plural, one {account selected} other {accounts selected}}",
-    "bulk_select_all": "Select all listed ({count})",
+    "bulk_select_all": "Select all matching ({count})",
     "bulk_clear_selection": "Clear selection",
     "bulk_deactivate_confirm_title": "Deactivate {count} accounts?",
     "bulk_deactivate_confirm": "{count} accounts without vouchers will be deactivated. Existing bookkeeping is unaffected, and the accounts can be reactivated from the BAS catalog.",

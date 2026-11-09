@@ -44,7 +44,7 @@ function Mark({ account }: { account: ReconciliationAccount }) {
  */
 export default function AccountsOverview() {
   const t = useTranslations('accounts_v2')
-  const { data, isLoading, error } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts', fetchAccounts)
+  const { data, isLoading, error } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts?include_manual=false', fetchAccounts)
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   // Accounts with money in them: bank accounts and the skattekonto. Ledger
   // accounts reconciled by hand (2081, 2641 ...) belong to Avstämning.

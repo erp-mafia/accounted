@@ -11,6 +11,7 @@
     "node_modules",
     "docs/reference",
     "dev_docs",
+    ".e2e",
     "tests",
     "**/__tests__/**",
     "**/__mocks__/**",

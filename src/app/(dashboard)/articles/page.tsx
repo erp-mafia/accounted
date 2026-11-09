@@ -4,7 +4,8 @@ import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'rea
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useArticles } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -32,7 +33,6 @@ import {
   resolveCurrencyScope,
 } from '@/lib/articles/currency-scope'
 import Link from 'next/link'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 
@@ -71,17 +71,15 @@ function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
 }
 
+/** Manage the company-cached article register, including its inactive articles. */
 function ArticlesPageInner() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
-  const [articles, setArticles] = useState<Article[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const { articles, isLoading, error: articlesError } = useArticles({ includeInactive: true })
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
   const t = useTranslations('articles')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
@@ -116,31 +114,13 @@ function ArticlesPageInner() {
     [searchParams, sortColumn, sortDir, router, pathname]
   )
 
-  async function fetchArticles() {
-    if (!company) return
-    setIsLoading(true)
-    const { data, error } = await supabase
-      .from('articles')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setArticles(data || [])
-    }
-    setIsLoading(false)
-  }
-
   useEffect(() => {
-    fetchArticles()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (articlesError) toast({
+      title: t('load_failed_title'),
+      description: t('load_failed_description'),
+      variant: 'destructive',
+    })
+  }, [articlesError, toast, t])
 
   // Create runs through useSubmitWithAccountActivation so an ACCOUNTS_NOT_IN_CHART
   // response (revenue account not yet activated) opens the standard
@@ -165,12 +145,12 @@ function ArticlesPageInner() {
     setIsCreating(true)
     pendingCreateRef.current = data
     try {
-      const result = await runCreate()
+      await runCreate()
       toast({
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setArticles([...articles, result.data])
+      await invalidateReferenceData('ref:articles')
       setIsDialogOpen(false)
     } catch (err) {
       // The user closing the activation dialog is not an error worth toasting.

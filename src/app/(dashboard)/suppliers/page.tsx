@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { useSuppliers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -18,7 +19,6 @@ import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
 
@@ -52,49 +52,26 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
   return null
 }
 
+/** Manage the company-cached supplier register and refresh it after creating a supplier. */
 export default function SuppliersPage() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const { suppliers, isLoading, error: suppliersError } = useSuppliers()
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
   const tCommon = useTranslations('common')
   const router = useRouter()
 
-  async function fetchSuppliers() {
-    if (!company) return
-    setIsLoading(true)
-    // Archived suppliers (v1 API soft-delete) are kept for retention but are
-    // not part of the roster: same filter as /api/suppliers and the v1 list.
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('company_id', company.id)
-      .is('archived_at', null)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setSuppliers(data || [])
-    }
-    setIsLoading(false)
-  }
-
   useEffect(() => {
-    fetchSuppliers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (suppliersError) toast({
+      title: t('load_failed_title'),
+      description: t('load_failed_description'),
+      variant: 'destructive',
+    })
+  }, [suppliersError, toast, t])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {
     setIsCreating(true)
@@ -119,7 +96,7 @@ export default function SuppliersPage() {
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setSuppliers([...suppliers, result.data])
+      await invalidateReferenceData('ref:suppliers')
       setIsDialogOpen(false)
     }
 

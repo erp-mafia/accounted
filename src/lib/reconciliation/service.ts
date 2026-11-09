@@ -39,6 +39,8 @@ export interface ListAccountsOptions {
   today?: string
   /** Compute status per account (N reads). Default true; the rail needs it. */
   withStatus?: boolean
+  /** Include manually reconciled ledger accounts. Default true. */
+  includeManual?: boolean
   /** Window for the bank bridge ("i perioden"). Defaults to the calendar year of `today`. */
   windowFrom?: string
   windowTo?: string
@@ -392,17 +394,19 @@ export async function listReconciliationAccounts(
   // own, reconciled against a system specification or the signer's underlag.
   // A failed read costs only this group, never the bank or skattekonto rows.
   let manualAccounts: ReconciliationAccount[] = []
-  try {
-    const exclude = new Set<string>(cashAccounts.map((a) => a.ledger_account))
-    if (skattekonto) exclude.add(skattekonto.account_number)
-    manualAccounts = await listManualAccounts(supabase, companyId, {
-      asOf: window.to,
-      exclude,
-      signoffs,
-      withStatus,
-    })
-  } catch (err) {
-    log.warn('manual accounts failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+  if (options.includeManual !== false) {
+    try {
+      const exclude = new Set<string>(cashAccounts.map((a) => a.ledger_account))
+      if (skattekonto) exclude.add(skattekonto.account_number)
+      manualAccounts = await listManualAccounts(supabase, companyId, {
+        asOf: window.to,
+        exclude,
+        signoffs,
+        withStatus,
+      })
+    } catch (err) {
+      log.warn('manual accounts failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+    }
   }
 
   return [...bankAccounts, ...(skattekonto ? [skattekonto] : []), ...manualAccounts]

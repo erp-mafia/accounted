@@ -37,6 +37,7 @@ interface AccountNumberProps {
   className?: string
 }
 
+/** Resolve a missing display name from the shared chart and show the BAS reference tooltip. */
 export function AccountNumber({
   number,
   name,
@@ -49,7 +50,7 @@ export function AccountNumber({
   useBasReference()
   // Inactive accounts included: historical verifikat keep referencing them
   // long after they leave the active chart.
-  const { accounts } = useAccounts(false)
+  const { accounts } = useAccounts(false, { enabled: !!showName && !name })
   const companyName = useMemo(
     () => accounts.find((a) => a.account_number === number)?.account_name,
     [accounts, number],

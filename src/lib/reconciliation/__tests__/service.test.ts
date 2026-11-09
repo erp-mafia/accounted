@@ -130,6 +130,21 @@ describe('listReconciliationAccounts', () => {
     expect(opts.signoffs.has('manual:2440')).toBe(true)
   })
 
+  it('skips the manual ledger calculation when only feed accounts are requested', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [cashAccount(ID_A)] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    skattekontoStatusMock.mockResolvedValue(null)
+    const rows = await listReconciliationAccounts(supabase as never, COMPANY, { includeManual: false })
+    expect(rows.map(row => row.account_key)).toEqual([bankAccountKey(ID_A)])
+    expect(bankStatusMock).toHaveBeenCalled()
+    expect(skattekontoStatusMock).toHaveBeenCalled()
+    expect(listManualMock).not.toHaveBeenCalled()
+  })
+
   it('keeps the fed accounts when the manual read fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
