@@ -252,6 +252,107 @@ describe('validateVoucherForInvoiceLink', () => {
     }
   })
 
+  // #146: on the 19xx side the verifikat must book the invoice's sale or its
+  // receivable; the rule is voucherBooksSale (invoice-settlement-side.ts).
+  function bankDebitVoucher() {
+    return {
+      id: 'je-1',
+      voucher_series: 'A',
+      voucher_number: 9,
+      entry_date: '2026-05-01',
+      description: '',
+      status: 'posted',
+      source_type: 'manual',
+      fiscal_period_id: 'fp-1',
+      company_id: 'company-1',
+    }
+  }
+
+  it.each([
+    ['a private withdrawal', [
+      { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+    ]],
+    ['an owner deposit', [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      { account_number: '2018', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+    ]],
+  ])('cash method: refuses %s as the payment (LINK_VOUCHER_NO_SALE)', async (_label, lines) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({ data: lines })
+    enqueue({ data: [{ id: 'it-1', revenue_account: null }] }) // invoice_items: no line account
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toEqual({ ok: false, code: 'LINK_VOUCHER_NO_SALE' })
+  })
+
+  it('cash method: refuses a sale next to a withdrawal from the bank (the 2013 debit is not the customer\'s)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3001', debit_amount: 0, credit_amount: 800, currency: 'SEK' },
+        { account_number: '1930', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_items: no line account
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toEqual({ ok: false, code: 'LINK_VOUCHER_NO_SALE' })
+  })
+
+  it('cash method: accepts a receivable booked elsewhere (Dr 1930 / Cr 1510) and reads no invoice lines', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1510', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_payments
+    enqueue({ data: [] }) // already-linked lookup
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: true, paymentAmount: 1000, isFullyPaid: true })
+    expect(findCalls('invoice_items', 'select')).toEqual([])
+  })
+
+  it('cash method: accepts an outlay credited to the account the invoice line posts to', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3740', debit_amount: 0.4, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1680', debit_amount: 0, credit_amount: 1000.4, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [{ id: 'it-1', revenue_account: '1680' }] }) // invoice_items
+    enqueue({ data: [] }) // invoice_payments
+    enqueue({ data: [] }) // already-linked lookup
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: true, paymentAmount: 1000 })
+  })
+
+  it('cash method: answers LINK_VOUCHER_DB_ERROR when the invoice lines cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '2420', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: null, error: { message: 'boom' } }) // invoice_items
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_DB_ERROR' })
+  })
+
   it('cash method: rejects when the voucher has no bank/cash debit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
@@ -548,9 +649,17 @@ describe('findMatchingVouchersForInvoice', () => {
               credit_amount: 0,
               currency: 'SEK',
             },
+            {
+              id: 'l2',
+              account_number: '3001',
+              debit_amount: 0,
+              credit_amount: 1000,
+              currency: 'SEK',
+            },
           ],
         },
     ])
+    enqueue({ data: [{ journal_entry_id: 'je-1', account_number: '3001', debit_amount: 0, credit_amount: 1000 }] })
     enqueue({ data: [] }) // invoice_payments already-linked lookup
     enqueue({ data: [] }) // fiscal_periods lock lookup
     const result = await findMatchingVouchersForInvoice(
@@ -561,6 +670,67 @@ describe('findMatchingVouchersForInvoice', () => {
     expect(result).toHaveLength(1)
     expect(result[0].journal_entry_id).toBe('je-1')
     expect(result[0].ar_credit_amount).toBe(1000)
+  })
+
+  it('cash method: offers no private withdrawal or owner deposit that fits the amount (#146)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = makeInvoice({
+      remaining_amount: 1000,
+      total: 1000,
+      currency: 'SEK',
+      due_date: '2026-05-01',
+      invoice_number: 'F-1',
+    })
+    const voucherRow = (id: string, number: number) => ({
+      id,
+      voucher_series: 'A',
+      voucher_number: number,
+      entry_date: '2026-05-01',
+      description: 'Överföring',
+      status: 'posted',
+      source_type: 'manual',
+      fiscal_period_id: 'fp-1',
+      company_id: 'company-1',
+    })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueueVouchers(enqueue, [
+      { ...voucherRow('je-sale', 7), journal_entry_lines: [
+        { id: 'l1', account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+      { ...voucherRow('je-deposit', 8), journal_entry_lines: [
+        { id: 'l2', account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+      { ...voucherRow('je-withdrawal', 9), journal_entry_lines: [
+        { id: 'l3', account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+    ])
+    // Every line of the candidates (vouchersBookingSale).
+    enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'je-sale', account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l1b', journal_entry_id: 'je-sale', account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+        { id: 'l2', journal_entry_id: 'je-deposit', account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l2b', journal_entry_id: 'je-deposit', account_number: '2018', debit_amount: 0, credit_amount: 1000 },
+        { id: 'l3', journal_entry_id: 'je-withdrawal', account_number: '2013', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l3b', journal_entry_id: 'je-withdrawal', account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_items: no line account
+    enqueue({ data: [] }) // invoice_payments already-linked lookup
+    enqueue({ data: [] }) // fiscal_periods lock lookup
+
+    const result = await findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)
+
+    expect(result.map((c) => c.journal_entry_id)).toEqual(['je-sale'])
+  })
+
+  it('cash method: offers nothing when the sale guard cannot read the lines', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'SEK', due_date: '2026-05-01' })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueueVouchers(enqueue, [cashVoucher('Betalning', 1000)])
+    enqueue({ data: null, error: { message: 'boom' } })
+    expect(await findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)).toEqual([])
   })
 
   // Reference matching follows the supplier side (desk crm#64): the invoice
@@ -579,6 +749,7 @@ describe('findMatchingVouchersForInvoice', () => {
       company_id: 'company-1',
       journal_entry_lines: [
         { id: 'l1', account_number: '1930', debit_amount: debit, credit_amount: 0, currency: 'SEK' },
+        { id: 'l2', account_number: '3001', debit_amount: 0, credit_amount: debit, currency: 'SEK' },
       ],
     }
   }
@@ -593,6 +764,7 @@ describe('findMatchingVouchersForInvoice', () => {
     })
     enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueueVouchers(enqueue, [cashVoucher(description, debit)])
+    enqueue({ data: [{ journal_entry_id: 'je-1', account_number: '3001', debit_amount: 0, credit_amount: debit }] })
     enqueue({ data: [] })
     enqueue({ data: [] })
     return findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)

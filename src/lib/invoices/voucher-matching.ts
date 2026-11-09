@@ -15,7 +15,9 @@
  *     class 19: 1910/1920/1930/1940…) IS the payment the user already booked;
  *     linking just marks the invoice paid without a duplicate entry. A
  *     payment the owner received privately is debited to 2013 instead and
- *     settles the same way (settlesOnAccount, crm#1580).
+ *     settles the same way (settlesOnAccount, crm#1580). That verifikat
+ *     must book the invoice's sale or receivable, never a private withdrawal
+ *     or an owner's deposit (voucherBooksSale, #146).
  *
  * No payment entry is created in either case. Only an invoice_payments row
  * is inserted pointing at the existing journal_entry_id, plus the invoice's
@@ -75,7 +77,15 @@ import {
 import type { VoucherNumber } from './voucher-label'
 import { roundOre } from '@/lib/money'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
-import { SETTLEMENT_ACCOUNTS_BEYOND_PREFIX, resolveInvoiceSettlementSide, settlesOnAccount } from './invoice-settlement-side'
+import {
+  SETTLEMENT_ACCOUNTS_BEYOND_PREFIX,
+  invoiceLinePostingAccounts,
+  resolveInvoiceSettlementSide,
+  settlesOnAccount,
+  voucherBooksSale,
+  vouchersBookingSale,
+  type SaleCheckLine,
+} from './invoice-settlement-side'
 import {
   bookSaleBeforeSettlement,
   planSaleBeforeSettlementById,
@@ -176,6 +186,27 @@ export async function findMatchingVouchersForInvoice(
     logContext,
   })
   if (byEntry.size === 0) return []
+
+  // On the 19xx side only a voucher that books this invoice's sale or
+  // receivable is offered, as the validator and the RPC judge it
+  // (voucherBooksSale, #146): never a private withdrawal or an owner's
+  // deposit that happens to fit the amount. A failed read offers nothing.
+  if (settlement.side === 'bank_debit') {
+    let sales: Set<string>
+    try {
+      sales = await vouchersBookingSale(supabase, invoice.id, Array.from(byEntry.keys()))
+    } catch (error) {
+      log.warn('sale guard read failed; no voucher candidates', {
+        ...logContext,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return []
+    }
+    for (const entryId of Array.from(byEntry.keys())) {
+      if (!sales.has(entryId)) byEntry.delete(entryId)
+    }
+    if (byEntry.size === 0) return []
+  }
 
   // Every payment row on a voucher counts, whichever invoice it belongs to:
   // the candidate is what the voucher has left (voucherCapacity, the RPC's
@@ -282,6 +313,7 @@ export type VoucherLinkErrorCode =
   | 'LINK_VOUCHER_VOUCHER_NOT_FOUND'
   | 'LINK_VOUCHER_NOT_POSTED'
   | 'LINK_VOUCHER_NO_AR_CREDIT'
+  | 'LINK_VOUCHER_NO_SALE'
   | 'LINK_VOUCHER_ALREADY_LINKED'
   | 'LINK_VOUCHER_FULLY_ALLOCATED'
   | 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING'
@@ -459,6 +491,27 @@ export async function validateVoucherForInvoiceLink(
 
   if (arCreditTotal <= 0) {
     return { ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT' }
+  }
+
+  // On the 19xx side the verifikat must book this invoice's sale or its
+  // receivable, as the RPC's invoice_voucher_books_sale() judges it
+  // (voucherBooksSale, #146). The invoice's line accounts are read only when
+  // the verifikat credits neither revenue nor kundfordringar.
+  if (settlement.side === 'bank_debit') {
+    const saleLines = lines as SaleCheckLine[]
+    let booksSale = voucherBooksSale(saleLines, [])
+    if (!booksSale) {
+      try {
+        booksSale = voucherBooksSale(saleLines, await invoiceLinePostingAccounts(supabase, invoice.id))
+      } catch (error) {
+        return {
+          ok: false,
+          code: 'LINK_VOUCHER_DB_ERROR',
+          details: { reason: error instanceof Error ? error.message : String(error) },
+        }
+      }
+    }
+    if (!booksSale) return { ok: false, code: 'LINK_VOUCHER_NO_SALE' }
   }
 
   // Label guard, unchanged. This is NOT a unit check any more (the amount above

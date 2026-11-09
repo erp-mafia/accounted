@@ -1,0 +1,1 @@
+[2026-11-07] A kontantmetod bank_debit voucher link needs a credit on 3xxx, 151x or one of the invoice's own line accounts, and no 2013 debit beside a 19xx credit (#146): requiring 3xxx alone refused 22 legitimate production links (Dr 1930 / Cr 1510 carries, Cr 1680 outlays).
