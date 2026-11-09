@@ -3,6 +3,7 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { usePageState } from '@/lib/hooks/use-page-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -128,17 +129,17 @@ export default function ChartOfAccountsManager() {
   // rows track the classes the user has explicitly FOLDED AWAY; the BAS
   // catalog (~1300 rows) keeps the inverse default and tracks the classes
   // the user has opened.
-  const [view, setView] = useState<'my-accounts' | 'bas-catalog'>('my-accounts')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
-  const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
+  const [view, setView] = usePageState<'my-accounts' | 'bas-catalog'>('chart-view', 'my-accounts')
+  const [searchQuery, setSearchQuery] = usePageState('chart-searchQuery', '')
+  const [collapsedMyClasses, setCollapsedMyClasses] = usePageState<Set<number>>('chart-collapsed', new Set())
+  const [expandedCatalogClasses, setExpandedCatalogClasses] = usePageState<Set<number>>('chart-expanded', new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
   const { settings: companySettings } = useCompanySettings()
   // Off by default: the list endpoint's `?active=false` means "no filter", so
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
-  const [showInactive, setShowInactive] = useState(false)
-  const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
+  const [showInactive, setShowInactive] = usePageState('chart-showInactive', false)
+  const [usageFilter, setUsageFilter] = usePageState<UsageFilter>('chart-usage', 'all')
   // Row selection for the bulk inactivate (#2186), keyed by account number
   // (the PUT/deactivate routes key on it too). Cleared on view switch.
   const [selectedNumbers, setSelectedNumbers] = useState<Set<string>>(new Set())

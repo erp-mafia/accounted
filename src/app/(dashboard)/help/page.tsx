@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { HelpLink } from '@/components/ui/info-tooltip'
@@ -215,7 +217,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
   const t = useTranslations('help')
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b border-border cursor-pointer" {...expandableSurface(onToggle)}>
       <button
         type="button"
         onClick={onToggle}

@@ -4,6 +4,8 @@
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
+import { usePageState } from '@/lib/hooks/use-page-state'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
 import React, { useState, useEffect, useMemo } from 'react'
 import { useDimensions, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
@@ -109,7 +111,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'simplified' | 'detailed'>('simplified')
+  const [viewMode, setViewMode] = usePageState<'simplified' | 'detailed'>('trial-balance-view', 'simplified')
 
   useEffect(() => {
     setLoading(true)
@@ -198,7 +200,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto -mx-2 px-2">
+          <ResponsiveTable>
             {viewMode === 'simplified' ? (
               <table className="w-full text-sm min-w-[500px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -267,7 +269,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
                 </tfoot>
               </table>
             )}
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
     </div>
@@ -305,7 +307,7 @@ function TrialBalanceSimplifiedRow({
     () => makeTrialBalanceFetcher(row.account_number, periodId),
     [row.account_number, periodId]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
 
   const ob = getNetBalance(row, 'opening')
   const ch = getNetBalance(row, 'period')
@@ -313,19 +315,19 @@ function TrialBalanceSimplifiedRow({
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           {row.account_name}
         </td>
@@ -357,23 +359,23 @@ function TrialBalanceDetailedRow({
     () => makeTrialBalanceFetcher(row.account_number, periodId),
     [row.account_number, periodId]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           {row.account_name}
         </td>
@@ -720,7 +722,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -752,7 +754,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                       <tr
                         key={row.account_number}
                         className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={() => onNavigateToAccount(row.account_number)}
+                        onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
                       >
                         <td className="px-4 py-1.5">
                           <AccountNumber number={row.account_number} name={row.account_name} />
@@ -777,7 +779,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
@@ -864,7 +866,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -902,7 +904,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
@@ -992,7 +994,7 @@ function BalansrapportSectionRows({
         <tr
           key={row.account_number}
           className="border-b cursor-pointer hover:bg-secondary/35 transition-colors"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <td className="px-4 py-1.5">
             <AccountNumber number={row.account_number} name={row.account_name} />
@@ -1062,7 +1064,7 @@ function ReportSectionTable({
   // Resultatrapport/Balansrapport idiom, instead of one boxed sub-table per
   // section with a repeated title line.
   return (
-    <div className="overflow-x-auto">
+    <ResponsiveTable>
       <table className="w-full text-sm min-w-[400px]">
         <tbody>
           {sections.map((section) => (
@@ -1101,7 +1103,7 @@ function ReportSectionTable({
           </tfoot>
         )}
       </table>
-    </div>
+    </ResponsiveTable>
   )
 }
 
@@ -2560,7 +2562,7 @@ function VatRutaRow({
 
   return (
     <>
-      <tr className="border-b">
+      <tr {...(canDrill ? expansion.surfaceProps : {})} className={canDrill ? "border-b cursor-pointer" : "border-b"}>
         <td className="py-2">
           {canDrill && (
             <span className="inline-block align-middle mr-1">
@@ -2655,7 +2657,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<SupplierLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [asOfDate, setAsOfDate] = usePageState('ledger-as-of-date', formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -2749,7 +2751,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
             <CardTitle>Ålderfördelning per leverantör</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
@@ -2779,7 +2781,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
                   <td className="py-2 text-right">{formatAmount(ledger.total_outstanding)}</td>
                 </tr>
               </tfoot>
-            </table></div>
+            </table></ResponsiveTable>
           </CardContent>
         </Card>
       )}
@@ -2856,10 +2858,10 @@ function SupplierLedgerRow({
     () => makeSupplierFetcher(entry.supplier_id),
     [entry.supplier_id]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2"><Toggle /></td>
         <td className="py-2">{entry.supplier_name}</td>
         <td className="py-2 text-right tabular-nums">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
@@ -2905,7 +2907,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<JournalRegisterData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedEntries, setExpandedEntries] = useState<Set<number>>(new Set())
+  const [expandedEntries, setExpandedEntries] = usePageState<Set<number>>(`journal-expanded:${periodId}`, new Set())
 
   const fetchData = async () => {
     setLoading(true)
@@ -2975,7 +2977,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
           <CardTitle>Grundbok (registreringsordning)</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+          <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b text-left">
                 <th className="py-2 w-8"></th>
@@ -3045,7 +3047,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
                 <td className="py-2 text-right">{formatAmount(data.total_credit)}</td>
               </tr>
             </tfoot>
-          </table></div>
+          </table></ResponsiveTable>
         </CardContent>
       </Card>
     </div>
@@ -3198,8 +3200,8 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<ARLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [expandedCustomers, setExpandedCustomers] = usePageState<Set<string>>(`receivables-expanded:${periodId}`, new Set())
+  const [asOfDate, setAsOfDate] = usePageState('ledger-as-of-date', formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -3310,7 +3312,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle>Ålderfördelning per kund</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
@@ -3369,7 +3371,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                   <td className="py-2 text-right">{formatAmount(ledger.total_outstanding)}</td>
                 </tr>
               </tfoot>
-            </table></div>
+            </table></ResponsiveTable>
           </CardContent>
         </Card>
       )}
@@ -3556,7 +3558,7 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -3608,13 +3610,13 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="p-6">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <tbody>
                 <tr>
@@ -3631,7 +3633,7 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                 </tr>
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
     </div>

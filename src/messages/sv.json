@@ -6397,6 +6397,8 @@
     "uploading": "Laddar upp..."
   },
   "journal_attachments": {
+    "show_preview": "Visa förhandsgranskning",
+    "hide_preview": "Dölj förhandsgranskning",
     "loading": "Laddar underlag...",
     "title": "Underlag",
     "add": "Lägg till underlag",

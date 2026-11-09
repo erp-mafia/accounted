@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
@@ -442,7 +444,7 @@ function TemplateSection({
           const isExpanded = expandedId === tt.id
           const isConvertible = convertLibraryToBookingTemplate(tt) !== null
           return (
-            <div key={tt.id} className="border-b border-border">
+            <div key={tt.id} className="border-b border-border cursor-pointer" {...expandableSurface(() => onToggle(isExpanded ? null : tt.id))}>
               <div className="flex items-center gap-3 px-1 py-3 transition-colors duration-150 hover:bg-secondary/60">
                 <button
                   type="button"

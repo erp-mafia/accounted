@@ -4,6 +4,9 @@ import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { usePageState } from '@/lib/hooks/use-page-state'
+import { expandableSurface } from '@/components/ui/expandable-surface'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -53,8 +56,8 @@ const EMPTY_DATE_RANGE: DateRangeValue = {}
 /** Display the filtered ledger with on-demand account details and matching export bounds. */
 export default function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
   const t = useTranslations('reports')
-  const [hideInactive, setHideInactive] = useState(true)
-  const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set())
+  const [hideInactive, setHideInactive, viewReady] = usePageState('ledger-hide-inactive', true)
+  const [expandedAccounts, setExpandedAccounts] = usePageState<Set<string>>(`ledger-expanded:${periodId}:${initialAccountFilter ?? ''}`, new Set())
   const toggleAccount = (number: string) => setExpandedAccounts(previous => {
     const next = new Set(previous)
     if (next.has(number)) next.delete(number)
@@ -64,9 +67,9 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   const [data, setData] = useState<GeneralLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [accountFrom, setAccountFrom] = useState('')
-  const [accountTo, setAccountTo] = useState('')
-  const [appliedAccountRange, setAppliedAccountRange] = useState({ from: '', to: '' })
+  const [accountFrom, setAccountFrom] = usePageState(`ledger-from:${periodId}`, '')
+  const [accountTo, setAccountTo] = usePageState(`ledger-to:${periodId}`, '')
+  const [appliedAccountRange, setAppliedAccountRange] = usePageState(`ledger-range:${periodId}`, { from: '', to: '' })
   const previousAccountFilter = React.useRef(initialAccountFilter)
   // Only the newest request may land. The window changes right after mount
   // (the date-range control resolves its preset, or a drill-down's window),
@@ -110,10 +113,13 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
 
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
-    setExpandedAccounts(new Set(initialAccountFilter ? [initialAccountFilter] : []))
+    if (!viewReady) return
     const accountFilterChanged = previousAccountFilter.current !== initialAccountFilter
     previousAccountFilter.current = initialAccountFilter
     if (initialAccountFilter || accountFilterChanged) {
+      if (initialAccountFilter && !expandedAccounts.has(initialAccountFilter)) {
+        setExpandedAccounts(previous => new Set([...previous, initialAccountFilter]))
+      }
       const account = initialAccountFilter ?? ''
       setAccountFrom(account)
       setAccountTo(account)
@@ -121,7 +127,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
     } else {
       fetchData()
     }
-  }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
+  }, [periodId, initialAccountFilter, dimensionFilter, dateRange, viewReady])
 
   const visibleAccounts = (data?.accounts ?? []).filter(
     account => !hideInactive || isActiveLedgerAccount(account),
@@ -216,7 +222,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
       </div>
 
       {visibleAccounts.map((account) => (
-        <Card key={account.account_number}>
+        <Card key={account.account_number} className="cursor-pointer" {...expandableSurface(() => toggleAccount(account.account_number))}>
           <CardHeader className="pb-2">
             <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 sm:flex sm:items-center sm:justify-between">
               {/* data-ph-mask: account number and name are user chart data */}
@@ -255,7 +261,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
             </div>
           </CardHeader>
           {expandedAccounts.has(account.account_number) && <CardContent id={`ledger-account-${account.account_number}`}>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <ResponsiveTable primaryColumn={3}><table className="w-full text-sm">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-16">Ver.nr</th>
@@ -307,7 +313,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
                   <td className="py-2 text-right tabular-nums">{formatAmount(account.closing_balance)}</td>
                 </tr>
               </tfoot>
-            </table></div>
+            </table></ResponsiveTable>
           </CardContent>}
         </Card>
       ))}

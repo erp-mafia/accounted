@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -361,10 +363,13 @@ export default function JournalEntryAttachments({
           {documents.map((doc) => {
             const isReplacing = replacingDocId === doc.id
             return (
-              <div key={doc.id}>
+              <div key={doc.id} {...(isPreviewable(doc.mime_type) ? expandableSurface(() => handlePreviewToggle(doc)) : {})}>
                 <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
                   {isPreviewable(doc.mime_type) ? (
                     <button
+                      type="button"
+                      aria-label={t(expandedDoc === doc.id ? 'hide_preview' : 'show_preview')}
+                      aria-expanded={expandedDoc === doc.id}
                       onClick={() => handlePreviewToggle(doc)}
                       className="shrink-0 hover:text-primary transition-colors"
                     >

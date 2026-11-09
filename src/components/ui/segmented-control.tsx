@@ -44,7 +44,7 @@ export function SegmentedControl<T extends string>({
     <>
       <div
         className={cn(
-          'inline-flex h-8 shrink-0 items-center gap-0.5 rounded-full bg-muted/70 p-[3px]',
+          'inline-flex h-auto min-h-8 max-w-full flex-wrap shrink-0 items-center gap-0.5 rounded-full bg-muted/70 p-[3px] sm:h-8 sm:flex-nowrap',
           className,
         )}
         role="tablist"
@@ -69,7 +69,7 @@ export function SegmentedControl<T extends string>({
               }}
               data-ph-unmask=""
               className={cn(
-                'inline-flex h-full items-center gap-1.5 rounded-full px-3.5 text-[12.5px] transition-colors duration-150',
+                'inline-flex h-6 items-center pointer-coarse:min-h-10 sm:h-full gap-1.5 rounded-full px-3.5 text-[12.5px] transition-colors duration-150',
                 value === opt.value
                   ? 'border border-border bg-card font-medium text-foreground'
                   : disabled

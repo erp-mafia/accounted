@@ -6397,6 +6397,8 @@
     "uploading": "Uploading..."
   },
   "journal_attachments": {
+    "show_preview": "Show preview",
+    "hide_preview": "Hide preview",
     "loading": "Loading documents...",
     "title": "Documents",
     "add": "Add document",

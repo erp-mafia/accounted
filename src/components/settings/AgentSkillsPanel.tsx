@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale } from 'next-intl'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
@@ -242,7 +244,7 @@ export function AgentSkillsPanel() {
                 const body = bodies[atom.id]
                 const dormant = !atom.active
                 return (
-                  <div key={atom.id} className="border-b border-border">
+                  <div key={atom.id} className="border-b border-border cursor-pointer" {...expandableSurface(() => toggle(atom))}>
                     <button
                       type="button"
                       onClick={() => toggle(atom)}

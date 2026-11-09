@@ -1228,3 +1228,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-03] MCP create_invoice staging and commit both build through buildStagedInvoice (the shared buildInvoiceWriteData) instead of adding the 1660-on-a-VAT-line check to the hand copy: one definition, so ROT/RUT, accrual, preview VAT and the reverse-charge notice cannot drift again.
 
 [2026-11-09] Move collapsible navigation and ledger presentation into a dedicated UI PR. Reports reuse the existing catalog, and inactive means zero closing balance with no vouchers in the selected interval.
+
+[2026-11-09] Responsive report tables keep one DOM and derive narrow-screen labels from their headers. Disclosure surfaces preserve native controls and selection. Per-tab, per-company view state and delayed scroll restoration retain context after voucher navigation.

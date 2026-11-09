@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
-import { useEffect } from 'react'
+import { useHistoryScroll } from '@/lib/hooks/use-history-scroll'
 import type { ReactNode } from 'react'
 import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
 import { isFullBleedEditorPath } from '@/lib/invoices/editor/new-editor-params'
@@ -27,13 +27,7 @@ export function MainContainer({
 }) {
   const pathname = usePathname()
 
-  // The panel (<main>) is its own scroll container on desktop, so Next's
-  // built-in scroll-to-top on navigation (which targets the window) never
-  // fires for it. Reset the panel scroll on every route change; hash-anchor
-  // scrolling still works because pages call scrollIntoView themselves.
-  useEffect(() => {
-    document.getElementById('main-content')?.scrollTo(0, 0)
-  }, [pathname])
+  const contentRef = useHistoryScroll(companyId, pathname)
 
   // Full-bleed routes own their own padding + multi-pane layout. They
   // shouldn't sit inside any horizontal padding: that's what causes a
@@ -46,7 +40,7 @@ export function MainContainer({
 
   if (isFullBleed) {
     return (
-      <div key={companyId ?? ''} className="h-full">
+      <div ref={contentRef} key={companyId ?? ''} className="h-full">
         <SIEImportHoldBanner companyId={companyId} />
         {children}
       </div>
@@ -59,7 +53,7 @@ export function MainContainer({
   // is what the sticky top bar pulls itself back over (negative margin), so
   // the two numbers must stay in step with the CSS.
   return (
-    <div key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
+    <div ref={contentRef} key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
       <SIEImportHoldBanner companyId={companyId} />
       {children}
     </div>

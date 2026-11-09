@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import Link from 'next/link'
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
@@ -204,7 +206,7 @@ export function PaymentFilePanel({
       </div>
 
       {!readOnly && (
-        <div className="mt-3 space-y-3">
+        <div className="mt-3 space-y-3 cursor-pointer" {...expandableSurface(() => setShowInstructions(value => !value))}>
           {/* One attention sentence per section (convention 6). A missing
               sender account outranks the format caveat: without it the
               download fails outright. The caveat then drops to a muted line

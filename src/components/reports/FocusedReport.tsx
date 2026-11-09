@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react'
 import dynamic from 'next/dynamic'
+import { usePageState } from '@/lib/hooks/use-page-state'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
@@ -87,14 +88,12 @@ function FocusedReportInner({
 
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
-  const [dateRange, setDateRange] = useState<DateRangeValue>({})
+  const [dateRange, setDateRange] = usePageState<DateRangeValue>('report-date-range', {})
   // A drill-down arrives with the clicked report's window and dimension
   // filter in the URL (lib/reports/report-drilldown.ts). Read once: after
   // that the page's own controls own the state.
   const [drilldown] = useState(() => parseDrilldownParams(searchParams))
-  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(() =>
-    DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null,
-  )
+  const [dimensionFilter, setDimensionFilter] = usePageState<DimensionFilterValue | null>('report-dimension', DIMENSION_FILTER_SLUGS.has(slug) ? drilldown.dimension : null)
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
@@ -149,7 +148,7 @@ function FocusedReportInner({
                 setSelectedPeriodBounds(
                   period ? { start: period.period_start, end: period.period_end } : null,
                 )
-                setDateRange({})
+                if (selectedPeriod && selectedPeriod !== id) setDateRange({})
               }}
               includeAllOption={false}
               hideFuturePeriods

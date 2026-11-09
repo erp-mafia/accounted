@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
@@ -158,7 +160,7 @@ export function CounterpartyTemplatesPanel() {
           const isMultiLine = tt.line_pattern && tt.line_pattern.length > 0
 
           return (
-            <div key={tt.id} className="border-b border-border">
+            <div key={tt.id} className="border-b border-border cursor-pointer" {...expandableSurface(() => setExpandedId(isExpanded ? null : tt.id))}>
               {/* Clickable summary row: flat hairline, one line. */}
               <button
                 type="button"
