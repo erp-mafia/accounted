@@ -25,7 +25,12 @@
  *   - an account that is not synced keeps its ledger account as a soft claim
  *     and yields it when a synced account asks for it, as in the picker;
  *   - a ledger account held elsewhere (another connection, another physical
- *     account) is refused by the database with a sentence naming that account.
+ *     account) is refused by the database with a sentence naming that account;
+ *   - rows that end up on one account twice, once per channel (statement
+ *     files on the new ledger account, the feed of the moved account), are
+ *     folded to one per movement, as the import would have: planned before
+ *     the save while the accounts are apart, set aside after it
+ *     (lib/cash-accounts/move-twins.ts).
  * A dry run answers the moves with their counts and writes nothing.
  */
 
@@ -42,6 +47,8 @@ import {
 } from '@/lib/cash-accounts/configuration'
 import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
 import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
+import type { LedgerMoveTwinsPlan } from '@/lib/cash-accounts/move-twins'
+import { LEDGER_MOVE_TWINS } from '@/lib/composition/ledger-move-twins'
 
 const MAX_ACCOUNTS = 50
 
@@ -233,6 +240,10 @@ export async function changeBankAccountLedgers(
   if (options.dryRun) return { ok: true, dryRun: true, preview: { ...view } }
   if (moves.length === 0) return { ok: true, data: view }
 
+  // The rows this move will put on one account that no import compared,
+  // planned while the accounts are still apart (lib/cash-accounts/move-twins.ts).
+  const twinPlans = await planMoveTwins(ctx, connection.id, moves, cashRows)
+
   const selections: BankAccountSelection[] = stored.map((account) => {
     const currency = (account.currency ?? 'SEK').toUpperCase()
     const ledger = finalLedger.get(account.uid)
@@ -279,7 +290,67 @@ export async function changeBankAccountLedgers(
     })
   }
   ctx.log.info('bank account ledger changed', { connectionId: connection.id, moves: moves.length })
+  await applyMoveTwins(ctx, connection.id, twinPlans)
   return { ok: true, data: view }
+}
+
+/**
+ * Per move: the moving account against the accounts already on the ledger
+ * account it moves to that the save can merge into it, i.e. not this
+ * connection's (those trade places) and with no bank identity (an account of
+ * statement files; one with the same IBAN was compared by every import, one
+ * with another IBAN is another bank account). Never fails the move: a plan
+ * that cannot be read is skipped and the rows stay as they are.
+ */
+async function planMoveTwins(
+  ctx: OperationContext,
+  connectionId: string,
+  moves: LedgerChangeMove[],
+  cashRows: CashRow[],
+): Promise<LedgerMoveTwinsPlan[]> {
+  const plans: LedgerMoveTwinsPlan[] = []
+  for (const move of moves) {
+    if (!move.cash_account_id) continue
+    const targets = cashRows
+      .filter((r) => r.ledger_account === move.to_ledger && r.id !== move.cash_account_id)
+      .filter((r) => r.bank_connection_id !== connectionId && physicalAccountKey(r) === null)
+      .map((r) => r.id)
+    if (targets.length === 0) continue
+    try {
+      plans.push(await LEDGER_MOVE_TWINS.prepare(ctx.supabase, ctx.companyId, move.cash_account_id, targets))
+    } catch (error) {
+      ctx.log.warn('channel twins not planned for a ledger move', {
+        connectionId,
+        cashAccountId: move.cash_account_id,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  return plans
+}
+
+/** After the save: the planned copies now on one account are set aside. Never fails the move, which is done. */
+async function applyMoveTwins(ctx: OperationContext, connectionId: string, plans: LedgerMoveTwinsPlan[]): Promise<void> {
+  for (const plan of plans) {
+    if (plan.setAside.length === 0 && plan.overBookedBuckets === 0) continue
+    try {
+      const setAside = plan.setAside.length > 0
+        ? await LEDGER_MOVE_TWINS.apply(ctx.supabase, ctx.companyId, plan, { actorUserId: ctx.userId, correlationId: connectionId })
+        : 0
+      ctx.log.info('channel twins after a ledger move', {
+        connectionId,
+        planned: plan.setAside.length,
+        setAside,
+        overBookedBuckets: plan.overBookedBuckets,
+      })
+    } catch (error) {
+      ctx.log.error('channel twins not set aside after a ledger move', {
+        connectionId,
+        planned: plan.setAside.length,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
 }
 
 export interface CashAccountLedgerRequest {

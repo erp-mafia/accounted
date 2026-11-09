@@ -48,6 +48,7 @@ export const PROCESSING_EVENT_TYPES = [
   'BankTransactionDuplicateDismissed',
   'BankTransactionStrandedRelinked',
   'BankTransactionStrandedRepaired',
+  'BankTransactionTwinsIgnored',
   'CashAccountTwinsMerged',
   'ChannelQuestionAnswered',
   'ChannelQuestionAsked',

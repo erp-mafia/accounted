@@ -9,6 +9,16 @@ vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...a: unknown[]) => emit
 const requireCompanyAdmin = vi.fn()
 vi.mock('@/lib/operations/access', () => ({ requireCompanyAdmin: (...a: unknown[]) => requireCompanyAdmin(...a) }))
 
+const prepareTwins = vi.fn()
+const applyTwins = vi.fn()
+vi.mock('@/lib/composition/ledger-move-twins', () => ({
+  LEDGER_MOVE_TWINS: {
+    module: 'transactions',
+    prepare: (...a: unknown[]) => prepareTwins(...a),
+    apply: (...a: unknown[]) => applyTwins(...a),
+  },
+}))
+
 import { changeBankAccountLedgers, changeCashAccountLedgers } from '../ledger-change'
 
 const COMPANY = 'company-1'
@@ -73,6 +83,8 @@ function setup(options: {
 beforeEach(() => {
   vi.clearAllMocks()
   requireCompanyAdmin.mockResolvedValue(null)
+  prepareTwins.mockResolvedValue({ setAside: [], overBookedBuckets: 0 })
+  applyTwins.mockResolvedValue(0)
 })
 
 describe('changeBankAccountLedgers', () => {
@@ -141,6 +153,82 @@ describe('changeBankAccountLedgers', () => {
         ledgerChanges: [{ cashAccountId: 'cash-b', uid: '2222', from: '1931', to: '1920' }],
       }),
     }))
+  })
+
+  // crm#1701: statement files on a manual 1930 account, the bank's feed
+  // connected onto 1935 and then moved to 1930, where the save merges them.
+  describe('rows of one bank account that no import compared', () => {
+    const plan = { setAside: [{ transaction_id: 'feed-1', twin_transaction_id: 'file-1' }], overBookedBuckets: 0 }
+
+    it('plans the copies before the save against the statement account on the target, and sets them aside after', async () => {
+      prepareTwins.mockResolvedValue(plan)
+      applyTwins.mockResolvedValue(1)
+      const { ctx, saved } = setup({
+        accounts: [account('1111')],
+        cash: [cashRow('cash-a', '1111', '1935'), cashRow('cash-file', null, '1930')],
+      })
+      prepareTwins.mockImplementation(async () => {
+        // Planned while the accounts are still apart: nothing saved yet.
+        expect(saved()).toBeUndefined()
+        return plan
+      })
+
+      const outcome = await changeBankAccountLedgers(ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] })
+
+      expect(outcome.ok).toBe(true)
+      expect(prepareTwins).toHaveBeenCalledWith(ctx.supabase, COMPANY, 'cash-a', ['cash-file'])
+      expect(applyTwins).toHaveBeenCalledWith(ctx.supabase, COMPANY, plan, { actorUserId: 'user-1', correlationId: CONNECTION })
+      expect(saved()).toBeDefined()
+    })
+
+    it('never compares with an account that has a bank identity or is this connection’s own', async () => {
+      const { ctx } = setup({
+        accounts: [account('1111'), account('2222')],
+        cash: [
+          cashRow('cash-a', '1111', '1935'),
+          // Another synced account of this connection on 1930, even without an
+          // IBAN: it trades places, it is never merged.
+          cashRow('cash-b', '2222', '1930', { iban: null }),
+          // Another bank account with its own IBAN: never the same account.
+          cashRow('cash-other', null, '1930', { iban: 'SE4550000000058398257466' }),
+        ],
+      })
+      await changeBankAccountLedgers(ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] })
+      expect(prepareTwins).not.toHaveBeenCalled()
+      expect(applyTwins).not.toHaveBeenCalled()
+    })
+
+    it('plans nothing on a dry run or when nothing moves', async () => {
+      const { ctx } = setup({ accounts: [account('1111')], cash: [cashRow('cash-a', '1111', '1935'), cashRow('cash-file', null, '1930')] })
+      await changeBankAccountLedgers(ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] }, { dryRun: true })
+      await changeBankAccountLedgers(ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1935' }] })
+      expect(prepareTwins).not.toHaveBeenCalled()
+    })
+
+    it('sets nothing aside when the save is refused', async () => {
+      prepareTwins.mockResolvedValue(plan)
+      const { ctx } = setup({
+        accounts: [account('1111')],
+        cash: [cashRow('cash-a', '1111', '1935'), cashRow('cash-file', null, '1930')],
+        saveError: { code: '23505', message: 'BANK_SELECTION_LEDGER_CONFLICT' },
+      })
+      const outcome = await changeBankAccountLedgers(ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] })
+      expect(outcome.ok).toBe(false)
+      expect(applyTwins).not.toHaveBeenCalled()
+    })
+
+    it('never fails a move because the copies could not be planned or set aside', async () => {
+      const cash = [cashRow('cash-a', '1111', '1935'), cashRow('cash-file', null, '1930')]
+      prepareTwins.mockRejectedValueOnce(new Error('statement timeout'))
+      const first = setup({ accounts: [account('1111')], cash })
+      expect((await changeBankAccountLedgers(first.ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] })).ok).toBe(true)
+
+      prepareTwins.mockResolvedValueOnce(plan)
+      applyTwins.mockRejectedValueOnce(new Error('statement timeout'))
+      const second = setup({ accounts: [account('1111')], cash })
+      expect((await changeBankAccountLedgers(second.ctx, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] })).ok).toBe(true)
+      expect(log.error).toHaveBeenCalledWith('channel twins not set aside after a ledger move', expect.objectContaining({ connectionId: CONNECTION }))
+    })
   })
 
   it('is provider-neutral: an Enable Banking connection changes the same way', async () => {
