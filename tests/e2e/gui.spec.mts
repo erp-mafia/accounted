@@ -254,7 +254,8 @@ for (const theme of ['light', 'dark'] as const) {
         expect(layout.radius, route).toBe('0px')
       }
       if (route === '/supplier-invoices') {
-        const checkbox = row.getByRole('checkbox').first()
+        const selectableRow = page.locator('main .responsive-table tbody > tr').filter({ has: page.getByRole('checkbox') }).first()
+        const checkbox = selectableRow.getByRole('checkbox').first()
         await measured(info, 'Select a supplier invoice without opening it', BUDGET.interaction, async () => {
           await checkbox.check()
           await expect(checkbox).toBeChecked()
