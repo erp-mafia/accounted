@@ -212,3 +212,66 @@ for (const dimension of ['P1', null]) {
     expect(dimensions.every(value => value === dimension)).toBe(true)
   })
 }
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`shared tables keep mobile rows distinct in ${theme} mode`, async ({ page }, info) => {
+    await page.addInitScript(value => localStorage.setItem('theme', value), theme)
+    const routes = ['/transactions', '/invoices', '/supplier-invoices', '/bookkeeping', '/reports/trial-balance', '/reports/grundbok', '/accounts']
+    for (const route of routes) {
+      await measured(info, `Ready card table ${route}`, BUDGET.navigation, async () => {
+        await page.goto(route)
+        if (route === '/transactions') await page.getByRole('tab', { name: 'Alla', exact: true }).click()
+        await page.locator('main .responsive-table > table > tbody > tr:has(> :nth-child(2))').first().waitFor({ state: 'visible' })
+      })
+      expect(await page.locator('html').evaluate(element => element.classList.contains('dark'))).toBe(theme === 'dark')
+      const row = page.locator('main .responsive-table > table > tbody > tr:has(> :nth-child(2))').first()
+      const layout = await row.evaluate(element => {
+        const style = getComputedStyle(element)
+        const wrapper = element.closest('.responsive-table') as HTMLElement
+        const dataRows = [...element.parentElement!.children].filter(row => row.children.length > 1)
+        const last = getComputedStyle(dataRows[dataRows.length - 1])
+        return {
+          narrow: wrapper.clientWidth <= 576,
+          display: style.display,
+          borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+          radius: style.borderTopLeftRadius,
+          gap: parseFloat(getComputedStyle(element.parentElement!).rowGap),
+          lastBottom: last.borderBottomWidth,
+          cellBottoms: [...element.children].map(cell => getComputedStyle(cell).borderBottomWidth),
+          overflow: wrapper.scrollWidth > wrapper.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth + 1,
+        }
+      })
+      expect(layout.overflow, route).toBe(false)
+      if (layout.narrow) {
+        expect(layout.display, route).toBe('grid')
+        expect(layout.borders, route).toEqual(['1px', '1px', '1px', '1px'])
+        expect(layout.radius, route).toBe('8px')
+        expect(layout.gap, route).toBeGreaterThanOrEqual(12)
+        expect(layout.lastBottom, route).toBe('1px')
+        expect(layout.cellBottoms, route).toEqual(layout.cellBottoms.map(() => '0px'))
+      } else {
+        expect(layout.display, route).toBe('table-row')
+        expect(layout.radius, route).toBe('0px')
+      }
+      if (route === '/supplier-invoices') {
+        const checkbox = row.getByRole('checkbox').first()
+        await measured(info, 'Select a supplier invoice without opening it', BUDGET.interaction, async () => {
+          await checkbox.check()
+          await expect(checkbox).toBeChecked()
+          await expect(page).toHaveURL(/\/supplier-invoices$/)
+        })
+      }
+      if (route === '/bookkeeping') {
+        // Selection belongs to the row; the foldout must remain visually
+        // connected to that row rather than appearing as a separate invoice.
+        await row.locator('td').nth(3).click()
+        const detail = page.locator('main tr[data-responsive-detail-row]').first()
+        await detail.waitFor({ state: 'visible' })
+        if (layout.narrow) {
+          expect(await detail.evaluate(element => getComputedStyle(element).borderBottomWidth)).toBe('1px')
+          expect(await row.evaluate(element => getComputedStyle(element).borderBottomWidth)).toBe('0px')
+        }
+      }
+    }
+  })
+}
