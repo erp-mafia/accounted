@@ -59,6 +59,11 @@ export function isAccruedIncomeAccount(account: string | null | undefined): bool
   return typeof account === 'string' && /^17\d{2}$/.test(account)
 }
 
+/** Any interim account a periodisering can use, 17xx or 29xx. */
+export function isInterimBalanceAccount(account: string | null | undefined): boolean {
+  return isAccruedCostAccount(account) || isAccruedIncomeAccount(account)
+}
+
 /**
  * True for an upplupen post in either direction (a cost on 29xx, revenue on
  * 17xx): its months lie before the invoice and each books on its own last

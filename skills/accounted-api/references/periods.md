@@ -601,6 +601,173 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/accrual-schedules`
+
+**Create a periodisering by hand for an amount on 17xx/29xx that no invoice line in Accounted carries, with monthly catch-up.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Ny periodisering. Spreads amount_sek over calendar months with the same installments and catch-up as an invoice plan. For a deferral (förutbetald kostnad on 17xx, förutbetald intäkt on 29xx) amount_sek is what remains to dissolve: it may not exceed the balance left on balance_account (from its latest ingående balans on, after every month already dissolved, by Accounted, by hand or by an imported voucher from an earlier system) less the months not yet posted of other active plans on the account, nor what the origin verifikat or ingående balans put there. Start at the first month not yet dissolved. An upplupen kostnad (29xx) or intäkt (17xx) has no such limit. Months already begun post at approval; the rest post through the nightly accrual run. Dry-runnable: the dry run answers the months and available_sek and writes nothing.
+
+**Use when:** A migration brought a running periodisering whose remaining months must keep dissolving, or a bank booking or the ingående balans put an annual insurance, licence or rent on 17xx/29xx without an invoice line in Accounted.
+**Do not use for:** An invoice line in Accounted (periodisera on that line), changing an existing plan (replan it), or undoing one (cancel it).
+
+**Pitfalls:**
+- For a migrated plan give the REMAINING amount and the first month not yet dissolved: the earlier system's dissolutions are already in the books, and booking a month twice is refused with 400 ACCRUAL_BALANCE_EXCEEDED (details.available_sek says what is left).
+- Without origin_journal_entry_id a deferral comes from the ingående balans: 400 ACCRUAL_OPENING_BALANCE_MISSING when the account has none. A reversed origin is refused (ACCRUAL_ORIGIN_REVERSED).
+- Give either months (1-120) or period_end. The amount is split in öre over every calendar month and sums exactly to amount_sek. target_account must be a resultatkonto, 3xxx-8xxx.
+- Reversing the origin verifikat later cancels the plan and stornoes the months it posted.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  direction: "expense" | "revenue",
+  amount_sek: number,
+  balance_account: string,
+  target_account: string,
+  period_start: string,
+  months?: number,
+  period_end?: string,
+  description: string,
+  dimensions?: Record<string, string>,
+  origin_journal_entry_id?: string
+}
+```
+
+Example request:
+```json
+{
+  "direction": "expense",
+  "amount_sek": 6000,
+  "balance_account": "1790",
+  "target_account": "6570",
+  "period_start": "2026-07-01",
+  "months": 6,
+  "description": "Årsavgift bankpaket, resterande månader",
+  "origin_journal_entry_id": "5b1e…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    source_kind: "manual",
+    direction: "expense" | "revenue",
+    balance_account: string,
+    target_account: string,
+    total_amount: number,
+    period_start: string,
+    period_end: string,
+    months: number,
+    origin_journal_entry_id: string | null,
+    posting_floor_date: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "source_kind": "manual",
+    "direction": "expense",
+    "balance_account": "1790",
+    "target_account": "6570",
+    "total_amount": 6000,
+    "period_start": "2026-07-01",
+    "period_end": "2026-12-31",
+    "months": 6,
+    "origin_journal_entry_id": "5b1e…",
+    "posting_floor_date": "2026-01-10"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accrual-schedules/{id}/cancel`
+
+**Undo a periodisering set up by hand: cancel its months not yet posted and storno the months it posted.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Ångra periodisering. The months not yet posted are cancelled and every month the plan posted is stornoed (dated today when today lies in that month's fiscal year, else on the month's own date), so the whole amount is back on the balance account. Only a manual plan: an invoice's plan is cancelled by crediting the invoice. Dry-runnable: the dry run lists the months it would cancel and reverse.
+
+**Use when:** A manual periodisering was set up wrong (amount, accounts, months), or the item it spreads no longer exists.
+**Do not use for:** Booking the rest now (Lös upp nu), moving the end or the booking day (replan it), or an invoice's plan (credit the invoice).
+
+**Pitfalls:**
+- A month whose storno fails (a locked or closed year) keeps the plan active with failed_reversals > 0 and a last_error on the month: unlock and cancel again.
+- Reversing the origin verifikat runs the same undo on its own.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    status: "cancelled" | "active",
+    cancelled_months: number,
+    reversed_entries: number,
+    failed_reversals: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "status": "cancelled",
+    "cancelled_months": 4,
+    "reversed_entries": 2,
+    "failed_reversals": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/accrual-schedules/{id}/replan`
 
 **Re-plan the months of a periodisering that are not yet posted: a new period end and/or the day each month books on.**

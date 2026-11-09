@@ -1,0 +1,1 @@
+[2026-11-06] Manual accrual event subject: a dissolution of a manual plan names its origin verifikat, or the plan itself when the amount came from an opening balance, replacing the invoice-only subject rule from 2026-10-18.

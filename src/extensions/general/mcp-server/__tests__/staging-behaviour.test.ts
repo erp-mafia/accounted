@@ -797,6 +797,29 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // Ny periodisering: a posted verifikat that put 1 200 kr on 1790, nothing
+  // else on the account and no other plan on it; the dry run reads the
+  // origin, the IB floor and the account's lines, the plan is made at approval.
+  gnubok_create_accrual_schedule: {
+    args: {
+      direction: 'expense', amount_sek: 1200, balance_account: '1790', target_account: '5010',
+      period_start: '2026-01-01', months: 12, description: 'Annual insurance', origin_journal_entry_id: SOME_UUID,
+    },
+    rows: {
+      journal_entries: {
+        id: SOME_UUID, entry_date: '2026-01-01', status: 'posted', source_type: 'manual', reversed_by_id: null,
+        lines: [{ account_number: '1790', debit_amount: 1200, credit_amount: 0 }],
+      },
+      journal_entry_lines: { account_number: '1790', debit_amount: 1200, credit_amount: 0 },
+      'rpc:account_ib_floor': { floor_date: '2026-01-01', amount: 0 },
+    },
+    empty: ['accrual_schedules'],
+  },
+  // Ångra periodisering: an active manual plan with nothing posted yet; the
+  // dry run lists its months, the undo runs at approval.
+  gnubok_cancel_accrual_schedule: {
+    rows: { accrual_schedules: { source_kind: 'manual', status: 'active', balance_account: '1790', installments: [] } },
+  },
   // Ändra periodisering: an active 17xx schedule with January posted and
   // February to December pending; the preview reads the schedule and the
   // lock date, never the replan RPC or the engine.

@@ -2,8 +2,8 @@
 
 // Periodiseringar: running accrual schedules (förutbetalda kostnader 17xx,
 // upplupna kostnader 29xx / förutbetalda intäkter 29xx, upplupna intäkter
-// 17xx) created from
-// invoice lines. Not on the stays-Swedish list (.claude/rules/i18n.md), so
+// 17xx) created from invoice lines or set up by hand (Ny periodisering,
+// accounted#164). Not on the stays-Swedish list (.claude/rules/i18n.md), so
 // the chrome reads the `periodiseringar` namespace; account numbers and
 // server error texts pass through as they are.
 
@@ -26,6 +26,8 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { AccrualReplanDialog, canReplanSchedule } from '@/components/bookkeeping/AccrualReplanDialog'
+import { ManualAccrualDialog } from '@/components/bookkeeping/ManualAccrualDialog'
+import { Button } from '@/components/ui/button'
 import type {
   AccrualSchedule,
   AccrualScheduleInstallment,
@@ -78,6 +80,8 @@ export default function AccrualSchedulesPage() {
   const [postConfirmOpen, setPostConfirmOpen] = useState(false)
   const [dissolveTarget, setDissolveTarget] = useState<ScheduleWithInstallments | null>(null)
   const [replanTarget, setReplanTarget] = useState<ScheduleWithInstallments | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [cancelTarget, setCancelTarget] = useState<ScheduleWithInstallments | null>(null)
 
   const fetchSchedules = useCallback(async (filter: StatusFilter) => {
     setIsLoading(true)
@@ -162,6 +166,35 @@ export default function AccrualSchedulesPage() {
     }
   }
 
+  // "Ångra" on a periodisering set up by hand: the months not yet posted go
+  // and the posted ones are stornoed (POST /api/bookkeeping/accruals/[id]/cancel).
+  async function handleCancel() {
+    if (!cancelTarget) return
+    try {
+      const res = await fetch(`/api/bookkeeping/accruals/${cancelTarget.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(getErrorMessage(json, { context: 'journal_entry', locale }))
+      const result = json.data as { status: 'cancelled' | 'active'; failed_reversals: number }
+      toast(
+        result.status === 'cancelled'
+          ? { title: tAccruals('cancel_done') }
+          : { title: tAccruals('cancel_failed'), description: tAccruals('cancel_partial', { count: result.failed_reversals }), variant: 'destructive' },
+      )
+      setCancelTarget(null)
+      await fetchSchedules(statusFilter)
+    } catch (error) {
+      toast({
+        title: tAccruals('cancel_failed'),
+        description: getErrorMessage(error, { context: 'journal_entry', locale }),
+        variant: 'destructive',
+      })
+    }
+  }
+
   const blockedInstallments = useMemo(
     () =>
       schedules.reduce(
@@ -186,6 +219,7 @@ export default function AccrualSchedulesPage() {
             <p>{t('help')}</p>
           </HelpPopover>
         }
+        action={canWrite ? <Button size="sm" onClick={() => setCreateOpen(true)}>{tAccruals('manual_title')}</Button> : undefined}
       />
 
       {dueCount > 0 ? (
@@ -324,6 +358,18 @@ export default function AccrualSchedulesPage() {
                               {t('dissolve_now')}
                             </button>
                           )}
+                          {canWrite && schedule.source_kind === 'manual' && schedule.status !== 'cancelled' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setCancelTarget(schedule)
+                              }}
+                              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, 'ml-4')}
+                            >
+                              {tAccruals('cancel_action')}
+                            </button>
+                          )}
                         </td>
                       </tr>
                       {isOpen && (
@@ -338,6 +384,13 @@ export default function AccrualSchedulesPage() {
                                       : t('source_customer_invoice')}
                                   </Link>
                                 )}
+                                {schedule.source_kind === 'manual' && (schedule.origin_journal_entry_id ? (
+                                  <Link href={`/bookkeeping/${schedule.origin_journal_entry_id}`} className={QUIET_LINK_CLASS}>
+                                    {tAccruals('source_origin')}
+                                  </Link>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">{tAccruals('source_opening_balance')}</span>
+                                ))}
                                 <table className="w-full text-sm">
                                   <thead>
                                     <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -445,6 +498,39 @@ export default function AccrualSchedulesPage() {
           </div>
         )}
       </ConfirmDialog>
+
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => !open && setCancelTarget(null)}
+        title={tAccruals('cancel_title')}
+        description={
+          cancelTarget
+            ? tAccruals('cancel_description', {
+                posted: cancelTarget.installments.filter((i) => i.status === 'posted').length,
+                account: cancelTarget.balance_account,
+              })
+            : undefined
+        }
+        confirmLabel={tAccruals('cancel_confirm')}
+        destructive
+        onConfirm={handleCancel}
+      >
+        {cancelTarget && (
+          <div className="space-y-1 text-sm">
+            <p className="font-medium">{cancelTarget.description || t('fallback_description')}</p>
+            <p className="tabular-nums text-muted-foreground">
+              {cancelTarget.target_account} ← {cancelTarget.balance_account} ·{' '}
+              {formatCurrency(cancelTarget.total_amount)}
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
+
+      <ManualAccrualDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={() => void fetchSchedules(statusFilter)}
+      />
     </div>
   )
 }

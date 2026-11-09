@@ -60,6 +60,7 @@ export const HANDLE_RESOURCES = [
   { type: 'document', prefix: 'doc', label: 'document', segments: ['documents', 'underlag'], fields: ['document'] },
   { type: 'pending_operation', prefix: 'pop', label: 'pending operation', segments: ['pending-operations'], fields: ['pending_operation'] },
   { type: 'fiscal_period', prefix: 'fp', label: 'fiscal period', segments: ['fiscal-periods'], fields: ['fiscal_period', 'period'] },
+  { type: 'accrual_schedule', prefix: 'acs', label: 'accrual schedule', segments: ['accrual-schedules'], fields: ['accrual_schedule'] },
   { type: 'employee', prefix: 'emp', label: 'employee', segments: ['employees', 'payslips'], fields: ['employee'] },
   { type: 'salary_run', prefix: 'srun', label: 'salary run', segments: ['salary-runs'], fields: ['salary_run'] },
   { type: 'article', prefix: 'art', label: 'article', segments: ['articles'], fields: ['article'] },

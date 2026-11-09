@@ -120,6 +120,10 @@ const RISK_TIERS = {
   correct_entry_lines_inline: 'high',
   // Re-plans months not yet posted; posted verifikat never change.
   replan_accrual_schedule: 'low',
+  // A periodisering set up by hand books its elapsed months at approval; its
+  // undo stornoes the months it posted (lib/bookkeeping/accruals/manual.ts).
+  create_accrual_schedule: 'medium',
+  cancel_accrual_schedule: 'medium',
   // K3 (lib/operations/k3.ts): a nedskrivning or a component replacement
   // books a verifikat undone only by storno; the transition voucher too. The
   // split at the transition books nothing but sets the basis every later K3

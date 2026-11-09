@@ -2476,6 +2476,7 @@ export interface JournalEntryLine {
 
 export type AccrualDirection = 'expense' | 'revenue'
 export type AccrualScheduleStatus = 'active' | 'completed' | 'cancelled'
+export type AccrualScheduleSourceKind = 'invoice' | 'manual'
 export type AccrualInstallmentStatus = 'pending' | 'posted' | 'cancelled'
 
 // What "Ändra periodisering" answers: the months not yet posted, now and
@@ -2507,6 +2508,7 @@ export interface AccrualSchedule {
   user_id: string
   company_id: string
   direction: AccrualDirection
+  source_kind?: AccrualScheduleSourceKind
   supplier_invoice_id: string | null
   supplier_invoice_item_id: string | null
   invoice_id: string | null
