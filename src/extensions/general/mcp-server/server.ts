@@ -25826,7 +25826,7 @@ export const tools: McpTool[] = [
         create_fiscal_period: { type: 'boolean' },
         import_opening_balances: { type: 'boolean', description: 'Default true. false when gnubok_sie_preflight finds a posted IB' },
         import_transactions: { type: 'boolean' },
-        voucher_series: { type: 'string', description: 'Override voucher series for imported vouchers' },
+        voucher_series: { type: 'string', description: 'Series for imported vouchers without one in the file; vouchers with a series keep it' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
         only_used_accounts: { type: 'boolean' },
