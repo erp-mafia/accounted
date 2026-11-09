@@ -288,9 +288,18 @@ for (const theme of ['light', 'dark'] as const) {
           await Promise.all(element.closest('tr')!.getAnimations().map(animation => animation.finished))
         })
         try {
+          // Complete hit testing and frame-stability checks before the input
+          // clock. On CI, these driver checks take over a second even though
+          // no pointer event has yet reached the app.
+          await control.click({ trial: true })
+          const box = await control.boundingBox()
+          if (!box) throw new Error('Selectable invoice control is not visible')
+          const x = box.x + box.width / 2
+          const y = box.y + box.height / 2
           await measured(info, 'Select a supplier invoice without opening it', BUDGET.interaction, async () => {
-            await control.check()
-            expect(await control.getAttribute('aria-checked')).toBe('true')
+            if (info.project.use.hasTouch) await page.touchscreen.tap(x, y)
+            else await page.mouse.click(x, y)
+            await page.waitForFunction(element => element.getAttribute('aria-checked') === 'true', control)
             expect(new URL(page.url()).pathname).toBe('/supplier-invoices')
           })
         } finally { await control.dispose() }
