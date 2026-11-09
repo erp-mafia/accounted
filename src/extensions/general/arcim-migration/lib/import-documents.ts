@@ -183,6 +183,8 @@ export interface ImportDocumentsOptions {
    * alone takes about two minutes, paid again by every slice (crm#1581).
    */
   sweepDeadline?: number
+  /** A server continuation re-checks the run and connection between files. */
+  shouldContinue?: () => Promise<boolean>
   /** Clock, injectable for tests. */
   now?: () => number
 }
@@ -558,6 +560,7 @@ export async function importProviderDocuments(
     savedRun = null,
     timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
     sweepDeadline,
+    shouldContinue,
     now = Date.now,
   } = opts
   const startedAt = now()
@@ -792,6 +795,11 @@ export async function importProviderDocuments(
   const sweepStartedAt = now()
 
   for (let index = startIndex; index < attachments.length; index++) {
+    if (shouldContinue && !(await shouldContinue())) {
+      result.partial = true
+      result.nextCursor = index > startIndex ? attachments[index - 1].id : startCursor
+      break
+    }
     // Always make progress: at least one attachment per call, then stop at
     // the budget so the caller can report progress and resume after the
     // last handled id.
@@ -805,6 +813,19 @@ export async function importProviderDocuments(
     }
     const attachment = attachments[index]
     result.scanned++
+    // The hard stop cut this file in flight (crm#1581): that is not a failure
+    // of the file. When this slice already moved past other files, stop before
+    // it, so the next slice retries it with a full budget. A file that a fresh
+    // slice could not finish either is counted failed and passed, as before,
+    // so one slow file never holds the run (the server refuses a slice that
+    // does not advance).
+    const cutInFlight = (error: unknown): boolean => {
+      if (!(error instanceof ExecutionBudgetExceeded) || index === startIndex) return false
+      result.scanned--
+      result.partial = true
+      result.nextCursor = attachments[index - 1].id
+      return true
+    }
     const isSupplierInvoiceFile = attachment.supplierInvoiceNumber != null
     if (isSupplierInvoiceFile && refusedSupplierInvoiceScopes.has('archive')) continue
 
@@ -816,6 +837,7 @@ export async function importProviderDocuments(
       try {
         ref = (await withUnauthorizedRefresh(() => source().resolveRef!(attachment))) ?? null
       } catch (error) {
+        if (cutInFlight(error)) break
         if (stopsTheSweep(error)) throw error
         if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
           refuseSupplierInvoiceScope('supplierinvoice', error)
@@ -955,6 +977,7 @@ export async function importProviderDocuments(
     try {
       await withUnauthorizedRefresh(importAttachment)
     } catch (error) {
+      if (cutInFlight(error)) break
       if (stopsTheSweep(error)) throw error
       if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
         // A supplier-invoice file is an addition to the voucher files: a

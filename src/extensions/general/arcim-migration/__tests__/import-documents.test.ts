@@ -25,6 +25,7 @@ import {
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import { importProviderDocuments, ProviderConnectionRefusedError } from '../lib/import-documents'
+import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 
 // The Bokio client is constructed but never called directly (the attachments
 // module is mocked), so a bare stub avoids touching real config/rate-limiter.
@@ -1428,6 +1429,61 @@ describe('importProviderDocuments', () => {
         'c.pdf',
         'd.pdf',
       ])
+    })
+
+    it('retries the file in flight when the execution budget is cut, without counting it as failed', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      mockDownloadFortnoxArchiveFile
+        .mockResolvedValueOnce({ bytes: bytesOf('PDF-file-a'), contentType: 'application/pdf' })
+        .mockRejectedValueOnce(new ExecutionBudgetExceeded('underlag-test'))
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+      })
+
+      // The retried file is scanned once, by the slice that finishes it.
+      expect(result).toMatchObject({ partial: true, nextCursor: 'file-a', failed: 0, linked: 1, scanned: 1 })
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(2)
+    })
+
+    it('counts a file the hard stop cut as the first of its slice as failed and moves past it', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      mockDownloadFortnoxArchiveFile
+        .mockRejectedValueOnce(new ExecutionBudgetExceeded('underlag-test'))
+        .mockResolvedValue({ bytes: bytesOf('PDF-file-b'), contentType: 'application/pdf' })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+      })
+
+      // A fresh slice could not finish it: retrying it again would never advance.
+      expect(result).toMatchObject({ failed: 1, partial: false })
+      expect(mockDownloadFortnoxArchiveFile.mock.calls.length).toBeGreaterThan(1)
+    })
+
+    it('stops before the next file when the continuation loses the run or connection', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      const shouldContinue = vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        shouldContinue,
+      })
+
+      expect(result).toMatchObject({ partial: true, nextCursor: 'file-a', failed: 0, linked: 1 })
+      expect(shouldContinue).toHaveBeenCalledTimes(2)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
     })
   })
 })
