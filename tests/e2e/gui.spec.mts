@@ -391,3 +391,22 @@ test('loaded customer, invoice and credit views fit narrow screens', async ({ pa
     }
   }
 })
+
+test('mobile calendar weeks show seven readable days and retain day navigation', async ({ page }, info) => {
+  await page.setViewportSize({ width: 320, height: 844 })
+  await measured(info, 'Ready mobile calendar', BUDGET.navigation, async () => {
+    await page.goto('/e/general/calendar')
+    await page.getByRole('tab', { name: 'Vecka', exact: true }).waitFor({ state: 'visible' })
+  })
+  await page.getByRole('tab', { name: 'Vecka', exact: true }).click()
+  const days = page.locator('[data-calendar-week-list] > button')
+  await expect(days).toHaveCount(7)
+  expect(await page.evaluate(horizontalOverflow)).toEqual({ page: false, main: false, regions: [] })
+  const label = await days.first().locator('span').first().textContent()
+  await measured(info, 'Open a mobile week day', BUDGET.interaction, async () => {
+    await days.first().click()
+    await page.getByRole('heading', { name: label!, exact: true }).waitFor({ state: 'visible' })
+    await expect(page.getByRole('tab', { name: 'Dag', exact: true })).toHaveAttribute('aria-selected', 'true')
+  })
+  expect(await page.evaluate(horizontalOverflow)).toEqual({ page: false, main: false, regions: [] })
+})
