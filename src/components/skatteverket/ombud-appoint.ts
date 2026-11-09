@@ -13,17 +13,22 @@ import { ombudCheckOutcome, type OmbudCheckOutcome, type OmbudConnectionFacts } 
  * Skatteverket's e-service opens with the app pre-filled as ombud and the
  * roles pre-selected; the company only signs there with BankID. Nothing calls
  * back when they have signed, so the grant is checked against Skatteverket's
- * ombudsregister when the user returns to the page.
+ * ombudsregister when the user returns to the page. The server asks the
+ * register before it mints a link: a company that already appointed the app
+ * (directly at Skatteverket, say) gets "already appointed" and no link.
  */
 
 const BASE = '/api/extensions/ext/skatteverket/system-connection'
 
-export type OmbudLinkResult = { ok: true } | { ok: false; error: string | null }
+export type OmbudLinkResult =
+  | { ok: true; alreadyAppointed: boolean }
+  | { ok: false; error: string | null }
 
 /**
  * Mint the deep link and open it. Call straight from a click handler: the tab
  * opens before the first await, so popup blockers allow it, and is pointed at
- * the link once the server has minted it.
+ * the link once the server has minted it. Already appointed: the tab closes
+ * again and `alreadyAppointed` says so.
  */
 export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<OmbudLinkResult> {
   // No 'noopener' feature: with it window.open returns null and the
@@ -32,7 +37,14 @@ export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<Omb
   if (tab) tab.opener = null
   try {
     const res = await fetch(`${BASE}/deeplink`, { method: 'POST' })
-    const body = (await res.json().catch(() => ({}))) as { data?: { djuplank?: unknown }; error?: unknown }
+    const body = (await res.json().catch(() => ({}))) as {
+      data?: { djuplank?: unknown; already_appointed?: unknown }
+      error?: unknown
+    }
+    if (res.ok && body.data?.already_appointed === true) {
+      tab?.close()
+      return { ok: true, alreadyAppointed: true }
+    }
     const url = typeof body.data?.djuplank === 'string' ? body.data.djuplank : null
     if (!res.ok || !url) {
       tab?.close()
@@ -42,7 +54,7 @@ export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<Omb
     // blocked too: navigate this tab instead so the link is never lost.
     if (tab) tab.location.href = url
     else window.location.assign(url)
-    return { ok: true }
+    return { ok: true, alreadyAppointed: false }
   } catch {
     tab?.close()
     return { ok: false, error: null }
@@ -52,13 +64,9 @@ export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<Omb
 /** What a check found (ombudCheckOutcome), or why it could not ask. */
 export type OmbudVerifyResult = OmbudCheckOutcome | 'rate_limited' | 'failed'
 
-/**
- * Ask the ombudsregister whether the company has appointed the app.
- * `justSigned`: the user is back from signing through the deep link.
- */
+/** Ask the ombudsregister whether the company has appointed the app: the user is back from signing. */
 export async function verifyOmbudGrant(
   locale: ErrorLocale = 'sv',
-  { justSigned = false }: { justSigned?: boolean } = {},
 ): Promise<{ result: OmbudVerifyResult; error: string | null }> {
   try {
     const res = await fetch(`${BASE}/verify`, { method: 'POST' })
@@ -68,7 +76,7 @@ export async function verifyOmbudGrant(
       error?: unknown
     }
     if (!res.ok) return { result: 'failed', error: body.error ? getErrorMessage(body, { locale }) : null }
-    return { result: ombudCheckOutcome(body.data?.connection ?? null, { justSigned }), error: null }
+    return { result: ombudCheckOutcome(body.data?.connection ?? null), error: null }
   } catch {
     return { result: 'failed', error: null }
   }
@@ -81,9 +89,8 @@ export type OmbudAppointOutcome = { result: OmbudVerifyResult | 'link_failed'; e
  * next time this page becomes visible (the user is back from signing) the
  * grant is verified once and `onResult` hears the outcome. No polling: an
  * unfinished signature costs one register call per return, and the hourly
- * ombud sync finds a grant Skatteverket registers later. `check()` runs the
- * same check on demand, for a company that appointed the app directly at
- * Skatteverket.
+ * ombud sync finds a grant Skatteverket registers later. A company the server
+ * finds already appointed hears 'granted' at once, with no tab and no check.
  */
 export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void) {
   const errorLocale = useLocale() as ErrorLocale
@@ -95,26 +102,18 @@ export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void
     onResultRef.current = onResult
   }, [onResult])
 
-  const runCheck = useCallback(
-    async (justSigned: boolean) => {
-      setChecking(true)
-      const outcome = await verifyOmbudGrant(errorLocale, { justSigned })
-      setChecking(false)
-      onResultRef.current(outcome)
-    },
-    [errorLocale],
-  )
-  const check = useCallback(() => runCheck(false), [runCheck])
-
   useEffect(() => {
-    function onVisible() {
+    async function onVisible() {
       if (document.visibilityState !== 'visible' || !armed.current) return
       armed.current = false
-      void runCheck(true)
+      setChecking(true)
+      const outcome = await verifyOmbudGrant(errorLocale)
+      setChecking(false)
+      onResultRef.current(outcome)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [runCheck])
+  }, [errorLocale])
 
   const appoint = useCallback(async () => {
     setLinking(true)
@@ -124,10 +123,14 @@ export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void
       onResultRef.current({ result: 'link_failed', error: opened.error })
       return
     }
+    if (opened.alreadyAppointed) {
+      onResultRef.current({ result: 'granted', error: null })
+      return
+    }
     armed.current = true
   }, [errorLocale])
 
-  return { appoint, check, linking, checking }
+  return { appoint, linking, checking }
 }
 
 /**
@@ -148,12 +151,6 @@ export function useOmbudAppointWithToasts(onVerified: (result: OmbudVerifyResult
           return
         case 'waiting':
           toast({ title: t('waiting'), description: t('waiting_hint', { appName }) })
-          return
-        case 'withdrawn':
-          toast({ title: t('withdrawn'), description: t('withdrawn_hint', { appName }) })
-          return
-        case 'predates':
-          toast({ title: t('predates'), description: t('predates_hint', { appName }) })
           return
         case 'rate_limited':
           toast({ title: t('rate_limited') })

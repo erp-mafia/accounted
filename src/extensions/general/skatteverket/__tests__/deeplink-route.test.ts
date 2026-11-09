@@ -1,10 +1,18 @@
 /**
  * POST /system-connection/deeplink: gating (capability, role, system-auth
- * mode), org-number derivation server-side, the opt-in row it records, and
- * the OmbudApiError -> 502 mapping. POST /system-connection/verify: the same
+ * mode), org-number derivation server-side, the register check that answers
+ * "already appointed" instead of a link, the opt-in row it records, and the
+ * OmbudApiError -> 502 mapping. POST /system-connection/verify: the same
  * org-number claim gate before any probe.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// The dispatcher's session check, for the 401 case below.
+const mockCreateClient = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supabase/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
+  createClient: (...a: unknown[]) => mockCreateClient(...a),
+}))
 
 const mockRequireCapability = vi.fn()
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
@@ -25,7 +33,7 @@ vi.mock('../lib/grant-probe', async (importOriginal) => {
 })
 
 const mockRecordProbeResult = vi.fn()
-const mockGetConnection = vi.fn(async () => null)
+const mockGetConnection = vi.fn(async (): Promise<unknown> => null)
 const mockStanding = vi.fn(async (_companyId: string, _orgNumber: string): Promise<string> => 'clear')
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
@@ -43,10 +51,12 @@ vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: (...a: unknown[]) => mo
 import { skatteverketExtension } from '../index'
 import { OmbudApiError } from '../lib/ombud-client'
 import type { ExtensionContext } from '@/lib/extensions/types'
-import { testRoutes } from '@/tests/helpers'
+import { createMockRequest, createQueuedMockSupabase, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { extensionRegistry } from '@/lib/extensions/registry'
+import { POST as dispatch } from '@/app/api/extensions/ext/[...path]/route'
 
-const ENV_KEYS = ['SKATTEVERKET_SYSTEM_AUTH_MODE', 'SKATTEVERKET_SYSTEM_AUTH_MECHANISM']
+const ENV_KEYS = ['SKATTEVERKET_SYSTEM_AUTH_MODE', 'SKATTEVERKET_SYSTEM_AUTH_MECHANISM', 'SKATTEVERKET_ENABLED']
 let savedEnv: Record<string, string | undefined>
 
 function findRoute(path = '/system-connection/deeplink') {
@@ -108,10 +118,11 @@ beforeEach(() => {
   mockRecordProbeResult.mockResolvedValue({ id: 'conn-1', status: 'pending' })
   mockStanding.mockResolvedValue('clear')
   mockGetConnection.mockResolvedValue(null)
+  // The register lists nothing for the company yet: the link is handed out.
   mockProbeCompanyGrants.mockResolvedValue({
-    connection: { id: 'conn-1', lasombud_status: 'granted' },
-    lasombud: { status: 'granted' },
-    momsOmbud: { status: 'granted' },
+    connection: { id: 'conn-1', status: 'pending', lasombud_status: 'denied', moms_ombud_status: 'denied' },
+    lasombud: { status: 'denied' },
+    momsOmbud: { status: 'denied' },
   })
   mockWriteAudit.mockResolvedValue(undefined)
   mockCreateDeepLink.mockResolvedValue({
@@ -205,6 +216,8 @@ describe('POST /system-connection/deeplink', () => {
     expect(mockStanding).toHaveBeenCalledWith('company-1', '165560000000')
     expect(mockCreateDeepLink).not.toHaveBeenCalled()
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
+    // The register is never asked on a number the company has not proven.
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
   })
 
   it('409 ORG_NUMBER_PROVEN_TWICE when another claimant is proven too: no link, no row', async () => {
@@ -214,6 +227,7 @@ describe('POST /system-connection/deeplink', () => {
     const body = await res.json()
     expect(body.error.code).toBe('ORG_NUMBER_PROVEN_TWICE')
     expect(getErrorMessage(body, { locale: 'sv' })).toMatch(/Arkivera de andra företagen/)
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
     expect(mockCreateDeepLink).not.toHaveBeenCalled()
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
@@ -238,6 +252,128 @@ describe('POST /system-connection/deeplink', () => {
     expect(res.status).toBe(502)
     expect(await res.json()).toMatchObject({ code: 'OBR_HTTP_ERROR' })
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /system-connection/deeplink: the register is asked first', () => {
+  const verified = {
+    id: 'conn-1',
+    org_number: '165560000000',
+    status: 'verified',
+    lasombud_status: 'granted',
+    moms_ombud_status: 'granted',
+    lasombud_checked_at: null as string | null,
+  }
+
+  it('already appointed with both roles (directly at Skatteverket, say): Klart, no link, no new opt-in', async () => {
+    mockProbeCompanyGrants.mockResolvedValue({
+      connection: verified,
+      lasombud: { status: 'granted' },
+      momsOmbud: { status: 'granted' },
+    })
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ data: { already_appointed: true, connection: verified } })
+    // The same probe verify runs, for the company's own number and caller.
+    expect(mockProbeCompanyGrants).toHaveBeenCalledWith('company-1', '165560000000', 'user-1')
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('nothing granted: the link, as before', async () => {
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.djuplank).toBe('https://sso.skatteverket.se/ombud?x=1')
+    expect(body.data).not.toHaveProperty('already_appointed')
+    expect(mockProbeCompanyGrants).toHaveBeenCalledTimes(1)
+    expect(mockCreateDeepLink).toHaveBeenCalledTimes(1)
+  })
+
+  it('one role granted, the other missing: the link, for both roles', async () => {
+    mockProbeCompanyGrants.mockResolvedValue({
+      connection: { ...verified, status: 'partial', moms_ombud_status: 'denied' },
+      lasombud: { status: 'granted' },
+      momsOmbud: { status: 'denied' },
+    })
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.djuplank).toBe('https://sso.skatteverket.se/ombud?x=1')
+    expect(mockCreateDeepLink).toHaveBeenCalledWith('165560000000', expect.anything(), ['lasombud', 'moms_ombud'])
+  })
+
+  it('probed within the last minute: the stored answer decides, the register is not asked again', async () => {
+    mockGetConnection.mockResolvedValue({ ...verified, lasombud_checked_at: new Date(Date.now() - 20_000).toISOString() })
+    const res = await findRoute().handler(request(), makeContext())
+    expect((await res.json()).data.already_appointed).toBe(true)
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
+  })
+
+  it('a stored answer for another org number is never reused', async () => {
+    mockGetConnection.mockResolvedValue({
+      ...verified,
+      org_number: '165599999999',
+      lasombud_checked_at: new Date(Date.now() - 20_000).toISOString(),
+    })
+    const res = await findRoute().handler(request(), makeContext())
+    expect((await res.json()).data.djuplank).toBe('https://sso.skatteverket.se/ombud?x=1')
+    expect(mockProbeCompanyGrants).toHaveBeenCalledTimes(1)
+  })
+
+  it('a grant signed before the opt-in is not accepted: the link, so the company signs again', async () => {
+    mockProbeCompanyGrants.mockResolvedValue({
+      connection: {
+        ...verified,
+        status: 'pending',
+        lasombud_status: 'denied',
+        moms_ombud_status: 'denied',
+        last_probe_detail: {
+          lasombud: { status: 'denied', reason: 'predates_opt_in' },
+          moms_ombud: { status: 'denied', reason: 'predates_opt_in' },
+        },
+      },
+      lasombud: { status: 'denied', reason: 'predates_opt_in' },
+      momsOmbud: { status: 'denied', reason: 'predates_opt_in' },
+    })
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.djuplank).toBe('https://sso.skatteverket.se/ombud?x=1')
+    expect(body.data).not.toHaveProperty('already_appointed')
+    expect(mockRecordProbeResult).toHaveBeenCalledWith(expect.objectContaining({ reopened: true }))
+  })
+
+  it('a check that fails hands out the link instead of an error', async () => {
+    mockProbeCompanyGrants.mockRejectedValue(new Error('skatteverket_company_connections read failed: timeout'))
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.djuplank).toBe('https://sso.skatteverket.se/ombud?x=1')
+  })
+})
+
+describe('POST /system-connection/deeplink through the extension dispatcher', () => {
+  beforeEach(() => {
+    process.env.SKATTEVERKET_ENABLED = 'true'
+    extensionRegistry.clear()
+    extensionRegistry.register(skatteverketExtension)
+  })
+  afterEach(() => extensionRegistry.clear())
+
+  it('401 without a session: the register is not asked and no link is minted', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: { message: 'Not authenticated' } })
+    mockCreateClient.mockResolvedValue(supabase)
+
+    const response = await dispatch(
+      createMockRequest('/api/extensions/ext/skatteverket/system-connection/deeplink', { method: 'POST' }),
+      { params: Promise.resolve({ path: ['skatteverket', 'system-connection', 'deeplink'] }) },
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(401)
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
+    expect(mockCreateDeepLink).not.toHaveBeenCalled()
   })
 })
 
@@ -269,5 +405,28 @@ describe('POST /system-connection/verify: the org-number claim', () => {
     const res = await verify()
     expect(res.status).toBe(200)
     expect(mockProbeCompanyGrants).toHaveBeenCalledWith('company-1', '165560000000', 'user-1')
+  })
+})
+
+describe('POST /system-connection/verify: one check a minute', () => {
+  const verify = () =>
+    findRoute('/system-connection/verify').handler(
+      new Request('http://localhost/api/extensions/ext/skatteverket/system-connection/verify', { method: 'POST' }),
+      makeContext(),
+    )
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+
+  it('429 when the register was asked within the minute', async () => {
+    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(20_000) })
+    const res = await verify()
+    expect(res.status).toBe(429)
+    expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
+  })
+
+  it('back from signing within the minute: the appoint button checked, then minted the link, so the check runs', async () => {
+    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(19_900) })
+    const res = await verify()
+    expect(res.status).toBe(200)
+    expect(mockProbeCompanyGrants).toHaveBeenCalledTimes(1)
   })
 })

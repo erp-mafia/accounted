@@ -1,9 +1,10 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
 import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
@@ -11,23 +12,29 @@ import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
+  SettingsReveal,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
+  SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
 import {
   ArrowTopRightOnSquareIcon,
   BeakerIcon,
   BuildingLibraryIcon,
   CheckCircleIcon,
+  ChevronDownIcon,
+  EllipsisHorizontalIcon,
   ShieldExclamationIcon,
 } from '@/components/icons'
+import { cn } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
-import type { OmbudAppointment, OmbudRoleState } from '@/lib/skatteverket/ombud-appointment'
+import type { OmbudAppointment, OmbudRole, OmbudRoleState } from '@/lib/skatteverket/ombud-appointment'
 
 type Environment = 'test' | 'prod'
 
@@ -47,6 +54,17 @@ type Status =
       disabled?: boolean
     }
 
+interface SystemConnectionState {
+  available: boolean
+  mode?: string
+  environment?: string
+  ombud_org_number?: string | null
+  grant_url?: string
+  cert?: { notAfter: string; daysUntilExpiry: number; expiresSoon: boolean } | null
+  /** Where the appointment stands (lib/skatteverket/ombud-appointment.ts). */
+  appointment?: OmbudAppointment
+}
+
 /** Live warning inside a settings group: one warning-tone line, no banner. */
 function WarningLine({ children }: { children: React.ReactNode }) {
   return (
@@ -56,16 +74,227 @@ function WarningLine({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function SkatteverketConnectPanel() {
+/** One quiet line inside a settings group, for a state that needs no action. */
+function NoteLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+      {children}
+    </p>
+  )
+}
+
+/**
+ * Kopplingar → Skatteverket. Two connections that do different jobs, in the
+ * order a company needs them:
+ *
+ *   1. Ombud (when system auth is on): the company appoints the app as its
+ *      ombud once, and the skattekonto and the declarations' status are read
+ *      in the background with no login. The main step, at the top.
+ *   2. BankID: a personal login, needed when someone submits a declaration
+ *      (moms, AGI). Below, as the secondary step, its technical rows folded
+ *      away under Detaljer.
+ *
+ * With system auth off (or self-hosted without a certificate) the ombud step
+ * is not there at all and the BankID connection is the page, as before.
+ */
+export function SkatteverketConnectPanel({ title }: { title: string }) {
+  const t = useTranslations('settings_skatteverket_connect')
+  const { appName } = useBranding()
+  const [system, setSystem] = useState<SystemConnectionState | null>(null)
+
+  const loadSystem = useCallback(async () => {
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
+      if (!res.ok) {
+        setSystem({ available: false })
+        return
+      }
+      setSystem((await res.json()) as SystemConnectionState)
+    } catch {
+      setSystem({ available: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSystem()
+  }, [loadSystem])
+
+  const ombudAvailable = system?.available === true
+  // The difference between the two, behind the "?" beside the title (a
+  // popover, so it opens on a tap as well as a click).
+  const intro = system === null
+    ? undefined
+    : ombudAvailable
+      ? (
+          <div className="space-y-2">
+            <p>{t.rich('intro_ombud', { appName, b: (chunks) => <b className="font-medium">{chunks}</b> })}</p>
+            <p>{t.rich('intro_bankid', { b: (chunks) => <b className="font-medium">{chunks}</b> })}</p>
+          </div>
+        )
+      : t('connect_intro')
+
   return (
     <>
-      <SkatteverketPersonalConnectionCard />
-      <SkatteverketSystemConnectionCard />
+      <SettingsSectionHeader title={title} intro={intro} />
+      {system === null ? (
+        <SettingsGroup>
+          <SettingsRow label={t('title')} borderless>
+            <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : (
+        <>
+          {ombudAvailable && <OmbudStep state={system} reload={loadSystem} />}
+          <SkatteverketPersonalConnectionCard
+            secondary={ombudAvailable}
+            readsCovered={ombudAvailable && readsRunOnOmbud(system.appointment)}
+          />
+        </>
+      )}
     </>
   )
 }
 
-function SkatteverketPersonalConnectionCard() {
+const NOT_APPOINTED: OmbudAppointment = { state: 'none', predatesOptIn: false }
+
+/** The background reads run on läsombud: with it granted, the BankID login is only for submitting. */
+function readsRunOnOmbud(appointment: OmbudAppointment | undefined): boolean {
+  return appointment !== undefined && 'roles' in appointment && appointment.roles.lasombud === 'granted'
+}
+
+/**
+ * The ombud step: one status and one button. The button asks Skatteverket's
+ * register first (server-side, in the deep link route): already appointed
+ * with both roles reads Klart with no trip to Skatteverket; otherwise
+ * Skatteverket's e-service opens with the roles pre-selected and the company
+ * signs there. Nothing calls back after signing, so the grant is checked once
+ * when the user returns, and the hourly ombud sync finds one Skatteverket
+ * registers later (minutes to an hour): until then the status says it is
+ * waiting on Skatteverket. Red is kept for a grant that counted and no longer
+ * does.
+ */
+function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: () => Promise<void> }) {
+  const t = useTranslations('settings_skatteverket_connect')
+  const tOmbud = useTranslations('skatteverket_ombud')
+  const { appName } = useBranding()
+  const { appoint, linking, checking } = useOmbudAppointWithToasts(() => {
+    void reload()
+  })
+
+  const appointment = state.appointment ?? NOT_APPOINTED
+  const roles = 'roles' in appointment ? appointment.roles : null
+  const done = roles !== null && roles.lasombud === 'granted' && roles.moms_ombud === 'granted'
+  // Appointed with one role only: say which role is missing, and offer the
+  // link again (it pre-selects both).
+  const missingRoles: OmbudRole[] =
+    appointment.state === 'appointed' && !done && roles
+      ? (['lasombud', 'moms_ombud'] as const).filter((role) => roles[role] !== 'granted')
+      : []
+
+  const roleLabel = (role: OmbudRole) =>
+    role === 'lasombud' ? t('system_behorighet_lasombud') : t('system_behorighet_moms')
+  const roleStateLabel = (role: OmbudRoleState) =>
+    role === 'withdrawn'
+      ? t('system_status_withdrawn')
+      : role === 'error'
+        ? t('system_status_error')
+        : t('system_status_not_included')
+
+  const status = done ? (
+    <span className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
+      <CheckCircleIcon className="h-3.5 w-3.5" />
+      {tOmbud('done')}
+    </span>
+  ) : appointment.state === 'waiting' ? (
+    <Badge variant="secondary">{tOmbud('waiting')}</Badge>
+  ) : appointment.state === 'withdrawn' ? (
+    <Badge variant="destructive">{t('system_status_withdrawn')}</Badge>
+  ) : appointment.state === 'appointed' ? (
+    <Badge variant="warning">{t('ombud_partial')}</Badge>
+  ) : (
+    <SettingsRowNote>{tOmbud('none')}</SettingsRowNote>
+  )
+
+  const help = (
+    <div className="space-y-2">
+      <p>{t('system_intro', { appName })}</p>
+      <p>{t('ombud_checks_first', { appName })}</p>
+      {state.ombud_org_number && (
+        <p>
+          {t('system_org_label')}: <span className="font-mono tabular-nums">{state.ombud_org_number}</span>
+        </p>
+      )}
+      {state.grant_url && (
+        <p>
+          <a
+            href={state.grant_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('system_open_ombud')}
+          </a>
+        </p>
+      )}
+    </div>
+  )
+
+  const busy = linking || checking
+
+  return (
+    <SettingsGroup label={t('system_title')}>
+      <SettingsRow label={t('system_status_label')} help={help}>
+        {status}
+        {!done && (
+          <SettingsRowEnd>
+            {/* Waiting: the signature may be unfinished, so the same button
+                opens the link again, quieter, as on Hem and Kom igång. */}
+            <Button
+              size="sm"
+              variant={appointment.state === 'waiting' ? 'outline' : 'default'}
+              onClick={() => void appoint()}
+              loading={busy}
+              title={t('system_deeplink_hint', { appName })}
+            >
+              {!busy && <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />}
+              {appointment.state === 'waiting' ? tOmbud('reopen') : t('system_deeplink', { appName })}
+            </Button>
+          </SettingsRowEnd>
+        )}
+      </SettingsRow>
+
+      {appointment.state === 'waiting' && <NoteLine>{tOmbud('waiting_hint', { appName })}</NoteLine>}
+      {appointment.state === 'withdrawn' && <WarningLine>{tOmbud('withdrawn_hint', { appName })}</WarningLine>}
+      {roles &&
+        missingRoles.map((role) => (
+          <NoteLine key={role}>
+            {roleLabel(role)}: {roleStateLabel(roles[role])}
+          </NoteLine>
+        ))}
+      {appointment.predatesOptIn && <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>}
+      {state.cert?.expiresSoon && (
+        <WarningLine>
+          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
+        </WarningLine>
+      )}
+    </SettingsGroup>
+  )
+}
+
+/**
+ * The personal BankID connection. `secondary`: the ombud step sits above, so
+ * this is the login for submitting declarations: its own eyebrow and an
+ * outline button. `readsCovered`: the ombud already does the background
+ * reads, so an expired session is the normal resting state, not a warning;
+ * until then an expired session still stops the skattekonto sync and says so.
+ */
+function SkatteverketPersonalConnectionCard({
+  secondary,
+  readsCovered,
+}: {
+  secondary: boolean
+  readsCovered: boolean
+}) {
   const t = useTranslations('settings_skatteverket_connect')
   // Toast strings shared with TaxSettingsContent's query-param fallback path.
   const tOauth = useTranslations('settings_skatteverket')
@@ -74,6 +303,8 @@ function SkatteverketPersonalConnectionCard() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const detailsId = useId()
   // True while an OAuth tab opened from this panel is still alive. Disables
   // the connect button so a second click cannot start a parallel flow: each
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
@@ -253,36 +484,51 @@ function SkatteverketPersonalConnectionCard() {
     }
   }
 
-  // Static connect guidance lives behind the "?": what the connection is
-  // used for, plus the consent-page instructions ("godkänn alla
-  // behörigheter", the ska/skahmst explainer). The consent notes only matter
-  // when the user can actually reach the consent page: hidden while the
-  // feature is entitlement-gated.
-  const connectHelp = (
+  // The consent-page instructions ("godkänn alla behörigheter", the
+  // ska/skahmst explainer) live behind the row's "?"; what the connection is
+  // for sits behind the section title's. They only matter when the user can
+  // actually reach the consent page: hidden while the feature is
+  // entitlement-gated.
+  const connectHelp = hasSkatteverket ? (
     <div className="space-y-2">
-      <p>{t('connect_intro')}</p>
-      {hasSkatteverket && (
-        <>
-          <p>{t('connect_approve_all')}</p>
-          <p>
-            {t.rich('skahmst_note', {
-              code: (chunks) => <span className="font-mono">{chunks}</span>,
-            })}
-          </p>
-        </>
-      )}
+      <p>{t('connect_approve_all')}</p>
+      <p>
+        {t.rich('skahmst_note', {
+          code: (chunks) => <span className="font-mono">{chunks}</span>,
+        })}
+      </p>
     </div>
+  ) : undefined
+
+  const groupLabel = secondary ? t('bankid_title') : undefined
+  // Secondary: what BankID is for sits under its name, where the label
+  // column has room, so the "?" moves into the label beside the name.
+  const rowLabel = secondary ? (
+    <span className="flex flex-col gap-1">
+      <span className="inline-flex items-center gap-2">
+        <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('bankid_label')}
+        {connectHelp ? <HelpPopover className="shrink-0">{connectHelp}</HelpPopover> : null}
+      </span>
+      <span className="text-[12.5px] text-muted-foreground">{t('bankid_line')}</span>
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-2">
+      <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+      {t('title')}
+    </span>
   )
+  const rowHelp = secondary ? undefined : connectHelp
+  const connectTitle = !hasSkatteverket
+    ? isSelfHosted()
+      ? t('connect_requires_connector_key')
+      : t('connect_requires_subscription')
+    : undefined
 
   if (loading) {
     return (
-      <SettingsGroup>
-        <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            {t('title')}
-          </span>
-        } help={connectHelp} borderless>
+      <SettingsGroup label={groupLabel}>
+        <SettingsRow label={rowLabel} help={rowHelp} borderless>
           <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
         </SettingsRow>
       </SettingsGroup>
@@ -291,27 +537,17 @@ function SkatteverketPersonalConnectionCard() {
 
   if (!status?.connected) {
     return (
-      <SettingsGroup>
+      <SettingsGroup label={groupLabel}>
         {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
-        <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            {t('title')}
-          </span>
-        } help={connectHelp} borderless={!hasSkatteverket}>
-          <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
+        <SettingsRow label={rowLabel} help={rowHelp} borderless={!hasSkatteverket}>
+          <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} quietProd={secondary} />
           <SettingsRowEnd>
             <Button
               size="sm"
+              variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status?.disabled || !hasSkatteverket || connecting}
-              title={
-                !hasSkatteverket
-                  ? isSelfHosted()
-                    ? t('connect_requires_connector_key')
-                    : t('connect_requires_subscription')
-                  : undefined
-              }
+              title={connectTitle}
             >
               <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_with_bankid')}
@@ -329,14 +565,26 @@ function SkatteverketPersonalConnectionCard() {
 
   const scopes = (status.scope || '').split(/\s+/).filter(Boolean)
   const skattekontoReason = status.skattekontoUnavailable?.reason ?? null
+  // `ska` gates the interactive skattekonto API (saldo + transaktioner); a
+  // grant without it cannot sync, so the reconnect is offered even while the
+  // token is otherwise healthy.
+  const offerReconnect =
+    status.expired ||
+    status.needsReconsent ||
+    !status.canRefresh ||
+    !scopes.includes('ska') ||
+    !scopes.includes('agd') ||
+    skattekontoReason === 'not_authorized'
   const expiresAtDate = new Date(status.expiresAt)
   const expiresInMinutes = Math.round(
     (expiresAtDate.getTime() - Date.now()) / 60_000,
   )
 
   return (
-    <SettingsGroup>
-      {status.needsReconsent && (
+    <SettingsGroup label={groupLabel}>
+      {/* "Automatic syncing is paused" is untrue while the ombud does the
+          reads; a missing scope still blocks a submission. */}
+      {status.needsReconsent && (!readsCovered || status.lastErrorCode === 'MISSING_SCOPE') && (
         <WarningLine>
           {/* MISSING_SCOPE right after a connect means the user skipped a
               behörighet on SKV's consent page; tell them exactly that
@@ -347,268 +595,131 @@ function SkatteverketPersonalConnectionCard() {
         </WarningLine>
       )}
 
-      <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            {t('title')}
-          </span>
-        } help={connectHelp}>
+      <SettingsRow label={rowLabel} help={rowHelp}>
         {status.expired ? (
-          <Badge variant="warning">{t('expired')}</Badge>
+          // With the ombud doing the background reads, an expired login is
+          // where the BankID session normally rests: the next submission
+          // asks for a new one.
+          readsCovered ? (
+            <SettingsRowNote>{t('expired')}</SettingsRowNote>
+          ) : (
+            <Badge variant="warning">{t('expired')}</Badge>
+          )
         ) : (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
             <CheckCircleIcon className="h-3.5 w-3.5" />
             {t('connected')}
           </span>
         )}
-        <EnvironmentBadge environment={status.environment} disabled={status.disabled} />
+        <EnvironmentBadge environment={status.environment} disabled={status.disabled} quietProd={secondary} />
         <SettingsRowEnd>
-          {/* `ska` gates the interactive skattekonto API (saldo +
-              transaktioner); a grant without it cannot sync, so offer the
-              reconnect even while the token is otherwise healthy. */}
-          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd') || skattekontoReason === 'not_authorized') && (
+          {offerReconnect && (
             <Button
               size="sm"
+              variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
-              title={
-                !hasSkatteverket
-                  ? isSelfHosted()
-                    ? t('connect_requires_connector_key')
-                    : t('connect_requires_subscription')
-                  : undefined
-              }
+              title={connectTitle}
             >
               <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('reconnect')}
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={disconnect}
-            disabled={disconnecting || connecting}
-          >
-            <ShieldExclamationIcon className="mr-2 h-4 w-4" />
-            {disconnecting ? t('disconnecting') : t('disconnect')}
-          </Button>
-        </SettingsRowEnd>
-      </SettingsRow>
-
-      <SettingsRow label={t('token_expires_label')} help={t('session_lifetime_note')}>
-        <SettingsRowNote className="tabular-nums">
-          {expiresAtDate.toLocaleString('sv-SE')}
-          {!status.expired && expiresInMinutes > 0 && (
-            <> {t('expires_in_minutes', { minutes: expiresInMinutes })}</>
+          {/* One button per row: beside the reconnect, Koppla från waits behind "...". */}
+          {offerReconnect ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon-sm" aria-label={t('more_actions')} disabled={disconnecting || connecting}>
+                  <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => void disconnect()}>{t('disconnect')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button variant="outline" size="sm" onClick={disconnect} loading={disconnecting} disabled={connecting}>
+              {!disconnecting && <ShieldExclamationIcon className="mr-2 h-4 w-4" />}
+              {t('disconnect')}
+            </Button>
           )}
-        </SettingsRowNote>
-      </SettingsRow>
-
-      <SettingsRow label={t('refresh_label')}>
-        <SettingsRowNote>
-          {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
-        </SettingsRowNote>
-      </SettingsRow>
-
-      <SettingsRow label={t('permissions_label')}>
-        <div className="flex flex-wrap gap-2">
-          {scopes.map(s => (
-            <Badge key={s} variant="outline">
-              {SCOPE_LABELS[s] ?? s}
-            </Badge>
-          ))}
-        </div>
+        </SettingsRowEnd>
       </SettingsRow>
 
       {/* `ska` is the scope the interactive skattekonto API enforces;
           skahmst (bulk E-transport service) does not substitute for it.
-          Missing scopes are actionable state: keep them visible. */}
+          Missing scopes are actionable state: keep them visible, outside
+          Detaljer. */}
       {!scopes.includes('ska') && <WarningLine>{t('missing_skattekonto')}</WarningLine>}
-      {/* Skatteverket's own answer on the last skattekonto read: no account
-          yet is a state to explain, not a fault; a person without
-          authorization is something the user can act on. */}
-      {skattekontoReason === 'no_account' && (
-        <SettingsRow label={t('scope_skattekonto')}>
-          <SettingsRowNote>{t('skattekonto_no_account')}</SettingsRowNote>
-        </SettingsRow>
-      )}
+      {/* Skatteverket's own answer on the last skattekonto read: a person
+          without authorization is something the user can act on. */}
       {skattekontoReason === 'not_authorized' && <WarningLine>{t('skattekonto_not_authorized')}</WarningLine>}
       {!scopes.includes('agd') && <WarningLine>{t('missing_agd')}</WarningLine>}
       {status.disabled && <WarningLine>{t('disabled_filings_message')}</WarningLine>}
-    </SettingsGroup>
-  )
-}
 
-interface SystemConnectionState {
-  available: boolean
-  mode?: string
-  environment?: string
-  ombud_org_number?: string | null
-  grant_url?: string
-  cert?: { notAfter: string; daysUntilExpiry: number; expiresSoon: boolean } | null
-  /** Where the appointment stands (lib/skatteverket/ombud-appointment.ts). */
-  appointment?: OmbudAppointment
-}
+      {/* The token's own facts: useful when something is off, noise otherwise. */}
+      <button
+        type="button"
+        onClick={() => setDetailsOpen((open) => !open)}
+        aria-expanded={detailsOpen}
+        aria-controls={detailsId}
+        className="flex w-full items-center gap-2 px-1 py-3 text-left text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      >
+        <ChevronDownIcon
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-180')}
+          aria-hidden="true"
+        />
+        {t('details')}
+      </button>
+      <div id={detailsId}>
+        <SettingsReveal open={detailsOpen} indent={false}>
+          <SettingsRow label={t('token_expires_label')} help={t('session_lifetime_note')}>
+            <SettingsRowNote className="tabular-nums">
+              {expiresAtDate.toLocaleString('sv-SE')}
+              {!status.expired && expiresInMinutes > 0 && (
+                <> {t('expires_in_minutes', { minutes: expiresInMinutes })}</>
+              )}
+            </SettingsRowNote>
+          </SettingsRow>
 
-const NOT_APPOINTED: OmbudAppointment = { state: 'none', predatesOptIn: false }
+          <SettingsRow label={t('refresh_label')}>
+            <SettingsRowNote>
+              {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
+            </SettingsRowNote>
+          </SettingsRow>
 
-/** One quiet line inside a settings group, for a state that needs no action. */
-function NoteLine({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
-      {children}
-    </p>
-  )
-}
+          <SettingsRow label={t('permissions_label')} borderless={skattekontoReason !== 'no_account'}>
+            <div className="flex flex-wrap gap-2">
+              {scopes.map(s => (
+                <Badge key={s} variant="outline">
+                  {SCOPE_LABELS[s] ?? s}
+                </Badge>
+              ))}
+            </div>
+          </SettingsRow>
 
-/**
- * The system (ombud + organization certificate) connection: the one-time
- * grant that lets background syncs run without a personal BankID session.
- * Renders nothing until SKATTEVERKET_SYSTEM_AUTH_MODE is switched on
- * server-side, so the whole section is invisible during Phase 1.
- *
- * Skatteverket's register can take from minutes to hours to list a fresh
- * grant, and the hourly ombud sync picks it up: until then the card says it
- * is waiting on Skatteverket, not that anything is missing. Red is kept for
- * a grant that counted and no longer does.
- */
-function SkatteverketSystemConnectionCard() {
-  const t = useTranslations('settings_skatteverket_connect')
-  const tOmbud = useTranslations('skatteverket_ombud')
-  const { appName } = useBranding()
-  const [state, setState] = useState<SystemConnectionState | null>(null)
-  async function loadState() {
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
-      if (!res.ok) {
-        setState({ available: false })
-        return
-      }
-      setState((await res.json()) as SystemConnectionState)
-    } catch {
-      setState({ available: false })
-    }
-  }
-
-  useEffect(() => {
-    loadState()
-  }, [])
-
-  // Appoint via the deep link, then re-check the register when the user is
-  // back from signing at Skatteverket (shared with Hem and onboarding).
-  // `check` is the same check on demand ("Kontrollera nu").
-  const { appoint, check, linking, checking } = useOmbudAppointWithToasts(() => {
-    void loadState()
-  })
-
-  if (!state?.available) return null
-
-  const appointment = state.appointment ?? NOT_APPOINTED
-  const fullyGranted =
-    appointment.state === 'appointed' &&
-    appointment.roles.lasombud === 'granted' &&
-    appointment.roles.moms_ombud === 'granted'
-
-  const roleBadge = (role: OmbudRoleState) => {
-    switch (role) {
-      case 'granted':
-        return (
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircleIcon className="h-3.5 w-3.5" />
-            {t('system_status_granted')}
-          </span>
-        )
-      case 'withdrawn':
-        return <Badge variant="destructive">{t('system_status_withdrawn')}</Badge>
-      case 'error':
-        return <Badge variant="warning">{t('system_status_error')}</Badge>
-      default:
-        return <SettingsRowNote>{t('system_status_not_included')}</SettingsRowNote>
-    }
-  }
-
-  return (
-    <SettingsGroup label={t('system_title')} help={t('system_intro', { appName })}>
-      {state.ombud_org_number && (
-        <SettingsRow label={t('system_org_label')}>
-          <span className="font-mono text-sm tabular-nums">{state.ombud_org_number}</span>
-        </SettingsRow>
-      )}
-
-      {appointment.state === 'none' || appointment.state === 'waiting' ? (
-        <SettingsRow label={t('system_status_label')}>
-          {appointment.state === 'waiting' ? (
-            <Badge variant="secondary">{tOmbud('waiting')}</Badge>
-          ) : (
-            <SettingsRowNote>{tOmbud('none')}</SettingsRowNote>
+          {/* No skattekonto yet is a state to explain, not a fault. */}
+          {skattekontoReason === 'no_account' && (
+            <SettingsRow label={t('scope_skattekonto')} borderless>
+              <SettingsRowNote>{t('skattekonto_no_account')}</SettingsRowNote>
+            </SettingsRow>
           )}
-        </SettingsRow>
-      ) : (
-        <>
-          <SettingsRow label={t('system_behorighet_lasombud')}>
-            {roleBadge(appointment.roles.lasombud)}
-          </SettingsRow>
-          <SettingsRow label={t('system_behorighet_moms')}>
-            {roleBadge(appointment.roles.moms_ombud)}
-          </SettingsRow>
-        </>
-      )}
-
-      {appointment.state === 'waiting' && <NoteLine>{tOmbud('waiting_hint', { appName })}</NoteLine>}
-
-      {appointment.predatesOptIn && <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>}
-
-      {state.cert?.expiresSoon && (
-        <WarningLine>
-          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
-        </WarningLine>
-      )}
-
-      <div className="flex flex-wrap items-center gap-4 px-1 py-3">
-        <Button
-          size="sm"
-          variant={fullyGranted ? 'outline' : 'default'}
-          onClick={() => void appoint()}
-          loading={linking}
-          disabled={checking}
-          title={t('system_deeplink_hint', { appName })}
-        >
-          {!linking && <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />}
-          {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
-        </Button>
-        {state.grant_url && (
-          <a
-            href={state.grant_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          >
-            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-            {t('system_open_ombud')}
-          </a>
-        )}
+        </SettingsReveal>
       </div>
-
-      {/* Only for a company that appointed the app at Skatteverket without
-          the link above and does not want to wait for the hourly check. */}
-      {!fullyGranted && (
-        <p className="px-1 pb-3 text-[12.5px] text-muted-foreground">
-          {t('system_check_lead', { appName })}{' '}
-          <button
-            type="button"
-            onClick={() => void check()}
-            disabled={checking || linking}
-            className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-          >
-            {checking ? t('system_checking') : t('system_check_now')}
-          </button>
-        </p>
-      )}
     </SettingsGroup>
   )
 }
 
-function EnvironmentBadge({ environment, disabled }: { environment?: Environment; disabled?: boolean }) {
+/** `quietProd`: production is the normal state, so only test or disabled says anything. */
+function EnvironmentBadge({
+  environment,
+  disabled,
+  quietProd = false,
+}: {
+  environment?: Environment
+  disabled?: boolean
+  quietProd?: boolean
+}) {
   const t = useTranslations('settings_skatteverket_connect')
   if (disabled) {
     return (
@@ -626,7 +737,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
       </Badge>
     )
   }
-  if (environment === 'prod') {
+  if (environment === 'prod' && !quietProd) {
     return (
       <span className="text-xs text-muted-foreground">{t('env_prod')}</span>
     )

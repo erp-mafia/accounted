@@ -54,9 +54,9 @@ export interface SkvCompanyConnection {
   last_probe_detail: Record<string, unknown> | null
   last_error: string | null
   /**
-   * The company's opt-in for THIS org number: the first deep link or
-   * check (Kontrollera nu) on it (reset when the org number changes, see
-   * recordProbeResult). A grant only counts when it was signed on or after
+   * The company's opt-in for THIS org number: the first check or deep link
+   * on it, both from the appoint button (reset when the org number changes,
+   * see recordProbeResult). A grant only counts when it was signed on or after
    * this day (ombudGrantCounts in ombud-client.ts).
    */
   created_at: string
@@ -379,7 +379,8 @@ export async function listConnections(environment: SkvEnvironment): Promise<SkvC
 
 /**
  * Where a company stands on the org number it asks Accounted's ombud
- * connection for (deep link, Kontrollera nu, the hourly register sync):
+ * connection for (the appoint button's check and deep link, the check on
+ * return from signing, the hourly register sync):
  *
  *   'clear'        : it may hold the connection. Either no other live
  *                    company claims the number, or it is the ONE claimant a

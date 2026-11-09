@@ -71,32 +71,19 @@ export function ombudAppointment(connection: OmbudConnectionFacts | null): Ombud
 }
 
 /**
- * What a check of the register tells the person who ran it (the return from
- * signing, or Kontrollera nu), in the words the card uses. läsombud decides
- * 'granted': the background reads run on it.
- *   'waiting'   the register does not list the grant yet. Right after signing
- *               that is Skatteverket still registering it (minutes to over an
- *               hour), never a failure: the hourly ombud sync picks it up.
- *   'withdrawn' the läsombud grant counted on this opt-in and no longer does.
- *   'predates'  the grant Skatteverket lists was signed before the company's
- *               opt-in, so it does not count: a direct appointment checked on
- *               a later day.
- * `justSigned`: the person is back from signing through the deep link. Its
+ * What the check on the return from signing through the deep link tells the
+ * person, in the words the card uses. läsombud decides 'granted': the
+ * background reads run on it. Anything short of it is a wait: the link's
  * opt-in cleared any withdrawal, and an older grant that predates the opt-in
- * then only means the new signature is not listed yet, so anything short of a
- * grant is a wait.
+ * only means the new signature is not listed yet. Skatteverket takes minutes
+ * to over an hour to register it, never a failure: the hourly ombud sync
+ * picks it up. (A company that appointed the app some other way finds out
+ * from the appoint button itself, which asks the register before it hands
+ * out a link.)
  */
-export type OmbudCheckOutcome = 'granted' | 'waiting' | 'withdrawn' | 'predates'
+export type OmbudCheckOutcome = 'granted' | 'waiting'
 
-export function ombudCheckOutcome(
-  connection: OmbudConnectionFacts | null,
-  { justSigned }: { justSigned: boolean },
-): OmbudCheckOutcome {
+export function ombudCheckOutcome(connection: OmbudConnectionFacts | null): OmbudCheckOutcome {
   const appointment = ombudAppointment(connection)
-  const lasombud = 'roles' in appointment ? appointment.roles.lasombud : null
-  if (lasombud === 'granted') return 'granted'
-  if (justSigned) return 'waiting'
-  if (lasombud === 'withdrawn') return 'withdrawn'
-  if (appointment.predatesOptIn) return 'predates'
-  return 'waiting'
+  return 'roles' in appointment && appointment.roles.lasombud === 'granted' ? 'granted' : 'waiting'
 }

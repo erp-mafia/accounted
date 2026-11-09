@@ -1,0 +1,1 @@
+[2026-11-10] Kopplingar > Skatteverket puts the ombud first (one button, one status) and BankID second as "Signera deklarationer"; the button asks the ombudsregister before it mints a link, replacing "Kontrollera nu": two equal cards left users unsure which to press.

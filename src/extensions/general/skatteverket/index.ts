@@ -364,6 +364,60 @@ async function ombudClaimRefusal(companyId: string, orgNumber: string): Promise<
   )
 }
 
+/** At most one register check a minute per company from a click (verify, or the appoint button's own check). */
+const MANUAL_PROBE_INTERVAL_MS = 60_000
+
+/** True when the company's last real probe ran inside MANUAL_PROBE_INTERVAL_MS. */
+function probedRecently(connection: { lasombud_checked_at: string | null } | null): boolean {
+  const last = connection?.lasombud_checked_at ?? null
+  return last !== null && Date.now() - new Date(last).getTime() < MANUAL_PROBE_INTERVAL_MS
+}
+
+/**
+ * Whether the check on return from signing must wait: the last real probe is
+ * recent and no deep link was minted after it. The appoint button probes,
+ * then mints the link, whose opt-in row stamps last_probe_at but not
+ * lasombud_checked_at; a user who signs within that minute and comes back
+ * must still get a check, not a 429.
+ */
+function verifyRateLimited(
+  connection: { lasombud_checked_at: string | null; last_probe_at: string | null } | null,
+): boolean {
+  if (!connection?.lasombud_checked_at || !probedRecently(connection)) return false
+  const linkMintedSince =
+    connection.last_probe_at !== null &&
+    new Date(connection.last_probe_at).getTime() > new Date(connection.lasombud_checked_at).getTime()
+  return !linkMintedSince
+}
+
+/**
+ * The connection row when the company has already appointed the app with
+ * every behörighet, so the appoint button can say Klart instead of sending
+ * the user to Skatteverket to sign what is already there: a grant the
+ * register listed since the last hourly sync, or one signed directly at
+ * Skatteverket on or after the opt-in day. The same probe the verify route
+ * runs (grantCountsFor: a grant signed before the opt-in does not count, and
+ * a company with no row opts in today, so it signs again), skipped for a row
+ * probed within the last minute, whose answer is still fresh. A check that
+ * fails answers null: the deep link is then handed out as before.
+ */
+async function alreadyAppointed(companyId: string, orgNumber: string, userId: string) {
+  try {
+    const stored = await getConnection(companyId, currentSkvEnvironment())
+    const connection =
+      stored && stored.org_number === orgNumber && probedRecently(stored)
+        ? stored
+        : (await probeCompanyGrants(companyId, orgNumber, userId)).connection
+    return connection?.status === 'verified' ? connection : null
+  } catch (err) {
+    log.warn('ombud pre-check before the deep link failed; handing out the link', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
 /**
  * Resolve auth for a company-scoped READ triggered from the UI: the caller's
  * own token if they connected, otherwise any active token another member of
@@ -1052,14 +1106,12 @@ export const skatteverketExtension: Extension = {
           )
         }
 
-        // Manual probes are rate limited: one per minute per company. Timed
-        // on the last real probe (lasombud_checked_at), not last_probe_at,
-        // which the deep link's opt-in row also stamps: a user who signs at
-        // Skatteverket within a minute of opening the link and comes back
-        // must get a verification, not a 429.
+        // Manual probes are rate limited: one per minute per company, timed
+        // on the last real probe (lasombud_checked_at). A deep link minted
+        // since then lifts it (verifyRateLimited): the appoint button's own
+        // register check runs just before the link it hands out.
         const existing = await getConnection(ctx.companyId, currentSkvEnvironment())
-        const lastProbe = existing?.lasombud_checked_at ?? null
-        if (lastProbe && Date.now() - new Date(lastProbe).getTime() < 60_000) {
+        if (verifyRateLimited(existing)) {
           return NextResponse.json(
             { error: 'Vänta en minut mellan verifieringar.', connection: existing },
             { status: 429 }
@@ -1108,7 +1160,8 @@ export const skatteverketExtension: Extension = {
     // Accounted pre-filled as ombud and both roles pre-selected; the company
     // only signs with BankID there. Runs on the system identity (the link's
     // ombud is whoever holds the token), so it needs the same configuration
-    // as verify.
+    // as verify. It asks the register first: a company that already
+    // appointed the app with both roles gets `already_appointed` and no link.
     {
       method: 'POST',
       path: '/system-connection/deeplink',
@@ -1144,6 +1197,13 @@ export const skatteverketExtension: Extension = {
 
           const refusedForLink = await ombudClaimRefusal(ctx.companyId, orgNumber)
           if (refusedForLink) return refusedForLink
+
+          // Already appointed with every behörighet: nothing to sign, so no
+          // link. A partial or missing grant gets the link for both roles.
+          const appointed = await alreadyAppointed(ctx.companyId, orgNumber, ctx.userId)
+          if (appointed) {
+            return NextResponse.json({ data: { already_appointed: true, connection: appointed } })
+          }
 
           const link = await createUtseOmbudDeepLink(
             orgNumber,
