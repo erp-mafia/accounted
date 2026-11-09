@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks'
+import type { TestInfo } from '@playwright/test'
 
 export const BUDGET = { startup: 5000, navigation: 3000, interaction: 1000 } as const
 
@@ -18,4 +19,10 @@ export async function withinBudget<T>(name: string, milliseconds: number, action
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Use one annotation format for every timed browser action. */
+export async function measured(info: Pick<TestInfo, 'annotations'>, name: string, milliseconds: number, action: () => Promise<unknown>) {
+  const { elapsed } = await withinBudget(name, milliseconds, action)
+  info.annotations.push({ type: 'duration', description: `${name}: ${Math.round(elapsed)} ms / ${milliseconds} ms` })
 }

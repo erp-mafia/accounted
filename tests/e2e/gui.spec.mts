@@ -2,15 +2,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { root, runtimeDir } from '../../scripts/e2e/runtime.mjs'
 import { test } from './fixtures'
-import { BUDGET, withinBudget } from './budget'
-import { expect, type TestInfo } from '@playwright/test'
+import { BUDGET, measured } from './budget'
+import { expect } from '@playwright/test'
 
 test.skip(!existsSync(path.join(root, 'src/components/dashboard/NavTreeSection.tsx')), 'Companion UI PR is not present in this build')
 
-async function measured(info: TestInfo, name: string, limit: number, action: () => Promise<unknown>) {
-  const result = await withinBudget(name, limit, action)
-  info.annotations.push({ type: 'latency', description: `${name}: ${Math.round(result.elapsed)} ms / ${limit} ms` })
-}
 
 test('general ledger collapses, expands and filters without another report fetch', async ({ page }, info) => {
   await page.goto('/reports/huvudbok')

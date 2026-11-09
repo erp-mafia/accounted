@@ -1,16 +1,12 @@
-import { expect, type Page, type TestInfo } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { readFileSync, existsSync } from 'node:fs'
 import { root } from '../../scripts/e2e/runtime.mjs'
 import path from 'node:path'
 import { runtimeDir } from '../../scripts/e2e/runtime.mjs'
-import { withinBudget, BUDGET } from './budget'
+import { measured, BUDGET } from './budget'
 import { test } from './fixtures'
 
 
-async function measured(info: TestInfo, name: string, milliseconds: number, action: () => Promise<unknown>) {
-  const { elapsed } = await withinBudget(name, milliseconds, action)
-  info.annotations.push({ type: 'duration', description: `${name}: ${Math.round(elapsed)} ms / ${milliseconds} ms` })
-}
 
 const destinations: { path: string; ready: (page: Page) => Promise<unknown> }[] = [
   { path: '/customers', ready: page => page.getByRole('link', { name: 'Testkund 001 AB', exact: true }).waitFor({ state: 'visible' }) },

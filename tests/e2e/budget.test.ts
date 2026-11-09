@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { withinBudget } from './budget'
+import { measured, withinBudget } from './budget'
 import { buildDataset, YEAR_ENTRY_COUNTS } from './dataset'
 
 describe('browser performance deadlines', () => {
+  it('records completed browser actions with the shared duration format', async () => {
+    const info = { annotations: [] as { type: string; description?: string }[] }
+    await measured(info, 'ready ledger', 100, async () => {})
+    expect(info.annotations).toEqual([{ type: 'duration', description: expect.stringMatching(/^ready ledger: \d+ ms \/ 100 ms$/) }])
+  })
+  it('does not annotate failed actions as successful timings', async () => {
+    const info = { annotations: [] as { type: string; description?: string }[] }
+    await expect(measured(info, 'broken ledger', 100, async () => { throw new Error('HTTP 500') })).rejects.toThrow('HTTP 500')
+    expect(info.annotations).toEqual([])
+  })
   it('returns successful action results and elapsed time', async () => {
     const result = await withinBudget('ready page', 100, async () => 42)
     expect(result.value).toBe(42)
