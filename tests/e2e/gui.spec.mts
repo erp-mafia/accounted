@@ -176,12 +176,18 @@ test('back from a voucher restores expanded accounts, filters and scroll', async
   await page.getByRole('heading', { name: 'Kontorader', exact: true }).waitFor({ state: 'visible' })
   await measured(info, 'Return to expanded ledger', BUDGET.navigation, async () => {
     await page.goBack()
-    await expect(page.getByRole('button', { name: disclosureLabel!, exact: true })).toBeVisible()
-    await expect.poll(async () => page.evaluate(expected => Math.max(
-      Math.abs(document.getElementById('main-content')!.scrollTop - expected.panel), Math.abs(window.scrollY - expected.window),
-    ), before), { intervals: [16] }).toBeLessThan(80)
-    await expect(page.getByRole('checkbox', { name: 'Dölj inaktiva' })).toBeChecked()
+    // One browser-side readiness check avoids measuring multiple full-DOM
+    // trace snapshots as navigation time on a very long expanded ledger.
+    await page.waitForFunction(({ expected, label }) => {
+      const toggle = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button =>
+        button.getAttribute('aria-label') === label && button.getAttribute('aria-expanded') === 'true' && button.getClientRects().length > 0,
+      )
+      return !!toggle && Math.max(
+        Math.abs(document.getElementById('main-content')!.scrollTop - expected.panel), Math.abs(window.scrollY - expected.window),
+      ) < 80
+    }, { expected: before, label: disclosureLabel })
   })
+  await expect(page.getByRole('checkbox', { name: 'Dölj inaktiva' })).toBeChecked()
 })
 
 
