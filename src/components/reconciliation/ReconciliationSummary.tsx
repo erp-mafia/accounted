@@ -74,7 +74,7 @@ export function ReconciliationSummary({
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-            <th className="w-full py-1.5 text-left font-medium" aria-hidden="true"></th>
+            <th className="w-full py-1.5 text-left font-medium"><span className="sr-only">{t('col_event')}</span></th>
             <th className={cn(NUM, 'font-medium')}>{externalHead}</th>
             <th className={cn(NUM, 'font-medium')}>{t('v2_col_ledger', { account: status.account_number })}</th>
             <th className={cn(NUM, 'font-medium')}>{t('v2_col_diff')}</th>
