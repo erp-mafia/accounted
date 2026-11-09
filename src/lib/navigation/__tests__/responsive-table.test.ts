@@ -34,4 +34,31 @@ describe('responsive table headers', () => {
     expect(html).toContain('--table-column-2:&quot;Amount&quot;')
     expect(html.match(/class="responsive-table/g)).toHaveLength(1)
   })
+  it('infers a mobile title from the existing wide description header', () => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { children: h('table', null,
+      h('thead', null, h('tr', null, h('th', { 'aria-hidden': true }), h('th', null, 'Date'), h('th', { className: 'w-full' }, 'Description'), h('th', null, 'Amount'))),
+      h('tbody', null, h('tr', null, h('td', null, h('input', { type: 'checkbox', 'aria-label': 'Select row' })), h('td', null, '2026-11-09'), h('td', null, 'A long description'), h('td', null, '100'))),
+    ) }))
+    expect(html).toContain('data-primary-column="3"')
+    expect(html).toContain('data-leading-control="true"')
+    expect(html).not.toContain('data-actions-last')
+    expect(html).toContain('aria-label="Select row"')
+  })
+  it('recognizes checkbox headers and an empty trailing actions header', () => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { children: h('table', null,
+      h('thead', null, h('tr', null, h('th', null, h('input', { type: 'checkbox', 'aria-label': 'Select all rows' })), h('th', null, 'Name'), h('th', null))),
+    ) }))
+    expect(html).toContain('data-leading-control="true"')
+    expect(html).toContain('data-primary-column="2"')
+    expect(html).toContain('data-actions-last="true"')
+  })
+  it('keeps explicitly chosen primary and status columns authoritative', () => {
+    const html = renderToStaticMarkup(h(ResponsiveTable, { primaryColumn: 2, actionsColumn: 'last', children: h('table', null,
+      h('thead', null, h('tr', null, h('th', { className: 'w-full' }, 'Name'), h('th', null, 'Reference'), h('th', null, 'Status'))),
+    ) }))
+    expect(html).toContain('data-primary-column="2"')
+    expect(html).toContain('data-actions-last="true"')
+    expect(html).not.toContain('data-leading-control')
+  })
+
 })

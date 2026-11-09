@@ -176,7 +176,7 @@ export default function TransactionHistoryList({
       ) : (
         /* Negative margin + matching padding: keeps the columns flush with
            the page edges (mirrors the inbox table on the transactions page). */
-        <ResponsiveTable>
+        <ResponsiveTable actionsColumn="last">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>

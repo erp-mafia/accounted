@@ -1,45 +1,62 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-/** Read static header labels through native table elements and shared table primitives. */
-function headerLabels(children: React.ReactNode): string[] {
+/** Read static labels and column roles through native and shared table headers. */
+function headerColumns(children: React.ReactNode): { label: string; primary: boolean; selection: boolean }[] {
   const text = (node: React.ReactNode): string => React.Children.toArray(node).map(child => {
     if (typeof child === 'string' || typeof child === 'number') return String(child)
     if (!React.isValidElement<{ children?: React.ReactNode; label?: React.ReactNode; 'aria-label'?: string }>(child)) return ''
     return text(child.props.children) || text(child.props.label) || child.props['aria-label'] || ''
   }).join('')
-  let labels: string[] = []
+  const hasSelection = (node: React.ReactNode): boolean => React.Children.toArray(node).some(child => {
+    if (!React.isValidElement<{ children?: React.ReactNode; type?: string; role?: string }>(child)) return false
+    const name = typeof child.type === 'string' ? child.type : (child.type as { displayName?: string }).displayName
+    return child.props.type === 'checkbox' || child.props.role === 'checkbox' || name === 'Checkbox' || hasSelection(child.props.children)
+  })
+  let columns: { label: string; primary: boolean; selection: boolean }[] = []
   const visit = (nodes: React.ReactNode) => {
     React.Children.forEach(nodes, node => {
-      if (labels.length || !React.isValidElement<{ children?: React.ReactNode }>(node)) return
+      if (columns.length || !React.isValidElement<{ children?: React.ReactNode }>(node)) return
       const name = typeof node.type === 'string' ? node.type : (node.type as { displayName?: string }).displayName
       if (name === 'thead' || name === 'TableHeader') {
         const row = React.Children.toArray(node.props.children).find(React.isValidElement)
         if (row && React.isValidElement<{ children?: React.ReactNode }>(row)) {
-          labels = React.Children.toArray(row.props.children).map(cell => text(cell))
+          columns = React.Children.toArray(row.props.children).map(cell => ({
+            label: text(cell),
+            primary: React.isValidElement<{ className?: string }>(cell) && !!cell.props.className?.split(/\s+/).includes('w-full'),
+            selection: hasSelection(cell),
+          }))
         }
       } else visit(node.props.children)
     })
   }
   visit(children)
-  return labels
+  return columns
 }
 
-/** Keep desktop tables intact and stack labelled cells when their own container becomes narrow. */
-export function ResponsiveTable({ children, className, primaryColumn }: {
+/** Keep one native table and present its rows as labelled cards in narrow containers. */
+export function ResponsiveTable({ children, className, primaryColumn, actionsColumn }: {
   children: React.ReactNode
   className?: string
   /** One-based column to give the full row width on narrow screens. */
   primaryColumn?: number
+  /** Put a final action/status column in a separate full-width mobile footer. */
+  actionsColumn?: 'last'
 }) {
-  const labels = headerLabels(children)
+  const columns = headerColumns(children)
+  const labels = columns.map(column => column.label)
+  const leadingControl = !!columns.length && (!columns[0].label || columns[0].selection)
+  const inferredPrimary = columns.findIndex(column => column.primary)
+  const firstValue = columns.findIndex((column, index) => !!column.label && !(leadingControl && index === 0))
+  const primary = primaryColumn ?? (inferredPrimary >= 0 ? inferredPrimary + 1 : firstValue >= 0 ? firstValue + 1 : undefined)
+  const actionsLast = actionsColumn === 'last' || (columns.length > 1 && !columns[columns.length - 1].label)
   const style: Record<string, string> = { containerType: 'inline-size', containerName: 'responsive-table' }
   labels.forEach((label, index) => {
     style[`--table-column-${index + 1}`] = JSON.stringify(label)
     style[`--table-last-column-${labels.length - index}`] = JSON.stringify(label)
   })
   return (
-    <div className={cn('responsive-table min-w-0 w-full overflow-x-auto', className)} style={style} data-primary-column={primaryColumn}>
+    <div className={cn('responsive-table min-w-0 w-full overflow-x-auto', className)} style={style} data-primary-column={primary} data-leading-control={leadingControl || undefined} data-actions-last={actionsLast || undefined}>
       {children}
     </div>
   )

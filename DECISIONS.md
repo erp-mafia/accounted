@@ -1230,3 +1230,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-11-09] Move collapsible navigation and ledger presentation into a dedicated UI PR. Reports reuse the existing catalog, and inactive means zero closing balance with no vouchers in the selected interval.
 
 [2026-11-09] Responsive report tables keep one DOM and derive narrow-screen labels from their headers. Disclosure surfaces preserve native controls and selection. Per-tab, per-company view state and delayed scroll restoration retain context after voucher navigation.
+
+[2026-11-09] Mobile tables reuse one native table DOM with bordered, spaced row cards. Infer titles and selection columns from existing headers; place final actions in a full-width footer. Expanded details share their row outline.

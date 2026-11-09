@@ -4530,7 +4530,7 @@ export default function TransactionsPage() {
 
             {/* Negative margin + matching padding: the scroll container runs
                 to the panel edges while the columns keep the page padding. */}
-            <ResponsiveTable primaryColumn={txColumns.has('date') ? 3 : 2}>
+            <ResponsiveTable primaryColumn={txColumns.has('date') ? 3 : 2} actionsColumn="last">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>

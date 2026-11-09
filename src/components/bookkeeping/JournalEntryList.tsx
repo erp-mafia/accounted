@@ -1768,7 +1768,7 @@ export default function JournalEntryList({
                       </td>
                     </tr>
                     {isExpanded && (
-                      <tr data-no-stagger>
+                      <tr data-no-stagger data-responsive-detail-row>
                         <td colSpan={6} className="border-b border-border p-0">
                           <RowFoldout>
                             <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
