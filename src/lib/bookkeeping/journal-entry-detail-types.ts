@@ -2,7 +2,7 @@ import type { JournalEntry } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
-type StruckLineSnapshot = {
+export type StruckLineSnapshot = {
   id: string
   account_number: string
   debit_amount: number | string

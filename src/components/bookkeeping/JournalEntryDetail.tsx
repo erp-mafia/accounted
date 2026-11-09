@@ -69,7 +69,7 @@ const EditDraftEntryDialog = dynamic(() => import('@/components/bookkeeping/Edit
 const RecordateEntryDialog = dynamic(() => import('@/components/bookkeeping/RecordateEntryDialog'))
 const RetagLineDialog = dynamic(() => import('@/components/dimensions/RetagLineDialog'))
 
-import type { JournalEntryDetailRead } from '@/lib/bookkeeping/journal-entry-detail-types'
+import type { JournalEntryDetailRead, StruckLineSnapshot } from '@/lib/bookkeeping/journal-entry-detail-types'
 
 
 /**
