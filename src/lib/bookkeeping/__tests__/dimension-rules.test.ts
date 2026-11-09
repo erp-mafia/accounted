@@ -301,6 +301,7 @@ describe('dimension rule policy per source type', () => {
     'credit_note',
     'supplier_credit_note',
     'system',
+    'tax_account',
     'accrual',
     'vat_settlement',
     'rot_rut_payout',

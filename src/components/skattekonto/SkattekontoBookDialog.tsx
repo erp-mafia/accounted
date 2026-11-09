@@ -6,10 +6,12 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { readSkattekontoTwinProbe } from '@/lib/skatteverket/skattekonto-twin-probe'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
@@ -123,8 +125,13 @@ export default function SkattekontoBookDialog({
   onLinked?: () => void
 }) {
   const t = useTranslations('skv_book_dialog')
+  const { settings: companySettings } = useCompanySettings()
   const { toast } = useToast()
   const router = useRouter()
+  // The series the user picked for the row it was picked for. Unset, the
+  // request names no series and the server books in the company's
+  // Skattekonto series; the picker only shows that default.
+  const [seriesChoice, setSeriesChoice] = useState<{ rowId: string; letter: string } | null>(null)
   const [isBooking, setIsBooking] = useState(false)
   const [isOpeningDraft, setIsOpeningDraft] = useState(false)
   // The ledger-twin refusal for the row it was given for, and which action
@@ -159,6 +166,15 @@ export default function SkattekontoBookDialog({
   const [probingRowId, setProbingRowId] = useState<string | null>(null)
 
   const rowId = row?.id ?? null
+  const chosenSeries = seriesChoice && seriesChoice.rowId === rowId ? seriesChoice.letter : null
+  // Unknown until the settings load: the picker shows a placeholder, never a guess.
+  const defaultSeries = companySettings ? resolveDefaultSeriesForSource(companySettings, 'tax_account') : null
+  const shownSeries = chosenSeries ?? defaultSeries
+  const seriesOptions = buildVoucherSeriesOptions(companySettings?.voucher_series_labels, [
+    ...Object.values(companySettings?.default_voucher_series_per_source_type ?? {}),
+    shownSeries,
+  ])
+
   // Which action "Bokför ändå" repeats for a twin found on open: the one the
   // dialog's primary button would have taken.
   const openMode: 'book' | 'draft' | 'manual' =
@@ -211,6 +227,7 @@ export default function SkattekontoBookDialog({
   // Closing forgets the refusal: a reopened dialog asks the server again.
   function handleOpenChange(next: boolean) {
     if (!next) {
+      setSeriesChoice(null)
       setTwinRefusal(null)
       setCoverRefusal(null)
       setDirectRefusal(null)
@@ -239,6 +256,7 @@ export default function SkattekontoBookDialog({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ids: [row.id],
+            ...(chosenSeries ? { voucher_series: chosenSeries } : {}),
             ...(duplicateReason ? { allow_duplicate_ids: [row.id], duplicate_reason: duplicateReason } : {}),
           }),
         },
@@ -306,14 +324,14 @@ export default function SkattekontoBookDialog({
     if (!row) return
     setIsOpeningDraft(true)
     try {
+      const body = {
+        ...(chosenSeries ? { voucher_series: chosenSeries } : {}),
+        ...(duplicateReason ? { allow_duplicate: true, duplicate_reason: duplicateReason } : {}),
+      }
       const res = await fetch(
         `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
-        duplicateReason
-          ? {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ allow_duplicate: true, duplicate_reason: duplicateReason }),
-            }
+        Object.keys(body).length > 0
+          ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
           : { method: 'POST' },
       )
       const json = await res.json()
@@ -766,6 +784,26 @@ export default function SkattekontoBookDialog({
         ) : undefined
       }
     >
+      <div className="flex items-center justify-between gap-4 pb-3 text-sm">
+        <Label htmlFor="skattekonto-voucher-series" className="text-muted-foreground">{t('series_label')}</Label>
+        <Select
+          value={shownSeries ?? ''}
+          onValueChange={(letter) => {
+            if (letter) setSeriesChoice({ rowId: row.id, letter })
+          }}
+        >
+          <SelectTrigger id="skattekonto-voucher-series" className="w-24 font-mono">
+            <SelectValue placeholder={t('series_default')} />
+          </SelectTrigger>
+          <SelectContent>
+            {seriesOptions.map((option) => (
+              <SelectItem key={option.letter} value={option.letter}>
+                {option.label ? `${option.letter} ${option.label}` : option.letter}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <dl className="space-y-3 py-2 text-sm">
         <div className="flex items-baseline justify-between gap-4">
           <dt className="shrink-0 text-muted-foreground">{t('event_label')}</dt>

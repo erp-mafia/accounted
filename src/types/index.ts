@@ -2276,6 +2276,8 @@ export type JournalEntrySourceType =
   | 'correction'
   | 'import'
   | 'system'
+  // A verifikat booked from a Skatteverket skattekonto row.
+  | 'tax_account'
   | 'inbox_item'
   | 'supplier_invoice_registered'
   | 'supplier_invoice_paid'

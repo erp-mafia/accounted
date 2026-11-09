@@ -8,7 +8,8 @@
  *
  * Defaults to 'A' when:
  *   - the settings row is null/undefined
- *   - the JSONB is missing the source_type key
+ *   - the JSONB is missing the source_type key (and the key it inherits
+ *     from, see SERIES_INHERITED_FROM)
  *   - the configured value is not a single uppercase letter A-Z
  *
  * These functions are pure; no I/O. Engine call-sites read the settings row
@@ -173,6 +174,7 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   inbox_item: 'A',
   import: 'A',
   system: 'A',
+  tax_account: 'A',
   storno: 'A',
   correction: 'A',
   stripe_payout: 'A',
@@ -203,9 +205,22 @@ export function isStandardVoucherSeriesMap(
 }
 
 /**
+ * Source types split off an older one: a map saved before the split has no
+ * key for the new type, so it resolves to the letter of the type it was split
+ * from, the series those bookings used until then. Skattekonto bookings were
+ * 'system' until #172 gave them 'tax_account'; a company that moved 'system'
+ * to another series keeps its skattekonto there until it sets Skattekonto
+ * itself.
+ */
+const SERIES_INHERITED_FROM: Readonly<Partial<Record<JournalEntrySourceType, JournalEntrySourceType>>> = {
+  tax_account: 'system',
+}
+
+/**
  * Resolve the default voucher_series letter for a given source_type from a
  * company_settings row. Returns 'A' as a safe fallback when no mapping is
- * configured for that source_type.
+ * configured for that source_type (nor for the type it inherits from, see
+ * SERIES_INHERITED_FROM).
  *
  * @param settings - Either a full CompanySettings row or just the per-source
  *                   map. `null`/`undefined` is allowed (returns 'A').
@@ -234,9 +249,15 @@ export function resolveDefaultSeriesForSource(
 
   if (!mapCandidate || typeof mapCandidate !== 'object') return 'A'
 
-  const value = (mapCandidate as VoucherSeriesMap)[sourceType]
+  const map = mapCandidate as VoucherSeriesMap
+  const value = map[sourceType]
   if (typeof value === 'string' && SERIES_LETTER_RE.test(value)) {
     return value
+  }
+  const inheritedFrom = SERIES_INHERITED_FROM[sourceType]
+  const inherited = inheritedFrom ? map[inheritedFrom] : undefined
+  if (typeof inherited === 'string' && SERIES_LETTER_RE.test(inherited)) {
+    return inherited
   }
   return 'A'
 }

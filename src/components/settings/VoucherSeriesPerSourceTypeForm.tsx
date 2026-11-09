@@ -17,7 +17,9 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import {
   buildVoucherSeriesOptions,
   isStandardVoucherSeriesMap,
+  resolveDefaultSeriesForSource,
   STANDARD_VOUCHER_SERIES_MAP,
+  type VoucherSeriesMap,
 } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
@@ -41,6 +43,7 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
   { key: 'webshop_order', labelKey: 'webshop_order' },
   { key: 'pos_daily_sales', labelKey: 'pos_daily_sales' },
   { key: 'vat_settlement', labelKey: 'vat_settlement' },
+  { key: 'tax_account', labelKey: 'tax_account' },
   { key: 'opening_balance', labelKey: 'opening_balance' },
   { key: 'year_end', labelKey: 'year_end' },
 ]
@@ -79,6 +82,7 @@ const SV_LABELS: Record<string, string> = {
   webshop_order: 'Webshopordrar',
   pos_daily_sales: 'Dagskassor (kassasystem)',
   vat_settlement: 'Momsredovisning',
+  tax_account: 'Skattekonto',
   opening_balance: 'Ingående balanser',
   year_end: 'Bokslut',
 }
@@ -181,7 +185,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
       >
         <SettingsSelect
           id={`series-${key}`}
-          value={(draft[key] as string | undefined) || 'A'}
+          // The letter the engine books with: a type without its own key
+          // shows the series it falls back to (Skattekonto follows System).
+          value={resolveDefaultSeriesForSource(draft as VoucherSeriesMap, key)}
           onChange={(e) => handleChange(key, e.target.value)}
           className="font-mono"
         >

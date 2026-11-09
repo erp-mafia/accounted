@@ -67,18 +67,15 @@ export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
  * avskrivning is booked as 'year_end' and an asset disposal or nedskrivning
  * (and its reversal) as 'system' (lib/bokslut/assets), and so is the
  * transition to K3 (lib/bokslut/k3-transition: balance sheet adjustments
- * against equity, K3 35.11); a skattekonto row booked from the Skatteverket feed
- * is 'system' too (the skatteverket extension). Their history projects as
- * year_end.closing and ledger.system. The semesterårsavslut's adjustment of
- * the semesterlöneskuld (lib/salary/semesterberedning.ts) is booked as
- * 'salary_payment' although no salary is paid; its history projects as
- * payroll.salary_paid.
+ * against equity, K3 35.11). Their history projects as year_end.closing and
+ * ledger.system. The semesterårsavslut's adjustment of the semesterlöneskuld
+ * (lib/salary/semesterberedning.ts) is booked as 'salary_payment' although no
+ * salary is paid; its history projects as payroll.salary_paid.
  */
 export const KINDS_WITHOUT_SOURCE_TYPE: readonly BusinessEventKind[] = [
   'expense.mileage_allowance',
   'asset.depreciated',
   'asset.disposed',
-  'se.tax_account.booked',
   'payroll.vacation_liability_adjusted',
   'asset.impaired',
   'asset.impairment_reversed',
@@ -99,6 +96,7 @@ export const KIND_BY_SOURCE_TYPE: Readonly<Record<JournalEntrySourceType, Busine
   opening_balance: 'ledger.opening_balance',
   import: 'ledger.history_import',
   system: 'ledger.system',
+  tax_account: 'se.tax_account.booked',
   accrual: 'ledger.accrual',
   currency_revaluation: 'ledger.currency_revaluation',
   bank_transaction: 'bank.categorized',

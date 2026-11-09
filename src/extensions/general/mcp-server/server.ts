@@ -16697,6 +16697,11 @@ export const tools: McpTool[] = [
           type: 'string',
           description: 'item_id of an unmatched_external row from gnubok_list_reconciliation_items (account_key "skattekonto").',
         },
+        voucher_series: {
+          type: 'string',
+          pattern: '^[A-Z]$',
+          description: 'Optional verifikat series A-Z. Defaults to the company setting for tax_account.',
+        },
         allow_duplicate: {
           type: 'boolean',
           description:
@@ -16717,6 +16722,10 @@ export const tools: McpTool[] = [
       const transactionId = args.skattekonto_transaction_id
       if (typeof transactionId !== 'string' || transactionId.length === 0) {
         throw badArgument('skattekonto_transaction_id', 'skattekonto_transaction_id is required')
+      }
+      const voucherSeries = args.voucher_series
+      if (voucherSeries !== undefined && (typeof voucherSeries !== 'string' || !/^[A-Z]$/.test(voucherSeries))) {
+        throw badArgument('voucher_series', 'voucher_series must be one letter A-Z')
       }
 
       const { data: row } = await supabase
@@ -16807,6 +16816,7 @@ export const tools: McpTool[] = [
         // the guard on.
         params: {
           transaction_id: tx.id,
+          ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
           ...(allowDuplicate && (twins.length > 0 || cover || direct.length > 0)
             ? { allow_duplicate: true, duplicate_reason: duplicateReason }
             : {}),
@@ -16872,6 +16882,11 @@ export const tools: McpTool[] = [
           maxItems: 200,
           description: 'item_ids of unmatched_external rows from gnubok_list_reconciliation_items (account_key "skattekonto"); duplicates are ignored.',
         },
+        voucher_series: {
+          type: 'string',
+          pattern: '^[A-Z]$',
+          description: 'Optional verifikat series A-Z for every row. Defaults to the company setting for tax_account.',
+        },
         allow_duplicate_ids: {
           type: 'array',
           items: { type: 'string' },
@@ -16900,6 +16915,10 @@ export const tools: McpTool[] = [
       ]
       if (ids.length === 0 || ids.length > 200) {
         throw badArgument('skattekonto_transaction_ids', 'skattekonto_transaction_ids must contain 1-200 row ids')
+      }
+      const voucherSeries = args.voucher_series
+      if (voucherSeries !== undefined && (typeof voucherSeries !== 'string' || !/^[A-Z]$/.test(voucherSeries))) {
+        throw badArgument('voucher_series', 'voucher_series must be one letter A-Z')
       }
 
       const { data: rows } = await supabase
@@ -17082,6 +17101,7 @@ export const tools: McpTool[] = [
         title: `Bokför ${bookableIds.length} skattekontohändelser`,
         params: {
           ids: bookableIds,
+          ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
           ...(approvedDuplicateIds.length > 0 ? { allow_duplicate_ids: approvedDuplicateIds, duplicate_reason: duplicateReason } : {}),
         },
         preview: {

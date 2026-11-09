@@ -437,6 +437,7 @@ describe('bokforSkattekontoTransactionsBatch', () => {
       'company-1',
       'user-1',
       [row1.id, row2.id, row3.id],
+      { voucherSeries: 'S' },
     )
 
     expect(result.results).toHaveLength(3)
@@ -465,6 +466,10 @@ describe('bokforSkattekontoTransactionsBatch', () => {
       'bulk_accept',
     )
     expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(createDraftEntry).mock.calls[0][3]).toMatchObject({
+      source_type: 'tax_account',
+      voucher_series: 'S',
+    })
   })
 
   it('hoists rules/entity_type: one fetch each for the whole batch', async () => {

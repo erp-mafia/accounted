@@ -22,7 +22,7 @@ import type { TransactionCategory } from '@/types'
 /** Every journal_entries.source_type the database accepts (journal_entries_source_type_check). */
 const SOURCE_TYPES = [
   'manual', 'bank_transaction', 'invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note',
-  'salary_payment', 'opening_balance', 'year_end', 'storno', 'correction', 'import', 'system', 'inbox_item',
+  'salary_payment', 'opening_balance', 'year_end', 'storno', 'correction', 'import', 'system', 'tax_account', 'inbox_item',
   'supplier_invoice_registered', 'supplier_invoice_paid', 'supplier_invoice_cash_payment',
   'supplier_credit_note', 'currency_revaluation', 'supplier_invoice_privately_paid', 'reminder_fee', 'accrual',
   'result_appropriation', 'rot_rut_payout', 'vat_settlement', 'stripe_payout', 'webshop_order', 'expense_claim',

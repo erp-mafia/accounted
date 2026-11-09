@@ -223,6 +223,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   result_appropriation: 'Resultatdisposition',
   import: 'Import',
   system: 'System',
+  tax_account: 'Skattekonto',
   storno: 'Storno',
   correction: 'Rättelse',
 }

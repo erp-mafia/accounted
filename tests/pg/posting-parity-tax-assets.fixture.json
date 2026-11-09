@@ -124,7 +124,7 @@
           "voucher_number": 7,
           "entry_date": "2026-07-12",
           "description": "Skattekonto: Debiterad preliminärskatt",
-          "source_type": "system",
+          "source_type": "tax_account",
           "status": "posted",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9001",
           "lines": [
@@ -159,7 +159,7 @@
           "voucher_number": 8,
           "entry_date": "2026-07-14",
           "description": "Skattekonto: Inbetalning bokförd",
-          "source_type": "system",
+          "source_type": "tax_account",
           "status": "posted",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9002",
           "lines": [
@@ -194,7 +194,7 @@
           "voucher_number": 9,
           "entry_date": "2026-07-31",
           "description": "Skattekonto: Kostnadsränta",
-          "source_type": "system",
+          "source_type": "tax_account",
           "status": "posted",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9003",
           "lines": [
@@ -234,7 +234,7 @@
           "voucher_number": 0,
           "entry_date": "2026-08-12",
           "description": "Skattekonto: Debiterad preliminärskatt",
-          "source_type": "system",
+          "source_type": "tax_account",
           "status": "draft",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: -",
           "lines": [
@@ -274,7 +274,7 @@
           "voucher_number": 10,
           "entry_date": "2026-08-20",
           "description": "Skattekonto: Intäktsränta",
-          "source_type": "system",
+          "source_type": "tax_account",
           "status": "posted",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9005",
           "lines": [

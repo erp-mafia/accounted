@@ -116,6 +116,7 @@ export const BOOKING_REVIEW_SOURCES: Readonly<Record<JournalEntrySourceType, Boo
   currency_revaluation: null,
   accrual: null,
   system: null,
+  tax_account: null,
 }
 
 /** A matched rule as a decision records it. */
