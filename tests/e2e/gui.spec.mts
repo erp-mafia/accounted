@@ -26,7 +26,7 @@ test('general ledger collapses, expands and filters without another report fetch
   await measured(info, 'Expand all ledger accounts', BUDGET.interaction, async () => {
     await page.getByRole('button', { name: 'Expandera alla', exact: true }).click()
     await page.getByRole('button', { name: /^Kollapsa konto / }).first().waitFor({ state: 'visible' })
-    await page.getByRole('columnheader', { name: 'Ver.nr', exact: true }).first().waitFor({ state: 'visible' })
+    await page.locator('main table tbody tr').first().waitFor({ state: 'visible' })
   })
   await measured(info, 'Collapse all ledger accounts', BUDGET.interaction, async () => {
     await page.getByRole('button', { name: 'Kollapsa alla', exact: true }).click()
@@ -124,4 +124,62 @@ test('ledger account headers fit the viewport and retain full names', async ({ p
     await longest.getByRole('button', { name: /^Expandera konto / }).click()
     await expect(longest.getByRole('button', { name: /^Kollapsa konto / })).toHaveAttribute('aria-expanded', 'true')
   }
+})
+
+
+test('whole ledger surfaces toggle once while links and selection stay independent', async ({ page }, info) => {
+  await page.goto('/reports/huvudbok')
+  const card = page.locator('main [data-expandable-surface]').first()
+  const toggle = card.getByRole('button', { name: /^Expandera konto / })
+  await expect(toggle).toBeVisible()
+  const box = await card.boundingBox()
+  expect(box).toBeTruthy()
+  await measured(info, 'Expand a card through its padding', BUDGET.interaction, async () => {
+    await card.click({ position: { x: box!.width - 8, y: box!.height - 8 } })
+    await expect(card.getByRole('button', { name: /^Kollapsa konto / })).toBeVisible()
+  })
+  await card.getByText(/^IB:/).click()
+  await expect(toggle).toBeVisible()
+  await toggle.focus()
+  await page.keyboard.press('Space')
+  const collapse = card.getByRole('button', { name: /^Kollapsa konto / })
+  await expect(collapse).toBeVisible()
+  await card.evaluate(element => {
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(element.querySelector('h3')!)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  await expect(collapse).toBeVisible()
+  await page.evaluate(() => window.getSelection()?.removeAllRanges())
+  if (info.project.name === 'mobile') {
+    const fit = await card.locator('.responsive-table').evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth }))
+    expect(fit.scroll).toBeLessThanOrEqual(fit.width + 1)
+    const firstCell = card.locator('tbody tr').first().locator('td').first()
+    expect(await firstCell.evaluate(element => getComputedStyle(element, '::before').content)).toContain('Ver.nr')
+  }
+})
+
+test('back from a voucher restores expanded accounts, filters and scroll', async ({ page }, info) => {
+  await page.goto('/reports/huvudbok')
+  await page.getByRole('button', { name: 'Expandera alla', exact: true }).click()
+  const link = page.locator('main .responsive-table a[href^="/bookkeeping/"]').last()
+  await link.waitFor({ state: 'visible' })
+  await link.scrollIntoViewIfNeeded()
+  const card = link.locator('xpath=ancestor::*[@data-expandable-surface][1]')
+  const disclosureLabel = await card.getByRole('button', { name: /^Kollapsa konto / }).getAttribute('aria-label')
+  const before = await page.evaluate(() => ({ panel: document.getElementById('main-content')!.scrollTop, window: window.scrollY }))
+  expect(Math.max(before.panel, before.window)).toBeGreaterThan(100)
+  await link.click()
+  await page.getByRole('heading', { name: 'Kontorader', exact: true }).waitFor({ state: 'visible' })
+  await measured(info, 'Return to expanded ledger', BUDGET.navigation, async () => {
+    await page.goBack()
+    await expect(page.getByRole('button', { name: disclosureLabel!, exact: true })).toBeVisible()
+    await expect.poll(async () => page.evaluate(expected => Math.max(
+      Math.abs(document.getElementById('main-content')!.scrollTop - expected.panel), Math.abs(window.scrollY - expected.window),
+    ), before), { intervals: [16] }).toBeLessThan(80)
+    await expect(page.getByRole('checkbox', { name: 'Dölj inaktiva' })).toBeChecked()
+  })
 })

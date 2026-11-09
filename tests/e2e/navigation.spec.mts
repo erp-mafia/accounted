@@ -1,5 +1,6 @@
 import { expect, type Page, type TestInfo } from '@playwright/test'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { root } from '../../scripts/e2e/runtime.mjs'
 import path from 'node:path'
 import { runtimeDir } from '../../scripts/e2e/runtime.mjs'
 import { withinBudget, BUDGET } from './budget'
@@ -22,6 +23,10 @@ const destinations: { path: string; ready: (page: Page) => Promise<unknown> }[] 
   { path: '/reports/huvudbok', ready: page => page.getByRole('table').or(page.getByRole('button', { name: /^Expandera konto / })).first().waitFor({ state: 'visible' }) },
   { path: '/reports/resultatrapport', ready: page => page.getByRole('row').filter({ hasText: '3011' }).first().waitFor({ state: 'visible' }) },
   { path: '/reports/balansrapport', ready: page => page.getByText(/SUMMA TILLGÅNGAR/i).first().waitFor({ state: 'visible' }) },
+  { path: '/reports/trial-balance', ready: page => page.locator('main table tbody tr').first().waitFor({ state: 'visible' }) },
+  { path: '/reports/grundbok', ready: page => page.locator('main table tbody tr').first().waitFor({ state: 'visible' }) },
+  { path: '/reports/kundreskontra', ready: page => page.locator('main table tbody tr').first().waitFor({ state: 'visible' }) },
+  { path: '/reports/supplier-ledger', ready: page => page.locator('main table tbody tr').first().waitFor({ state: 'visible' }) },
   { path: '/accounts', ready: page => page.getByText('Inga konton kopplade än.', { exact: false }).waitFor({ state: 'visible' }) },
   { path: '/salary', ready: page => page.getByRole('link', { name: 'Lägg till anställd', exact: true }).waitFor({ state: 'visible' }) },
   { path: '/settings/company', ready: page => expect(page.locator('input[name="company_name"]')).toHaveValue('E2E Ten Year Consulting AB') },
@@ -39,6 +44,16 @@ for (const destination of destinations) {
       expect(response?.ok()).toBe(true)
       await expect(page).toHaveURL(new RegExp(`${destination.path}(?:\\?|$)`))
       await destination.ready(page)
+      if (info.project.name === 'mobile' && existsSync(path.join(root, 'src/components/ui/responsive-table.tsx'))) {
+        const overflow = await page.locator('main').evaluate(main => ({
+          outer: main.scrollWidth > main.clientWidth + 1,
+          tables: [...main.querySelectorAll<HTMLElement>('div')].filter(element =>
+            element.clientWidth > 0 && element.querySelector('table') &&
+            ['auto', 'scroll'].includes(getComputedStyle(element).overflowX) && element.scrollWidth > element.clientWidth + 1,
+          ).length,
+        }))
+        expect(overflow, 'Mobile data should fit without horizontal scrolling').toEqual({ outer: false, tables: 0 })
+      }
     })
   })
 }

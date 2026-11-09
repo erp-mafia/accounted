@@ -3,6 +3,7 @@
 import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { usePageState } from '@/lib/hooks/use-page-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -133,7 +134,6 @@ export default function ChartOfAccountsManager() {
   // the user has opened.
   const [view, setView] = useState<'my-accounts' | 'bas-catalog'>('my-accounts')
   const [searchQuery, setSearchQuery] = useState('')
-  const [visibleAccountCount, setVisibleAccountCount] = useState(100)
   const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
   const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
@@ -150,6 +150,7 @@ export default function ChartOfAccountsManager() {
   // The usage map loads after first paint; until it has, "utan verifikat"
   // would match every account, so the filter stays disabled.
   const [usageLoaded, setUsageLoaded] = useState(false)
+  const [visibleAccountCount, setVisibleAccountCount] = usePageState('chart-visible-count', 100)
 
   // Data state
   const { accounts, isLoading: loading } = useAccounts(!showInactive)
