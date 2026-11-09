@@ -24,6 +24,7 @@
     "start": "next start",
     "lint": "eslint",
     "check:guards": "node scripts/checks/no-new-antipatterns.mjs",
+    "check:mr-privacy": "node scripts/check-mr-privacy.mjs",
     "validate:packs": "tsx scripts/validate-packs.ts",
     "validate:registry": "tsx scripts/validate-registry.ts",
     "check:lint": "eslint --quiet",
