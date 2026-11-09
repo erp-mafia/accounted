@@ -165,6 +165,7 @@ async function coverForRows(
 const SkattekontoBokforBatchSchema = z
   .object({
     ids: z.array(z.string().uuid()).min(1).max(200),
+    voucher_series: z.string().regex(/^[A-Z]$/).optional(),
     allow_duplicate_ids: z.array(z.string().uuid()).max(200).optional(),
     duplicate_reason: z.string().max(DUPLICATE_REASON_MAX_LENGTH).optional(),
   })
@@ -2255,6 +2256,7 @@ export const skatteverketExtension: Extension = {
             ctx.userId,
             ids,
             {
+              ...(parsed.data.voucher_series ? { voucherSeries: parsed.data.voucher_series } : {}),
               allowDuplicateIds: parsed.data.allow_duplicate_ids ?? [],
               ...(parsed.data.allow_duplicate_ids?.length ? { duplicateReason: parsed.data.duplicate_reason } : {}),
             },
@@ -2288,6 +2290,7 @@ export const skatteverketExtension: Extension = {
         // keeps the guard on.
         const rawBody = await request.text().catch(() => '')
         let duplicateReason: string | null = null
+        let voucherSeries: string | undefined
         if (rawBody.trim()) {
           let body: unknown
           try {
@@ -2295,7 +2298,7 @@ export const skatteverketExtension: Extension = {
           } catch {
             return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
           }
-          const fields = (body ?? {}) as { allow_duplicate?: unknown; duplicate_reason?: unknown }
+          const fields = (body ?? {}) as { allow_duplicate?: unknown; duplicate_reason?: unknown; voucher_series?: unknown }
           if (fields.allow_duplicate !== undefined && typeof fields.allow_duplicate !== 'boolean') {
             return NextResponse.json(
               { error: 'Ogiltiga parametrar: allow_duplicate måste vara true eller false.' },
@@ -2311,6 +2314,13 @@ export const skatteverketExtension: Extension = {
               { status: 400 },
             )
           }
+          if (fields.voucher_series !== undefined && (typeof fields.voucher_series !== 'string' || !/^[A-Z]$/.test(fields.voucher_series))) {
+            return NextResponse.json(
+              { error: 'Ogiltiga parametrar: voucher_series måste vara en bokstav A-Z.' },
+              { status: 400 },
+            )
+          }
+          voucherSeries = fields.voucher_series
           if (fields.allow_duplicate === true) {
             duplicateReason = normaliseDuplicateReason(fields.duplicate_reason)
             if (!duplicateReason) {
@@ -2329,7 +2339,10 @@ export const skatteverketExtension: Extension = {
             ctx.userId,
             id,
             undefined,
-            duplicateReason ? { duplicateReason } : {},
+            {
+              ...(duplicateReason ? { duplicateReason } : {}),
+              ...(voucherSeries ? { voucherSeries } : {}),
+            },
           )
           return NextResponse.json({ data: { entry } })
         } catch (err) {
@@ -2823,9 +2836,13 @@ async function commitBookSkattekontoRows(
     ? rawAllow.filter((v): v is string => typeof v === 'string' && ids.includes(v))
     : []
   const duplicateReason = normaliseDuplicateReason(params.duplicate_reason)
+  const voucherSeries = typeof params.voucher_series === 'string' && /^[A-Z]$/.test(params.voucher_series)
+    ? params.voucher_series
+    : undefined
 
   try {
     const result = await bokforSkattekontoTransactionsBatch(supabase, companyId, userId, ids, {
+      ...(voucherSeries ? { voucherSeries } : {}),
       allowDuplicateIds,
       ...(duplicateReason ? { duplicateReason } : {}),
     })

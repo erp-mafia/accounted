@@ -5646,6 +5646,8 @@
     "event_label": "Händelse",
     "date_label": "Datum",
     "amount_label": "Belopp",
+    "series_label": "Verifikationsserie",
+    "series_default": "Standard",
     "posting_label": "Kontering",
     "posting_value": "{skattekonto} mot {account}",
     "posting_rounding": "1650 krediteras {receivable}, skillnaden {difference} bokas på 3740 öres- och kronutjämning",

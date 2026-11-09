@@ -2276,7 +2276,7 @@ function skattekontoLinkAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): R
   } else {
     if (newEntry && !oldEntry) {
       const entry = ctx.linkedEntryById?.get(newEntry)
-      const booked = entry?.source_type === 'system' && !!entry.source_id && entry.source_id === row.record_id
+      const booked = (entry?.source_type === 'system' || entry?.source_type === 'tax_account') && !!entry.source_id && entry.source_id === row.record_id
       code = booked ? 'skattekonto.booked' : 'skattekonto.linked'
       event = booked ? 'Skattekontohändelse bokförd' : 'Skattekontohändelse kopplad till verifikat'
       details.push(`Verifikat: ${linkedEntryLabel(newEntry, ctx)}`)

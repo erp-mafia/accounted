@@ -89,6 +89,7 @@ const SOURCE_TYPE_SET: Record<JournalEntrySourceType, true> = {
   correction: true,
   import: true,
   system: true,
+  tax_account: true,
   inbox_item: true,
   supplier_invoice_registered: true,
   supplier_invoice_paid: true,

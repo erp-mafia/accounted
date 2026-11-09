@@ -157,7 +157,7 @@ describe('a rot/rut set-off under kontantmetoden is its begäran\'s payout', () 
     )
     expect(net(entry.lines)).toEqual({ '1630': 3750, '3001': -3000, '2611': -750 })
     expect(entry.lines[0]).toMatchObject({ account_number: '1630', debit_amount: 3750, line_description: KVITTNING })
-    expect(entry.source_type).toBe('system')
+    expect(entry.source_type).toBe('tax_account')
   })
 
   it('keeps 1513 for the part of a mixed begäran whose share is already on it', () => {

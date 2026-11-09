@@ -10,7 +10,7 @@
         {
           "entry_date": "2026-07-12",
           "description": "Skattekonto: Debiterad preliminärskatt",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000001000001",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9001",
           "lines": [
@@ -38,7 +38,7 @@
         {
           "entry_date": "2026-07-14",
           "description": "Skattekonto: Inbetalning bokförd",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000001000002",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9002",
           "lines": [
@@ -66,7 +66,7 @@
         {
           "entry_date": "2026-07-31",
           "description": "Skattekonto: Kostnadsränta",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000001000003",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9003",
           "lines": [
@@ -125,7 +125,7 @@
         {
           "entry_date": "2026-08-12",
           "description": "Skattekonto: Debiterad preliminärskatt",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000002000001",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: -",
           "lines": [
@@ -159,7 +159,7 @@
         {
           "entry_date": "2026-08-20",
           "description": "Skattekonto: Intäktsränta",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000003000001",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9005",
           "lines": [
@@ -202,7 +202,7 @@
         {
           "entry_date": "2026-08-26",
           "description": "Skattekonto: Moms juli 2026",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000004000001",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9006",
           "lines": [
@@ -251,7 +251,7 @@
         {
           "entry_date": "2026-09-12",
           "description": "Skattekonto: Debiterad preliminärskatt",
-          "source_type": "system",
+          "source_type": "tax_account",
           "source_id": "00000000-0000-4000-8000-000005000001",
           "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9007 Bokförd trots att bokföringen redan innehåller händelsen (A17). Skäl: Skatteverket debiterade två gånger",
           "lines": [

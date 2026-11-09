@@ -5646,6 +5646,8 @@
     "event_label": "Event",
     "date_label": "Date",
     "amount_label": "Amount",
+    "series_label": "Voucher series",
+    "series_default": "Default",
     "posting_label": "Posting",
     "posting_value": "{skattekonto} against {account}",
     "posting_rounding": "1650 is credited {receivable}, the difference {difference} is booked on 3740 rounding",

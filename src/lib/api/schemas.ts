@@ -480,6 +480,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'correction',
   'import',
   'system',
+  'tax_account',
   'inbox_item',
   'supplier_invoice_registered',
   'supplier_invoice_paid',

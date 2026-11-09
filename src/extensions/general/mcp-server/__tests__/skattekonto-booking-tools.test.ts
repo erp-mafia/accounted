@@ -353,7 +353,7 @@ describe('gnubok_book_skattekonto_row: staging behaviour', () => {
     enqueue({ data: { id: 'op-1' } })      // pending_operations insert
 
     const result = (await single.execute(
-      { skattekonto_transaction_id: ROW.id },
+      { skattekonto_transaction_id: ROW.id, voucher_series: 'S' },
       'company-1', 'user-1', supabase as never, { type: 'api_key' },
     )) as {
       staged: boolean
@@ -374,7 +374,7 @@ describe('gnubok_book_skattekonto_row: staging behaviour', () => {
     const inserted = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
     expect(inserted).toMatchObject({
       operation_type: 'book_skattekonto_row',
-      params: { transaction_id: ROW.id },
+      params: { transaction_id: ROW.id, voucher_series: 'S' },
       risk_level: 'medium',
     })
     // No journal write of any kind at stage time.
@@ -411,7 +411,7 @@ describe('gnubok_book_skattekonto_rows: batch staging', () => {
     enqueue({ data: { id: 'op-2' } })      // pending_operations insert
 
     const result = (await batch.execute(
-      { skattekonto_transaction_ids: ['skv-ok', 'skv-booked', 'skv-upcoming', 'skv-foreign'] },
+      { skattekonto_transaction_ids: ['skv-ok', 'skv-booked', 'skv-upcoming', 'skv-foreign'], voucher_series: 'S' },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
@@ -422,6 +422,7 @@ describe('gnubok_book_skattekonto_rows: batch staging', () => {
     }
     expect(inserted.operation_type).toBe('book_skattekonto_rows')
     expect(inserted.params.ids).toEqual(['skv-ok'])
+    expect(inserted.params).toMatchObject({ voucher_series: 'S' })
     expect(result.preview.row_count).toBe(1)
     // One verifikat per bookable row, none for a skipped one (crm#1104).
     const entries = result.preview.journal_entries as Array<{ description: string; lines: Array<{ account_number: string }> }>

@@ -118,6 +118,20 @@ describe('POST /skattekonto/transaktioner/bokfor-batch', () => {
     )
   })
 
+  it('passes an explicit series through and rejects an invalid one', async () => {
+    vi.mocked(bokforSkattekontoTransactionsBatch).mockResolvedValue({
+      results: [], summary: { total: 0, succeeded: 0, failed: 0 },
+    })
+    const ctx = makeContext()
+    await findRoute().handler(makeRequest({ ids: [UUID_A], voucher_series: 'S' }), ctx)
+    expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
+      ctx.supabase, 'company-1', 'user-1', [UUID_A], { voucherSeries: 'S', allowDuplicateIds: [] },
+    )
+
+    const invalid = await findRoute().handler(makeRequest({ ids: [UUID_A], voucher_series: 'AA' }), makeContext())
+    expect(invalid.status).toBe(400)
+  })
+
   it('passes allow_duplicate_ids with the reason through as the per-row override', async () => {
     vi.mocked(bokforSkattekontoTransactionsBatch).mockResolvedValue({
       results: [{ id: UUID_A, ok: true }],
@@ -243,6 +257,13 @@ describe('commitBookSkattekontoRows (approved MCP op): ledger-twin override', ()
     })
     expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
       {}, 'company-1', 'user-1', [UUID_A, UUID_B], { allowDuplicateIds: [UUID_B], duplicateReason: 'Debiterades två gånger' },
+    )
+  })
+
+  it('passes the staged series through to the approved batch', async () => {
+    await service()({}, 'user-1', 'company-1', { ids: [UUID_A], voucher_series: 'S' })
+    expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
+      {}, 'company-1', 'user-1', [UUID_A], { voucherSeries: 'S', allowDuplicateIds: [] },
     )
   })
 

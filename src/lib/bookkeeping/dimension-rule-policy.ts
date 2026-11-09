@@ -88,6 +88,7 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   credit_note: 'exempt',
   supplier_credit_note: 'exempt',
   system: 'exempt',
+  tax_account: 'exempt',
   accrual: 'exempt',
   vat_settlement: 'exempt',
   rot_rut_payout: 'exempt',

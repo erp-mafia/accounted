@@ -1101,13 +1101,15 @@ export function duplicateOverrideNote(
 
 /**
  * Partial unique index journal_entries_system_source_live_unique (migration
- * 20260920145033): one live (draft or posted) source_type = 'system' entry per
- * (company_id, source_id). The booking below writes source_id = the
- * skattekonto row id, so a second Bokför racing the first for the same row
- * fails at the draft INSERT with 23505 before any draft exists. The engine
- * wraps the failure in BookkeepingDatabaseError and keeps only the Postgres
- * message, which names the index: match on that, the same technique as
- * isPeriodLockTriggerError.
+ * 20260920145033, widened to 'tax_account' by 20261109170200): one live
+ * (draft or posted) entry per (company_id, source_id) across source_type
+ * 'system' and 'tax_account', so a row booked as 'system' before the move
+ * cannot get a second verifikat as 'tax_account'. The booking below writes
+ * source_id = the skattekonto row id, so a second Bokför racing the first for
+ * the same row fails at the draft INSERT with 23505 before any draft exists.
+ * The engine wraps the failure in BookkeepingDatabaseError and keeps only the
+ * Postgres message, which names the index: match on that, the same technique
+ * as isPeriodLockTriggerError.
  */
 const SYSTEM_SOURCE_LIVE_UNIQUE_INDEX = 'journal_entries_system_source_live_unique'
 
@@ -1136,6 +1138,7 @@ export function buildSkattekontoEntry(
   tx: SkattekontoEntrySource,
   guess: CounterAccountMatch,
   account: SkattekontoLedgerAccount,
+  voucherSeries?: string,
 ): Omit<CreateJournalEntryInput, 'fiscal_period_id'> {
   const amount = Math.abs(Number(tx.belopp_skatteverket))
   const isCreditToSkattekonto = Number(tx.belopp_skatteverket) > 0
@@ -1201,9 +1204,10 @@ export function buildSkattekontoEntry(
   return {
     entry_date: tx.transaktionsdatum,
     description: `Skattekonto: ${tx.transaktionstext}`,
-    source_type: 'system',
+    source_type: 'tax_account',
     source_id: tx.id,
     notes: `Genererad från skattekonto-synk. Skatteverket-id: ${tx.transaktionsidentitet ?? '-'}`,
+    ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
     lines,
   }
 }
@@ -1302,6 +1306,8 @@ export async function bokforSkattekontoTransaction(
     // must never land in an immutable posted verifikat. The single-row draft
     // endpoint keeps its historical behaviour (draft for user review).
     requireSettled?: boolean
+    // Explicit series for this verifikat; omitted resolves tax_account in company settings.
+    voucherSeries?: string
     // duplicateReason: the override. Book even though the ledger already
     // holds the event (a twin, or a hold), because of this stated reason,
     // which the verifikat carries in its notes. Only an explicit per-row
@@ -1446,7 +1452,7 @@ export async function bokforSkattekontoTransaction(
   }
 
   // The verifikat, from the builder the staging preview shows too.
-  const built = buildSkattekontoEntry(tx, guess, ctx.account)
+  const built = buildSkattekontoEntry(tx, guess, ctx.account, options?.voucherSeries)
 
   // Nothing on the skattekonto account holds the event, yet the ledger may
   // hold it without that account: a previous system that paid the tax
@@ -1660,7 +1666,7 @@ export async function bokforSkattekontoTransactionsBatch(
   companyId: string,
   userId: string,
   ids: string[],
-  options?: { allowDuplicateIds?: string[]; duplicateReason?: string },
+  options?: { allowDuplicateIds?: string[]; duplicateReason?: string; voucherSeries?: string },
 ): Promise<SkattekontoBatchResult> {
   const ruleContext = await loadRuleContext(supabase, companyId)
   // An override without a reason is no override: the guard stays on.
@@ -1719,6 +1725,7 @@ export async function bokforSkattekontoTransactionsBatch(
           // Skatteverket row into an immutable verifikat.
           requireSettled: true,
           ...(reason && allowDuplicate.has(id) ? { duplicateReason: reason } : {}),
+          ...(options?.voucherSeries ? { voucherSeries: options.voucherSeries } : {}),
           ledgerTwins: twinsByRow.get(id),
           ledgerHolding,
           ledgerDirect: directByRow.get(id),
