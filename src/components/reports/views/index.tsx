@@ -788,12 +788,12 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
       <Card>
         <CardContent className="p-6">
-          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto]">
+          <div className="grid grid-cols-1 items-baseline gap-x-6 gap-y-2 sm:grid-cols-[1fr_auto_auto]">
             <span className="text-sm font-medium">Beräknat resultat</span>
-            <span className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
+            <span className={`font-display text-xl tabular-nums w-full text-right sm:w-32 ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
               {formatAmount(data.net_result_current)} kr
             </span>
-            <span className="tabular-nums text-sm text-muted-foreground w-32 text-right">
+            <span className="tabular-nums text-sm text-muted-foreground w-full text-right sm:w-32">
               {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>
           </div>

@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useLocale, useTranslations } from 'next-intl'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { BridgeLine, ReconciliationAccount, ReconciliationStatus } from '@/lib/reconciliation/schemas'
@@ -68,7 +70,7 @@ export function ReconciliationSummary({
         : t('v2_row_balance_at', { date: formatDate(status.as_of.slice(0, 10)) })
 
   return (
-    <div className="max-w-[760px] overflow-x-auto stagger-enter">
+    <ResponsiveTable className="max-w-[760px] stagger-enter">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
@@ -128,6 +130,6 @@ export function ReconciliationSummary({
           </tr>
         </tbody>
       </table>
-    </div>
+    </ResponsiveTable>
   )
 }

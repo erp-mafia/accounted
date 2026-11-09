@@ -138,7 +138,7 @@ export function EditorTopBar({
           {meta}
         </p>
       )}
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
         {paneSwitch}
         <div className="inline-flex items-stretch">
           <Button

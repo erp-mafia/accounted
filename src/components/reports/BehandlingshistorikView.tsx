@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { AlertCircle, History } from 'lucide-react'
@@ -144,7 +146,7 @@ export function BehandlingshistorikView({
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable >
             <table className="w-full text-sm min-w-[760px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
@@ -180,7 +182,7 @@ export function BehandlingshistorikView({
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
     </div>

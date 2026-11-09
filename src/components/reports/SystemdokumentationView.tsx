@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { AlertCircle } from 'lucide-react'
@@ -92,7 +94,7 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
 
       <Card>
         <CardContent className="p-0">
-          <table className="w-full text-[13px]">
+          <ResponsiveTable><table className="w-full text-[13px]">
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[220px]')}>{t('col_section')}</th>
@@ -109,7 +111,7 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></ResponsiveTable>
         </CardContent>
       </Card>
 

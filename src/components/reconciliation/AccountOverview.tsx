@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
@@ -763,7 +765,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       ) : items.items.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <ResponsiveTable >
           <table className="w-full text-[13px]">
             <thead>
               <PairsHead externalLabel={isSkv ? t('v2_side_external_skv') : t('v2_side_external_bank')} />
@@ -834,7 +836,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           {items.has_more && (
             <p className="px-4 pt-3 text-[12.5px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
           )}
-        </div>
+        </ResponsiveTable>
       )}
 
       {openWork === 0 && items.items.length > 0 && (

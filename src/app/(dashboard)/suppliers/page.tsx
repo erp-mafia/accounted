@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
@@ -216,7 +218,7 @@ export default function SuppliersPage() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -262,7 +264,7 @@ export default function SuppliersPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
 
           {/* Footer note (concept pgnote) */}
           <p className="px-1 text-xs text-muted-foreground tabular-nums">

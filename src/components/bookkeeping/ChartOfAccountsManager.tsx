@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -698,7 +700,7 @@ export default function ChartOfAccountsManager() {
                 </button>
               </div>
             )}
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -870,7 +872,7 @@ export default function ChartOfAccountsManager() {
                   })}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
           </div>
         )
       ) : (
@@ -884,7 +886,7 @@ export default function ChartOfAccountsManager() {
           ) : filteredReference.length === 0 ? (
             <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
           ) : (
-            <div className="overflow-x-auto">
+            <ResponsiveTable>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -962,7 +964,7 @@ export default function ChartOfAccountsManager() {
                     })}
                 </tbody>
               </table>
-            </div>
+            </ResponsiveTable>
           )}
         </div>
       )}

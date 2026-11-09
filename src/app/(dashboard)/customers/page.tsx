@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
 import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -347,7 +349,7 @@ function CustomersPageInner() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -420,7 +422,7 @@ function CustomersPageInner() {
                 })}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
 
           {/* Footer note (concept pgnote) */}
           <p className="px-1 text-xs text-muted-foreground tabular-nums">
