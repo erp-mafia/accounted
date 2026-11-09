@@ -117,7 +117,10 @@ test('journal entry details render before their background refresh within budget
     await heldRefresh
     await route.continue()
   })
-  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/${entry.id}/detail`)).catch(() => null)
+  const refreshed = page.waitForResponse(
+    response => new URL(response.url()).pathname.endsWith(`/${entry.id}/detail`),
+    { timeout: 15_000 },
+  ).catch(() => null)
   const note = `E2E note before refresh ${info.project.name}`
   await page.route(`**/api/bookkeeping/journal-entries/${entry.id}/notes`, route => route.fulfill({ json: { data: {} } }))
   try {

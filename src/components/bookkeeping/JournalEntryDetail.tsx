@@ -100,6 +100,8 @@ function committedByLabel(
   }
 }
 
+const NO_REFERENCES: UnderlagReference[] = []
+
 // Ledger amounts render as plain sv-SE numbers with two decimals (no currency
 // suffix), the same way the verifikat list's line tables do.
 const fmtAmount = (value: number | string): string =>
@@ -144,7 +146,7 @@ export default function JournalEntryDetail({ id, initialCompanyId, initialData }
   const entry = detail?.entry ?? null
   const chain = detail?.chain ?? []
   const error = detailError ? t('error_load_failed') : null
-  const references = detail?.references ?? retriedReferences ?? []
+  const references = detail?.references ?? retriedReferences ?? NO_REFERENCES
   const retagLog = detail?.retag_log ?? []
   const rattelseLog = detail?.rattelse_log ?? []
   const periodStatus = detail?.period_status ?? null

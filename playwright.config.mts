@@ -19,7 +19,7 @@ export default defineConfig({
     actionTimeout: 3000,
     navigationTimeout: 5000,
     // Full-DOM trace snapshots serialize thousands of expanded ledger rows
-    // inside timed actions. Keep action/network traces and failure screenshots
+    // inside timed actions. Keep action traces and failure screenshots
     // without adding diagnostic DOM-copy work to user-facing latency budgets.
     trace: { mode: 'retain-on-failure', snapshots: false },
     screenshot: 'only-on-failure',

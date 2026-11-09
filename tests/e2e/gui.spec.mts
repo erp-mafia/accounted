@@ -218,13 +218,34 @@ for (const theme of ['light', 'dark'] as const) {
     await page.addInitScript(value => localStorage.setItem('theme', value), theme)
     const routes = ['/transactions', '/invoices', '/supplier-invoices', '/bookkeeping', '/reports/trial-balance', '/reports/grundbok', '/accounts']
     for (const route of routes) {
+      let rowIndex = 0
       await measured(info, `Ready card table ${route}`, BUDGET.navigation, async () => {
         await page.goto(route)
         if (route === '/transactions') await page.getByRole('tab', { name: 'Alla', exact: true }).click()
-        await page.locator('main .responsive-table > table > tbody > tr:has(> :nth-child(2))').first().waitFor({ state: 'visible' })
+        if (route === '/accounts') {
+          // The isolated fixture has cash accounts, but no external bank link.
+          await page.getByText('Inga konton kopplade än.', { exact: false }).waitFor({ state: 'visible' })
+          return
+        }
+        // Playwright's custom :has(:nth-child()) query takes several seconds
+        // on hundreds of rows. Native DOM selection keeps readiness timing
+        // focused on the page while still checking the same visible data row.
+        const found = await page.waitForFunction(() => {
+          const rows = [...document.querySelectorAll('main .responsive-table > table > tbody > tr')]
+          const index = rows.findIndex(row => row.children.length > 1 && row.getClientRects().length > 0)
+          return index >= 0 ? index + 1 : false
+        })
+        rowIndex = Number(await found.jsonValue()) - 1
+        await found.dispose()
       })
       expect(await page.locator('html').evaluate(element => element.classList.contains('dark'))).toBe(theme === 'dark')
-      const row = page.locator('main .responsive-table > table > tbody > tr:has(> :nth-child(2))').first()
+      if (route === '/accounts') {
+        const empty = page.locator('main .responsive-table tbody > tr').first()
+        expect(await empty.evaluate(element => element.children.length)).toBe(1)
+        expect(await empty.evaluate(element => getComputedStyle(element).borderBottomWidth)).toBe('0px')
+        continue
+      }
+      const row = page.locator('main .responsive-table > table > tbody > tr').nth(rowIndex)
       const layout = await row.evaluate(element => {
         const style = getComputedStyle(element)
         const wrapper = element.closest('.responsive-table') as HTMLElement
@@ -254,13 +275,25 @@ for (const theme of ['light', 'dark'] as const) {
         expect(layout.radius, route).toBe('0px')
       }
       if (route === '/supplier-invoices') {
-        const selectableRow = page.locator('main .responsive-table tbody > tr').filter({ has: page.getByRole('checkbox') }).first()
-        const checkbox = selectableRow.getByRole('checkbox').first()
-        await measured(info, 'Select a supplier invoice without opening it', BUDGET.interaction, async () => {
-          await checkbox.check()
-          await expect(checkbox).toBeChecked()
-          await expect(page).toHaveURL(/\/supplier-invoices$/)
+        const checkbox = page.getByRole('checkbox', { name: 'Välj faktura för betalfil', exact: true }).first()
+        // Resolve the displayed control before timing the tap: searching
+        // hundreds of records is test-driver work, not UI response latency.
+        const control = await checkbox.elementHandle()
+        if (!control) throw new Error('Selectable invoice control is missing')
+        await control.scrollIntoViewIfNeeded()
+        // A far-down mobile card may still be entering after the table is
+        // visible. Finish its bounded entrance animation before measuring
+        // input response, rather than timing Playwright's stability retries.
+        await control.evaluate(async element => {
+          await Promise.all(element.closest('tr')!.getAnimations().map(animation => animation.finished))
         })
+        try {
+          await measured(info, 'Select a supplier invoice without opening it', BUDGET.interaction, async () => {
+            await control.check()
+            expect(await control.getAttribute('aria-checked')).toBe('true')
+            expect(new URL(page.url()).pathname).toBe('/supplier-invoices')
+          })
+        } finally { await control.dispose() }
       }
       if (route === '/bookkeeping') {
         // Selection belongs to the row; the foldout must remain visually
