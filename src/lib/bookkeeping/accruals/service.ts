@@ -74,6 +74,7 @@ const log = createLogger('bookkeeping.accruals')
 
 export interface AccrualScheduleSpec {
   direction: AccrualDirection
+  sourceKind?: 'invoice' | 'manual'
   supplierInvoiceId?: string
   supplierInvoiceItemId?: string | null
   invoiceId?: string
@@ -119,7 +120,7 @@ function stornoDissolution(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  schedule: Pick<ScheduleRow, 'supplier_invoice_id' | 'invoice_id'>,
+  schedule: Pick<ScheduleRow, 'id' | 'supplier_invoice_id' | 'invoice_id' | 'origin_journal_entry_id' | 'source_kind'>,
   entryId: string,
   basis: 'system_derived' | 'user_created',
   reversalDate?: string,
@@ -359,6 +360,7 @@ export async function createAccrualSchedule(
       user_id: userId,
       company_id: companyId,
       direction: spec.direction,
+      source_kind: spec.sourceKind ?? 'invoice',
       supplier_invoice_id: spec.supplierInvoiceId ?? null,
       supplier_invoice_item_id: spec.supplierInvoiceItemId ?? null,
       invoice_id: spec.invoiceId ?? null,
@@ -423,6 +425,33 @@ export async function createAccrualSchedule(
   return scheduleRow
 }
 
+const MANUAL_ORIGIN_REVERSED_MESSAGE =
+  'Verifikatet som periodiseringen utgår från är makulerat utan rättelse, så månaden bokförs inte. ' +
+  'Ångra periodiseringen, och lägg vid behov upp en ny från det verifikat som står kvar.'
+
+/**
+ * Whether a manual periodisering's origin verifikat still stands: posted, or
+ * stornoed with a posted rättelse in its place (liveEntryOf). Reversing the
+ * origin cancels its manual plans (cancel-accruals-on-origin-reversal); this
+ * keeps a month from posting when that did not run. Invoice plans and plans
+ * from an ingående balans have no origin to check. Cached per run.
+ */
+async function manualOriginStands(
+  supabase: SupabaseClient,
+  companyId: string,
+  schedule: Pick<ScheduleRow, 'source_kind' | 'origin_journal_entry_id'>,
+  cache: Map<string, boolean>,
+): Promise<boolean> {
+  const originId = schedule.source_kind === 'manual' ? schedule.origin_journal_entry_id : null
+  if (!originId) return true
+  const cached = cache.get(originId)
+  if (cached !== undefined) return cached
+  const live = await liveEntryOf(supabase, companyId, originId)
+  const stands = !('none' in live)
+  cache.set(originId, stands)
+  return stands
+}
+
 /**
  * Post every pending installment whose calendar month has begun.
  * Used by the daily cron, the manual "Bokför förfallna" action, and the
@@ -471,10 +500,14 @@ export async function postDueInstallments(
 
   const lockFloor = await fetchLockDateFloor(supabase, companyId)
   const touchedSchedules = new Set<string>()
+  const originStanding = new Map<string, boolean>()
 
   for (const installment of due) {
     const schedule = installment.schedule as ScheduleRow
     try {
+      if (!(await manualOriginStands(supabase, companyId, schedule, originStanding))) {
+        throw new Error(MANUAL_ORIGIN_REVERSED_MESSAGE)
+      }
       const { entryDate, fiscalPeriodId } = isAccruedSchedule(schedule)
         ? await accruedPosting(supabase, companyId, installment.period_month, schedule.direction, lockFloor)
         : await deferralPosting(supabase, companyId, installment.period_month, schedule, lockFloor)
@@ -1014,11 +1047,7 @@ export async function cancelSchedulesForSource(
   userId: string,
   source: { supplierInvoiceId?: string; invoiceId?: string },
   options: { reversalDate?: string } = {},
-): Promise<{
-  cancelledSchedules: number
-  reversedEntries: number
-  failedReversals: number
-}> {
+): Promise<CancelSchedulesResult> {
   if (!source.supplierInvoiceId && !source.invoiceId) {
     throw new Error('cancelSchedulesForSource requires a source invoice id')
   }
@@ -1036,8 +1065,33 @@ export async function cancelSchedulesForSource(
   if (error) {
     throw new Error(`Failed to load accrual schedules: ${error.message}`)
   }
-  const schedules = (data ?? []) as ScheduleRow[]
+  return cancelSchedules(supabase, companyId, userId, (data ?? []) as ScheduleRow[], {
+    reversalDate: options.reversalDate,
+    failurePrefix: 'Storno vid kreditering misslyckades',
+  })
+}
 
+export interface CancelSchedulesResult {
+  cancelledSchedules: number
+  reversedEntries: number
+  failedReversals: number
+}
+
+/**
+ * Undo what each schedule booked: cancel its pending months, storno every
+ * posted dissolution and mark it cancelled, so the interim account holds the
+ * whole amount again. The credit of an invoice (cancelSchedulesForSource) and
+ * the undo of a manual periodisering (lib/bookkeeping/accruals/manual.ts) run
+ * the same steps; `failurePrefix` names the action in a stuck month's
+ * last_error. A schedule whose stornos did not all go through stays active.
+ */
+export async function cancelSchedules(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  schedules: readonly ScheduleRow[],
+  options: { reversalDate?: string; failurePrefix: string },
+): Promise<CancelSchedulesResult> {
   let cancelledSchedules = 0
   let reversedEntries = 0
   let failedReversals = 0
@@ -1087,7 +1141,7 @@ export async function cancelSchedulesForSource(
         await supabase
           .from('accrual_schedule_installments')
           .update({
-            last_error: `Storno vid kreditering misslyckades: ${message}`,
+            last_error: `${options.failurePrefix}: ${message}`,
           })
           .eq('id', installment.id)
           .eq('company_id', companyId)

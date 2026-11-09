@@ -1225,3 +1225,43 @@ describe('release day', () => {
     expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-02-14')
   })
 })
+
+describe('postDueInstallments: a manual plan follows its origin verifikat', () => {
+  const manualSchedule = makeSchedule({ source_kind: 'manual', supplier_invoice_id: null, supplier_invoice_item_id: null })
+
+  it('posts while the origin stands', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ schedule: manualSchedule })] }, // due installments
+      { data: { bookkeeping_locked_through: null } }, // company_settings
+      { data: { id: 'je-origin', status: 'posted' } }, // liveEntryOf: the origin
+      { data: [{ id: 'inst-1' }] }, // CAS claim
+      { count: 1 }, // still pending months
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, { userId: USER, today: '2026-01-20' })
+
+    expect(result).toMatchObject({ posted: 1, failed: 0 })
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('books no month once the origin is reversed without a rättelse', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ schedule: manualSchedule })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: { id: 'je-origin', status: 'reversed' } }, // liveEntryOf: the origin
+      { data: [] }, // no correction in its place
+      { data: null }, // last_error on the installment
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, { userId: USER, today: '2026-01-20' })
+
+    expect(result).toMatchObject({ posted: 0, failed: 1 })
+    expect(result.errors[0].message).toMatch(/makulerat utan rättelse/)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('accrual_schedule_installments', 'update')[0][0]).toMatchObject({
+      last_error: expect.stringMatching(/Ångra periodiseringen/),
+    })
+  })
+})

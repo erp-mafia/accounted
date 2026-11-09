@@ -65,6 +65,7 @@
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/attachments-store",
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/manual-reconciliation",
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/service",
+      "lib/composition/event-consumers.ts -> lib/bookkeeping/handlers/cancel-accruals-on-origin-reversal",
       "lib/composition/event-consumers.ts -> lib/bookkeeping/handlers/unlearn-on-reversal",
       "lib/composition/event-consumers.ts -> lib/composition/async-event-consumers",
       "lib/composition/event-consumers.ts -> lib/events/consumers",

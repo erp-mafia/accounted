@@ -52,6 +52,7 @@ describe('the prefix table (a public contract)', () => {
       team: 'team',
       business_event: 'bev',
       sie_import: 'sie',
+      accrual_schedule: 'acs',
     })
   })
 

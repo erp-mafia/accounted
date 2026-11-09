@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 467 endpoints.
+  pagination, scopes), and all 469 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 467 operations. Paths are shown without
+API version `2026-05-12`, 469 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -282,7 +282,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (73)
+### Periods and registers (75)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -294,6 +294,8 @@ PATCH /companies/{companyId}/accounts/{number} : Edit or deactivate an account i
 DELETE /companies/{companyId}/accounts/{number} : Delete an account nothing has been booked on [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/accounts/activate : Activate BAS accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/accounts/deactivate : Deactivate accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/accrual-schedules : Create a periodisering by hand for an amount on 17xx/29xx that no invoice line in Accounted carries, with monthly catch-up [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/accrual-schedules/{id}/cancel : Undo a periodisering set up by hand: cancel its months not yet posted and storno the months it posted [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/accrual-schedules/{id}/replan : Re-plan the months of a periodisering that are not yet posted: a new period end and/or the day each month books on [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/agreement-obligations : List the payments the agreements say fall due, oldest first, with whether each arrived in the bank [scope:companies:read risk:low idempotent]
 GET /companies/{companyId}/agreements : List the company's agreements (rent, leases, loans, subscriptions, insurance, permits, IP, domains, guarantees and more) with the next payment and the notice and end dates [scope:companies:read risk:low idempotent]

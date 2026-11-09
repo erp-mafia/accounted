@@ -189,7 +189,7 @@ import {
   journalEntriesUpdateDraft,
   journalEntriesCancelDraft,
 } from './journal-entries'
-import { accrualSchedulesReplan } from './accrual-schedules'
+import { accrualSchedulesCancel, accrualSchedulesCreate, accrualSchedulesReplan } from './accrual-schedules'
 import {
   auditTrailList,
   reportsBehandlingshistorik,
@@ -456,7 +456,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   journalEntriesBatchNoDocumentRequired,
   journalEntriesRattelseLog,
   // accrual-schedules (periodisering)
+  accrualSchedulesCreate,
   accrualSchedulesReplan,
+  accrualSchedulesCancel,
   // filing-reports
   reportsInk2,
   reportsInk3,

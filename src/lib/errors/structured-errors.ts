@@ -1887,6 +1887,72 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Periodiseringen kunde inte hittas.',
     message_en: 'Accrual schedule not found.',
   },
+  // A periodisering set up by hand (lib/bookkeeping/accruals/manual.ts, accounted#164).
+  ACCRUAL_ORIGIN_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet som periodiseringen ska utgå från finns inte eller är inte bokfört.',
+    message_en: 'The verifikat the accrual schedule should start from does not exist or is not posted.',
+  },
+  ACCRUAL_ORIGIN_REVERSED: {
+    httpStatus: 400,
+    message_sv: 'Verifikatet som periodiseringen ska utgå från är makulerat. Utgå från rättelsen eller det verifikat som står kvar.',
+    message_en: 'The verifikat the accrual schedule should start from is reversed. Start from its correction or the verifikat that stands.',
+  },
+  ACCRUAL_ORIGIN_ACCOUNT_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Verifikatet för inte upp något belopp på balanskontot. Välj raden som förde upp beloppet, eller rätt balanskonto.',
+    message_en: 'The verifikat puts no amount on the balance account. Pick the line that put the amount there, or the right balance account.',
+  },
+  ACCRUAL_OPENING_BALANCE_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Balanskontot har ingen ingående balans att periodisera. Öppna verifikatet som förde upp beloppet och välj Periodisera på raden.',
+    message_en: 'The balance account has no opening balance to spread. Open the verifikat that put the amount there and choose Periodisera on its line.',
+  },
+  ACCRUAL_BALANCE_EXCEEDED: {
+    httpStatus: 400,
+    message_sv: 'Beloppet är större än det som finns kvar att periodisera på balanskontot. Ange det belopp som återstår och den första månad som inte redan är upplöst.',
+    message_en: 'The amount exceeds what remains to spread on the balance account. Enter the remaining amount and the first month not yet released.',
+  },
+  ACCRUAL_PERIOD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange antal månader eller ett slutdatum som inte ligger före första månaden.',
+    message_en: 'Give the number of months or an end date that is not before the first month.',
+  },
+  ACCRUAL_AMOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Beloppet måste vara större än noll och räcka till minst ett öre per månad.',
+    message_en: 'The amount must be greater than zero and cover at least one öre per month.',
+  },
+  ACCRUAL_BALANCE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Balanskontot måste vara ett 17xx- eller 29xx-konto.',
+    message_en: 'The balance account must be a 17xx or 29xx account.',
+  },
+  ACCRUAL_TARGET_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Resultatkontot måste vara ett konto i klass 3-8.',
+    message_en: 'The P&L account must be an account in class 3-8.',
+  },
+  ACCRUAL_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Periodiseringen kunde inte skapas.',
+    message_en: 'The accrual schedule could not be created.',
+  },
+  ACCRUAL_ROOM_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Det gick inte att läsa hur mycket som finns kvar att periodisera.',
+    message_en: 'Could not read how much remains to spread.',
+  },
+  ACCRUAL_CANCEL_NOT_MANUAL: {
+    httpStatus: 400,
+    message_sv: 'En periodisering från en faktura ångras genom att fakturan krediteras.',
+    message_en: 'An accrual schedule from an invoice is undone by crediting the invoice.',
+  },
+  ACCRUAL_CANCEL_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Periodiseringen kunde inte ångras.',
+    message_en: 'The accrual schedule could not be undone.',
+  },
   ACCRUAL_DISSOLVE_FAILED: {
     httpStatus: 400,
     message_sv: 'Periodiseringen kunde inte lösas upp.',

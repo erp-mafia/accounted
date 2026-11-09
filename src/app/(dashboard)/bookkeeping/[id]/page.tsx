@@ -53,7 +53,9 @@ import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { ManualAccrualDialog, type ManualAccrualPrefill } from '@/components/bookkeeping/ManualAccrualDialog'
 import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
+import { basDeferralDirection } from '@/lib/bookkeeping/result-account-ranges'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -119,6 +121,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
   const tCorrection = useTranslations('journal_correction')
+  const tAccruals = useTranslations('accruals')
   const { format: attribute } = useAttribution()
   const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
@@ -187,6 +190,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const { settings } = useCompanySettings()
   const dimensionsEnabled = settings?.dimensions_enabled === true
   const [retagLine, setRetagLine] = useState<RetagLine | null>(null)
+  const [accrualPrefill, setAccrualPrefill] = useState<ManualAccrualPrefill | null>(null)
   const [retagLog, setRetagLog] = useState<
     { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
   >([])
@@ -523,6 +527,31 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         <PencilIcon className="h-3 w-3" />
       </button>
     ) : null
+
+  // "Periodisera" only on a line that put an amount on a förutbetald account
+  // (a debit on 1710-1740/1790, a credit on 2970-2979): the dialog prefills
+  // what remains on the account, read from the ledger.
+  const accrualButton = (line: JournalEntryLine) => {
+    const direction = basDeferralDirection(line.account_number)
+    if (!canWrite || entry.status !== 'posted' || !direction) return null
+    const net = Number(line.debit_amount ?? 0) - Number(line.credit_amount ?? 0)
+    if (direction === 'expense' ? net <= 0 : net >= 0) return null
+    return (
+      <button
+        type="button"
+        className="rounded-sm px-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        onClick={() => setAccrualPrefill({
+          direction,
+          balance_account: line.account_number,
+          description: entry.description ?? '',
+          origin_journal_entry_id: entry.id,
+          origin_label: formatVoucher(entry),
+        })}
+      >
+        {tAccruals('line_action')}
+      </button>
+    )
+  }
 
   // Title in the serif: the voucher label for posted entries, a plain
   // "Utkast till verifikat" while the number is still unassigned.
@@ -905,6 +934,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               ...voucherLineView(line),
               extra: (
                 <>
+                  {accrualButton(line)}
                   {retagButton(line)}
                   {renderDimensions(line)}
                 </>
@@ -1094,6 +1124,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         }}
         line={retagLine}
         onRetagged={fetchData}
+      />
+
+      <ManualAccrualDialog
+        open={accrualPrefill !== null}
+        onOpenChange={(open) => { if (!open) setAccrualPrefill(null) }}
+        prefill={accrualPrefill ?? undefined}
+        onCreated={fetchData}
       />
 
       {/* Inline rättelse dialogs (strike lines / metadata) */}

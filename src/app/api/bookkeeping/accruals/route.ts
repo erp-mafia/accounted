@@ -1,11 +1,22 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { validateQuery } from '@/lib/api/validate'
+import { validateBody, validateQuery } from '@/lib/api/validate'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import {
+  CREATE_NEEDS_A_PERIOD,
+  CreateManualAccrualFields,
+  accrualSchedulesCreate,
+  createNamesPeriod,
+} from '@/lib/operations/accrual-schedules'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { installmentDueDate } from '@/lib/bookkeeping/accruals/service'
 import type { AccrualSchedule, AccrualScheduleInstallment } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+
+const CreateBodySchema = CreateManualAccrualFields.extend({
+  dry_run: z.boolean().optional(),
+}).refine(createNamesPeriod, CREATE_NEEDS_A_PERIOD)
 
 const ListQuerySchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled', 'all']).default('active'),
@@ -71,4 +82,33 @@ export const GET = withRouteContext(
 
     return NextResponse.json({ data: schedules, due_count: dueCount })
   },
+)
+
+/**
+ * POST /api/bookkeeping/accruals
+ *
+ * "Ny periodisering": a periodisering set up by hand from a posted verifikat
+ * or the ingående balans. { dry_run: true } answers the months and what
+ * remains to spread, and writes nothing; the dialog shows it before the user
+ * confirms. The rules live in createManualAccrualSchedule, the same service
+ * the v1 endpoint and gnubok_create_accrual_schedule run (operation
+ * accrual-schedules.create).
+ */
+export const POST = withRouteContext(
+  'accruals.create',
+  async (request, { supabase, companyId, user, log, requestId }) => {
+    const validation = await validateBody(request, CreateBodySchema)
+    if (!validation.success) return validation.response
+    const { dry_run: dryRun, ...input } = validation.data
+    const outcome = await accrualSchedulesCreate.run(
+      { supabase, companyId, userId: user.id, log },
+      input,
+      { dryRun: dryRun === true },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    log.info('manual accrual schedule created', { userId: user.id, companyId, scheduleId: outcome.data.accrual_schedule_id })
+    return NextResponse.json({ data: outcome.data }, { status: 201 })
+  },
+  { requireWrite: true },
 )

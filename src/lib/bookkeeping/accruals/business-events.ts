@@ -22,9 +22,14 @@ import type { AccrualSchedule } from '@/types'
  * never read as a category. Amounts are SEK magnitudes.
  */
 
-type ScheduleSource = Pick<AccrualSchedule, 'supplier_invoice_id' | 'invoice_id'>
+type ScheduleSource = Pick<AccrualSchedule, 'id' | 'supplier_invoice_id' | 'invoice_id' | 'origin_journal_entry_id' | 'source_kind'>
 
 function subjectOf(schedule: ScheduleSource): BusinessEventDraft['subject'] {
+  if (schedule.source_kind === 'manual') {
+    return schedule.origin_journal_entry_id
+      ? { type: 'journal_entry', id: schedule.origin_journal_entry_id }
+      : { type: 'accrual_schedule', id: schedule.id }
+  }
   if (schedule.supplier_invoice_id) return { type: 'supplier_invoice', id: schedule.supplier_invoice_id }
   if (schedule.invoice_id) return { type: 'invoice', id: schedule.invoice_id }
   return null

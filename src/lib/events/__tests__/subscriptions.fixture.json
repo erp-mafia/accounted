@@ -109,6 +109,7 @@
   ],
   "journal_entry.reversed": [
     "unlearn-on-reversal",
+    "accrual-origin-reversal",
     "event-log",
     "webhooks"
   ],

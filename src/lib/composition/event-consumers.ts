@@ -18,6 +18,7 @@
  */
 import { handleSupplierInvoiceRetroMatch } from '@/lib/invoices/supplier-invoice-handler'
 import { unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
+import { cancelAccrualsOnOriginReversal } from '@/lib/bookkeeping/handlers/cancel-accruals-on-origin-reversal'
 import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
 import { relayAgentFeedback } from '@/lib/events/handlers/agent-feedback-relay-handler'
@@ -46,6 +47,14 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     owner: 'transactions',
     eventTypes: ['journal_entry.reversed'],
     handle: (event) => unlearnOnReversal(event.payload),
+  }),
+  // A reversed verifikat cancels the manual periodiseringar it is the origin
+  // of and stornoes the months they posted, as a credit does for an invoice.
+  eventConsumer({
+    id: 'accrual-origin-reversal',
+    owner: 'ledger',
+    eventTypes: ['journal_entry.reversed'],
+    handle: (event) => cancelAccrualsOnOriginReversal(event.payload),
   }),
   // The attest mail to each attester when an invoice that needs attest is registered.
   eventConsumer({

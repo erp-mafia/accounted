@@ -89,6 +89,8 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   hold_corporate_meeting: 'warning_hold_corporate_meeting',
   save_tax_loss_carryforward: 'warning_save_tax_loss_carryforward',
   book_webshop_day: 'warning_book_webshop_day',
+  create_accrual_schedule: 'warning_create_accrual_schedule',
+  cancel_accrual_schedule: 'warning_cancel_accrual_schedule',
   // The sentence for a change of the payment details; singleActionWarning
   // drops their clause when the change has none (crm#1605).
   update_company_settings: 'warning_update_company_settings_payment',

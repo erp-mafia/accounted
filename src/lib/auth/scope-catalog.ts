@@ -459,6 +459,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_correct_entry_metadata: 'bookkeeping:write',
   gnubok_correct_entry_lines: 'bookkeeping:write',
   gnubok_replan_accrual_schedule: 'bookkeeping:write',
+  gnubok_create_accrual_schedule: 'bookkeeping:write',
+  gnubok_cancel_accrual_schedule: 'bookkeeping:write',
   // K3 (lib/operations/k3.ts)
   gnubok_post_asset_value_adjustment: 'bookkeeping:write',
   gnubok_replace_asset_component: 'bookkeeping:write',
