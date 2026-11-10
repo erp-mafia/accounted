@@ -127,6 +127,62 @@ describe('bankNetMismatch: the RPC bank net', () => {
 })
 
 describe('bulk booking dry run (what staging runs)', () => {
+  // #203: a verifikat posted from the row whose claim never landed books it
+  // already, though no pointer or link says so.
+  it('refuses a new samlingsverifikat over a row a posted verifikat names, naming that verifikat', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null }) // transactions
+    enqueue({ data: [{ id: JE, status: 'posted', source_type: 'bank_transaction', source_id: TX_OUT, voucher_series: 'A', voucher_number: 31 }], error: null }) // booked from the row
+
+    const outcome = await run(supabase, {
+      entry_description: 'Bankavgift',
+      manual_lines: [line('6570', 5000, 0), line('1930', 0, 5000)],
+    })
+
+    expect(outcome).toEqual({
+      ok: false,
+      code: 'BULK_BOOK_TX_ALREADY_BOOKED',
+      details: { tx_id: TX_OUT, via: 'named', journal_entry_id: JE, voucher: 'A31' },
+    })
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', [TX_OUT]], ['status', ['posted', 'reversed']]])
+  })
+
+  it('asks no verifikat about a row its pointer already books, nor when linking rows to an existing verifikat', async () => {
+    const asked = (calls: unknown[][]) => calls.some(([column]) => column === 'source_id')
+    const booked = createQueuedMockSupabase()
+    booked.enqueue({ data: [{ ...transferOut, journal_entry_id: JE }], error: null })
+    const outcome = await run(booked.supabase, { entry_description: 'Bankavgift', manual_lines: [line('6570', 5000, 0), line('1930', 0, 5000)] })
+    expect(outcome).toMatchObject({ ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: TX_OUT } })
+    expect(asked(booked.findCalls('journal_entries', 'in'))).toBe(false)
+
+    // Linking the row to the verifikat that names it is the way on, never refused for it.
+    const link = createQueuedMockSupabase()
+    link.enqueue({ data: [transferOut], error: null })
+    await run(link.supabase, { existing_journal_entry_id: JE })
+    expect(asked(link.findCalls('journal_entries', 'in'))).toBe(false)
+  })
+
+  it('reads the booked-from rows by their stored ids, however the caller spelled them', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null })
+    enqueue({ data: [{ id: JE, status: 'posted', source_type: 'bank_transaction', source_id: TX_OUT, voucher_series: 'A', voucher_number: 31 }], error: null })
+    const outcome = await run(supabase, {
+      tx_ids: [TX_OUT.toUpperCase()],
+      entry_description: 'Bankavgift',
+      manual_lines: [line('6570', 5000, 0), line('1930', 0, 5000)],
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: TX_OUT, via: 'named' } })
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', [TX_OUT]], ['status', ['posted', 'reversed']]])
+  })
+
+  it('fails closed when the booked-from read fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [transferOut], error: null })
+    enqueue({ error: { message: 'timeout' } })
+    const outcome = await run(supabase, { entry_description: 'Bankavgift', manual_lines: [line('6570', 5000, 0), line('1930', 0, 5000)] })
+    expect(outcome).toEqual({ ok: false, code: 'BANK_ROW_READ_FAILED' })
+  })
+
   it('refuses manual lines that balance only before each line is rounded', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null }) // transactions
@@ -146,6 +202,7 @@ describe('bulk booking dry run (what staging runs)', () => {
   it('refuses the crm#1501 transfer at staging and names the doors that book it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null }) // transactions
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({
       data: [
         { account_number: '1930', is_active: true },
@@ -176,6 +233,7 @@ describe('bulk booking dry run (what staging runs)', () => {
     const second = { ...stripeFee, id: TX_LATER, amount: -37.5 }
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [second, stripeFee], error: null })
+    enqueue({ data: [], error: null }) // posted verifikat booked from the rows: none
     enqueue({ data: [{ account_number: '1686', is_active: true }, { account_number: '6570', is_active: true }], error: null })
     enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null })
 
@@ -199,6 +257,7 @@ describe('bulk booking dry run (what staging runs)', () => {
     covered.mockResolvedValue('2026-12-31')
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null })
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '6570', is_active: true }], error: null })
     enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
 
@@ -240,6 +299,7 @@ describe('bulk booking dry run (what staging runs)', () => {
   it('refuses at staging lines that do not move the row\'s account by its amount, naming both amounts', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null })
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({
       data: [
         { account_number: '1930', is_active: true },
@@ -308,6 +368,7 @@ describe('bulk booking dry run (what staging runs)', () => {
   it('refuses at staging an account that is deactivated or missing from the chart, saying which', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null })
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({
       data: [
         { account_number: '1930', is_active: true },

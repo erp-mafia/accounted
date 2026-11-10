@@ -28,6 +28,7 @@ function stage(args: Record<string, unknown>) {
   const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
   const tx = makeTransaction({ id: 'tx-1', amount: -500, cash_account_id: 'cash-1' })
   enqueue({ data: tx, error: null })
+  enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
   enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
   enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
   enqueue({ data: null, error: null })

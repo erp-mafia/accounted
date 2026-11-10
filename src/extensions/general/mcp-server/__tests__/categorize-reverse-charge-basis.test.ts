@@ -71,6 +71,7 @@ async function stage(
 ) {
   const { supabase, enqueue, findCall } = createQueuedMockSupabase()
   enqueue({ data: document ? { ...coreTxRow, document_id: 'doc-1' } : coreTxRow }) // core: transactions
+  enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
   enqueue({ data: settingsRow }) // core: company_settings
   if (document) enqueue({ data: { id: 'doc-1', extracted_data: document } }) // core: the pinned underlag
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
@@ -147,6 +148,7 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
   it('refuses plain reverse_charge when no underlag tells the seller country, and stages nothing (#94)', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // momskoder
@@ -216,6 +218,7 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
   it('refuses a named box that the override account contradicts, and stages nothing (crm#1454)', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: { account_number: '4531', account_class: 4, is_active: true } }) // override chart row

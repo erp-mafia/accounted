@@ -76,8 +76,16 @@ export type TransactionBookableVerdict =
       code: 'TRANSACTION_ALREADY_CATEGORIZED'
       /** The posted verifikat that already books the row; null when a read failed. */
       journalEntryId: string | null
-      /** Which anchor names it: the 1:1 pointer or a bank_line junction row. */
-      via: 'pointer' | 'link' | 'read_error'
+      /**
+       * What says so: the 1:1 pointer, a bank_line junction row, or the
+       * verifikat itself, which names the row while no anchor does (named).
+       */
+      via: 'pointer' | 'link' | 'named' | 'read_error'
+      /**
+       * On a named refusal, the verifikat's label ("A31"): the row reads as
+       * unbooked everywhere else, so the number is how the person finds it.
+       */
+      voucher?: string | null
     }
 
 /**
@@ -88,7 +96,9 @@ export type TransactionBookableVerdict =
  *   - its pointer (transactions.journal_entry_id) names a posted verifikat, or
  *   - a 'bank_line' transaction_voucher_links row names a posted verifikat
  *     (a bulk-book samlingsverifikat, a 1:N split, or a correction that
- *     re-pointed the link, see relinkTransactionsToEntry).
+ *     re-pointed the link, see relinkTransactionsToEntry), or
+ *   - nothing anchors it, but a posted verifikat names it as the row it books
+ *     (readBookedFromRows): the claim after the posting never landed.
  *
  * A pointer or link to a verifikat that is no longer posted (reversed by a
  * storno, the uncategorize path) does not count: the row reads as unbooked in
@@ -120,6 +130,13 @@ export async function assertTransactionBookable(
   }
   if (anchors.linked[0]) {
     return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: anchors.linked[0].id, via: 'link' }
+  }
+  const named = await readNamingEntries(supabase, companyId, tx)
+  if (named === 'read_error') {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
+  }
+  if (named[0]) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: named[0].id, via: 'named', voucher: anchorVoucherLabel(named[0]) }
   }
   return { ok: true }
 }
@@ -213,6 +230,123 @@ async function readPostedAnchors(
 }
 
 /**
+ * The verifikat that book each bank row as the row they were booked from
+ * (source_type 'bank_transaction' with the row as source_id, which every door
+ * that books a row from itself writes), in one read: a posted one, lowest
+ * voucher number first, then the standing correction of a reversed one. A door
+ * posts the verifikat and claims the row in a second write; when the claim and
+ * its compensating storno both fail (the busy bank-account lock, a request
+ * that dies between them), the verifikat stands beside a row its pointer and
+ * links read as open, and only the verifikat says the row is booked.
+ *
+ * A storno opens the row again: the original is reversed and the storno is
+ * source_type 'storno'. A correction does not: the original is reversed, but
+ * its correction books the row's money on (public.standing_correction, as
+ * readPostedAnchors reads a corrected anchor), and nothing re-points a row
+ * that no anchor names. `checked` holds the reversed verifikat
+ * readPostedAnchors already asked about. 'read_error' when a read failed: the
+ * gates fail closed on it.
+ *
+ * This is the source half of public.posted_entries_naming_bank_row, on the
+ * (source_type, source_id) index. The other half, a verifikat whose
+ * bank_booking_context names the row, is not read here: as the caller (row
+ * level security) its GIN index cannot be used, and the probe read about
+ * 116,000 pages, 4.5 s, per row in the largest company on 2026-11-09 (see
+ * 20261107213000), against 0.06 ms for the source half. A probe that runs as
+ * its owner is #205.
+ */
+async function readBookedFromRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+  checked: ReadonlySet<string> = new Set(),
+): Promise<Map<string, PostedAnchor[]> | 'read_error'> {
+  const ids = [...new Set(transactionIds.filter((id) => typeof id === 'string' && id.length > 0))]
+  const byRow = new Map<string, PostedAnchor[]>()
+  if (ids.length === 0) return byRow
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, status, source_type, source_id, voucher_series, voucher_number')
+    .eq('company_id', companyId)
+    .eq('source_type', 'bank_transaction')
+    .in('source_id', ids)
+    .in('status', ['posted', 'reversed'])
+  // A list, or no rows at all; anything else is no answer.
+  if (error || (data != null && !Array.isArray(data))) return 'read_error'
+  // The filters again on what came back, as readPostedAnchors reads status.
+  const found = ((data ?? []) as Array<PostedAnchor & { status?: string }>)
+    .filter((entry) => entry.source_type === 'bank_transaction' && typeof entry.source_id === 'string')
+    .sort((a, b) => (a.voucher_number ?? Number.MAX_SAFE_INTEGER) - (b.voucher_number ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id))
+  // Keyed by the lowercase id: a door may hold the id as its caller spelled it.
+  const add = (row: string, entry: PostedAnchor) => byRow.set(row.toLowerCase(), [...(byRow.get(row.toLowerCase()) ?? []), entry])
+  for (const entry of found) if (entry.status === 'posted') add(entry.source_id!, entry)
+
+  const reversed = found.filter((entry) => entry.status === 'reversed' && !checked.has(entry.id))
+  // Ten at a time: a bulk booking holds up to 200 rows.
+  for (let start = 0; start < reversed.length; start += 10) {
+    const wave = reversed.slice(start, start + 10)
+    const answers = await Promise.all(wave.map((entry) => standingCorrectionOf(supabase, companyId, entry.id)))
+    for (const [index, answer] of answers.entries()) {
+      if (answer === 'read_error') return 'read_error'
+      if (answer) add(wave[index]!.source_id!, answer)
+    }
+  }
+  return byRow
+}
+
+/** The posted correction a reversed verifikat's bank money lives on, null when none; 'read_error' when a read failed. */
+async function standingCorrectionOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryId: string,
+): Promise<PostedAnchor | null | 'read_error'> {
+  const { data: correctionId, error } = await supabase.rpc('standing_correction', { p_entry_id: entryId })
+  if (error) return 'read_error'
+  if (!correctionId) return null
+  const { data: correction, error: readError } = await supabase
+    .from('journal_entries')
+    .select('id, source_type, source_id, voucher_series, voucher_number')
+    .eq('company_id', companyId)
+    .eq('id', correctionId as string)
+    .maybeSingle()
+  if (readError) return 'read_error'
+  return (correction as PostedAnchor | null) ?? null
+}
+
+/** readBookedFromRows for one row. */
+async function readNamingEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  tx: AnchoredTransaction,
+): Promise<PostedAnchor[] | 'read_error'> {
+  // readPostedAnchors asked about the pointer's and the links' verifikat already.
+  const checked = new Set(
+    [tx.journal_entry_id, ...(tx.transaction_voucher_links ?? []).map((link) => link.journal_entry_id)].filter(
+      (id): id is string => typeof id === 'string',
+    ),
+  )
+  const byRow = await readBookedFromRows(supabase, companyId, [tx.id], checked)
+  return byRow === 'read_error' ? byRow : (byRow.get(String(tx.id).toLowerCase()) ?? [])
+}
+
+/**
+ * For a door that books a new verifikat on several rows at once (bulk-book's
+ * samlingsverifikat): the first posted verifikat booked from each row, keyed
+ * by the row's lowercase id, in one read (readBookedFromRows). Rows nothing
+ * names are left out. Ask it only for rows no pointer or link anchors: those
+ * are the door's own refusal.
+ */
+export async function readNamedBankRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<Map<string, { journalEntryId: string; voucher: string | null }> | 'read_error'> {
+  const byRow = await readBookedFromRows(supabase, companyId, transactionIds)
+  if (byRow === 'read_error') return byRow
+  return new Map([...byRow].map(([row, [first]]) => [row, { journalEntryId: first!.id, voucher: anchorVoucherLabel(first!) }]))
+}
+
+/**
  * How a refused row can be opened again, one answer per shape, verified door
  * by door in tests/pg/customer-bank-match-doors.pg.test.ts:
  *
@@ -227,7 +361,11 @@ async function readPostedAnchors(
  *     or a verifikat of its own through a link. Uncategorize cannot reach it
  *     and Koppla bort refuses it: only a storno of the verifikat releases it,
  *     with every other row that verifikat explains (gnubok_reverse_journal_entry,
- *     Återför on the verifikat).
+ *     Återför on the verifikat). Also a row only a posted verifikat names
+ *     (via 'named'): nothing links them, so the storno is what opens the
+ *     row. When that verifikat is the row's booking, linking the two instead
+ *     (Koppla, gnubok_link_transaction_to_journal_entry) books the row once
+ *     and leaves nothing to rebook (tests/pg/named-bank-row-gate.pg.test.ts).
  *   - restore: an ignored row comes back with Återställ
  *     (gnubok_ignore_transaction restore: true,
  *     DELETE /transactions/{id}/ignore).
@@ -237,8 +375,12 @@ export type BankRowUndo = 'uncategorize' | 'unlink' | 'reverse_voucher' | 'resto
 /** The gate's refusal, as a door maps it. */
 export interface BankRowRefusal {
   outcome: 'refuse'
-  /** The pointer, a bank_line link, a reconciliation link on the pointer, an ignored row, or a failed read. */
-  via: 'pointer' | 'link' | 'reconciliation' | 'ignored' | 'read_error'
+  /**
+   * The pointer, a bank_line link, a reconciliation link on the pointer, a
+   * posted verifikat that names the row while nothing anchors it, an ignored
+   * row, or a failed read.
+   */
+  via: 'pointer' | 'link' | 'reconciliation' | 'named' | 'ignored' | 'read_error'
   /** The posted verifikat that books the row; null when none does or a read failed. */
   journalEntryId: string | null
   /** Its voucher label ("A12"), null when unnumbered or unread. */
@@ -280,7 +422,8 @@ export function bankRowRefusalCode(refusal: BankRowRefusal, alreadyBookedCode: s
  * The gate a door that books a new verifikat on a bank row asks first: is
  * the row already booked, and if so, may this request reverse that booking?
  * Same read as assertTransactionBookable (the pointer and the bank_line links
- * to a posted verifikat; a failed read refuses).
+ * to a posted verifikat, then the posted verifikat that name a row nothing
+ * anchors; a failed read refuses).
  *
  * An ignored row is refused here, by every door that passes its is_ignored:
  * it can carry no verifikat (CHECK transactions_is_ignored_no_journal_entry),
@@ -294,7 +437,9 @@ export function bankRowRefusalCode(refusal: BankRowRefusal, alreadyBookedCode: s
  * (source_type 'bank_transaction', source_id the row, which the categorize
  * and book doors write), the row is not a reconciliation link
  * (reconciliation_method set), and no bank_line link names another posted
- * verifikat. Everything else always refuses. A link-only row (a bulk-book
+ * verifikat, nor does any other posted verifikat name the row (reversing
+ * the pointer's would leave that one booking it).
+ * Everything else always refuses. A link-only row (a bulk-book
  * samlingsverifikat with N>1, a 1:N split) is booked by a verifikat that
  * explains other rows too, and a reconciliation link points at an
  * independent verifikat (an SIE import, a salary run, a hand booking) whose
@@ -312,13 +457,12 @@ export async function decideBankRowRebooking(
   if (tx.is_ignored) {
     return { outcome: 'refuse', via: 'ignored', journalEntryId: null, voucher: null, replaceable: false, undo: 'restore' }
   }
+  const readError: BankRowRefusal = { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null }
   const anchors = await readPostedAnchors(supabase, companyId, tx)
-  if (anchors === 'read_error') {
-    return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null }
-  }
+  if (anchors === 'read_error') return readError
   const { pointer, linked } = anchors
   const refuse = (
-    via: 'pointer' | 'link' | 'reconciliation',
+    via: 'pointer' | 'link' | 'reconciliation' | 'named',
     entry: PostedAnchor,
     undo: BankRowUndo,
     replaceable = false,
@@ -331,12 +475,19 @@ export async function decideBankRowRebooking(
     undo,
   })
   if (!pointer) {
-    if (!linked[0]) return { outcome: 'open' }
-    return refuse('link', linked[0], tx.reconciliation_method ? 'unlink' : 'reverse_voucher')
+    if (linked[0]) return refuse('link', linked[0], tx.reconciliation_method ? 'unlink' : 'reverse_voucher')
+    const named = await readNamingEntries(supabase, companyId, tx)
+    if (named === 'read_error') return readError
+    return named[0] ? refuse('named', named[0], 'reverse_voucher') : { outcome: 'open' }
   }
   if (tx.reconciliation_method) return refuse('reconciliation', pointer, 'unlink')
   const own = isBookedFromRow(pointer, tx.id) && linked.length === 0
-  if (own && opts.replace) return { outcome: 'replace', journalEntryId: pointer.id }
+  if (own && opts.replace) {
+    const named = await readNamingEntries(supabase, companyId, tx)
+    if (named === 'read_error') return readError
+    const other = named.find((entry) => entry.id !== pointer.id)
+    return other ? refuse('named', other, 'reverse_voucher') : { outcome: 'replace', journalEntryId: pointer.id }
+  }
   return refuse('pointer', pointer, 'uncategorize', own)
 }
 

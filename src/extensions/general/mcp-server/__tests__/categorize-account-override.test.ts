@@ -88,6 +88,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
   it('rejects at staging when the override account is not in the chart (TX_CATEGORIZE_INVALID_ACCOUNT, as v1)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // core: company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: null }) // applyAccountOverride: chart_of_accounts miss
@@ -105,6 +106,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
   it('rejects at staging when the override account is inactive', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: false } })
@@ -122,6 +124,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
   it('rejects account_override combined with category "private"', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -138,6 +141,7 @@ describe('gnubok_categorize_transaction: account_override', () => {
   it('stages with the override in params AND preview when the account is active', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // core: company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit

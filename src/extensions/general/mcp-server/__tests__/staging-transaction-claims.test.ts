@@ -319,6 +319,7 @@ describe('gnubok_categorize_transaction: the row already in an open proposal', (
   function stageCategorize(open: unknown[]) {
     const mock = createQueuedMockSupabase()
     mock.enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, cash_account_id: 'cash-1' }), error: null })
+    mock.enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     mock.enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     mock.enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
     mock.enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers

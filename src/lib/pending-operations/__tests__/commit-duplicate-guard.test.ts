@@ -113,6 +113,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: null },
     ])
 
@@ -137,6 +138,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // no fiscal period yet
       { data: [] }, // pre-FY guard: earliest-period lookup (none yet)
@@ -188,6 +190,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // no fiscal period yet
       { data: [] }, // pre-FY guard: earliest-period lookup (none yet)

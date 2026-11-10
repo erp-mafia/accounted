@@ -93,6 +93,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const categorizedHandler = vi.fn()
     eventBus.on('transaction.categorized', categorizedHandler)
     enqueue({ data: txRow({ is_ignored: true }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
@@ -137,6 +138,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     // posted entry, whose orphan must be reversed.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
@@ -163,6 +165,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('posts the entry with the override on the business side', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
@@ -188,6 +191,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('records the decision with the proposal the agent booked from', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] })
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
@@ -226,6 +230,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('books GROSS with no auto-VAT line when the override has no explicit VAT intent', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
@@ -257,6 +262,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
       mockCreateJE.mockClear()
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: txRow({ amount: -250, amount_sek: -250 }) })
+      enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: settingsRow })
       enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
       if (accountOverride) {
@@ -285,6 +291,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('reads the momskoder through a loader the caller shares (the bulk driver), not once per booking', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ amount: -250, amount_sek: -250 }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
@@ -304,6 +311,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('returns 400 (never posts) when the override was deactivated after staging', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: false } })
@@ -321,6 +329,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('returns 400 when accountOverride is combined with category "private"', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -337,6 +346,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('stornos a posted entry when the ignored-row constraint rejects the link', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ is_ignored: true }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
@@ -372,6 +382,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
   it('uses a company-scoped CAS and stornos a concurrent loser', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })

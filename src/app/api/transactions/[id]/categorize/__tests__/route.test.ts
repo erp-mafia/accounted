@@ -326,6 +326,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: { ...tx, transaction_voucher_links: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }, error: null })
     enqueue({ data: [{ id: 'je-old', status: 'reversed' }] }) // journal_entries
     enqueue({ data: null, error: null }) // standing_correction: none
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod

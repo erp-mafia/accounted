@@ -298,6 +298,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       },
       // 2. transactions fetch (categorize core)
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700.28, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       // 3. company_settings
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
@@ -346,6 +347,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
           journal_entry_id: null,
         },
       },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: { ledger_account: '1931', currency: 'SEK' } }, // resolveSettlementAccount: explicit cash_account_id lookup
       { data: [{ id: 'fp-1' }] },
@@ -389,6 +391,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -423,6 +426,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       // item i2 → bookable, then its categorize chain
       { data: { id: 'i2', matched_transaction_id: 'tx-2', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-2', date: '2026-06-02', amount: -25, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -451,6 +455,7 @@ describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
   function bookedChain(txId: string) {
     return [
       { data: { id: txId, date: '2026-10-01', amount: -500, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -593,6 +598,7 @@ describe('bulkBookMatchedInboxItems: a foreign row without a SEK value', () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -200, currency: 'CAD', amount_sek: null, exchange_rate: null, cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no CAD cash account -> 1930
       { data: [{ id: 'fp-1' }] }, // ensureFiscalPeriod: an open period covers the date
@@ -630,6 +636,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
   const bookableWaItem = () => [
     { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, channel_context: WA_CONTEXT } },
     { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+    { data: [] }, // the gate: no posted verifikat booked from the row (#203)
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
     { data: [{ id: 'fp-1' }] },
@@ -701,6 +708,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
         },
       },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -740,6 +748,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
         },
       },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -768,6 +777,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, channel_context: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [{ id: 'fp-1' }] },
@@ -799,6 +809,7 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
   const bookableItem = (itemId: string, txId: string, amount: number) => [
     { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
     { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+    { data: [] }, // the gate: no posted verifikat booked from the row (#203)
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
     { data: [{ id: 'fp-1' }] },
@@ -874,6 +885,7 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700.28, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
     ])
 
     const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {

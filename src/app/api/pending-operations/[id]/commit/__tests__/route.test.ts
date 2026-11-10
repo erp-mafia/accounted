@@ -169,6 +169,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row (#203)
         { data: settings },                           // fetch company settings
         { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
@@ -201,6 +202,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // route fetch op
         { data: { id: 'op-1' } },                    // CAS claim (pending -> committing)
         { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row (#203)
         { data: settings },                           // fetch company settings
         { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period exists

@@ -360,6 +360,7 @@ describe('MCP Receipt Matcher', () => {
 
       enqueueMany([
         { data: tx, error: null },           // fetch transaction (the booking service's dry run)
+        { data: [], error: null }, // the gate: no posted verifikat booked from the row (#203)
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
         // findUnresolvableAccounts: every account the verifikat posts to is active
@@ -408,6 +409,7 @@ describe('MCP Receipt Matcher', () => {
       const tx = makeTransaction({ id: 'tx-1', amount: -500 })
       enqueueMany([
         { data: tx, error: null },
+        { data: [], error: null }, // the gate: no posted verifikat booked from the row (#203)
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
         // findUnresolvableAccounts: every account the verifikat posts to is active

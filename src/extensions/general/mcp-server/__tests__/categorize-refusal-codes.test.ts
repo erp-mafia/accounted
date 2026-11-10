@@ -93,6 +93,7 @@ describe('gnubok_categorize_transaction: refusals carry their code', () => {
     })
     const error = await refusal({ category: 'expense_bank_fees' }, (enqueue) => {
       enqueue({ data: txRow() })
+      enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: settingsRow })
       enqueue({ data: [] }) // no enabled cash accounts: 1930
     })
@@ -121,6 +122,7 @@ describe('gnubok_categorize_transaction: refusals carry their code', () => {
   it('account_override on a private marking is VALIDATION_ERROR', async () => {
     const error = await refusal({ category: 'private', account_override: '6570' }, (enqueue) => {
       enqueue({ data: txRow() })
+      enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: settingsRow })
       enqueue({ data: [] })
     })

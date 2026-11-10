@@ -9,6 +9,7 @@ import { postingPort } from '@/lib/posting/port'
 import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
 import { guardBookedCounterLines } from '@/lib/cash-accounts/service'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
@@ -55,7 +56,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!bookable.ok) {
       return errorResponseFromCode(bookable.code, log, {
         requestId,
-        details: { journal_entry_id: bookable.journalEntryId, via: bookable.via },
+        details: {
+          journal_entry_id: bookable.journalEntryId,
+          via: bookable.via,
+          ...(bookable.voucher ? { voucher: bookable.voucher } : {}),
+        },
       })
     }
     // The guards this booking runs, in order, for its decision record.
@@ -334,23 +339,34 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Link transaction to the journal entry. CAS on the pointer value read
     // above (NULL, or a stale pointer at a reversed verifikat), like the
     // categorize core: a concurrent booking that changed it wins.
-    const linkQuery = supabase
-      .from('transactions')
-      .update({
-        journal_entry_id: journalEntry.id,
-        is_business: true,
-        is_ignored: false,
-        category: 'uncategorized',
-        ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
-        // The person booked this verifikat from the bank line.
-        ...linkBasisColumns('user_created'),
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-    const { data: updateResult, error: updateError } = await (transaction.journal_entry_id
-      ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
-      : linkQuery.is('journal_entry_id', null)
-    ).select('*')
+    const linkTransaction = async () => {
+      const linkQuery = supabase
+        .from('transactions')
+        .update({
+          journal_entry_id: journalEntry.id,
+          is_business: true,
+          is_ignored: false,
+          category: 'uncategorized',
+          ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
+          // The person booked this verifikat from the bank line.
+          ...linkBasisColumns('user_created'),
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+      return await (transaction.journal_entry_id
+        ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
+        : linkQuery.is('journal_entry_id', null)
+      ).select('*')
+    }
+    // The link's guard refuses with CASH_ACCOUNT_OPERATION_BUSY while another
+    // booking of the company is being numbered, and changes nothing: tried
+    // again before the posted verifikat is given up, as categorize does. A
+    // storno refused by the same lock left the verifikat posted beside a row
+    // that still read open, which the person then booked again (#203).
+    const { data: updateResult, error: updateError } = await retryWhileCashAccountBusy(
+      linkTransaction,
+      (outcome) => isCashAccountBusy(outcome.error),
+    )
 
     if (updateError) {
       await reverseOrphanedJournalEntry(

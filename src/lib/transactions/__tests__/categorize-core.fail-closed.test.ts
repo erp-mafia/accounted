@@ -92,6 +92,7 @@ const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
  */
 function enqueueUpToEngine(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
   enqueue({ data: txRow() }) // transactions select
+  enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
   enqueue({ data: settingsRow }) // company_settings
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   enqueue({ data: [] }) // ensureFiscalPeriod: no OPEN period covers the date
@@ -217,6 +218,7 @@ describe('categorizeMatchedTransaction: a foreign row without a SEK value', () =
   it('refuses with TX_MISSING_SEK_VALUE and writes nothing', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow({ amount: -200, currency: 'CAD', amount_sek: null, exchange_rate: null }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no CAD cash account -> 1930
     enqueue({ data: [{ id: 'fp-2024' }] }) // ensureFiscalPeriod: an open period covers the date

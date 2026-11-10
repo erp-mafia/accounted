@@ -86,6 +86,7 @@ describe('categorizeMatchedTransaction: orphaned counter-account guard', () => {
   it('refuses to book when the override counter is a revoked-held twin of a live row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // Override chart hit: 1931 exists and is active in the chart (the orphaned
@@ -120,6 +121,7 @@ describe('categorizeMatchedTransaction: orphaned counter-account guard', () => {
   it('still books when the 19xx counter is a live cash account (genuine transfer target)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ amount: -500, amount_sek: -500 }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount fallback -> 1930
     enqueue({ data: { account_number: '1940', account_class: 1, is_active: true } }) // override chart hit

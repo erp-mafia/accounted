@@ -909,6 +909,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
       cash_account_id: 'cash-1',
     })
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
     // findUnresolvableAccounts: every account the verifikat posts to is active
@@ -947,6 +948,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     // The booking service's dry run: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // findUnresolvableAccounts: every account the verifikat posts to is active
@@ -1008,6 +1010,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const inserts = captureInserts(supabase)
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // findUnresolvableAccounts: every account the verifikat posts to is active
@@ -1062,6 +1065,7 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       data: [{ id: BULK_TX_1, amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null })
     // the rows' settlement ledger (no cash account: no enabled SEK account, so 1930)
     enqueue({ data: [], error: null })
@@ -1180,6 +1184,7 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
     // enforceBulkBookDimensionPolicy: rules (none), then registry validation.
     enqueue({ data: [], error: null })
@@ -1254,6 +1259,7 @@ describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
     const inserts = captureInserts(supabase)
     // Untagged lines: the resolver makes no query.
     enqueue({ data: [txRow], error: null }) // transactions
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
     enqueue({ data: [ruleRow({ rule_type: 'required', dimension_values: null })], error: null }) // rules
 
@@ -1273,6 +1279,7 @@ describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
     noDuplicateFor(1)
     const inserts = captureInserts(supabase)
     enqueue({ data: [txRow], error: null }) // transactions
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
     enqueue({ data: [ruleRow({})], error: null }) // account_dimension_rules
     enqueue({ data: { dimensions_enabled: true }, error: null }) // registry validation: settings

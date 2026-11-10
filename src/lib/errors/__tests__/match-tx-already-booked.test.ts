@@ -30,10 +30,27 @@ describe('matchInvoiceTxAlreadyBookedMessages', () => {
 })
 
 describe('bankRowAlreadyBookedMessages', () => {
-  it('answers for the two match codes and nothing else', () => {
+  it('answers for the two match codes, and for a row only a verifikat names on any booking door', () => {
     expect(bankRowAlreadyBookedMessages('MATCH_INVOICE_TX_ALREADY_BOOKED', { voucher: 'A12', undo: 'uncategorize' })).not.toBeNull()
     expect(bankRowAlreadyBookedMessages('MATCH_SI_TX_ALREADY_BOOKED', { voucher: 'A12', storno_allowed: true })).not.toBeNull()
     expect(bankRowAlreadyBookedMessages('TRANSACTION_ALREADY_CATEGORIZED', { voucher: 'A12' })).toBeNull()
+    expect(bankRowAlreadyBookedMessages('TRANSACTION_ALREADY_CATEGORIZED', { journal_entry_id: 'je-1', via: 'named' })).not.toBeNull()
+    expect(bankRowAlreadyBookedMessages('BULK_BOOK_TX_ALREADY_BOOKED', { voucher: 'A31', via: 'named' })).not.toBeNull()
+    expect(bankRowAlreadyBookedMessages('SOME_OTHER_CODE', { voucher: 'A31', via: 'named' })).toBeNull()
+  })
+
+  // #203: the row reads as unbooked, so "undo the categorization" leads nowhere.
+  it('names a verifikat booked from the row but never linked to it, and both ways on', () => {
+    const messages = bankRowAlreadyBookedMessages('MATCH_INVOICE_TX_ALREADY_BOOKED', { voucher: 'A31', via: 'named', undo: 'reverse_voucher' })
+    expect(messages?.message_sv).toContain('verifikat A31, som bokfördes från den men aldrig kopplades till den')
+    expect(messages?.message_sv).toContain('Matcha manuellt')
+    expect(messages?.message_en).toContain('gnubok_link_transaction_to_journal_entry')
+    expect(messages?.message_en).toContain('gnubok_reverse_journal_entry')
+
+    // The categorize and book doors name the verifikat by id only.
+    const byId = bankRowAlreadyBookedMessages('TRANSACTION_ALREADY_CATEGORIZED', { journal_entry_id: 'je-1', via: 'named' })
+    expect(byId?.message_sv).toContain('ett verifikat, som bokfördes från den')
+    expect(byId?.message_en).toContain('verifikat je-1')
   })
 
   it('reaches the UI in its own language', () => {

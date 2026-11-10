@@ -276,7 +276,13 @@ describe('POST /transactions/bulk-book', () => {
         data: { ok: true, mode: 'create_new', journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 57, linked_tx_count: 2, tx_sum: 300, docs_linked: 0 },
         error: null,
       },
-      journal_entries: { data: { id: JE_ID, company_id: COMPANY_ID, status: 'posted', lines: [] }, error: null },
+      // The gate, on the pricing dry run and on the booking: no posted
+      // verifikat booked from the rows (#203); then the posted samlingsverifikat.
+      journal_entries: [
+        { data: [], error: null },
+        { data: [], error: null },
+        { data: { id: JE_ID, company_id: COMPANY_ID, status: 'posted', lines: [] }, error: null },
+      ],
     })
   const send = (query = '') => bulkBook(post(`${BASE}/bulk-book${query}`, manual), { params: Promise.resolve({ companyId: COMPANY_ID }) })
   const booked = (rpc: ReturnType<typeof vi.fn>) => rpc.mock.calls.some(([name]) => name === 'bulk_book_transactions')

@@ -87,6 +87,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null }, // atomic claim pending -> committing
       { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
       { data: [], error: null }, // account_dimension_rules
       { data: { ok: false, code: 'BULK_BOOK_UNAUTHORIZED' }, error: null }, // RPC refusal
@@ -116,6 +117,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
       { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
       { data: [], error: null }, // account_dimension_rules
       { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 3 }, error: null },
@@ -145,6 +147,7 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
       { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
       { data: [], error: null }, // account_dimension_rules
       { data: { ok: false, code: 'BULK_BOOK_INVALID_PAYLOAD' }, error: null },

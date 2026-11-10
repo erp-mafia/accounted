@@ -89,6 +89,7 @@ describe('categorizeMatchedTransaction: single-account currency fallback (#1722)
   it('books the bank leg on the single enabled cash account, not the hardcoded 1930', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // company_settings
     // The company's ONLY enabled SEK cash account books on 1920.
     enqueue({ data: [{ ledger_account: '1920' }] }) // resolveSettlementAccount currency fallback
@@ -119,6 +120,7 @@ describe('categorizeMatchedTransaction: single-account currency fallback (#1722)
   it('keeps 1930 when the company has several enabled accounts in the currency', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     // Two enabled SEK accounts: ambiguous, so no guessing.
     enqueue({ data: [{ ledger_account: '1920' }, { ledger_account: '1930' }] })
