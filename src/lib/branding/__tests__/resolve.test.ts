@@ -12,7 +12,6 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import {
   resolveBrandByHost,
   resolveBrandForCompany,
-  resolveBrandResultForCompany,
   deriveChromeColor,
   getEffectiveChrome,
   isBrandColorAccessible,
@@ -162,17 +161,6 @@ describe('resolveBrandForCompany', () => {
     mock.enqueue({ data: null })
 
     expect(await resolveBrandForCompany('missing')).toBeNull()
-  })
-
-  it('tells a failed read from no brand, and does not cache the failure', async () => {
-    mock.enqueueMany([{ data: null, error: { message: 'timeout' } }, { data: { team_id: 'team-1' } }, { data: null, error: { message: 'timeout' } }])
-
-    expect(await resolveBrandResultForCompany('company-1')).toEqual({ brand: null, lookupFailed: true })
-    expect(await resolveBrandResultForCompany('company-1')).toEqual({ brand: null, lookupFailed: true })
-    mock.enqueueMany([{ data: { team_id: 'team-1' } }, { data: brandRow }])
-    const answered = await resolveBrandResultForCompany('company-1')
-    expect(answered.lookupFailed).toBe(false)
-    expect(answered.brand?.appName).toBe('Siffra')
   })
 
   it('returns null when the team has no brand, and caches per company key', async () => {

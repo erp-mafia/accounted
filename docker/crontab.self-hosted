@@ -50,7 +50,6 @@
 30 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/idempotency/cleanup/cron
 30 2 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/pending-operations/expire/cron
 50 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/ombud/sync/cron
-15 7 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/ombud/announcement/cron
 0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/skattekonto/sync/cron
 */15 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/agi/kvittenser/cron
 30 */2 * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/vat/kvittenser/cron
