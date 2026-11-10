@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import { bankExclusion, batchTitle, ladderDueCutoff, resolveBatchOwner, runLadderCron, scanDecision } from '../autopilot'
 import { COLLECTIONS_BATCH_TYPE, type BatchParams } from '../batch'
 import { batches, caseAfter, gather, LADDER_ENV, ladderWorld, OWNER_ID, stage } from './batch-fixtures'
@@ -246,6 +247,15 @@ describe('stageDailyBatch', () => {
     expect(calls).not.toHaveBeenCalled()
     expect(world.openRequests).toEqual([])
     expect(world.db.rows('collection_cases')).toEqual([])
+    // Outside a request scope: no trace.
+    expect(op!.trace_id ?? null).toBeNull()
+  })
+
+  it('stamps the trace id of the run that staged the batch', async () => {
+    const world = await ladderWorld()
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+    expect(await runWithTrace(traceId, () => stage(world))).toMatchObject({ status: 'staged' })
+    expect(batches(world)[0]).toMatchObject({ operation_type: COLLECTIONS_BATCH_TYPE, trace_id: traceId })
   })
 
   it('stages nothing when nothing qualifies', async () => {

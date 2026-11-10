@@ -21,6 +21,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import type { Logger } from '@/lib/logger'
 import type { PendingOperation, PendingOperationActorType } from '@/types'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { agentReasonColumn, writeWithAgentReason } from './agent-reason'
 import { getRiskLevel } from './risk-tiers'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
@@ -88,7 +89,7 @@ export async function insertStagedOperation(
     }
   }
 
-  const { data, error } = await writeWithAgentReason(input.agentReason, (agentReason) =>
+  const { data, error } = await writeWithTraceId((traceId) => writeWithAgentReason(input.agentReason, (agentReason) =>
     supabase
       .from('pending_operations')
       .insert({
@@ -102,11 +103,13 @@ export async function insertStagedOperation(
         actor_id: input.actor.id ?? null,
         actor_label: input.actor.label ?? null,
         risk_level: stagedRiskLevel(input.operationType, input.params),
+        // The request that staged it (lib/observability/trace-context.ts).
+        ...traceIdColumn(traceId),
         ...agentReasonColumn(agentReason),
       })
       .select('*')
       .single(),
-  )
+  ))
 
   if (error || !data) throw new Error(`Failed to stage operation: ${error?.message ?? 'no row returned'}`)
   return { row: data as PendingOperation, ...(periodStatus ? { periodStatus } : {}) }

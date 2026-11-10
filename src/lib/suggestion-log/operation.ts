@@ -2,6 +2,7 @@ import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createLogger } from '@/lib/logger'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { PendingOperation } from '@/types'
@@ -162,13 +163,15 @@ export interface OperationDecision {
 
 /**
  * The rows for `entries`, one per voucher; `posted` is every voucher the
- * approval posted. `agentReason` defaults to the operation's.
+ * approval posted. `agentReason` defaults to the operation's; `traceId` is
+ * the request that records the approval (lib/observability/trace-context.ts).
  */
 export function buildOperationDecisionRows(
   decision: OperationDecision,
   entries: string[],
   posted: string[],
   agentReason: string | null = decision.operation.agent_reason ?? null,
+  traceId: string | null = null,
 ) {
   const { operation, actor } = decision
   const policy = approvalPolicy(actor, decision.grant, decision.door)
@@ -203,6 +206,7 @@ export function buildOperationDecisionRows(
     confidence_band: policy.band,
     input_hash: inputHash,
     checks: null,
+    ...traceIdColumn(traceId),
     // Why the stager proposed it, as the approver saw it.
     ...agentReasonColumn(agentReason),
   }))
@@ -265,8 +269,10 @@ export async function recordOperationDecision(supabase: SupabaseClient, decision
     const recorded = await recordedEntries(supabase, decision.companyId, decision.operation.id, !!decision.grant)
     const entries = posted.filter((id) => !recorded.has(id))
     if (entries.length === 0) return 0
-    const { error } = await writeWithAgentReason(decision.operation.agent_reason, (agentReason) =>
-      supabase.from('suggestion_log').insert(buildOperationDecisionRows(decision, entries, posted, agentReason)),
+    const { error } = await writeWithTraceId((traceId) =>
+      writeWithAgentReason(decision.operation.agent_reason, (agentReason) =>
+        supabase.from('suggestion_log').insert(buildOperationDecisionRows(decision, entries, posted, agentReason, traceId)),
+      ),
     )
     if (error) throw new Error(error.message)
     return entries.length

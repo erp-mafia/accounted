@@ -68,7 +68,8 @@ function mcpToolCall(name: string, args: Record<string, unknown> = {}): Request 
 }
 
 async function snapshot(res: Response) {
-  const headers = [...res.headers.entries()]
+  // X-Trace-Id is minted per message: the two calls never share it.
+  const headers = [...res.headers.entries()].filter(([k]) => k !== 'x-trace-id')
   return { status: res.status, headers, body: await res.text() }
 }
 

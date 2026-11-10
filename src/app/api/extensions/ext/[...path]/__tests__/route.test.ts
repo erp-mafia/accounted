@@ -66,6 +66,8 @@ import { extensionRegistry } from '@/lib/extensions/registry'
 import { requireCompanyId } from '@/lib/company/context'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { DELETE, GET, PATCH, POST, PUT } from '../route'
+import { getTraceId } from '@/lib/observability/trace-context'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
@@ -371,6 +373,69 @@ describe('Extension Catch-All Route', () => {
     expect(response.status).toBe(200)
     expect(handler).toHaveBeenCalled()
     expect(mockRequireCapability).not.toHaveBeenCalled()
+  })
+
+  describe('request trace', () => {
+    const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
+    const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`
+
+    it('names a minted trace on a refusal before any route matched', async () => {
+      const response = await GET(createMockRequest('/api/extensions/ext/'), createPathParams([]))
+      expect(response.status).toBe(400)
+      expect(response.headers.get('X-Trace-Id')).toMatch(/^[0-9a-f]{32}$/)
+    })
+
+    it('runs the handler in the trace of a valid traceparent header and names it in X-Trace-Id', async () => {
+      let seen: string | undefined
+      const handler = vi.fn(async () => {
+        seen = getTraceId()
+        return NextResponse.json({ ok: true })
+      })
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'GET', path: '/thing', handler }],
+      })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+
+      const response = await GET(
+        createMockRequest('/api/extensions/ext/test-ext/thing', { headers: { traceparent: TRACEPARENT } }),
+        createPathParams(['test-ext', 'thing']),
+      )
+
+      expect(response.status).toBe(200)
+      expect(seen).toBe(TRACE_ID)
+      expect(response.headers.get('X-Trace-Id')).toBe(TRACE_ID)
+      expect(response.headers.get('X-Request-Id')).toMatch(/^req_/)
+    })
+
+    it("keeps the trace a skipAuth handler's own door named (the MCP dispatch)", async () => {
+      const inner = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      const outer: Array<string | undefined> = []
+      const handler = vi.fn(async () => {
+        outer.push(getTraceId())
+        const response = await runWithTrace(inner, async () => NextResponse.json({ ok: true }))
+        response.headers.set('X-Trace-Id', inner)
+        return response
+      })
+      extensionRegistry.register({
+        id: 'mcp-like',
+        name: 'MCP-like',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'POST', path: '/mcp', handler, skipAuth: true }],
+      })
+
+      const response = await POST(
+        createMockRequest('/api/extensions/ext/mcp-like/mcp', { method: 'POST', body: {}, headers: { traceparent: TRACEPARENT } }),
+        createPathParams(['mcp-like', 'mcp']),
+      )
+
+      expect(outer).toEqual([TRACE_ID])
+      expect(response.headers.get('X-Trace-Id')).toBe(inner)
+    })
   })
 
   describe('declared role gates', () => {

@@ -437,6 +437,9 @@ import {
   writeWithAgentReason,
   type AgentReasonArg,
 } from '@/lib/pending-operations/agent-reason'
+import { getTraceId, parseTraceparent, traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { runAcrossCompanies, summarizeCompanyResult } from '@/lib/portfolio/runner'
 import { fetchPortfolioOverview, portfolioRowToWire, type DeadlineKindFilter } from '@/lib/portfolio/overview'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
@@ -2568,7 +2571,7 @@ async function stagePendingOperation(
   const agentMetadata = await loadSkillProvenance(supabase, companyId, userId, actor)
   // The tool call's `reason`, split off before the tool ran (request-local,
   // like the batch id).
-  const { data, error } = await writeWithAgentReason(currentAgentReason(), (agentReason) =>
+  const { data, error } = await writeWithTraceId((traceId) => writeWithAgentReason(currentAgentReason(), (agentReason) =>
     supabase
       .from('pending_operations')
       .insert({
@@ -2588,11 +2591,13 @@ async function stagePendingOperation(
         // Set only inside gnubok_stage_across_companies (request-local async
         // context); NULL for every other staging path.
         batch_id: currentStagingBatchId(),
+        // The tool call's trace (handleMcpRequest), none outside one.
+        ...traceIdColumn(traceId),
         ...agentReasonColumn(agentReason),
       })
       .select('*')
       .single(),
-  )
+  ))
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
@@ -27817,13 +27822,14 @@ export const tools: McpTool[] = [
       // satisfy data-minimisation (GDPR Art. 5(1)(b)). Use preview_data for
       // a redacted, human-readable summary, or call the underlying entity
       // endpoint when the agent needs the full payload.
-      // agent_reason: why the stager proposes it. Read without it while the
-      // column is not there yet (the migration runs after the deploy).
+      // agent_reason: why the stager proposes it; trace_id: the request that
+      // staged it. Read without them while a column is not there yet (the
+      // migration runs after the deploy).
       const selectWithReason = () =>
         supabase
           .from('pending_operations')
           .select(
-            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, created_at, resolved_at, result_data, rejection_category',
+            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, trace_id, created_at, resolved_at, result_data, rejection_category',
             { count: 'exact' }
           )
       const listQuery = (withAgentReason: boolean) => {
@@ -29339,6 +29345,8 @@ const SUPPORTED_PROTOCOL_VERSIONS = [
 ]
 const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
 const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+// W3C trace context in _meta: the trace the message runs in (handleMcpRequest).
+const META_TRACEPARENT = 'traceparent'
 // 2026-07-28 reserves -32020..-32099 for spec-defined errors.
 const JSONRPC_HEADER_MISMATCH = -32020
 const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
@@ -29460,6 +29468,9 @@ function emitToolCallTelemetry(payload: {
 }): void {
   if (!payload.companyId) return
   const companyId = payload.companyId
+  // Read now, in the message's trace scope: the emit itself runs after the
+  // response (emitAfterResponse).
+  const traceId = getTraceId() ?? null
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tool_called',
@@ -29490,6 +29501,7 @@ function emitToolCallTelemetry(payload: {
         // hard: anything longer is a message pretending to be a tag.
         errorCause: payload.errorCause ? payload.errorCause.slice(0, 64) : null,
         requestId: payload.requestId,
+        traceId,
         userId: payload.userId,
         companyId,
         sessionId: payload.actor.sessionId ?? null,
@@ -29821,6 +29833,22 @@ function emitWorkflowStarted(payload: {
     .catch((err) => console.error('[mcp] workflow_started emit failed:', err)))
 }
 
+/** The JSON-RPC body as handleMcpRequest read it; ok false when it is not JSON. */
+type ParsedMcpBody = { ok: true; body: JsonRpcRequest } | { ok: false }
+
+/**
+ * The trace one JSON-RPC message runs in: a valid params._meta.traceparent
+ * (trace context carried in _meta, spec 2026-07-28) first, else the trace the
+ * HTTP door already opened (the extension dispatcher reads the traceparent
+ * header), else the request's own header, else a new id.
+ */
+function mcpMessageTraceId(body: unknown, request: Request): string {
+  const params = body && typeof body === 'object' ? (body as { params?: unknown }).params : undefined
+  const meta = params && typeof params === 'object' ? (params as { _meta?: unknown })._meta : undefined
+  const fromMeta = meta && typeof meta === 'object' ? (meta as Record<string, unknown>)[META_TRACEPARENT] : undefined
+  return parseTraceparent(typeof fromMeta === 'string' ? fromMeta : null) ?? getTraceId() ?? traceIdFromRequest(request)
+}
+
 /**
  * Does a load_skill call name a private own/ skill? Read with literal \u
  * escapes decoded, as the dispatcher decodes them before the tool runs: on the
@@ -29833,8 +29861,21 @@ function namesOwnSkill(toolName: string, args: Record<string, unknown>): boolean
 /**
  * Handle an MCP JSON-RPC request.
  * Auth is done via Bearer API key (extension route has skipAuth: true).
+ *
+ * The body is read once, here, so the message's trace scope
+ * (lib/observability/trace-context.ts) opens around all of its handling and
+ * the response names the trace in X-Trace-Id.
  */
 export async function handleMcpRequest(request: Request): Promise<Response> {
+  const parsed: ParsedMcpBody = await request.json().then(
+    (body: JsonRpcRequest) => ({ ok: true as const, body }),
+    () => ({ ok: false as const }),
+  )
+  const traceId = mcpMessageTraceId(parsed.ok ? parsed.body : null, request)
+  return runRequestInTrace(traceId, () => handleMcpMessage(request, parsed))
+}
+
+async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promise<Response> {
   const toolNamespace = resolveMcpToolNamespace(request)
   // The challenge must name the metadata document on the SAME host the client
   // called. Pinned to NEXT_PUBLIC_APP_URL it broke every OAuth attempt against
@@ -29881,20 +29922,18 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // probing the endpoint without credentials learns nothing new.
   const token = extractBearerToken(request)
   // Eager authentication (auth-mode.ts): the URL opted out of lazy auth, so a
-  // tokenless caller is challenged before the body is even looked at. This is
+  // tokenless caller is challenged whatever the body says. This is
   // what makes claude.ai's Add-custom-connector probe detect OAuth instead of
   // "None"; a caller with a token is unaffected.
   if (!token && isEagerAuthRequested(request)) return unauthorized()
-  let body: JsonRpcRequest
-  try {
-    body = await request.json()
-  } catch {
+  if (!parsed.ok) {
     if (!token) return unauthorized()
     return NextResponse.json(
       jsonRpcError(null, -32700, 'Parse error: expected JSON-RPC 2.0 request body'),
       { status: 400 }
     )
   }
+  const body = parsed.body
 
   // Fire-and-forget notification: no id, no response expected. Answering
   // 401 here confuses clients, so it is accepted before any auth check.

@@ -74,6 +74,7 @@ import {
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
 import { companyWriteRefusal, truncateIp, withApiV1 } from '../with-api-v1'
+import { getTraceId } from '@/lib/observability/trace-context'
 import { ok } from '../response'
 import { z } from 'zod'
 import { registerEndpoint } from '../registry'
@@ -1755,5 +1756,49 @@ describe('companyWriteRefusal: the read-only rule the gate and GET /api-key shar
 
   it('refuses a read-only connection with CONNECTION_READ_ONLY, compared case-insensitively', () => {
     expect(companyWriteRefusal('admin', COMPANY, [COMPANY.toUpperCase()])).toBe('CONNECTION_READ_ONLY')
+  })
+})
+
+describe('withApiV1: request trace', () => {
+  const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
+  const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`
+
+  it('runs the handler in the trace of a valid traceparent header and names it in X-Trace-Id', async () => {
+    let seen: string | undefined
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      await Promise.resolve()
+      seen = getTraceId()
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(makeRequest('https://x.test/api/v1/health', { headers: { traceparent: TRACEPARENT } }), emptyParams())
+    expect(res.status).toBe(200)
+    expect(seen).toBe(TRACE_ID)
+    expect(res.headers.get('X-Trace-Id')).toBe(TRACE_ID)
+    // The request id stays its own value.
+    expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    expect(getTraceId()).toBeUndefined()
+  })
+
+  it('mints a trace when the header is missing or invalid, and names it on a refusal too', async () => {
+    let seen: string | undefined
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      seen = getTraceId()
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/health', { headers: { traceparent: TRACEPARENT.toUpperCase() } }),
+      emptyParams(),
+    )
+    expect(seen).toMatch(/^[0-9a-f]{32}$/)
+    expect(seen).not.toBe(TRACE_ID)
+    expect(res.headers.get('X-Trace-Id')).toBe(seen)
+
+    const refused = await withApiV1('companies.list', async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }))(
+      makeRequest('https://x.test/api/v1/companies'),
+      emptyParams(),
+    )
+    expect(refused.status).toBe(401)
+    expect(refused.headers.get('X-Trace-Id')).toMatch(/^[0-9a-f]{32}$/)
   })
 })

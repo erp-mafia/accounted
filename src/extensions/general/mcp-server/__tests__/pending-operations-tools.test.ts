@@ -163,6 +163,28 @@ describe('gnubok_list_pending_operations', () => {
     expect(selects[1]).not.toContain('agent_reason')
   })
 
+  it("returns each operation's trace_id, the request that staged it, and lists without it while the column is not there yet", async () => {
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+    const first = createQueuedMockSupabase()
+    first.enqueue({ data: [{ id: 'op-1', status: 'pending', trace_id: traceId }, { id: 'op-2', status: 'pending', trace_id: null }], error: null, count: 2 })
+    const listed = (await listTool.execute({}, 'company-1', 'user-1', first.supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; trace_id: string | null }>
+    }
+    expect(listed.operations.map((op) => op.trace_id)).toEqual([traceId, null])
+    expect(String(first.findCalls('pending_operations', 'select')[0]?.[0])).toContain('trace_id')
+
+    const before = createQueuedMockSupabase()
+    before.enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.trace_id does not exist' }, count: null })
+    before.enqueue({ data: [{ id: 'op-1', status: 'pending' }], error: null, count: 1 })
+    const fallback = (await listTool.execute({}, 'company-1', 'user-1', before.supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string }>
+    }
+    expect(fallback.operations.map((op) => op.id)).toEqual(['op-1'])
+    const selects = before.findCalls('pending_operations', 'select').map((args) => String(args[0]))
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('trace_id')
+  })
+
   // Issue #3408: approve is never pre-ticked on consent, so the default
   // connection lacks it; the widget reads can_approve to hide its buttons.
   it('says whether the calling key can approve or reject', async () => {

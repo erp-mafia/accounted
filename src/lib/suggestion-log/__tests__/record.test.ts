@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { accountProposal, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { DIRECT_BOOKING_POLICY_VERSION } from '@/lib/transactions/direct-booking'
 import { runInOperationCommit } from '@/lib/pending-operations/commit-scope'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import { finalFromCategorize, finalFromLines, recordDecisions, snapshotSuggestions, type SuggestionSnapshot } from '../record'
 import { bankLineInputHash, sha256Hex } from '../provenance'
 import { passed, warned } from '../checks'
@@ -258,6 +259,20 @@ describe('recordDecisions', () => {
     await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked, checks }], 'user-1')
 
     expect(inserts[0].rows).toEqual([expect.objectContaining({ checks })])
+  })
+
+  it('stamps the trace id of the request that recorded the decision, and none outside a request scope', async () => {
+    const { client, inserts } = fakeClient()
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+
+    await runWithTrace(traceId, () =>
+      recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1'),
+    )
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1')
+
+    expect(inserts[0].rows).toEqual([expect.objectContaining({ trace_id: traceId })])
+    expect(inserts[1].rows).toHaveLength(1)
+    expect((inserts[1].rows as Array<Record<string, unknown>>)[0]).not.toHaveProperty('trace_id')
   })
 
   it('names the pending operation whose approval carried the decision', async () => {

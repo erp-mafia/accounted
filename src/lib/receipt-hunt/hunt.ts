@@ -16,6 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
@@ -500,7 +501,7 @@ export async function huntCompany(
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const riskLevel = getRiskLevel(OPERATION_TYPE)
 
-  const rows = proposals.map((proposal) => {
+  const rowsWith = (traceId: string | null) => proposals.map((proposal) => {
     const tx = byId.get(proposal.transaction_id) as HuntTransaction
     const fileName = fileNames.get(proposal.document_id) ?? 'underlag'
     const hunted = proposal.mailProvenance != null
@@ -525,6 +526,8 @@ export async function huntCompany(
       actor_type: 'cron',
       actor_label: HUNT_ACTOR_LABEL,
       risk_level: riskLevel,
+      // The request (usually the cron run) that staged them.
+      ...traceIdColumn(traceId),
       agent_metadata: {
         source: hunted ? 'receipt_hunt_mail' : 'receipt_hunt',
         run_id: runId,
@@ -538,10 +541,10 @@ export async function huntCompany(
     }
   })
 
-  const { error } = await supabase.from('pending_operations').insert(rows)
+  const { error } = await writeWithTraceId((traceId) => supabase.from('pending_operations').insert(rowsWith(traceId)))
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: rows.length }
+  return { ...base, proposed: proposals.length }
 }
 
 /**

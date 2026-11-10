@@ -1,0 +1,1 @@
+[2026-11-09] Every door runs a request in one W3C trace id (valid traceparent or MCP _meta.traceparent, else minted), names it in X-Trace-Id and stamps it on staged operations, business events and receipts: a client id is a correlation hint, never identity; writes retry without the column.

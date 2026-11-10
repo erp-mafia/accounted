@@ -5,6 +5,10 @@
  *   on failure.
  * - Generates a parent requestId so every per-item log line for a single run
  *   shares a correlation id you can grep for in Vercel logs.
+ * - Opens the run's trace scope (lib/observability/trace-context.ts): the
+ *   trace of a valid `traceparent` header, else a new one, bound to the
+ *   logger and named on the response in X-Trace-Id, so the rows the run
+ *   stages and records carry it.
  * - Provides a `forEach` helper that runs the iteratee in an isolated try/catch
  *   per item and logs the outcome at info/error level. A single failing item
  *   never aborts the run.
@@ -33,6 +37,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 
 export interface CronItemContext {
@@ -102,10 +108,10 @@ export function withCronContext(
   handler: CronHandler,
   options: CronContextOptions = {},
 ): (request: Request) => Promise<Response> {
-  return async function wrapped(request: Request): Promise<Response> {
+  async function handle(request: Request, traceId: string): Promise<Response> {
     const requestId = generateRequestId('cron')
     const start = Date.now()
-    const log = createLogger(`cron/${operation}`, { requestId, operation })
+    const log = createLogger(`cron/${operation}`, { requestId, traceId, operation })
 
     const authError = verifyCronSecret(request)
     if (authError) {
@@ -172,6 +178,11 @@ export function withCronContext(
       log.error('cron run failed', err as Error, { durationMs: Date.now() - start })
       return errorResponse(err, log, { requestId })
     }
+  }
+
+  return async function wrapped(request: Request): Promise<Response> {
+    const traceId = traceIdFromRequest(request)
+    return runRequestInTrace(traceId, () => handle(request, traceId))
   }
 }
 

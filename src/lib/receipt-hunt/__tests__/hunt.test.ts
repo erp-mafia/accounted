@@ -4,6 +4,7 @@
  * exactly one operation per proposal with the shape the approval card reads.
  */
 import { describe, it, expect, vi } from 'vitest'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import { huntCompany } from '../hunt'
 
 type Row = Record<string, unknown>
@@ -106,6 +107,18 @@ describe('huntCompany', () => {
     expect(row.preview_data.will_overwrite_existing).toBe(false)
     expect(row.agent_metadata.run_id).toBe('run-1')
     expect(row.actor_type).toBe('cron')
+    // Outside a request scope: no trace, and the row does not name the column.
+    expect(row).not.toHaveProperty('trace_id')
+  })
+
+  it('stamps the trace id of the run that staged the proposals', async () => {
+    const { client, inserts } = mockSupabase(fixture())
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+
+    await runWithTrace(traceId, () => huntCompany(client, 'co-1', 'run-1'))
+
+    expect(inserts).toHaveLength(1)
+    for (const row of inserts[0].rows) expect(row.trace_id).toBe(traceId)
   })
 
   it('does not stage when the company has no members to ask', async () => {

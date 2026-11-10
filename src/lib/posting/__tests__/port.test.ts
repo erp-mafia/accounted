@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
 import { createPostingPort } from '../port'
@@ -16,6 +17,7 @@ const TX = '22222222-2222-4222-8222-222222222222'
 const EVENT_ID = '33333333-3333-4333-8333-333333333333'
 const EXISTING_ID = '44444444-4444-4444-8444-444444444444'
 const OP = '55555555-5555-4555-8555-555555555555'
+const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
 
 const INPUT: CreateJournalEntryInput = {
   fiscal_period_id: 'period-1',
@@ -117,8 +119,10 @@ describe('posting port', () => {
   it('shadow: records the event first, then posts with the link (log on failure)', async () => {
     const adapter = fakeAdapter()
     const { supabase, from, inserted } = fakeSupabase(() => ({ error: null }))
-    await runWithActor({ type: 'api_key', label: 'Bokföringsagent' }, () =>
-      port('shadow', adapter).postJournalEntry({ supabase, companyId: COMPANY, userId: 'user-1', event: EVENT, input: INPUT }),
+    await runWithTrace(TRACE_ID, () =>
+      runWithActor({ type: 'api_key', label: 'Bokföringsagent' }, () =>
+        port('shadow', adapter).postJournalEntry({ supabase, companyId: COMPANY, userId: 'user-1', event: EVENT, input: INPUT }),
+      ),
     )
     expect(from).toHaveBeenCalledWith('business_events')
     expect(inserted).toEqual([
@@ -144,11 +148,20 @@ describe('posting port', () => {
         mapping_version: 'se.category-mapping@bank-proposals.1+abc',
         jurisdiction: 'SE',
         idempotency_key: null,
+        trace_id: TRACE_ID,
       },
     ])
     const args = callArgs(adapter.createJournalEntry, 0)
     expect(args.input).toBe(INPUT)
     expect(args.businessEvent).toEqual({ id: EVENT_ID, role: 'produced', onFailure: 'log' })
+  })
+
+  it('shadow: an event recorded outside a request scope carries no trace id', async () => {
+    const adapter = fakeAdapter()
+    const { supabase, inserted } = fakeSupabase(() => ({ error: null }))
+    await port('shadow', adapter).postJournalEntry({ supabase, companyId: COMPANY, userId: 'user-1', event: EVENT, input: INPUT })
+    expect(inserted).toEqual([expect.objectContaining({ id: EVENT_ID })])
+    expect(inserted[0]).not.toHaveProperty('trace_id')
   })
 
   it('shadow: a failed event write is logged and the posting goes ahead without a link', async () => {

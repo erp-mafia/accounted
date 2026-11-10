@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { runInOperationCommit } from '@/lib/pending-operations/commit-scope'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction, type InboxSnapshot } from '../inbox'
 import { inboxInputHash } from '../provenance'
 import { passed } from '../checks'
@@ -177,6 +178,19 @@ describe('recordInboxDecision', () => {
     // No approval policy decides an underlag, so neither a policy nor a band is written.
     expect(inserts[0].row).not.toHaveProperty('policy_version')
     expect(inserts[0].row).not.toHaveProperty('confidence_band')
+  })
+
+  it('stamps the trace id of the request that recorded the decision, and none outside a request scope', async () => {
+    const { client, inserts } = fakeClient()
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+
+    await runWithTrace(traceId, () =>
+      recordInboxDecision(client as never, snap, { supplier_invoice_id: 'si-1', fields: {} }, 'user-1'),
+    )
+    await recordInboxDecision(client as never, snap, { supplier_invoice_id: 'si-1', fields: {} }, 'user-1')
+
+    expect(inserts[0].row).toMatchObject({ trace_id: traceId })
+    expect(inserts[1].row).not.toHaveProperty('trace_id')
   })
 
   it('records the guards the door ran and the operation whose approval carried the decision', async () => {

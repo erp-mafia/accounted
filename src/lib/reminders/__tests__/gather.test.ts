@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase, makeCompanySettings, makeCustomer, makeInvoice, type TableMockResolver } from '@/tests/helpers'
 import type { BankCheckResult } from '@/lib/collections/bank-check'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import type { ReminderContext } from '../facts'
 import type { ReminderHistoryEntry, ReminderInvoiceFacts } from '../policy'
 
@@ -166,7 +167,17 @@ describe('stageReminderBatch', () => {
       risk_level: 'high',
       preview_data: { batch_date: '2026-12-17', item_count: 2, excluded_count: 2, levels: [2, 0, 0], unchecked_bank_count: 1, sent_automatically: 0 },
     })
+    // Outside a request scope: no trace, and the row does not name the column.
+    expect(row).not.toHaveProperty('trace_id')
     expect((row!.params as { items: unknown[] }).items).toHaveLength(2)
+  })
+
+  it('stamps the trace id of the run that staged the batch', async () => {
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+    const mock = world({ pending_operations: [{ data: [] }, { data: [] }, { data: { id: 'op-1' } }] })
+    await runWithTrace(traceId, () => stage(mock))
+    const [row] = mock.payloads('pending_operations', 'insert') as Array<Record<string, unknown>>
+    expect(row).toMatchObject({ operation_type: 'reminder_daily_batch', trace_id: traceId })
   })
 
   it('stages nothing while a batch waits, once today, or with nothing due', async () => {

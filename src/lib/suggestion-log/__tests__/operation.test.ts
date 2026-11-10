@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { approvalDoorOf } from '../approval-door'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
+import { runWithTrace } from '@/lib/observability/trace-context-node'
 import type { PendingOperation } from '@/types'
 
 const logSpy = vi.hoisted(() => {
@@ -31,6 +32,7 @@ const ORIGINAL = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const CLAIMED_AT = '2026-10-16T10:00:00.000+00:00'
 const BEFORE_CLAIM = '2026-10-01T09:00:00.000+00:00'
 const AFTER_CLAIM = '2026-10-16T10:00:00.250+00:00'
+const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
 
 const operation: OperationDecision['operation'] = {
   id: OPERATION_ID,
@@ -275,6 +277,13 @@ describe('recordOperationDecision', () => {
       policy_version: 'staged-approval.1;approver=person_in_client;unattended_limit=none;door=mcp_view',
       confidence_band: 'review',
     })
+  })
+
+  it('stamps the trace id of the request that recorded the approval', async () => {
+    const db = fakeDb()
+    await runWithTrace(TRACE_ID, () => recordOperationDecision(db.client, decision()))
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0]).toMatchObject({ pending_operation_id: OPERATION_ID, trace_id: TRACE_ID })
   })
 
   it('records an approval by a service account key as direct, with the key as the deciding actor', async () => {
