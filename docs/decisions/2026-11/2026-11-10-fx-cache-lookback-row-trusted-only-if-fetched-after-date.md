@@ -1,0 +1,1 @@
+[2026-11-10] A cached exchange rate with an earlier day's observation is served only if fetched after its date, else looked up again and replaced: fetched_at already tells it, no column added, and a settled answer may now overwrite a row (crm#1740).

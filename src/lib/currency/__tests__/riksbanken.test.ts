@@ -98,7 +98,7 @@ function stubRiksbanken(
   return { requests, series }
 }
 
-type CacheRow = { rate: number | string; observation_date: string }
+type CacheRow = { rate: number | string; observation_date: string; fetched_at?: string }
 
 /**
  * A caller's client, as a user session: exchange_rates can be read, and an
@@ -503,10 +503,12 @@ describe('fetchExchangeRate', () => {
           rate: result!.rate,
           observation_date: '2025-01-15',
           source: 'riksbanken',
+          fetched_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         },
       ])
-      // First write wins and a stored row is never overwritten.
-      expect(writer.options).toEqual([{ onConflict: 'currency,rate_date', ignoreDuplicates: true }])
+      // A settled answer replaces the row: one written before its date was
+      // published must not keep answering (crm#1740).
+      expect(writer.options).toEqual([{ onConflict: 'currency,rate_date' }])
     })
 
     it('stores a weekend under its own date with the observation that answered it', async () => {
@@ -550,6 +552,112 @@ describe('fetchExchangeRate', () => {
       // The published day itself is settled and is stored.
       await fetchExchangeRate('USD', new Date('2025-06-12'), session.client)
       expect(writer.rows.map((r) => r.rate_date)).toEqual(['2025-06-12'])
+    })
+
+    // ── crm#1740: a row stored before its date was published ─────────────
+
+    describe('a cached row with an earlier day\'s observation', () => {
+      it('looks the date up again when the row was fetched on the date, and replaces it with the date\'s own rate', async () => {
+        // Stored before 2026-10-11 by a lookup on Thursday morning, before
+        // Thursday's rate existed: Wednesday's observation under Thursday.
+        const riksbanken = stubRiksbanken()
+        const writer = serviceWriter()
+        const session = userSessionClient({
+          exact: { rate: 9.99, observation_date: '2025-09-03', fetched_at: '2025-09-04T03:00:00+00:00' },
+        })
+        const thursday = expectedFor(riksbanken.series('USD'), '2025-09-04')!
+
+        const result = await fetchExchangeRate('USD', new Date('2025-09-04'), session.client)
+
+        expect(thursday.date).toBe('2025-09-04')
+        expect(result).toEqual({ currency: 'USD', rate: thursday.value, date: '2025-09-04' })
+        expect(riksbanken.requests).toHaveLength(1)
+        expect(writer.rows).toEqual([
+          expect.objectContaining({ rate_date: '2025-09-04', rate: thursday.value, observation_date: '2025-09-04' }),
+        ])
+        expect(writer.options).toEqual([{ onConflict: 'currency,rate_date' }])
+      })
+
+      it('replaces a row stored for a date ahead of its lookup', async () => {
+        // An invoice dated Friday, created on Tuesday: Tuesday's rate stored
+        // under Friday.
+        const riksbanken = stubRiksbanken()
+        const writer = serviceWriter()
+        const session = userSessionClient({
+          exact: { rate: 9.99, observation_date: '2025-06-10', fetched_at: '2025-06-10T15:00:00+00:00' },
+        })
+        const friday = expectedFor(riksbanken.series('USD'), '2025-06-13')!
+
+        const result = await fetchExchangeRate('USD', new Date('2025-06-13'), session.client)
+
+        expect(result).toEqual({ currency: 'USD', rate: friday.value, date: '2025-06-13' })
+        expect(writer.rows).toEqual([expect.objectContaining({ rate_date: '2025-06-13', observation_date: '2025-06-13' })])
+      })
+
+      it('serves a weekend fetched after it from the cache, without asking Riksbanken', async () => {
+        const fetchSpy = vi.spyOn(global, 'fetch')
+        const writer = serviceWriter()
+        const session = userSessionClient({
+          exact: { rate: 10.42, observation_date: '2025-03-14', fetched_at: '2025-03-17T15:30:00+00:00' },
+        })
+
+        const saturday = await fetchExchangeRate('USD', new Date('2025-03-15'), session.client)
+
+        expect(saturday).toEqual({ currency: 'USD', rate: 10.42, date: '2025-03-14' })
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(writer.rows).toEqual([])
+      })
+
+      it('serves a holiday fetched after it from the cache, without asking Riksbanken', async () => {
+        // A Friday holiday answers with Thursday's rate: the legitimate look-back.
+        const fetchSpy = vi.spyOn(global, 'fetch')
+        const session = userSessionClient({
+          exact: { rate: 10.37, observation_date: '2025-06-05', fetched_at: '2025-06-09T05:00:00+00:00' },
+        })
+
+        const holiday = await fetchExchangeRate('USD', new Date('2025-06-06'), session.client)
+
+        expect(holiday).toEqual({ currency: 'USD', rate: 10.37, date: '2025-06-05' })
+        expect(fetchSpy).not.toHaveBeenCalled()
+      })
+
+      it('confirms a holiday fetched on the day itself: same rate, the row stored again as settled', async () => {
+        // Fetched on the holiday, so the row cannot tell a holiday from a day
+        // not yet published. Riksbanken has nothing for the day: the previous
+        // banking day stands, and the rewrite (a fresh fetched_at) means it is
+        // served from the cache from now on.
+        const riksbanken = stubRiksbanken({ holidays: ['2025-06-06'] })
+        const writer = serviceWriter()
+        const thursday = expectedFor(riksbanken.series('USD'), '2025-06-05')!
+        const session = userSessionClient({
+          exact: { rate: thursday.value, observation_date: '2025-06-05', fetched_at: '2025-06-06T07:00:00+00:00' },
+        })
+
+        const holiday = await fetchExchangeRate('USD', new Date('2025-06-06'), session.client)
+
+        expect(holiday).toEqual({ currency: 'USD', rate: thursday.value, date: '2025-06-05' })
+        expect(writer.rows).toEqual([
+          expect.objectContaining({ rate_date: '2025-06-06', rate: thursday.value, observation_date: '2025-06-05' }),
+        ])
+        const rewritten = userSessionClient({ exact: writer.rows[0] as CacheRow })
+        expect(await readCachedRate(rewritten.client, 'USD', '2025-06-06')).toEqual(holiday)
+      })
+
+      it('neither trusts nor replaces the row while the date is still unpublished', async () => {
+        // Thursday is the latest published day and the row is for Friday:
+        // the live answer is Thursday too, and nothing is stored yet.
+        stubRiksbanken({ publishedThrough: '2025-06-12' })
+        const writer = serviceWriter()
+        const session = userSessionClient({
+          exact: { rate: 9.99, observation_date: '2025-06-11', fetched_at: '2025-06-13T03:00:00+00:00' },
+        })
+
+        const friday = await fetchExchangeRate('USD', new Date('2025-06-13'), session.client)
+
+        expect(friday).toMatchObject({ date: '2025-06-12' })
+        expect(friday!.rate).not.toBe(9.99)
+        expect(writer.rows).toEqual([])
+      })
     })
 
     it('still returns the rate when the cache write fails', async () => {
@@ -678,23 +786,55 @@ describe('fetchExchangeRate', () => {
 // parallel with its sandbox guard instead of always going through
 // fetchExchangeRate's sequential path.
 describe('readCachedRate', () => {
-  it('maps an exact-date cache row to an ExchangeRate', async () => {
-    const maybeSingle = vi.fn().mockResolvedValue({
-      // rate arrives as a numeric string from PostgREST: must be Number()ed.
-      data: { rate: '11.25', observation_date: '2025-01-14' },
-      error: null,
-    })
+  function cacheClient(row: Record<string, unknown> | null) {
+    const select = vi.fn().mockReturnThis()
     const supabase = {
       from: vi.fn(() => ({
-        select: vi.fn().mockReturnThis(),
+        select,
         eq: vi.fn().mockReturnThis(),
-        maybeSingle,
+        maybeSingle: vi.fn().mockResolvedValue({ data: row, error: null }),
       })),
     } as never
+    return { supabase, select }
+  }
 
-    const result = await readCachedRate(supabase, 'EUR', '2025-01-15')
+  it('maps an exact-date cache row to an ExchangeRate', async () => {
+    // rate arrives as a numeric string from PostgREST: must be Number()ed.
+    // A Saturday, fetched on Monday: Friday's observation answers it.
+    const { supabase, select } = cacheClient({
+      rate: '11.25',
+      observation_date: '2025-01-17',
+      fetched_at: '2025-01-20T04:00:00.123456+00:00',
+    })
 
-    expect(result).toEqual({ currency: 'EUR', rate: 11.25, date: '2025-01-14' })
+    const result = await readCachedRate(supabase, 'EUR', '2025-01-18')
+
+    expect(result).toEqual({ currency: 'EUR', rate: 11.25, date: '2025-01-17' })
+    expect(select).toHaveBeenCalledWith('rate, observation_date, fetched_at')
+  })
+
+  it('serves the date\'s own observation whenever it was fetched', async () => {
+    const { supabase } = cacheClient({ rate: 11.3, observation_date: '2025-01-15', fetched_at: '2025-01-15T15:00:00+00:00' })
+
+    expect(await readCachedRate(supabase, 'EUR', '2025-01-15')).toEqual({ currency: 'EUR', rate: 11.3, date: '2025-01-15' })
+  })
+
+  it.each([
+    ['fetched on the date itself', '2025-01-15T03:00:00+00:00'],
+    ['fetched before the date', '2025-01-13T12:00:00+00:00'],
+    ['without a fetch time', undefined],
+    ['with an unreadable fetch time', 'not a time'],
+  ])('treats an earlier day\'s observation %s as a miss (crm#1740)', async (_label, fetchedAt) => {
+    // It may be the day before standing in for a date not published yet.
+    const { supabase } = cacheClient({ rate: 11.25, observation_date: '2025-01-14', fetched_at: fetchedAt })
+
+    expect(await readCachedRate(supabase, 'EUR', '2025-01-15')).toBeNull()
+  })
+
+  it('treats an observation after the date as a miss: it is not that date\'s rate', async () => {
+    const { supabase } = cacheClient({ rate: 11.25, observation_date: '2025-01-16', fetched_at: '2025-01-20T04:00:00+00:00' })
+
+    expect(await readCachedRate(supabase, 'EUR', '2025-01-15')).toBeNull()
   })
 
   it('returns null when the cache has no row for the date', async () => {

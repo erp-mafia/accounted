@@ -251,7 +251,33 @@ export function setExchangeRateCacheWriterForTests(writer: SupabaseClient | null
   cacheWriterOverride = writer
 }
 
-/** Cache reads/writes are best-effort: a cache failure must never block a rate. */
+/**
+ * Whether a cached row is final for its date. The date's own observation
+ * always is. An earlier day's observation (a look-back) is final only when
+ * the row was fetched after the date was over: by then Riksbanken had
+ * published every observation up to it, so the look-back means the date has
+ * none of its own (a weekend, a holiday).
+ *
+ * A look-back fetched on the date or before it may be a date Riksbanken had
+ * not published yet, answered with the day before. Until 2026-10-11 such rows
+ * were stored, and a stored row answered every company for good (crm#1740).
+ * The writer stores only settled dates now, so every row it writes passes this
+ * check: a look-back is settled only once a later observation exists, which is
+ * published on a later day.
+ */
+function isSettledCacheRow(rateDate: string, observationDate: string, fetchedAt: unknown): boolean {
+  if (observationDate === rateDate) return true
+  if (observationDate > rateDate) return false
+  const fetched = typeof fetchedAt === 'string' ? Date.parse(fetchedAt) : Number.NaN
+  return Number.isFinite(fetched) && fetched >= Date.parse(`${shiftDay(rateDate, 1)}T00:00:00Z`)
+}
+
+/**
+ * The cached rate for a date, or null on a miss. A row that may predate the
+ * date's own observation (isSettledCacheRow) is a miss too: the caller looks
+ * the date up again, and fetchExchangeRate replaces the row once settled.
+ * Cache reads/writes are best-effort: a cache failure must never block a rate.
+ */
 export async function readCachedRate(
   supabase: SupabaseClient,
   currency: string,
@@ -260,12 +286,14 @@ export async function readCachedRate(
   try {
     const { data } = await supabase
       .from('exchange_rates')
-      .select('rate, observation_date')
+      .select('rate, observation_date, fetched_at')
       .eq('currency', currency)
       .eq('rate_date', rateDate)
       .maybeSingle()
     if (!data) return null
-    return { currency, rate: Number(data.rate), date: data.observation_date as string }
+    const observationDate = data.observation_date as string
+    if (!isSettledCacheRow(rateDate, observationDate, data.fetched_at)) return null
+    return { currency, rate: Number(data.rate), date: observationDate }
   } catch {
     return null
   }
@@ -275,7 +303,9 @@ export async function readCachedRate(
  * Best-effort cache write of one settled (currency, rate_date) answer, by the
  * service-role writer. The value is Riksbanken's own observation: nothing a
  * caller supplies reaches the row except the currency (checked against
- * RIKSBANKEN_CURRENCIES) and the date asked for.
+ * RIKSBANKEN_CURRENCIES) and the date asked for. It replaces a row already
+ * there: a write follows only a cache miss, so such a row is one
+ * readCachedRate does not trust, and a settled answer is final.
  */
 async function writeCachedRate(currency: string, rateDate: string, observation: Observation): Promise<void> {
   const writer = rateCacheWriter()
@@ -288,8 +318,9 @@ async function writeCachedRate(currency: string, rateDate: string, observation: 
         rate: observation.rate,
         observation_date: observation.date,
         source: 'riksbanken',
+        fetched_at: new Date().toISOString(),
       },
-      { onConflict: 'currency,rate_date', ignoreDuplicates: true },
+      { onConflict: 'currency,rate_date' },
     )
     if (error) log.warn('exchange rate cache not written', { currency, rateDate, reason: error.message })
   } catch {
@@ -345,9 +376,11 @@ export function exchangeRateDate(date?: Date): string {
  * whatever client the caller holds. Only a SETTLED date is written: one
  * Riksbanken has published an observation on or after. Today before
  * publication, or a date ahead, resolves to the latest observation but is not
- * stored, because the row is never updated and would answer with the earlier
- * rate for every company once the real one exists. Without `supabase` nothing
- * is read from or written to the table (a dry run relies on that).
+ * stored, because a stored row is served without asking Riksbanken and would
+ * answer with the earlier rate for every company once the real one exists. A
+ * cached row that may be such an early answer is not served (readCachedRate):
+ * the date is looked up again and the row replaced. Without `supabase`
+ * nothing is read from or written to the table (a dry run relies on that).
  *
  * Failure semantics: when Riksbanken is unreachable or rate-limited, the most
  * recent CACHED observation within the look-back is returned. With none,
