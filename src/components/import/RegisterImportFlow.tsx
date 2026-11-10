@@ -18,6 +18,7 @@ import {
   registerImportEndpoint,
   registerSteps,
   rowsForExecute,
+  stoppedImportParams,
   type RegisterStep,
 } from '@/lib/import/register-import-flow'
 import RegisterColumnMappingStep from '@/components/import/RegisterColumnMappingStep'
@@ -208,9 +209,14 @@ export default function RegisterImportFlow({
       for (const batch of batches) {
         const outcome = await postBatch(batch, updateDuplicates)
         if (!outcome.ok) {
-          // Earlier batches are in: say how far it got and that a new run
-          // picks up from there without creating anything twice.
-          setError(done > 0 ? `${outcome.message} ${t('execute_partial', { done, total: payload.length })}` : outcome.message)
+          // Earlier batches are in: say the line it stopped at, what the
+          // earlier batches could not import, and that a new run picks up
+          // from there without creating anything twice.
+          setError(
+            done > 0
+              ? `${outcome.message} ${t('execute_partial', stoppedImportParams(results, batch, done, payload.length))}`
+              : outcome.message,
+          )
           return
         }
         results.push(outcome.result)

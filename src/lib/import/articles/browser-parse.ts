@@ -1,4 +1,6 @@
+import { executeBatches } from '@/lib/import/register-import-flow'
 import {
+  ARTICLE_MATCH_MAX_BYTES,
   ARTICLE_MATCH_MAX_ROWS,
   type AnnotatedArticleRow,
   type ArticleImportParseResult,
@@ -23,8 +25,9 @@ export type ArticleBrowserParseOutcome =
  * parsed rows larger than it carries in a response, so the file never goes
  * to the server: the same parser as POST /api/import/articles/parse reads it
  * here, and only the match keys (article number, name) go to POST
- * /api/import/articles/match, in batches of ARTICLE_MATCH_MAX_ROWS. The
- * answer has the parse route's shape, so the review step is the same.
+ * /api/import/articles/match, in batches of at most ARTICLE_MATCH_MAX_ROWS
+ * keys and ARTICLE_MATCH_MAX_BYTES. The answer has the parse route's shape,
+ * so the review step is the same.
  */
 export async function parseArticleFileInBrowser(
   file: File,
@@ -38,10 +41,8 @@ export async function parseArticleFileInBrowser(
 
   const matches: AnnotatedArticleRow['duplicate_match'][] = []
   let duplicateCount = 0
-  for (let i = 0; i < parsed.rows.length; i += ARTICLE_MATCH_MAX_ROWS) {
-    const keys = parsed.rows
-      .slice(i, i + ARTICLE_MATCH_MAX_ROWS)
-      .map((r) => ({ article_number: r.article_number, name: r.name }))
+  const allKeys = parsed.rows.map((r) => ({ article_number: r.article_number, name: r.name }))
+  for (const keys of executeBatches(allKeys, ARTICLE_MATCH_MAX_ROWS, ARTICLE_MATCH_MAX_BYTES)) {
     const res = await fetchImpl('/api/import/articles/match', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

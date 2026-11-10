@@ -98,9 +98,10 @@ export const EXECUTE_BATCH_MAX_ROWS = 10_000
 export const EXECUTE_BATCH_MAX_BYTES = 3 * 1024 * 1024
 
 /**
- * The execute rows in request-sized batches, in file order. A file that fits
- * one request is one batch, so a normal import sends exactly what it always
- * did; a supplier price list (crm#1383) goes in as many as it needs.
+ * Rows in request-sized batches, in file order: the execute rows, and the
+ * article import's match keys. A file that fits one request is one batch, so
+ * a normal import sends exactly what it always did; a supplier price list
+ * (crm#1383) goes in as many as it needs.
  */
 export function executeBatches<R>(
   rows: readonly R[],
@@ -176,6 +177,30 @@ export function mergeExecuteResults<T extends ExecuteBatchResult>(results: reado
   }
   merged.errors = merged.errors.slice(0, MERGED_ERRORS_SHOWN)
   return merged
+}
+
+/**
+ * What the review step says when a batch fails after earlier ones went in:
+ * the file line the import stopped at, how many rows the earlier batches
+ * handled, and how many of those failed on their own. From that line on rows
+ * may be missing: the failed batch may be partly written (a timeout after
+ * some statements) and no later batch was sent. "N of M rows came in" alone
+ * named no line and counted the earlier batches' failed rows as in.
+ */
+export function stoppedImportParams(
+  results: readonly ExecuteBatchResult[],
+  stoppedBatch: readonly Record<string, unknown>[],
+  done: number,
+  total: number,
+): { row: number; done: number; total: number; failed: number } {
+  const first = stoppedBatch[0]?.row_index
+  return {
+    // The header is line 1, so without a file line the position stands in.
+    row: typeof first === 'number' ? first : done + 2,
+    done,
+    total,
+    failed: results.reduce((sum, r) => sum + r.failed, 0),
+  }
 }
 
 /** Rows the review table draws: beyond this a file is reviewed by its counts. */
