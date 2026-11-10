@@ -4023,6 +4023,18 @@ export const UpdateSettingsSchema = z.object({
     .describe('Superseded by the fixed invoice layout: accepted for compatibility, no longer changes the PDF.'),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // The English texts of the two above (crm#1735). The describe reaches the
+  // MCP settings tool and the API skill.
+  invoice_late_fee_text_en: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('English invoice_late_fee_text, printed on invoices to customers whose language is en. Null or empty prints the Swedish text.'),
+  invoice_credit_terms_text_en: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('English invoice_credit_terms_text, printed on invoices to customers whose language is en. Null or empty prints the Swedish text.'),
   // Opt-in for the invoice payment-link feature (editor field + automatic
   // Stripe link on send). Default off at the DB level.
   invoice_payment_links_enabled: z.boolean().optional(),

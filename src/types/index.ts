@@ -687,6 +687,12 @@ export interface CompanySettings {
   invoice_company_name_position: 'header' | 'footer'
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
+  // The English texts of the two above, printed on an invoice to an
+  // English-language customer; null or blank prints the Swedish text
+  // (lib/invoices/fine-print.ts, crm#1735). Optional: absent on a row read
+  // before migration 20261109183000.
+  invoice_late_fee_text_en?: string | null
+  invoice_credit_terms_text_en?: string | null
 
   // Opt-in for the invoice payment-link feature (default false): shows the
   // payment-link field in the invoice editor and enables automatic Stripe

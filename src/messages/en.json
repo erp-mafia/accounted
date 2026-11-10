@@ -1462,6 +1462,8 @@
       "invoice_company_name_position": "Company name position on the invoice",
       "invoice_late_fee_text": "Late payment interest text",
       "invoice_credit_terms_text": "Payment terms (footnote)",
+      "invoice_late_fee_text_en": "Late payment interest text in English",
+      "invoice_credit_terms_text_en": "Payment terms in English (footnote)",
       "invoice_payment_links_enabled": "Payment link on invoices",
       "invoice_email_texts": "Invoice email texts",
       "invoice_email_reply_to": "Reply-to address for invoice emails",
@@ -3827,7 +3829,11 @@
     "late_fee_label": "Late payment interest",
     "late_fee_placeholder": "E.g. Payments after the due date incur interest per the Swedish Interest Act.",
     "credit_terms_label": "Payment terms (footnote)",
-    "credit_terms_placeholder": "E.g. Payment is made to the specified bankgiro."
+    "credit_terms_placeholder": "E.g. Payment is made to the specified bankgiro.",
+    "late_fee_en_label": "Late payment interest in English",
+    "credit_terms_en_label": "Payment terms in English (footnote)",
+    "fine_print_en_placeholder": "Empty: the Swedish text is printed",
+    "fine_print_en_help": "Printed on invoices to customers whose language is English. Left empty, the Swedish text is printed."
   },
   "settings_email_texts": {
     "heading": "Email texts",

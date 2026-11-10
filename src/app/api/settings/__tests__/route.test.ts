@@ -439,6 +439,38 @@ describe('PUT /api/settings', () => {
     expect(response.status).toBe(400)
   })
 
+  // crm#1735: the English fine print beside the Swedish one.
+  it('saves the English late fee and payment terms texts, and clears one with null', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+      { data: { id: 's1', invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null } },
+      { data: null, count: 5 },                                               // deadlines count (has some -> no regen)
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_late_fee_text_en: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.invoice_late_fee_text_en).toBe('Interest is charged on late payments.')
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      invoice_late_fee_text_en: 'Interest is charged on late payments.',
+      invoice_credit_terms_text_en: null,
+    })
+  })
+
+  it('rejects an English fine print text that is not a string', async () => {
+    for (const body of [{ invoice_late_fee_text_en: 42 }, { invoice_credit_terms_text_en: { en: 'Pay in 30 days.' } }]) {
+      reset()
+      enqueueMany([{ data: { entity_type: 'enskild_firma', onboarding_complete: true } }])
+      const response = await PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+      expect(response.status, JSON.stringify(body)).toBe(400)
+      expect(findCall('company_settings', 'update')).toBeUndefined()
+    }
+  })
+
   it('round-trips share capital fields and clears them with null', async () => {
     const updates = { aktiekapital: 25000, antal_aktier: 500 }
     enqueueMany([

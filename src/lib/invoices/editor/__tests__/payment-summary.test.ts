@@ -333,4 +333,15 @@ describe('paymentTermsTexts', () => {
     ).toEqual(['Betalning inom 30 dagar.'])
     expect(paymentTermsTexts(null)).toEqual([])
   })
+
+  it('names the texts an English invoice prints: the English ones where set (crm#1735)', () => {
+    const settings = {
+      invoice_credit_terms_text: 'Betalning inom 30 dagar.',
+      invoice_late_fee_text: 'Dröjsmålsränta enligt räntelagen.',
+      invoice_credit_terms_text_en: 'Payment within 30 days.',
+      invoice_late_fee_text_en: null,
+    }
+    expect(paymentTermsTexts(settings, 'en')).toEqual(['Payment within 30 days.', 'Dröjsmålsränta enligt räntelagen.'])
+    expect(paymentTermsTexts(settings, 'sv')).toEqual(['Betalning inom 30 dagar.', 'Dröjsmålsränta enligt räntelagen.'])
+  })
 })

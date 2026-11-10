@@ -28,6 +28,7 @@ import {
   PAYMENT_QR_PT,
 } from '@/lib/invoices/pdf/geometry'
 import { bareLabel, formatPdfAmount, formatPdfCurrency, formatPdfDate, formatPdfQuantity, type PdfLang } from '@/lib/invoices/pdf/format'
+import { invoiceFinePrint } from '@/lib/invoices/fine-print'
 import {
   DEDUCTION_LABOR_ONLY_NOTICE,
   GRON_TEKNIK_BASE_NOTICE,
@@ -426,10 +427,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // It travels with the payment area, or with the totals when there is none,
   // so it can never be stranded alone on a page (crm#242). Payment terms, so
   // only on a document that asks for a payment: never on a quote, a
-  // kreditfaktura or a följesedel.
+  // kreditfaktura or a följesedel. In the invoice's language: the English
+  // texts on an English invoice, each falling back to the Swedish one
+  // (crm#1735).
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
-    : [company.invoice_late_fee_text, company.invoice_credit_terms_text].filter((t): t is string => !!t?.trim())
+    : [lateFee, creditTerms].filter((t): t is string => t !== null)
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>
       {finePrint.map((text, index) => (
