@@ -1148,6 +1148,68 @@ describe('importProviderDocuments', () => {
       expect(result).toMatchObject({ linked: 1, skipped: 0 })
       expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-live' })
     })
+
+    // The run before the re-run recorded each Bokio upload against the file
+    // it put on the first copy, and record_bokio_upload keeps that document:
+    // the live copy's document for the same upload is refused as a conflict
+    // (#51). The file is on the live verifikat by then, so it is not a failure.
+    describe('a Bokio upload recorded against its file on the reversed copy (#51)', () => {
+      const bokioLive = { ...liveCopy, source_voucher_series: 'V', source_voucher_number: 33 }
+      const bokioFirstCopy = { ...bokioLive, id: 'je-first-copy', status: 'reversed' }
+      const onFirstCopy = { id: 'earlier-run', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-first-copy', upload_source: 'api' }
+      const conflict = { data: null, error: { message: 'BOKIO_UPLOAD_IDENTITY_CONFLICT', code: 'P0001' } }
+
+      function wireBokioResync(existingAttachments: ExistingAttachment[]) {
+        mockFetchUploads.mockResolvedValue([UPLOAD] as never)
+        mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
+        mockDownload.mockResolvedValue({ bytes: bytesOf('PDFBYTES'), contentType: 'application/pdf' })
+        mockArchivedForOwnEntry.mockResolvedValue(true)
+        return rangeMockSupabase({
+          fiscal_periods: PERIODS,
+          journal_entries: [bokioFirstCopy, bokioLive],
+          document_attachments: existingAttachments,
+        })
+      }
+
+      it('links the file to the live copy and counts it linked, not failed', async () => {
+        const supabase = wireBokioResync([onFirstCopy])
+        vi.mocked(supabase.rpc).mockResolvedValue(conflict as never)
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ provider: 'bokio', linked: 1, skipped: 0, failed: 0 })
+        expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-live' })
+        expect(supabase.rpc).toHaveBeenCalledWith('record_bokio_upload', {
+          p_company_id: COMPANY, p_consent_id: 'c1', p_upload_id: 'up-1', p_document_id: 'doc-1',
+        })
+        expect(mockRecordDocumentArrival).toHaveBeenCalledTimes(1)
+      })
+
+      it('skips it on the next run without a failure', async () => {
+        const supabase = wireBokioResync([
+          onFirstCopy,
+          { id: 'live-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-live', upload_source: 'api' },
+        ])
+        vi.mocked(supabase.rpc).mockResolvedValue(conflict as never)
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ linked: 0, skipped: 1, failed: 0 })
+        expect(mockUpload).not.toHaveBeenCalled()
+      })
+
+      it('still counts a conflict as failed when no reversed copy holds the same file', async () => {
+        const supabase = wireBokioResync([
+          { ...onFirstCopy, sha256_hash: 'sha-OTHER-CONTENT' },
+        ])
+        vi.mocked(supabase.rpc).mockResolvedValue(conflict as never)
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ linked: 0, failed: 1 })
+        expect(mockRecordDocumentArrival).not.toHaveBeenCalled()
+      })
+    })
   })
 
   it('counts a receipt as unmatched when its journalEntryId is not in the Bokio voucher index', async () => {

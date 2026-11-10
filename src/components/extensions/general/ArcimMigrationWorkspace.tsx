@@ -651,6 +651,12 @@ interface ConnectionStatus {
    * for a server that predates the field.
    */
   latestDocumentImport?: DocumentImportRunStatus | null
+  /**
+   * Live verifikat without underlag whose reversed copy from an earlier
+   * import holds it (#51): a re-run migration left the files there.
+   * Optional only for a server that predates the field.
+   */
+  underlagOnReplacedCopies?: number
   entityCounts: {
     customers: number
     suppliers: number
@@ -678,6 +684,40 @@ const COMING_SOON_PROVIDERS = new Set<ArcimProvider>([])
 export function offeredProviders(status: Pick<ConnectionStatus, 'enabledProviders'> | null) {
   const enabled = status?.enabledProviders
   return ARCIM_PROVIDERS.filter((provider) => (enabled ? enabled.includes(provider.id) : provider.id !== 'wint'))
+}
+
+export interface ReplacedCopyUnderlagOffer {
+  consentId: string
+  provider: ArcimProvider
+  /** Live verifikat whose underlag sits on a reversed copy. */
+  count: number
+  /** The latest run on this connection stopped for a reconnect (B11). */
+  reconnect: boolean
+}
+
+/**
+ * The connection to run "Hämta underlag" again with, when live verifikat lack
+ * the underlag an earlier run left on the copy a re-run migration reversed
+ * (#51). The run links each file to the live copy and leaves the reversed one
+ * as it is. The connection the latest run used comes first: its files are
+ * the ones left behind. Null when nothing is left there, before a ledger
+ * import, without a connection that serves underlag, and while a run is
+ * moving on that connection (its line under the connection says so).
+ */
+export function replacedCopyUnderlagOffer(
+  status: Pick<ConnectionStatus, 'consents' | 'underlagOnReplacedCopies' | 'latestDocumentImport'> | null,
+  hasSieImport: boolean,
+): ReplacedCopyUnderlagOffer | null {
+  const count = status?.underlagOnReplacedCopies ?? 0
+  if (!status || !hasSieImport || count <= 0) return null
+  const connections = status.consents.filter(c => c.status === 1 && supportsUnderlagImport(c.provider))
+  const run = status.latestDocumentImport ?? null
+  const consent = connections.find(c => c.provider === run?.provider) ?? connections[0]
+  if (!consent) return null
+  const runHere = run?.provider === consent.provider ? run : null
+  const note = documentImportRunNote(runHere)
+  if (note?.kind === 'running' || note?.kind === 'resuming') return null
+  return { consentId: consent.id, provider: consent.provider, count, reconnect: note?.kind === 'reconnect' }
 }
 
 /** Visma has no logo on purpose (founder, 2026-10-29): ProviderMark shows its initial. */
@@ -807,6 +847,10 @@ export function ProviderStep({
   }
   const connectionAction = (provider: ArcimProvider) =>
     continuesImport(provider) ? t('ext_arcim_continue_import') : t('ext_arcim_resync')
+  const replacedCopyOffer = isLoadingStatus ? null : replacedCopyUnderlagOffer(connectionStatus, !!hasSieImport)
+  const replacedCopyProviderName = replacedCopyOffer
+    ? ARCIM_PROVIDERS.find(p => p.id === replacedCopyOffer.provider)?.name ?? replacedCopyOffer.provider
+    : ''
 
   return (
     <div className="stagger-enter space-y-8">
@@ -827,6 +871,27 @@ export function ProviderStep({
           Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera
           bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
           Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
+        </AttnLine>
+      )}
+
+      {/* Underlag an earlier run left on the copy a re-run migration then
+          reversed (#51): the same "Hämta underlag" run links them to the
+          live verifikat. Never with the line above: that one needs a ledger
+          import still to come, this one an import already there. */}
+      {replacedCopyOffer && (
+        <AttnLine
+          action={{
+            label: replacedCopyOffer.reconnect
+              ? t('ext_arcim_documents_reconnect_provider', { provider: replacedCopyProviderName })
+              : t('ext_arcim_documents_fetch_action'),
+            onClick: () =>
+              (replacedCopyOffer.reconnect ? (onReconnectDocuments ?? onFetchDocuments) : onFetchDocuments)(
+                replacedCopyOffer.consentId,
+                replacedCopyOffer.provider,
+              ),
+          }}
+        >
+          {t('ext_arcim_documents_on_replaced_copies', { count: replacedCopyOffer.count })}
         </AttnLine>
       )}
 

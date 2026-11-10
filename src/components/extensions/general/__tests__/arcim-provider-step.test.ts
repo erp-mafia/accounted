@@ -7,7 +7,7 @@ import { NextIntlClientProvider } from 'next-intl'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 
-import { ProviderStep, offeredProviders } from '../ArcimMigrationWorkspace'
+import { ProviderStep, offeredProviders, replacedCopyUnderlagOffer } from '../ArcimMigrationWorkspace'
 
 const IntlProvider = NextIntlClientProvider as (
   props: Omit<ComponentProps<typeof NextIntlClientProvider>, 'children'>,
@@ -276,6 +276,79 @@ describe('ProviderStep, what the stored key is still for', () => {
     const html = render(status(true, [idle]), 'en')
     expect(html).toContain(en.extensions.ext_arcim_key_idle.replaceAll('{provider}', 'Bokio'))
     expect(html).toContain(en.extensions.ext_arcim_key_remove)
+  })
+})
+
+// #51: an earlier "Hämta underlag" put the files on the first copy of each
+// verifikat, and a re-run migration then reversed that copy, so the live
+// verifikat lacks them. The page offers the same run again.
+describe('ProviderStep, underlag left on reversed copies by a re-run migration (#51)', () => {
+  const line = sv.extensions.ext_arcim_documents_on_replaced_copies.replace('{count}', '12')
+  const RUN = {
+    provider: 'fortnox',
+    startedAt: '2026-10-22T17:30:00Z',
+    updatedAt: '2026-10-22T17:50:20Z',
+    complete: true,
+    total: 40,
+    scanned: 40,
+    linked: 0,
+    skipped: 40,
+    unmatched: 0,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: null,
+    stalled: false,
+  }
+  // The sentence and its action: one ochre line, the action a button in it.
+  const attnLine = (html: string) => {
+    const start = html.indexOf(line)
+    return start === -1 ? null : html.slice(html.lastIndexOf('<p', start), html.indexOf('</p>', start))
+  }
+
+  it('says how many verifikat lack their underlag and offers Hämta underlag in the same line', () => {
+    const html = render({ ...status(true), underlagOnReplacedCopies: 12 })
+    const attn = attnLine(html)
+    expect(attn).toContain('text-attn')
+    expect(attn).toContain(`>${fetchDocuments}</button>`)
+  })
+
+  it('shows nothing when no verifikat is in that state, or for a server that predates the count', () => {
+    expect(attnLine(render({ ...status(true), underlagOnReplacedCopies: 0 }))).toBeNull()
+    expect(attnLine(render(status(true)))).toBeNull()
+  })
+
+  it('shows nothing before a ledger import, or without a connection that serves underlag', () => {
+    expect(attnLine(render({ ...status(false), underlagOnReplacedCopies: 12 }))).toBeNull()
+    const visma = { ...FORTNOX_CONSENT, id: 'consent-3', provider: 'visma' as const }
+    expect(attnLine(render({ ...status(true, [visma]), underlagOnReplacedCopies: 12 }))).toBeNull()
+  })
+
+  it('stays quiet while a run is moving on that connection', () => {
+    const running = { ...RUN, complete: false, nextCursor: 'file-20', scanned: 20 }
+    expect(attnLine(render({ ...status(true), underlagOnReplacedCopies: 12, latestDocumentImport: running }))).toBeNull()
+  })
+
+  it('offers the reconnect when the latest run stopped for one', () => {
+    const refused = { ...RUN, complete: false, nextCursor: 'file-20', needsReconnect: true, stalled: true }
+    const attn = attnLine(render({ ...status(true), underlagOnReplacedCopies: 12, latestDocumentImport: refused }))
+    expect(attn).toContain('>Koppla Fortnox igen</button>')
+  })
+
+  it('says the same in English', () => {
+    const html = render({ ...status(true), underlagOnReplacedCopies: 12 }, 'en')
+    expect(html).toContain('12 vouchers lack documents that are still on reversed copies from an earlier import.')
+    expect(html).toContain(`>${en.extensions.ext_arcim_documents_fetch_action}</button>`)
+  })
+
+  it('runs it on the connection the latest run used: its files are the ones left behind', () => {
+    const both = status(true, [FORTNOX_CONSENT, BOKIO_CONSENT])
+    expect(replacedCopyUnderlagOffer({ ...both, underlagOnReplacedCopies: 3, latestDocumentImport: { ...RUN, provider: 'bokio' } }, true))
+      .toEqual({ consentId: 'consent-2', provider: 'bokio', count: 3, reconnect: false })
+    expect(replacedCopyUnderlagOffer({ ...both, underlagOnReplacedCopies: 3 }, true))
+      .toEqual({ consentId: 'consent-1', provider: 'fortnox', count: 3, reconnect: false })
   })
 })
 
