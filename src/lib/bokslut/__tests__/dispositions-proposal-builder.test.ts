@@ -321,7 +321,75 @@ describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', ()
       taxWithProposals: 0,
       // floor10(9 112,36 + 480) = 9 590; 9 590 x 20,6 % = 1 975,54.
       taxAsBooked: 1_976,
+      // The one proposal that takes the 1 976 kr to 0 kr, and what it takes off the result.
+      zeroedBy: [{ kind: 'overavskrivningar', label: 'Förändring av överavskrivningar', resultEffect: -10_959 }],
     })
+  })
+
+  it('names every proposal that lowers the result, never an återföring that raises it', async () => {
+    // A mandatory återföring (+1 000) and an SLP (-500) beside the överavskrivning.
+    vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([
+      { ...fond2120(1_000), must_return_this_year: true },
+    ])
+    vi.mocked(calculateSarskildLoneskatt).mockResolvedValue({
+      kind: 'sarskild_loneskatt',
+      label: 'Särskild löneskatt',
+      description: 'Särskild löneskatt på pensionskostnader.',
+      amount: 500,
+      lines: [],
+      warnings: [],
+    })
+
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    expect(result.taxBasis?.pending.map((p) => p.kind)).toEqual([
+      'periodiseringsfond_ateforing',
+      'overavskrivningar',
+      'sarskild_loneskatt',
+    ])
+    expect(result.taxBasis?.taxWithProposals).toBe(0)
+    expect(result.taxBasis?.zeroedBy).toEqual([
+      { kind: 'overavskrivningar', label: 'Förändring av överavskrivningar', resultEffect: -10_959 },
+      { kind: 'sarskild_loneskatt', label: 'Särskild löneskatt', resultEffect: -500 },
+    ])
+    const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
+    // formatCurrency spaces are non-breaking: \s matches them.
+    expect(tax?.description).toMatch(
+      /Förändring av överavskrivningar \(-10\s959\skr\), Särskild löneskatt \(-500\skr\)/,
+    )
+    expect(tax?.description).not.toContain('Återföring')
+    // The mandatory återföring is pending, so the ledger's tax is not what
+    // skipping the överavskrivning gives: no figure, but the överavskrivning
+    // can still be skipped.
+    expect(tax?.description).not.toContain('Utan dem')
+    expect(tax?.description).toContain('avmarkera dem')
+  })
+
+  it('offers no skip when only a tax owed (SLP) zeroes it', async () => {
+    vi.mocked(calculateOveravskrivningar).mockResolvedValue({
+      status: 'not_applicable',
+      proposal: null,
+      currentReserve: 0,
+      currentPeriodChange: 0,
+      targetReserve: 0,
+      maximumSignedChange: 0,
+    })
+    vi.mocked(calculateSarskildLoneskatt).mockResolvedValue({
+      kind: 'sarskild_loneskatt',
+      label: 'Särskild löneskatt',
+      description: 'Särskild löneskatt på pensionskostnader.',
+      amount: 9_600,
+      lines: [],
+      warnings: [],
+    })
+
+    const result = await buildDispositionsProposal(supabaseFor(period), 'company-1', 'period-1')
+
+    expect(result.taxBasis?.zeroedBy.map((p) => p.kind)).toEqual(['sarskild_loneskatt'])
+    const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
+    expect(tax?.description).toMatch(/Särskild löneskatt \(-9\s600\skr\)/)
+    expect(tax?.description).not.toContain('Utan dem')
+    expect(tax?.description).not.toContain('avmarkera')
   })
 
   it('still offers the bolagsskatt card, so skipping the överavskrivning books the tax', async () => {
@@ -330,7 +398,10 @@ describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', ()
     const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(tax?.amount).toBe(0)
     expect(tax?.description).toContain('Förändring av överavskrivningar (-10 959 kr)')
+    // The tax the ledger carries without it: the amount the 0 kr hides.
+    expect(tax?.description).toMatch(/Utan dem blir skatten 1\s976\skr\./)
     expect(tax?.description).toContain('avmarkera dem')
+    expect(tax?.description).not.toMatch(/[\u2013\u2014]/)
     // The tax math is unchanged: the card's computation is the preview's.
     expect(tax?.computation).toEqual(expect.objectContaining({ taxAmount: 0 }))
   })
@@ -359,6 +430,8 @@ describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', ()
 
     expect(result.proposals.find((p) => p.kind === 'bolagsskatt')).toBeUndefined()
     expect(result.taxBasis?.taxAsBooked).toBe(0)
+    // The ledger carries no tax, so no proposal is what zeroes it.
+    expect(result.taxBasis?.zeroedBy).toEqual([])
   })
 
   it('keeps the plain bolagsskatt card when the tax stays above 0 kr', async () => {
@@ -369,6 +442,9 @@ describe('buildDispositionsProposal: a 0 kr bolagsskatt the proposals cause', ()
     const tax = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(tax?.amount).toBeGreaterThan(0)
     expect(tax?.description).not.toContain('avmarkera')
+    // Lowered, not zeroed: the pending list still carries the överavskrivning.
+    expect(result.taxBasis?.pending.map((p) => p.kind)).toContain('overavskrivningar')
+    expect(result.taxBasis?.zeroedBy).toEqual([])
   })
 })
 

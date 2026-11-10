@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +19,7 @@ import { EfDeclarationSection } from './EfDeclarationSection'
 import { DeferredTaxCard } from './DeferredTaxCard'
 import { LossCarryforwardRegister, LossRegisterDeficitHint } from './LossCarryforwardRegister'
 import type {
+  BolagsskattBasis,
   DispositionsProposal,
   ProposedDisposition,
   DispositionKind,
@@ -26,6 +28,7 @@ import type {
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { filesIncomeReturn, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { parseAmountInput } from '@/lib/money'
+import { explainZeroedTax } from '@/lib/bokslut/zeroed-tax'
 
 interface DispositionsStepProps {
   periodId: string
@@ -66,6 +69,7 @@ export function DispositionsStep({
   onNavigationBlockedChange,
 }: DispositionsStepProps) {
   const { toast } = useToast()
+  const t = useTranslations('dispositions_tax_basis')
   const [proposal, setProposal] = useState<DispositionsProposal | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -334,6 +338,7 @@ export function DispositionsStep({
           snapshot={proposal.taxAdjustments}
           draft={taxAdjustmentDraft}
           taxProposal={proposal.proposals.find((item) => item.kind === 'bolagsskatt')}
+          taxBasis={proposal.taxBasis}
           saving={savingAdjustments}
           error={adjustmentError}
           onChange={setTaxAdjustmentDraft}
@@ -418,6 +423,9 @@ export function DispositionsStep({
           <ProposalCard
             key={key}
             proposal={p}
+            description={
+              p.kind === 'bolagsskatt' ? zeroedTaxDescription(proposal.taxBasis, t) : undefined
+            }
             accept={sel.accept}
             overrideAmount={sel.overrideAmount}
             lockedSkip={sel.lockedSkip}
@@ -478,6 +486,7 @@ function TaxAdjustmentsCard({
   snapshot,
   draft,
   taxProposal,
+  taxBasis,
   saving,
   error,
   onChange,
@@ -486,6 +495,7 @@ function TaxAdjustmentsCard({
   snapshot: TaxAdjustmentSnapshot
   draft: TaxAdjustmentDraft
   taxProposal?: ProposedDisposition
+  taxBasis?: BolagsskattBasis
   saving: boolean
   error: string | null
   onChange: (draft: TaxAdjustmentDraft) => void
@@ -494,7 +504,11 @@ function TaxAdjustmentsCard({
   const detected = snapshot.items.filter(
     (item) => item.source === 'detected' && item.accountNumber && item.amount > 0,
   )
+  const t = useTranslations('dispositions_tax_basis')
   const computation = taxProposal?.computation
+  // The proposals the preview counts on but has not booked: they lead from
+  // the result in the books to the result after dispositions (accounted#180).
+  const pending = taxBasis?.pending ?? []
 
   return (
     <Card>
@@ -588,6 +602,19 @@ function TaxAdjustmentsCard({
 
         {computation && (
           <div className="rounded-lg bg-muted/50 p-4 text-sm space-y-1">
+            {taxBasis && pending.length > 0 && (
+              <>
+                <CalculationRow label={t('booked_result')} amount={taxBasis.bookedResultBeforeTax} />
+                {pending.map((item) => (
+                  <CalculationRow
+                    key={`${item.kind}:${item.label}`}
+                    label={item.label}
+                    amount={Math.abs(item.resultEffect)}
+                    prefix={item.resultEffect > 0 ? '+' : '-'}
+                  />
+                ))}
+              </>
+            )}
             <CalculationRow label="Resultat efter dispositioner" amount={numberValue(computation.resultBeforeTax)} />
             <CalculationRow label="Ej avdragsgilla kostnader" amount={numberValue(computation.nonDeductibleExpenses)} prefix="+" />
             <CalculationRow label="Ej skattepliktiga intäkter" amount={numberValue(computation.nonTaxableIncome)} prefix="-" />
@@ -629,12 +656,15 @@ function CalculationRow({
 
 function ProposalCard({
   proposal,
+  description,
   accept,
   overrideAmount,
   lockedSkip,
   onChange,
 }: {
   proposal: ProposedDisposition
+  /** Replaces the server's description (the 0 kr bolagsskatt, in the user's language). */
+  description?: string
   accept: boolean
   overrideAmount: number | undefined
   lockedSkip: boolean
@@ -649,7 +679,7 @@ function ProposalCard({
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
             <CardTitle className="text-base">{proposal.label}</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">{proposal.description}</p>
+            <p className="text-sm text-muted-foreground mt-1">{description ?? proposal.description}</p>
             {proposal.required && (
               <Badge variant="warning" className="mt-2 gap-1">
                 <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Obligatorisk
@@ -705,6 +735,28 @@ function ProposalCard({
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * The 0 kr bolagsskatt card in the user's language: the proposals that take
+ * the tax to 0 kr, with what each takes off the result, the tax without them
+ * and the way to pay tax this year. Undefined when no proposal zeroes it.
+ */
+function zeroedTaxDescription(
+  basis: BolagsskattBasis | undefined,
+  t: ReturnType<typeof useTranslations<'dispositions_tax_basis'>>,
+): string | undefined {
+  const zeroed = explainZeroedTax(basis)
+  if (!zeroed) return undefined
+  const list = zeroed.zeroedBy
+    .map((item) => `${item.label} (${item.resultEffect > 0 ? '+' : '-'}${formatCurrency(Math.abs(item.resultEffect))})`)
+    .join(', ')
+  const sentences = [t('zeroed_by', { list })]
+  if (zeroed.taxWithout !== null) {
+    sentences.push(t('zeroed_without', { amount: formatCurrency(zeroed.taxWithout) }))
+  }
+  if (zeroed.canSkip) sentences.push(t('zeroed_skip'))
+  return sentences.join(' ')
 }
 
 function isOverridable(proposal: ProposedDisposition): boolean {

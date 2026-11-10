@@ -19035,6 +19035,12 @@
     "submit": "Add card",
     "created_toast": "{name} was added"
   },
+  "dispositions_tax_basis": {
+    "booked_result": "Result before tax in the books",
+    "zeroed_by": "The tax is 0 kr if these proposed dispositions are booked: {list}.",
+    "zeroed_without": "Without them the tax is {amount}.",
+    "zeroed_skip": "Excess depreciation and an allocation to a tax allocation reserve are optional. To pay tax this year instead, untick them (Hoppa över) and the tax is recalculated on what is booked."
+  },
   "deferred_tax": {
     "title": "Deferred tax",
     "hint": "K3 chapter 29: deferred tax on differences between carrying amounts and tax values, and on tax losses that can be used. Untaxed reserves stay gross and are not included (K3 29.37).",
