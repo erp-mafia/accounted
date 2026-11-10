@@ -59,6 +59,52 @@ describe('loadTaxAdjustmentSnapshot', () => {
     })
   })
 
+  it('adds non-deductible representation (6072) to 4.3c and tax-free interest (8314) to 4.5c (crm#1681)', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValueOnce({
+      rows: [
+        { account_number: '6992', closing_debit: 7_035, closing_credit: 0 },
+        { account_number: '8423', closing_debit: 980, closing_credit: 0 },
+        { account_number: '6072', closing_debit: 1_209.82, closing_credit: 0 },
+        { account_number: '8314', closing_debit: 0, closing_credit: 82 },
+      ],
+      totalDebit: 9_224.82,
+      totalCredit: 82,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.nonDeductibleExpenses).toBe(9_224.82)
+    expect(snapshot.nonTaxableIncome).toBe(82)
+    expect(snapshot.items.find((item) => item.accountNumber === '6072')).toMatchObject({
+      adjustmentType: 'non_deductible_expense',
+      amount: 1_209.82,
+      included: true,
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8314')).toMatchObject({
+      adjustmentType: 'non_taxable_income',
+      amount: 82,
+      included: true,
+    })
+  })
+
+  it('leaves tax-free allowances (73xx) alone: tax-free for the employee, deductible for the company', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValueOnce({
+      rows: [
+        { account_number: '7321', closing_debit: 1_500, closing_credit: 0 },
+        { account_number: '7331', closing_debit: 2_500, closing_credit: 0 },
+      ],
+      totalDebit: 4_000,
+      totalCredit: 0,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.nonDeductibleExpenses).toBe(0)
+    expect(snapshot.items.some((item) => item.accountNumber === '7321' || item.accountNumber === '7331')).toBe(false)
+  })
+
   it('fails loudly instead of dropping form-specific accounts when the company row cannot be resolved', async () => {
     // Without a form the snapshot would silently fall back to the base
     // accounts and omit 3901 for an ekonomisk förening; the lookup error

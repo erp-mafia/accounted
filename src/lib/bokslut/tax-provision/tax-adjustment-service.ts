@@ -23,19 +23,47 @@ interface DetectedTaxAdjustmentAccount {
   includedByDefault?: boolean
 }
 
+/**
+ * Every BAS account the chart itself names as not deductible ("ej
+ * avdragsgill") is proposed as an INK2S 4.3c addition, and every account it
+ * names as tax-free interest ("Skattefria ränteintäkter") as a 4.5c deduction
+ * (crm#1681: 6072 representation and 8314 were missing, so 7653, 7754 and the
+ * taxable result were wrong). The BAS name is the rule, so a balance there is
+ * ticked by default, as 6992 always was. Skattefria traktamenten and
+ * bilersättningar (73xx) are not here: tax-free for the employee, deductible
+ * for the company.
+ */
+const NON_DEDUCTIBLE_EXPENSE_ACCOUNTS: ReadonlyArray<readonly [string, string]> = [
+  ['5982', 'Ej avdragsgill sponsring'],
+  ['6072', 'Representation, ej avdragsgill'],
+  ['6342', 'Lämnade skadestånd, ej avdragsgilla'],
+  ['6392', 'Övriga riskkostnader, ej avdragsgilla'],
+  ['6982', 'Föreningsavgifter, ej avdragsgilla'],
+  ['6992', 'Övriga externa kostnader, ej avdragsgilla'],
+  ['7622', 'Sjuk- och hälsovård, ej avdragsgill'],
+  ['7623', 'Sjukvårdsförsäkring, ej avdragsgill'],
+  ['7632', 'Personalrepresentation, ej avdragsgill'],
+  ['8423', 'Räntekostnader för skatter och avgifter'],
+]
+
+const NON_TAXABLE_INCOME_ACCOUNTS: ReadonlyArray<readonly [string, string]> = [
+  ['8254', 'Skattefria ränteintäkter, långfristiga tillgångar'],
+  ['8314', 'Skattefria ränteintäkter'],
+]
+
 export const DETECTED_TAX_ADJUSTMENT_ACCOUNTS: readonly DetectedTaxAdjustmentAccount[] = [
-  {
-    accountNumber: '6992',
-    sourceKey: 'account:6992',
-    adjustmentType: 'non_deductible_expense',
-    description: 'Övriga externa kostnader, ej avdragsgilla',
-  },
-  {
-    accountNumber: '8423',
-    sourceKey: 'account:8423',
-    adjustmentType: 'non_deductible_expense',
-    description: 'Räntekostnader för skatter och avgifter',
-  },
+  ...NON_DEDUCTIBLE_EXPENSE_ACCOUNTS.map(([accountNumber, description]) => ({
+    accountNumber,
+    sourceKey: `account:${accountNumber}`,
+    adjustmentType: 'non_deductible_expense' as const,
+    description,
+  })),
+  ...NON_TAXABLE_INCOME_ACCOUNTS.map(([accountNumber, description]) => ({
+    accountNumber,
+    sourceKey: `account:${accountNumber}`,
+    adjustmentType: 'non_taxable_income' as const,
+    description,
+  })),
 ]
 
 /**
