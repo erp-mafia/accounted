@@ -6365,6 +6365,7 @@
     "preview_title": "PDF-förhandsgranskning",
     "preview_open": "Öppna i ny flik",
     "preview_loading": "Förhandsgranskningen laddas",
+    "preview_not_drawn": "Förhandsgranskningen kunde inte visas här.",
     "status_seller_vat_missing": "Företagets momsregistreringsnummer saknas och måste stå på fakturan.",
     "status_seller_vat_add": "Lägg till",
     "status_seller_vat_ask_admin": "Be en administratör lägga till det.",
