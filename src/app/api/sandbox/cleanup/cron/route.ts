@@ -21,18 +21,47 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  * (migration 20260927220000). Before that, ten failing users filled every
  * batch and stopped the run after its first call: from 2026-09-23 the cron
  * removed nothing while the backlog grew past a thousand.
+ *
+ * Each failure comes back with its reason (migration 20261109185036): the
+ * SQLSTATE, the message, the table and constraint, and the error context
+ * that names the guard and the teardown statement. The run logs one error
+ * line per failed user, so a refusal by design (a sandbox user who also owns
+ * a real company) and a teardown gap (a new RESTRICT foreign key) can be told
+ * apart without the Postgres log.
  */
 export const maxDuration = 300
 
 const BATCH_LIMIT = 10
 const MAX_BATCHES = 25
 const TIME_BUDGET_MS = 240_000
+// A run with more failures than this logs the first ones and counts the rest:
+// they almost always share one reason.
+const MAX_LOGGED_FAILURES = 20
+
+const FAILURE_FIELDS = ['user_id', 'kind', 'sqlstate', 'message', 'table', 'constraint', 'context'] as const
+type CleanupFailure = Partial<Record<(typeof FAILURE_FIELDS)[number], string>>
+
+/** The `failures` the RPC reports, string fields only; absent before the migration. */
+function readFailures(data: unknown): CleanupFailure[] {
+  const list = typeof data === 'object' && data !== null ? (data as { failures?: unknown }).failures : undefined
+  if (!Array.isArray(list)) return []
+  return list.flatMap((item): CleanupFailure[] => {
+    if (typeof item !== 'object' || item === null) return []
+    const failure: CleanupFailure = {}
+    for (const field of FAILURE_FIELDS) {
+      const value = (item as Record<string, unknown>)[field]
+      if (typeof value === 'string') failure[field] = value
+    }
+    return [failure]
+  })
+}
 
 export const GET = withServiceCronContext('cron.sandbox_cleanup', async (_request, ctx) => {
   const supabase = ctx.supabase
 
   const started = Date.now()
   const totals = { cleaned: 0, failed: 0, orphans_removed: 0, batches: 0 }
+  const failures: CleanupFailure[] = []
   // Failed users stay at the head of the queue; skip past them. Sent only
   // once the RPC has reported one, so a deploy that lands before the
   // migration keeps calling the two-argument function.
@@ -68,6 +97,7 @@ export const GET = withServiceCronContext('cron.sandbox_cleanup', async (_reques
     totals.failed += batch.failed
     totals.orphans_removed += batch.orphans_removed
     totals.batches += 1
+    failures.push(...readFailures(data))
 
     const nextOffset = typeof data === 'object' && data !== null ? data.next_offset : undefined
     if (typeof nextOffset === 'number') {
@@ -82,9 +112,17 @@ export const GET = withServiceCronContext('cron.sandbox_cleanup', async (_reques
   }
 
   // Per-user failures used to be swallowed as Postgres WARNINGs, which is how
-  // the cleanup sat broken for months; surface them at error level instead.
+  // the cleanup sat broken for months; surface them at error level instead,
+  // each with the reason the teardown was refused.
   if (totals.failed > 0) {
-    ctx.log.error('sandbox cleanup completed with failures', totals)
+    for (const failure of failures.slice(0, MAX_LOGGED_FAILURES)) {
+      ctx.log.error('sandbox teardown failed', { failure })
+    }
+    ctx.log.error('sandbox cleanup completed with failures', {
+      ...totals,
+      failures_logged: Math.min(failures.length, MAX_LOGGED_FAILURES),
+      failures_omitted: Math.max(failures.length - MAX_LOGGED_FAILURES, 0),
+    })
   } else {
     ctx.log.info('sandbox cleanup summary', totals)
   }
