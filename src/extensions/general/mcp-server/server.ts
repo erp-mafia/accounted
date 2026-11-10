@@ -263,7 +263,7 @@ import {
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findCompanyScopedResource, findResource, parseResourceQuery } from './resources'
-import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
+import { buildLedgerContext, buildLedgerDigest } from '@/lib/agent-context/ledger-context'
 import { lastSessionSync, loadRememberedFacts } from '@/lib/agent-context/remembered-facts'
 import {
   capabilityDigest,
@@ -8030,32 +8030,7 @@ export const tools: McpTool[] = [
       // the briefing.
       const safeLedgerDigest = (async () => {
         try {
-          const ctx = await buildLedgerContext(supabase, companyId)
-          return {
-            resource_uri: 'Accounted://ledger/context',
-            window_from: ctx.meta.window.from,
-            posted_entries_window: ctx.meta.coverage.posted_entries_window,
-            top_counterparty_patterns: ctx.counterparty_patterns.slice(0, 5).map((p) => ({
-              counterparty: p.counterparty,
-              dominant_category: p.dominant.category,
-              dominant_account_number: p.dominant.account_number,
-              evidence: {
-                seen_12m: p.evidence.seen_12m,
-                agree: p.evidence.agree,
-                last_booked: p.evidence.last_booked,
-              },
-            })),
-            top_supplier_patterns: ctx.supplier_patterns.slice(0, 3).map((s) => ({
-              supplier: s.supplier,
-              dominant_account_number: s.dominant.account_number,
-              vat_treatment: s.dominant.vat_treatment,
-              evidence: {
-                seen_12m: s.evidence.seen_12m,
-                agree: s.evidence.agree,
-                last_booked: s.evidence.last_booked,
-              },
-            })),
-          }
+          return buildLedgerDigest(await buildLedgerContext(supabase, companyId))
         } catch {
           return null
         }

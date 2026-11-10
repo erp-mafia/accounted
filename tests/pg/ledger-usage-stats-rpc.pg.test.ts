@@ -12,7 +12,12 @@
  * and two-company isolation (a foreign company id yields empty sections).
  * Counterparty patterns key on the text the counterparty templates learn
  * from (merchant name, else original_description, else description), so a
- * feed without merchant names still gets patterns, on the template key.
+ * feed without merchant names still gets patterns, on the template key. *
+ * imported_counterparty_patterns (20261109090100): imported verifikat as a
+ * second basis. Only verifikat settled through money (19xx or a card ledger)
+ * or reskontra (244x/151x), not both, so payments never teach 2440/1930; the
+ * counterparty read out of the previous system's wrapper text on the same
+ * key as bank rows; booking account and VAT treatment read off the lines.
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
@@ -203,6 +208,17 @@ type LedgerStats = {
     vat_treatment: string | null
     dominant_account_number: string | null
     dominant_account_count: number
+  }>
+  imported_counterparty_patterns: Array<{
+    counterparty: string
+    counterparty_key: string
+    vouchers: number
+    last_booked: string
+    settled_via: string
+    dominant_account_number: string | null
+    dominant_account_count: number
+    vat_treatment: string | null
+    vat_treatment_count: number
   }>
   vat_treatments_used: string[]
   median_booking_lag_days: number | null
@@ -670,5 +686,184 @@ describe('get_ledger_usage_stats: feeds without a merchant name', () => {
       ])
       expect(p.counterparty.length).toBeLessThanOrEqual(60)
     }
+  })
+})
+
+describe('imported_voucher_counterparty', () => {
+  async function extract(raw: string | null): Promise<string | null> {
+    const res = await getPool().query(`SELECT public.imported_voucher_counterparty($1) AS name`, [raw])
+    return res.rows[0].name as string | null
+  }
+
+  it('takes the name out of the wrappers the previous systems write', async () => {
+    expect(await extract('Levfakt Telia Sverige AB (1234)')).toBe('Telia Sverige AB')
+    expect(await extract('LEVBET Foo (Nord) AB (12)')).toBe('Foo (Nord) AB')
+    expect(await extract('Kundfaktura Acme Konsult AB (1005)')).toBe('Acme Konsult AB')
+    expect(await extract('Leverantörsfaktura från 42 Kommunens Energi AB, 112233')).toBe('Kommunens Energi AB')
+    expect(await extract('Betalning till 1234-5678 Hälsopartner AB, 900001')).toBe('Hälsopartner AB')
+    expect(await extract('Kundfaktura till 17 Anna Exempel, 400100')).toBe('Anna Exempel')
+    expect(await extract('Faktura 1001 Exempel Konsult AB')).toBe('Exempel Konsult AB')
+    expect(await extract('LEVERANTÖRSFAKTURA: Elgrossist Nord AB - 100200 - Inköp varor 25% moms')).toBe('Elgrossist Nord AB')
+  })
+
+  it('keeps a bank-direct text as it stands and names no one for a bare wrapper', async () => {
+    expect(await extract('ANTHROPIC* CLAUDE SUB')).toBe('ANTHROPIC* CLAUDE SUB')
+    expect(await extract('Fakturaavgift Bank')).toBe('Fakturaavgift Bank')
+    expect(await extract('Levfakt  (12)')).toBeNull()
+    expect(await extract('Betalning Leverantörsfaktura V12')).toBeNull()
+    expect(await extract('Faktura #5001 (OCR 9001)')).toBeNull()
+    expect(await extract('Leverantörsfaktura: ')).toBeNull()
+    expect(await extract('   ')).toBeNull()
+    expect(await extract(null)).toBeNull()
+  })
+})
+
+describe('get_ledger_usage_stats imported_counterparty_patterns', () => {
+  let userId: string
+  let companyId: string
+  let fiscalPeriodId: string
+  let voucher = 100
+
+  async function imported(description: string, entryDate: string, lines: Array<[string, number, number]>): Promise<string> {
+    return insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate, description,
+      sourceType: 'import',
+      voucherSeries: 'I',
+      voucherNumber: voucher++,
+      lines: lines.map(([accountNumber, debitAmount, creditAmount]) => ({ accountNumber, debitAmount, creditAmount })),
+    })
+  }
+
+  beforeAll(async () => {
+    const seeded = await seedCompany()
+    userId = seeded.userId
+    companyId = seeded.companyId
+    fiscalPeriodId = seeded.fiscalPeriodId
+
+    // A company card on 2890: card-settled verifikat settle through money.
+    await getPool().query(
+      `INSERT INTO public.cash_accounts
+         (id, company_id, ledger_account, currency, name, kind, card_issuer, card_last4,
+          invoice_payee, is_primary, iban, source)
+       VALUES ($1, $2, '2890', 'SEK', 'Företagskort', 'card', 'eurocard', ARRAY['3667'], false, false, NULL, 'manual')`,
+      [randomUUID(), companyId],
+    )
+
+    // Supplier invoices through leverantörsreskontra, 25 % ingående moms.
+    for (const [nr, date] of [['101', '2026-05-05'], ['102', '2026-06-05'], ['103', '2026-06-25']] as const) {
+      await imported(`Levfakt Telia Sverige AB (${nr})`, date, [['6212', 800, 0], ['2641', 200, 0], ['2440', 0, 1000]])
+    }
+    // Their payments, one with an exchange difference: a payment says how a
+    // debt was settled, never what was bought.
+    await imported('Levbet Telia Sverige AB (101)', '2026-05-30', [['2440', 1000, 0], ['1930', 0, 1000]])
+    await imported('Levbet Telia Sverige AB (102)', '2026-06-30', [['2440', 1000, 0], ['7960', 5, 0], ['1930', 0, 1005]])
+    // Bank-direct reverse-charge purchase from abroad (2645/2614).
+    await imported('ANTHROPIC* CLAUDE SUB SAN FRANCISCO', '2026-05-20', [['6540', 500, 0], ['2645', 125, 0], ['2614', 0, 125], ['1930', 0, 500]])
+    await imported('ANTHROPIC* CLAUDE SUB', '2026-06-20', [['6540', 500, 0], ['2645', 125, 0], ['2614', 0, 125], ['1930', 0, 500]])
+    // Sales through kundreskontra, 25 % utgående moms, and a customer payment.
+    await imported('Kundfaktura Acme Konsult AB (5001)', '2026-05-10', [['1510', 1250, 0], ['3041', 0, 1000], ['2611', 0, 250]])
+    await imported('Kundfaktura Acme Konsult AB (5002)', '2026-06-10', [['1510', 1250, 0], ['3041', 0, 1000], ['2611', 0, 250]])
+    await imported('Kundbet Acme Konsult AB (5001)', '2026-06-01', [['1930', 1250, 0], ['1510', 0, 1250]])
+    // Domestic reverse charge (byggtjänst, 2647/2614).
+    await imported('Leverantörsfaktura från 77 Bygg Partner AB, F-123', '2026-05-12', [['4425', 1000, 0], ['2647', 250, 0], ['2614', 0, 250], ['2440', 0, 1000]])
+    await imported('Leverantörsfaktura från 77 Bygg Partner AB, F-124', '2026-06-12', [['4425', 1000, 0], ['2647', 250, 0], ['2614', 0, 250], ['2440', 0, 1000]])
+    // 2641 alone: the rate comes from the amounts (12 on 100 is 12 %).
+    await imported('Restaurang Kungen', '2026-05-14', [['5831', 100, 0], ['2641', 12, 0], ['1930', 0, 112]])
+    await imported('Restaurang Kungen', '2026-06-14', [['5831', 100, 0], ['2641', 12, 0], ['1930', 0, 112]])
+    // Paid with the company card.
+    await imported('SPOTIFY', '2026-05-16', [['6540', 100, 0], ['2641', 25, 0], ['2890', 0, 125]])
+    await imported('SPOTIFY', '2026-06-16', [['6540', 100, 0], ['2641', 25, 0], ['2890', 0, 125]])
+    // Import VAT legs: the account is known, the treatment is not.
+    await imported('Leverantörsfaktura: Speditören AB - 991 - Import', '2026-05-18', [['4010', 1000, 0], ['2641', 250, 0], ['2615', 0, 250], ['2440', 0, 1000]])
+    await imported('Leverantörsfaktura: Speditören AB - 992 - Import', '2026-06-18', [['4010', 1000, 0], ['2641', 250, 0], ['2615', 0, 250], ['2440', 0, 1000]])
+    // Never patterns: an accrual (no money, no reskontra), a bare wrapper,
+    // a verifikat before the window, and a reversed one.
+    await imported('Periodisering hyra', '2026-06-30', [['1790', 500, 0], ['5010', 0, 500]])
+    await imported('Levfakt  (55)', '2026-06-02', [['4010', 100, 0], ['2440', 0, 100]])
+    await imported('Levfakt Gammal Leverantör AB (1)', '2026-02-01', [['4010', 100, 0], ['2440', 0, 100]])
+    // Reversed as reverseEntry does it: a posted storno with reverses_id and
+    // the lines swapped, then the original flipped to 'reversed'.
+    const undone = await imported('Levfakt Ångrad AB (9)', '2026-06-03', [['6110', 100, 0], ['2440', 0, 100]])
+    const reversal = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status, reverses_id)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-06-04', 'Makulering', 'storno', 'draft', $6)`,
+      [reversal, userId, companyId, fiscalPeriodId, voucher++, undone],
+    )
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount)
+       SELECT $1, account_number, credit_amount, debit_amount FROM public.journal_entry_lines WHERE journal_entry_id = $2`,
+      [reversal, undone],
+    )
+    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [reversal])
+    await getPool().query(
+      `UPDATE public.journal_entries SET status = 'reversed', reversed_by_id = $2 WHERE id = $1`,
+      [undone, reversal],
+    )
+  })
+
+  it('learns the booking account, VAT and settlement of each counterparty', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    // Ordered by verifikat count; the display-name tiebreak follows the
+    // database collation, so compare the two-verifikat rows by key.
+    expect(stats.imported_counterparty_patterns.map((p) => p.vouchers)).toEqual([3, 2, 2, 2, 2, 2, 2])
+    const rows = stats.imported_counterparty_patterns
+      .map((p) => [
+        p.counterparty_key, p.vouchers, p.settled_via, p.dominant_account_number, p.dominant_account_count,
+        p.vat_treatment, p.vat_treatment_count,
+      ] as const)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    expect(rows).toEqual([
+      ['telia sverige', 3, 'payable', '6212', 3, 'standard_25', 3],
+      ['acme konsult', 2, 'receivable', '3041', 2, 'standard_25', 2],
+      ['anthropic', 2, 'bank', '6540', 2, 'reverse_charge', 2],
+      ['bygg partner', 2, 'payable', '4425', 2, 'reverse_charge_domestic', 2],
+      ['restaurang kungen', 2, 'bank', '5831', 2, 'reduced_12', 2],
+      ['speditören', 2, 'payable', '4010', 2, null, 0],
+      ['spotify', 2, 'bank', '6540', 2, 'standard_25', 2],
+    ])
+    const telia = stats.imported_counterparty_patterns[0]
+    expect(telia.counterparty).toBe('Telia Sverige AB')
+    expect(telia.last_booked).toBe('2026-06-25')
+    // The most frequent raw text is the display name; ties go to the first.
+    expect(stats.imported_counterparty_patterns.find((p) => p.counterparty_key === 'anthropic')!.counterparty)
+      .toBe('ANTHROPIC* CLAUDE SUB')
+  })
+
+  it('never learns from payments, accruals, bare wrappers, the past window or reversed verifikat', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const accounts = stats.imported_counterparty_patterns.map((p) => p.dominant_account_number)
+    expect(accounts).not.toContain('2440')
+    expect(accounts).not.toContain('1510')
+    expect(accounts).not.toContain('1930')
+    expect(accounts).not.toContain('7960')
+    expect(accounts).not.toContain('2890')
+    const keys = stats.imported_counterparty_patterns.map((p) => p.counterparty_key)
+    for (const absent of ['levfakt', 'periodisering hyra', 'gammal leverantör', 'ångrad']) {
+      expect(keys.some((k) => k.includes(absent)), absent).toBe(false)
+    }
+    // A later window drops what was booked before it.
+    const late = await callRpc(companyId, '2026-06-01')
+    expect(late.imported_counterparty_patterns.find((p) => p.counterparty_key === 'telia sverige')!.vouchers).toBe(2)
+  })
+
+  it('keys an imported counterparty as a bank row and a template of it are keyed', async () => {
+    const stats = await callRpc(companyId, '2026-04-01')
+    const keys = stats.imported_counterparty_patterns.map((p) => p.counterparty_key)
+    for (const raw of ['Telia Sverige AB', 'ANTHROPIC* CLAUDE SUB', 'Bygg Partner AB', 'SPOTIFY']) {
+      expect(keys).toContain(normalizeCounterpartyName(raw))
+    }
+    // Imports add no bank-row patterns, and the bank-row company has no
+    // imported ones: the two bases are separate sections.
+    expect(stats.counterparty_patterns).toEqual([])
+  })
+
+  it('isolates companies', async () => {
+    const other = await seedCompany()
+    const stats = await callRpc(other.companyId, '2026-04-01')
+    expect(stats.imported_counterparty_patterns).toEqual([])
   })
 })
