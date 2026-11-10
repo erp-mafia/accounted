@@ -122,6 +122,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
   const saveSettings = useSaveSettings()
   const [lateFeeText, setLateFeeText] = useState(settings.invoice_late_fee_text || '')
   const [creditTermsText, setCreditTermsText] = useState(settings.invoice_credit_terms_text || '')
+  const [lateFeeTextEn, setLateFeeTextEn] = useState(settings.invoice_late_fee_text_en || '')
+  const [creditTermsTextEn, setCreditTermsTextEn] = useState(settings.invoice_credit_terms_text_en || '')
   const [isSavingFont, setIsSavingFont] = useState(false)
   const [isUploadingFont, setIsUploadingFont] = useState(false)
   const [isDeletingFont, setIsDeletingFont] = useState(false)
@@ -144,6 +146,15 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     const update = { [field]: value || null } as Partial<CompanySettings>
     if (await saveSettings(update, { failedTitle })) onUpdate(update)
   }, [onUpdate, saveSettings, failedTitle])
+
+  // The English fine print saves only a change, so tabbing through an
+  // empty field writes nothing (crm#1735).
+  const saveEnglishText = useCallback(
+    (field: 'invoice_late_fee_text_en' | 'invoice_credit_terms_text_en', value: string) => {
+      if (value !== (settings[field] ?? '')) void saveText(field, value)
+    },
+    [settings, saveText],
+  )
 
   const saveFont = useCallback(async (fontFamily: InvoiceFontFamily) => {
     setIsSavingFont(true)
@@ -339,6 +350,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         />
       </SettingsRow>
       <SettingsRow
+        label={t('late_fee_en_label')}
+        htmlFor="invoice_late_fee_text_en"
+        help={t('fine_print_en_help')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice_late_fee_text_en"
+          rows={2}
+          placeholder={t('fine_print_en_placeholder')}
+          value={lateFeeTextEn}
+          onChange={(e) => setLateFeeTextEn(e.target.value)}
+          onBlur={() => saveEnglishText('invoice_late_fee_text_en', lateFeeTextEn)}
+        />
+      </SettingsRow>
+      <SettingsRow
         label={t('credit_terms_label')}
         htmlFor="invoice_credit_terms_text"
         align="baseline"
@@ -350,6 +376,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           value={creditTermsText}
           onChange={(e) => setCreditTermsText(e.target.value)}
           onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('credit_terms_en_label')}
+        htmlFor="invoice_credit_terms_text_en"
+        help={t('fine_print_en_help')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice_credit_terms_text_en"
+          rows={2}
+          placeholder={t('fine_print_en_placeholder')}
+          value={creditTermsTextEn}
+          onChange={(e) => setCreditTermsTextEn(e.target.value)}
+          onBlur={() => saveEnglishText('invoice_credit_terms_text_en', creditTermsTextEn)}
         />
       </SettingsRow>
     </SettingsGroup>

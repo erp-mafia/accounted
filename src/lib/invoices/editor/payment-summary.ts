@@ -20,6 +20,7 @@ import {
   type InvoiceQrKind,
   type ResolvedInvoicePaymentQr,
 } from '@/lib/invoices/payment-qr'
+import { invoiceFinePrint } from '@/lib/invoices/fine-print'
 
 /**
  * The invoice editor's Betalning section: ONE line that says what the
@@ -353,12 +354,22 @@ export function foreignPayeeChoiceForDraft(input: {
 
 /**
  * The terms line's texts: Betalningsvillkor, then Dröjsmålsränta, each its
- * first line. Empty when the company has set neither.
+ * first line, in the document's language as the PDF prints them
+ * (invoiceFinePrint: the English text on an English invoice, else the
+ * Swedish one). Empty when the company has set neither.
  */
 export function paymentTermsTexts(
-  settings: Pick<CompanySettings, 'invoice_credit_terms_text' | 'invoice_late_fee_text'> | null | undefined,
+  settings:
+    | Pick<
+        CompanySettings,
+        'invoice_credit_terms_text' | 'invoice_late_fee_text' | 'invoice_credit_terms_text_en' | 'invoice_late_fee_text_en'
+      >
+    | null
+    | undefined,
+  lang: 'sv' | 'en' = 'sv',
 ): string[] {
-  return [settings?.invoice_credit_terms_text, settings?.invoice_late_fee_text]
+  const { creditTerms, lateFee } = invoiceFinePrint(settings, lang)
+  return [creditTerms, lateFee]
     .map((text) => clean(text?.split('\n')[0]))
     .filter((text): text is string => text !== null)
 }

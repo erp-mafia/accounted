@@ -5268,7 +5268,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   lang: documentLanguage,
                   showOcr: companySettings?.invoice_show_ocr ?? true,
                 })}
-                terms={paymentTermsTexts(companySettings)}
+                terms={paymentTermsTexts(companySettings, documentLanguage)}
                 canEditCompany={isCompanyAdmin && canWrite}
                 addForm={
                   addingPayee ? (

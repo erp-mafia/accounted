@@ -1462,6 +1462,8 @@
       "invoice_company_name_position": "Företagsnamnets placering på fakturan",
       "invoice_late_fee_text": "Text om dröjsmålsränta",
       "invoice_credit_terms_text": "Betalningsvillkor (fotnot)",
+      "invoice_late_fee_text_en": "Text om dröjsmålsränta på engelska",
+      "invoice_credit_terms_text_en": "Betalningsvillkor på engelska (fotnot)",
       "invoice_payment_links_enabled": "Betalningslänk på fakturor",
       "invoice_email_texts": "Texter i fakturamejlet",
       "invoice_email_reply_to": "Svarsadress för fakturamejl",
@@ -3826,7 +3828,11 @@
     "late_fee_label": "Dröjsmålsränta",
     "late_fee_placeholder": "T.ex. Vid betalning efter förfallodagen debiteras ränta enligt räntelagen.",
     "credit_terms_label": "Betalningsvillkor (fotnot)",
-    "credit_terms_placeholder": "T.ex. Betalning sker till angivet bankgiro."
+    "credit_terms_placeholder": "T.ex. Betalning sker till angivet bankgiro.",
+    "late_fee_en_label": "Dröjsmålsränta på engelska",
+    "credit_terms_en_label": "Betalningsvillkor på engelska (fotnot)",
+    "fine_print_en_placeholder": "Tomt: den svenska texten skrivs ut",
+    "fine_print_en_help": "Skrivs ut på fakturor till kunder med engelska som språk. Lämnas fältet tomt skrivs den svenska texten ut."
   },
   "settings_email_texts": {
     "heading": "E-posttexter",

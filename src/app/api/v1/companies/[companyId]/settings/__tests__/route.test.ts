@@ -233,6 +233,36 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     }
   })
 
+  it('returns the English fine print, and reads without it while its columns are not there yet (crm#1735)', async () => {
+    const english = { invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null }
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: OWNER, company_settings: { data: { ...STORED, invoice_late_fee_text: 'Dröjsmålsränta.', ...english } } }),
+    )
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ invoice_late_fee_text: 'Dröjsmålsränta.', ...english })
+
+    const beforeMigration = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: null, error: { code: '42703', message: 'column company_settings.invoice_late_fee_text_en does not exist' } },
+        { data: STORED },
+      ],
+    })
+    mockServiceClient.mockReturnValue(beforeMigration)
+    const gap = await getSettings(request(BASE), params)
+    expect(gap.status).toBe(200)
+    expect((await gap.json()).data).toMatchObject({
+      bankgiro: '991-2346',
+      invoice_late_fee_text_en: null,
+      invoice_credit_terms_text_en: null,
+    })
+    const selects = beforeMigration.calls.filter((c) => c.table === 'company_settings' && c.method === 'select')
+    expect(String(selects[0].args[0])).toContain('invoice_late_fee_text_en')
+    expect(String(selects[0].args[0])).toContain('invoice_credit_terms_text_en')
+    expect(String(selects[1].args[0])).not.toContain('_text_en')
+  })
+
   it('a viewer may read', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'viewer' } }, company_settings: { data: STORED } }),
@@ -337,6 +367,28 @@ describe('PATCH /api/v1/companies/:companyId/settings', () => {
     })
     expect(propagateLegacyPayeeWrite).toHaveBeenCalledTimes(1)
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('writes the English fine print and refuses one that is not a string (crm#1735)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, invoice_credit_terms_text_en: 'Pay within 30 days.' } }],
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(BASE, { invoice_credit_terms_text_en: 'Pay within 30 days.' }), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ invoice_credit_terms_text_en: 'Pay within 30 days.' })
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      invoice_credit_terms_text_en: 'Pay within 30 days.',
+    })
+
+    const refused = makeClient({ company_members: OWNER, company_settings: { data: STORED } })
+    mockServiceClient.mockReturnValue(refused)
+    const bad = await updateSettings(patch(BASE, { invoice_late_fee_text_en: 42 }), params)
+    expect(bad.status).toBe(400)
+    expect((await bad.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(refused.updates('company_settings')).toHaveLength(0)
   })
 
   it('accepts the wider non-legal settings, e.g. invoice copy recipients and toggles', async () => {

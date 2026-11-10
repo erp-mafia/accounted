@@ -223,6 +223,8 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     invoice_company_name_position: c.invoice_company_name_position,
     invoice_late_fee_text: c.invoice_late_fee_text,
     invoice_credit_terms_text: c.invoice_credit_terms_text,
+    invoice_late_fee_text_en: c.invoice_late_fee_text_en,
+    invoice_credit_terms_text_en: c.invoice_credit_terms_text_en,
     invoice_payment_links_enabled: c.invoice_payment_links_enabled,
     invoice_email_texts: c.invoice_email_texts,
     invoice_email_cc_addresses: c.invoice_email_cc_addresses,
@@ -832,9 +834,10 @@ export async function withEntityTypeFallback<T extends SettingsRow>(
 }
 
 /**
- * The columns of the settings.get read, but nordea_agreement_id, which
- * getCompanySettings reads beside them while its migration may still be on
- * its way.
+ * The columns of the settings.get read, but the recent ones getCompanySettings
+ * reads beside them while their migrations may still be on their way:
+ * nordea_agreement_id (20261102093417) and the English invoice fine print
+ * (20261109183000, crm#1735).
  */
 const SETTINGS_READ_COLUMNS =
   'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_article_number, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, self_billing_prefix, next_self_billing_number, self_billing_acceptance_text, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete'
@@ -848,12 +851,12 @@ const SETTINGS_READ_COLUMNS =
 export async function getCompanySettings(ctx: OperationContext): Promise<OperationOutcome<SettingsRow>> {
   let read = await ctx.supabase
     .from('company_settings')
-    .select(`${SETTINGS_READ_COLUMNS}, nordea_agreement_id`)
+    .select(`${SETTINGS_READ_COLUMNS}, nordea_agreement_id, invoice_late_fee_text_en, invoice_credit_terms_text_en`)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (isMissingColumnError(read.error)) {
-    // Vercel serves this code up to a few hours before CI applies migration
-    // 20261102093417; the resource reads the absent id as null.
+    // Vercel serves this code up to a few hours before CI applies a
+    // migration; the resource reads the absent columns as null.
     read = await ctx.supabase.from('company_settings').select(SETTINGS_READ_COLUMNS).eq('company_id', ctx.companyId).maybeSingle()
   }
   const { data, error } = read
