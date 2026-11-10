@@ -173,7 +173,7 @@ Approval:
 - claude.ai / Claude Desktop: \`gnubok_list_pending_operations({ render_ui: true })\` opens the approval widget; the user approves there.
 - ChatGPT, Grok, local agents (no widget): show the staged preview (period, rutor, kontrollresultat) and ask. On a clear yes in this conversation, call \`gnubok_approve_pending_operation({ operation_id, confirmed: true })\`. \`confirmed: true\` is required for a high-risk operation and is only passed after that yes. Otherwise point them to Granskning in Accounted.
 
-After approval the result carries a \`signing_url\`: give it to the user and ask them to sign with BankID. When they say they signed, call \`gnubok_vat_declaration_status({ period_type, year, period, state: "submitted" })\`. Report "inlämnad" only when \`submitted\` is no longer null.
+After approval the result carries a \`signing_url\`: give it to the user and ask them to sign with BankID. Approved by the user in Accounted instead: read it with \`gnubok_list_pending_operations({ status: "committed", operation_type: "submit_vat_declaration" })\`, \`result_data.signing_url\`. When they say they signed, call \`gnubok_vat_declaration_status({ period_type, year, period, state: "submitted" })\`. Report "inlämnad" only when \`submitted\` is no longer null.
 
 If the momsredovisning was not booked in step 5 (the user chose to wait), book it now with the same two tools.
 

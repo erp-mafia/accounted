@@ -43,6 +43,7 @@ import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { INVOICE_QR_MODES } from '@/types'
 import { maskPersonnummer } from '@/lib/salary/personnummer-format'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 const S = UpdateSettingsSchema.shape
 
@@ -269,6 +270,11 @@ const SettingsResource = z.object({
   ),
 })
 
+/** settings.get only: the update operations neither take nor return the inbox address. */
+const SettingsReadResource = SettingsResource.extend({
+  inbox_address: z.string().nullable().describe('The document inbox address: mail sent or forwarded here becomes an inbox item. Null when the company has no inbox.'),
+})
+
 const atLeastOneField = (value: Record<string, unknown>) =>
   Object.values(value).some((field) => field !== undefined)
 const AT_LEAST_ONE = 'At least one company setting must be supplied'
@@ -331,7 +337,7 @@ export const settingsGet = defineOperation({
   docs: {
     summary: 'Read the company settings.',
     description:
-      'Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number). contact_person is the default "Vår referens" on new invoices.',
+      'Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number) and the document inbox address (inbox_address). contact_person is the default "Vår referens" on new invoices.',
     useWhen:
       'Before creating invoices (payment details must exist), before any settings change, or to learn how the books are kept (accounting_method: accrual = faktureringsmetoden, cash = kontantmetoden; moms_period).',
     doNotUseFor:
@@ -358,7 +364,7 @@ export const settingsGet = defineOperation({
     },
   },
   input: z.object({}),
-  output: SettingsResource,
+  output: SettingsReadResource,
   errorCodes: ['NOT_FOUND'],
   http: { method: 'GET', path: SETTINGS_PATH },
   mcp: {
@@ -369,9 +375,15 @@ export const settingsGet = defineOperation({
     keywords: ['inställningar', 'företagsinställningar', 'momsperiod', 'bokföringsmetod', 'bankgiro'],
   },
   run: async (ctx) => {
-    const outcome = await getCompanySettings(ctx)
+    // The inbox address rides along: the MCP briefing has carried it since
+    // crm#1174, and a partner portal that shows it to the customer had no
+    // read of it. A failed address read is null, never a failed settings read.
+    const [outcome, inboxAddress] = await Promise.all([
+      getCompanySettings(ctx),
+      resolveInboxAddress(ctx.supabase, ctx.companyId),
+    ])
     if (!outcome.ok || outcome.dryRun) return outcome
-    return { ok: true, data: toSettingsResource(ctx.companyId, outcome.data) }
+    return { ok: true, data: { ...toSettingsResource(ctx.companyId, outcome.data), inbox_address: inboxAddress } }
   },
 })
 

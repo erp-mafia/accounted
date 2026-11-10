@@ -106,6 +106,26 @@ describe('gnubok_list_uncategorized_transactions', () => {
     ])
   })
 
+  it("carries the bank's own id: a feed row's external_id is built from its content, so a resent row needs this one", async () => {
+    const rows = [
+      { id: 't-1', date: '2026-03-09', description: 'Hyra', amount: -900, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, external_id: 'eb_scope_2026-03-09_-90000_0', provider_transaction_id: 'bank-tx-1' },
+      { id: 't-2', date: '2026-03-09', description: 'Hyra', amount: -900, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, external_id: 'eb_scope_2026-03-09_-90000_1', provider_transaction_id: null },
+    ]
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, rows)
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<{ transaction_id: string; provider_transaction_id: string | null }>
+    }
+
+    const select = String(findCalls('open_bank_rows', 'select')[0][0]).split(',').map((c) => c.trim())
+    expect(select).toContain('provider_transaction_id')
+    expect(result.transactions.map((t) => [t.transaction_id, t.provider_transaction_id])).toEqual([
+      ['t-1', 'bank-tx-1'],
+      ['t-2', null],
+    ])
+  })
+
   it('narrows the page and its count to one bank account when cash_account_id is given', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueuePage(enqueue, [{ id: 't-1', date: '2026-03-09', description: 'A', amount: -10, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null }])
