@@ -41,7 +41,10 @@ beforeEach(() => {
 })
 
 describe('fetchInvoiceRegisterCoverage', () => {
-  it('returns no coverage when the register is empty', async () => {
+  // crm#1759: after an SIE migration the register is empty and the customer
+  // invoices are imported verifikat. An empty register used to answer "no
+  // coverage" without looking at the books, so nothing disclosed them.
+  it('discloses everything before today when the register is empty and the books carry AR debits', async () => {
     // Drafts and proformas are not the register: a backdated draft would
     // suppress the disclosure for exactly the period it exists to cover.
     tables = {
@@ -49,12 +52,32 @@ describe('fetchInvoiceRegisterCoverage', () => {
         invoice('draft', '2026-01-01', { status: 'draft' }),
         invoice('proforma', '2026-01-01', { document_type: 'proforma' }),
       ],
-      ...verifikat('je-1', '2025-12-01'),
+      ...verifikat('je-1', '2025-12-01', { source_type: 'import' }),
     }
 
-    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
-    expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
+    expect(coverage).toEqual({ covers_from: '2026-10-09', has_pre_register_invoices: true })
+  })
+
+  it('reads an empty register with no AR debits in the books as nothing to disclose', async () => {
+    tables = { ...verifikat('je-1', '2026-07-01', { credit: true }) }
+
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
+
+    expect(coverage).toEqual({ covers_from: '2026-10-09', has_pre_register_invoices: false })
+  })
+
+  it('reads a null boundary as unknown, as the function answered an empty register before 20261110100000', async () => {
+    const before = {
+      rpc: vi.fn().mockResolvedValue({
+        data: { covers_from: null, has_pre_register_invoices: false, pre_register_in_period: false },
+        error: null,
+      }),
+    }
+
+    expect(await fetchInvoiceRegisterCoverage(before as never, 'company-1')).toEqual(NO_INVOICE_REGISTER_COVERAGE)
+    expect(await hasPreRegisterArInPeriod(before as never, 'company-1', 'period-1')).toBe(false)
   })
 
   it('flags pre-register invoices when a posted non-engine AR debit predates the first invoice', async () => {
@@ -178,6 +201,13 @@ describe('hasPreRegisterArInPeriod', () => {
     tables = { invoices: [invoice('inv-1', '2026-07-19')], ...verifikat('je-1', '2026-07-01') }
 
     expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(true)
+  })
+
+  it('explains an empty register\'s reconciliation difference by the imported AR in the period (crm#1759)', async () => {
+    tables = { ...verifikat('je-sie', '2026-03-01', { source_type: 'import' }) }
+
+    expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(true)
+    expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-0')).toBe(false)
   })
 
   it('is false when the company is not flagged, or the read fails', async () => {

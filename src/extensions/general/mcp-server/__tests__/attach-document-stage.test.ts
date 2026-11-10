@@ -20,6 +20,8 @@ vi.mock('@/lib/documents/bank-match/fit', async (importOriginal) => {
 })
 
 import { tools } from '../server'
+import { findUnknownArgKeys, listArgKeys } from '../arg-guard'
+import { ALL_OPERATIONS } from '@/lib/operations/registry'
 
 const tool = tools.find((t) => t.name === 'gnubok_attach_document_to_transaction')!
 
@@ -74,10 +76,30 @@ describe('gnubok_attach_document_to_transaction: registration', () => {
     expect(tool.catalogVisibility).toBe('default')
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, idempotentHint: true, destructiveHint: false })
     const schema = tool.inputSchema as { properties: Record<string, unknown>; required?: string[] }
-    expect(Object.keys(schema.properties).sort()).toEqual(['document_id', 'dry_run', 'idempotency_key', 'reason', 'transaction_id'])
-    // Accepted, not listed: only a DOC_ROW_MISMATCH refusal asks for it, and says how (crm#1479).
-    expect(tool.undeclaredArgs).toContain('mismatch_reason')
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      'document_id', 'dry_run', 'idempotency_key', 'mismatch_reason', 'reason', 'transaction_id',
+    ])
+    // Listed with the operation's own bound, never accepted unlisted: a
+    // client that validates against this schema (additionalProperties:
+    // false) could not follow DOC_ROW_MISMATCH's remediation (crm#1742).
+    expect(schema.properties.mismatch_reason).toMatchObject({ type: 'string', maxLength: 300 })
+    expect(tool.undeclaredArgs ?? []).not.toContain('mismatch_reason')
     expect([...(schema.required ?? [])].sort()).toEqual(['document_id', 'transaction_id'])
+  })
+
+  // crm#1742: the refusal's remediation says "call again with
+  // mismatch_reason"; every tool that can refuse that way must list it.
+  it('lists mismatch_reason on every tool that can refuse with DOC_ROW_MISMATCH', () => {
+    const refusing = ALL_OPERATIONS.filter((op) => op.mcp && op.errorCodes?.includes('DOC_ROW_MISMATCH'))
+    expect(refusing.map((op) => op.mcp!.name)).toContain('gnubok_attach_document_to_transaction')
+    for (const op of refusing) {
+      const listed = tools.find((t) => t.name === op.mcp!.name)!
+      expect(listArgKeys(listed.inputSchema), op.mcp!.name).toContain('mismatch_reason')
+      expect(
+        findUnknownArgKeys(listed.inputSchema, { mismatch_reason: 'One invoice paid in two card charges' }),
+        op.mcp!.name,
+      ).toEqual([])
+    }
   })
 })
 

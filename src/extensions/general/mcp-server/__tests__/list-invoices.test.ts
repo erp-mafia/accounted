@@ -224,3 +224,58 @@ describe('gnubok_list_invoices: what the invoice asks for (crm#1568)', () => {
     await expect(listInvoices.execute({}, 'company-1', 'user-1', supabase as never)).rejects.toThrow(/ore_rounding/)
   })
 })
+
+// crm#1759: after an SIE migration the register was empty, the customer
+// invoices lived as imported verifikat, and the list carried no
+// coverage_note, so the agent read an empty answer as "no invoices".
+describe('gnubok_list_invoices: the register-coverage note (crm#1759)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  type CoverageResult = ListResult & {
+    invoice_register_coverage?: { covers_from: string | null; has_pre_register_invoices: boolean }
+    coverage_note?: string
+  }
+
+  async function listWith(rows: Array<Record<string, unknown>>, coverage: Record<string, unknown>) {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-10T08:00:00Z'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows, count: rows.length })
+    enqueue({ data: { pre_register_in_period: false, ...coverage } }) // rpc:get_invoice_register_coverage
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as CoverageResult
+    expect(supabase.rpc).toHaveBeenCalledWith('get_invoice_register_coverage', expect.objectContaining({ p_today: '2026-11-10' }))
+    return result
+  }
+
+  it('says an empty register holds none of the history the books carry', async () => {
+    const result = await listWith([], { covers_from: '2026-11-10', has_pre_register_invoices: true })
+
+    expect(result.invoices).toEqual([])
+    expect(result.invoice_register_coverage).toEqual({ covers_from: '2026-11-10', has_pre_register_invoices: true })
+    expect(result.coverage_note).toMatch(/^Fakturaregistret har inga kundfakturor före 2026-11-10/)
+    expect(result.coverage_note).toContain('1510/1513')
+    expect(result.coverage_note).toContain('inte heller när listan är tom')
+    expect(result.coverage_note).toContain('gnubok_query_journal')
+  })
+
+  it('keeps the boundary wording for a register that is complete from an earlier date', async () => {
+    const result = await listWith(
+      [invoiceRow({ status: 'sent', due_date: '2099-12-31', ore_rounding: true, deduction_total: 0 })],
+      { covers_from: '2026-07-19', has_pre_register_invoices: true },
+    )
+
+    expect(result.coverage_note).toMatch(/^Fakturaregistret är fullständigt först från 2026-07-19\./)
+  })
+
+  it('carries no note when the books show nothing outside the register, or the boundary is unknown', async () => {
+    const complete = await listWith([], { covers_from: '2026-11-10', has_pre_register_invoices: false })
+    expect(complete).not.toHaveProperty('coverage_note')
+
+    // The function before 20261110100000 answered an empty register this way.
+    const unknown = await listWith([], { covers_from: null, has_pre_register_invoices: false })
+    expect(unknown.invoice_register_coverage).toEqual({ covers_from: null, has_pre_register_invoices: false })
+    expect(unknown).not.toHaveProperty('coverage_note')
+  })
+})

@@ -480,12 +480,37 @@ describe('get_supplier_ledger_invoices: the leverantörsreskontra reads the same
 describe('get_invoice_register_coverage', () => {
   const AR = ['1510', '1513']
 
-  it('answers no coverage for an empty register', async () => {
+  it('reads an empty register with no AR in the books as complete from today, nothing to disclose', async () => {
     const s = await seedCompany()
     expect(await fetchInvoiceRegisterCoverage(sqlClient(s.userId), s.companyId, { today: '2026-10-23' })).toEqual({
-      covers_from: null,
+      covers_from: '2026-10-23',
       has_pre_register_invoices: false,
     })
+  })
+
+  // crm#1759 (20261110100000): after an SIE migration the register is empty
+  // and the customer invoices are imported verifikat; the function answered
+  // "no coverage" before looking at the books.
+  it('probes the books for an empty register: imported AR debits are disclosed from today', async () => {
+    const s = await seedCompany()
+    const customer = await insertCustomer(s, randomUUID(), 'Kund AB')
+    await insertPostedJournalEntry({
+      userId: s.userId, companyId: s.companyId, fiscalPeriodId: s.fiscalPeriodId, entryDate: '2026-01-10',
+      sourceType: 'import',
+      lines: [
+        { accountNumber: AR[0], debitAmount: 1250, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 1250 },
+      ],
+    })
+    // A draft is not the register: it neither moves the boundary nor hides the disclosure.
+    await insertInvoice(s, { id: randomUUID(), customerId: customer, number: 'D1', status: 'draft', total: 1250, invoiceDate: '2026-01-10' })
+
+    const coverage = await fetchInvoiceRegisterCoverage(sqlClient(s.userId), s.companyId, { today: '2026-10-23' })
+    expect(coverage).toEqual({ covers_from: '2026-10-23', has_pre_register_invoices: true })
+    const tables = await loadTables(s.companyId)
+    expect(coverage).toEqual(await fetchInvoiceRegisterCoverage(portClient(tables), s.companyId, { today: '2026-10-23' }))
+    expect(await hasPreRegisterArInPeriod(sqlClient(s.userId), s.companyId, s.fiscalPeriodId)).toBe(true)
+    expect(await hasPreRegisterArInPeriod(sqlClient(s.userId), s.companyId, randomUUID())).toBe(false)
   })
 
   it('starts the register at its first complete invoice and probes the books before it', async () => {
