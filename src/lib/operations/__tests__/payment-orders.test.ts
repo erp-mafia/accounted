@@ -195,6 +195,25 @@ describe('toOrderOut', () => {
       supplier_invoice: null,
     })
   })
+
+  // crm#1777: an agent saw the same awaiting_signature + RCVD for a signed
+  // payment as for one nobody signed. The Betalningar page tells them apart
+  // from the signing; the machine doors now answer the same.
+  it('bank_confirming: signed while the bank still answers RCVD, from the order\'s signing in either embed shape', () => {
+    const waiting = { status: 'awaiting_signature', batch_id: 'batch-1', provider_status: 'RCVD' }
+    expect(toOrderOut(orderRow(ORDER_A, { ...waiting, signing: { status: 'signed' } }) as never).bank_confirming).toBe(true)
+    expect(toOrderOut(orderRow(ORDER_A, { ...waiting, signing: [{ status: 'awaiting_second_signer' }] }) as never).bank_confirming).toBe(true)
+    // Nobody has signed: the BankID is still open, or Accounted has not seen it finish.
+    expect(toOrderOut(orderRow(ORDER_A, { ...waiting, signing: { status: 'awaiting_signature' } }) as never).bank_confirming).toBe(false)
+    // An unknown outcome is a person's to resolve, never "confirming".
+    expect(
+      toOrderOut(orderRow(ORDER_A, { ...waiting, outcome_unknown_at: '2026-10-10T10:00:00Z', signing: { status: 'signed' } }) as never).bank_confirming,
+    ).toBe(false)
+    // Unsigned at the bank, in a signing that failed.
+    expect(toOrderOut(orderRow(ORDER_A, { ...waiting, status: 'submitted', signing: { status: 'failed' } }) as never).bank_confirming).toBe(false)
+    // A draft is in no signing (prepare answers it without the embed).
+    expect(toOrderOut(orderRow(ORDER_A) as never).bank_confirming).toBe(false)
+  })
 })
 
 describe('payment-orders.list', () => {
@@ -220,6 +239,22 @@ describe('payment-orders.list', () => {
       ['supplier_invoice_id', INVOICE_A],
     ])
   })
+
+  it('reads each order\'s signing with it and answers bank_confirming (crm#1777)', async () => {
+    db.setTable('payment_orders', {
+      data: [
+        orderRow(ORDER_A, { status: 'awaiting_signature', batch_id: 'batch-1', provider_status: 'RCVD', signing: { status: 'signed' } }),
+        orderRow(ORDER_B, { status: 'awaiting_signature', batch_id: 'batch-2', provider_status: 'RCVD', signing: { status: 'awaiting_signature' } }),
+      ],
+    })
+    const result = await run(paymentOrdersList, { status: 'open', limit: 50 })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(String(db.findCall('payment_orders', 'select')?.[0])).toContain('signing:payment_order_batches!fk_payment_orders_batch(status)')
+    expect(result.data.payment_orders.map((o) => [o.payment_order_id, o.bank_confirming])).toEqual([
+      [ORDER_A, true],
+      [ORDER_B, false],
+    ])
+  })
 })
 
 describe('payment-orders.get', () => {
@@ -230,6 +265,16 @@ describe('payment-orders.get', () => {
     db.setTable('payment_orders', { data: null })
     const missing = await run(paymentOrdersGet, { payment_order_id: ORDER_B })
     expect(missing).toMatchObject({ ok: false, code: 'PAYMENT_ORDER_NOT_FOUND' })
+  })
+
+  it('reads the order\'s signing with it and answers bank_confirming (crm#1777)', async () => {
+    db.setTable('payment_orders', {
+      data: orderRow(ORDER_A, { status: 'awaiting_signature', batch_id: 'batch-1', provider_status: 'RCVD', signing: [{ status: 'signed' }] }),
+    })
+    const found = await run(paymentOrdersGet, { payment_order_id: ORDER_A })
+    if (!found.ok || found.dryRun) throw new Error('unexpected')
+    expect(String(db.findCall('payment_orders', 'select')?.[0])).toContain('signing:payment_order_batches!fk_payment_orders_batch(status)')
+    expect(found.data).toMatchObject({ status: 'awaiting_signature', provider_status: 'RCVD', bank_confirming: true })
   })
 })
 

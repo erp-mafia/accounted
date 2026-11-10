@@ -31,7 +31,7 @@ import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
 import { prepareSkattekontoPaymentOrder } from '@/lib/payments/orders/prepare-skattekonto'
 import { refineSkattekontoSource, SKATTEKONTO_SOURCE_FIELDS, toSkattekontoSource } from '@/lib/payments/orders/skattekonto-sources'
 import { BANK_ACCOUNTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage } from '@/lib/payments/usage'
-import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
+import { isBankConfirming, PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { formatPayeeLabel } from '@/lib/payments/supplier-payee'
 import { maskPayeeAccount } from '@/lib/payments/bank-account'
@@ -55,8 +55,9 @@ const ORDER_IDS = z
 const STATUS = z
   .enum(PAYMENT_ORDER_STATUSES)
   .describe(
-    'draft: prepared, not attested. approved: attested, waiting for a BankID signing. submitted, awaiting_signature, ' +
-      'awaiting_second_signer, accepted: at the bank. awaiting_second_signer: signed once, the bank waits for another ' +
+    'draft: prepared, not attested. approved: attested, waiting for a BankID signing. submitted: at the bank unsigned; nothing ' +
+      'is paid unless it is signed, and the online bank does not show it. awaiting_signature: in a BankID signing (bank_confirming ' +
+      'says whether it finished). awaiting_second_signer, accepted: signed, at the bank. awaiting_second_signer: signed once, the bank waits for another ' +
       'signatory; where the bank takes that signature through the API (SEB) they sign in Accounted (Kontrasignera on ' +
       'Betalningar, or a signing link over those orders), elsewhere in the online bank. executed: paid by the bank; the ' +
       'order closes when its debit is matched to the invoice. rejected, cancelled, failed: closed without a payment.',
@@ -111,6 +112,13 @@ const OrderOut = z.object({
   outcome_unknown: z
     .boolean()
     .describe('true while the bank may hold the payment but its answer was lost: a person resolves it in Accounted.'),
+  bank_confirming: z
+    .boolean()
+    .describe(
+      'true: its BankID signing finished and the bank still answers that it only received it (RCVD); nothing is left to sign and ' +
+        'the status moves on by itself. false on awaiting_signature: Accounted has not seen the signing finish; one finished ' +
+        'outside Accounted shows once the status sync hears it from the bank.',
+    ),
   approved_at: z.string().nullable(),
   submitted_at: z.string().nullable(),
   signed_at: z.string().nullable(),
@@ -178,7 +186,17 @@ type OrderSelectRow = Pick<
     due_date: string | null
     supplier: { name: string | null } | { name: string | null }[] | null
   } | null
+  /**
+   * The BankID signing the order is in (payment_order_batches through
+   * batch_id), read with the order as `ORDER_SIGNING`; absent where the
+   * answer does not carry it (prepare: a draft is in no signing). PostgREST
+   * returns the many-to-one embed as one object, the generated types an array.
+   */
+  signing?: { status: string } | { status: string }[] | null
 }
+
+/** The order's signing, embedded in the list and get reads: what bank_confirming is decided from. */
+const ORDER_SIGNING = 'signing:payment_order_batches!fk_payment_orders_batch(status)'
 
 function payeeLabel(row: OrderSelectRow): string {
   switch (row.payee_type) {
@@ -199,6 +217,7 @@ function payeeLabel(row: OrderSelectRow): string {
 export function toOrderOut(row: OrderSelectRow): OrderOutT {
   const invoice = row.supplier_invoice ?? null
   const supplier = invoice ? (Array.isArray(invoice.supplier) ? invoice.supplier[0] ?? null : invoice.supplier) : null
+  const signing = Array.isArray(row.signing) ? (row.signing[0] ?? null) : (row.signing ?? null)
   return {
     payment_order_id: row.id,
     supplier_invoice_id: row.supplier_invoice_id,
@@ -220,6 +239,8 @@ export function toOrderOut(row: OrderSelectRow): OrderOutT {
     provider_status: row.provider_status ?? null,
     provider_error_code: row.provider_error_code ?? null,
     outcome_unknown: row.outcome_unknown_at !== null && row.outcome_unknown_at !== undefined,
+    // The Betalningar page's "Banken bekräftar", from the same rule (api/payments/orders).
+    bank_confirming: isBankConfirming(row, signing?.status),
     approved_at: row.approved_at ?? null,
     submitted_at: row.submitted_at ?? null,
     signed_at: row.signed_at ?? null,
@@ -264,6 +285,7 @@ const EXAMPLE_ORDER = {
   provider_status: null,
   provider_error_code: null,
   outcome_unknown: false,
+  bank_confirming: false,
   approved_at: null,
   submitted_at: null,
   signed_at: null,
@@ -310,6 +332,7 @@ export const paymentOrdersList = defineOperation({
       'next_cursor rides in data (not meta): pass it back as ?cursor= until it is null.',
       'An executed order stays open until its bank debit is matched to the invoice (matched_at); the invoice shows as unpaid until then.',
       'outcome_unknown true means the bank may hold the payment while its answer was lost: nobody should pay the invoice again; a person resolves it in Accounted.',
+      'awaiting_signature with bank_confirming true is signed: the bank answers RCVD for a while after the BankID, and nothing waits for a person. submitted is unsigned, and the online bank does not show it.',
     ],
     example: {
       response: { data: { payment_orders: [EXAMPLE_ORDER], next_cursor: null }, meta: META },
@@ -354,7 +377,7 @@ export const paymentOrdersList = defineOperation({
     let query = ctx.supabase
       .from('payment_orders')
       .select(
-        'id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider_status, provider_error_code, outcome_unknown_at, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, due_date, supplier:suppliers(name))',
+        `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider_status, provider_error_code, outcome_unknown_at, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, due_date, supplier:suppliers(name)), ${ORDER_SIGNING}`,
       )
       .eq('company_id', ctx.companyId)
       .order('created_at', { ascending: false })
@@ -410,7 +433,7 @@ export const paymentOrdersGet = defineOperation({
     const { data, error } = await ctx.supabase
       .from('payment_orders')
       .select(
-        'id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider_status, provider_error_code, outcome_unknown_at, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, due_date, supplier:suppliers(name))',
+        `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider_status, provider_error_code, outcome_unknown_at, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, due_date, supplier:suppliers(name)), ${ORDER_SIGNING}`,
       )
       .eq('company_id', ctx.companyId)
       .eq('id', payment_order_id)

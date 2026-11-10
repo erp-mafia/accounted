@@ -440,6 +440,7 @@ Returns the company's bank payment orders, newest first, cursor-paginated: statu
 - next_cursor rides in data (not meta): pass it back as ?cursor= until it is null.
 - An executed order stays open until its bank debit is matched to the invoice (matched_at); the invoice shows as unpaid until then.
 - outcome_unknown true means the bank may hold the payment while its answer was lost: nobody should pay the invoice again; a person resolves it in Accounted.
+- awaiting_signature with bank_confirming true is signed: the bank answers RCVD for a while after the BankID, and nothing waits for a person. submitted is unsigned, and the online bank does not show it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -453,7 +454,7 @@ Response `200`:
 ```ts
 {
   data: {
-    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier" | "skatteverket" | "employee", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier" | "skatteverket" | "employee", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, bank_confirming: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
     next_cursor: string | null
   },
   meta: {
@@ -497,6 +498,7 @@ Example response `200`:
         "provider_status": null,
         "provider_error_code": null,
         "outcome_unknown": false,
+        "bank_confirming": false,
         "approved_at": null,
         "submitted_at": null,
         "signed_at": null,
@@ -586,7 +588,7 @@ Response `200`:
 ```ts
 {
   data: {
-    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier" | "skatteverket" | "employee", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
+    payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier" | "skatteverket" | "employee", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, bank_confirming: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
     skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" | "auto_debit" }[],
     warnings: { supplier_invoice_id: string, code: "unattested" | "ocr_invalid" | "payee_changed" | "payee_new" | "date_moved", alternative_payee?: string | null, from?: string, to?: string }[],
     skattekonto?: { source: { kind: "vat_declaration" | "agi", tax_period: string, declared: number, due_date: string | null, filed: boolean, paid_at: string | null } | null, combined?: { due_date: string, total: number, components: { source: "vat_declaration" | "agi", period: string, amount: number }[], excluded: { source: "vat_declaration" | "agi", period: string, declared: number, reason: "refund" | "zero" | "already_paid" | "period_not_ended" }[] } | null, balance: { saldo: number, fetched_at: string | null } | null, warnings: { code: "late" | "date_moved" | "not_filed" | "possible_duplicate" | "same_due_date_parts", due?: string, from?: string, to?: string, payment_order_id?: string, executed_at?: string | null, source?: "vat_declaration" | "agi", period?: string, parts?: { source: "vat_declaration" | "agi", period: string, amount: number }[], total?: number, replaces_draft?: boolean, suggested_source?: { source: "due_date", due_date: string } }[], replaced_draft_ids: string[], merged_into?: { payment_order_id: string, status: string, amount: number, total: number } } | null,
@@ -633,6 +635,7 @@ Example response `200`:
         "provider_status": null,
         "provider_error_code": null,
         "outcome_unknown": false,
+        "bank_confirming": false,
         "approved_at": null,
         "submitted_at": null,
         "signed_at": null,
@@ -698,6 +701,7 @@ Response `200`:
     provider_status: string | null,
     provider_error_code: string | null,
     outcome_unknown: boolean,
+    bank_confirming: boolean,
     approved_at: string | null,
     submitted_at: string | null,
     signed_at: string | null,
@@ -747,6 +751,7 @@ Example response `200`:
     "provider_status": null,
     "provider_error_code": null,
     "outcome_unknown": false,
+    "bank_confirming": false,
     "approved_at": null,
     "submitted_at": null,
     "signed_at": null,
