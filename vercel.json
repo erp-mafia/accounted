@@ -47,6 +47,10 @@
       "schedule": "30 6 * * *"
     },
     {
+      "path": "/api/bank/open-payments/unended-consents/cron",
+      "schedule": "5 4 * * *"
+    },
+    {
       "path": "/api/extensions/stripe/transactions/cron",
       "schedule": "30 3 * * *"
     },

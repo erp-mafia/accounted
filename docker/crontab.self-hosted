@@ -34,6 +34,7 @@
 20 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/tic/budget/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bank/open-payments/sync/cron
 30 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bank/open-payments/switch-reminders/cron
+5 4 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bank/open-payments/unended-consents/cron
 30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron
 45 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/woocommerce/orders/cron
 15 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/shopify/orders/cron
