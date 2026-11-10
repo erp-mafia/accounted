@@ -34,8 +34,12 @@ interface RecordedOp {
   conflict: string | undefined
   filters: Array<[string, unknown]>
 }
-// `selectRows` answers a select by its filters (default: no rows).
-function recordingSupabase(selectRows: (filters: Array<[string, unknown]>) => unknown[] = () => []) {
+// `selectRows` answers a select by its filters (default: no rows);
+// `failWrite` makes a write of that table and op answer an error.
+function recordingSupabase(
+  selectRows: (filters: Array<[string, unknown]>) => unknown[] = () => [],
+  failWrite: (table: string, op: RecordedOp['op']) => boolean = () => false,
+) {
   const calls: RecordedOp[] = []
   const supabase = {
     from(table: string) {
@@ -80,8 +84,12 @@ function recordingSupabase(selectRows: (filters: Array<[string, unknown]>) => un
           ctx.filters.push(['or', filter])
           return chain
         },
-        then(resolve: (v: { data: unknown; error: null }) => void) {
-          resolve({ data: ctx.op === 'select' ? selectRows(ctx.filters) : null, error: null })
+        then(resolve: (v: { data: unknown; error: { message: string } | null }) => void) {
+          const failed = ctx.op !== 'select' && failWrite(ctx.table, ctx.op)
+          resolve({
+            data: ctx.op === 'select' ? selectRows(ctx.filters) : null,
+            error: failed ? { message: 'boom' } : null,
+          })
         },
       }
       return chain
@@ -105,6 +113,13 @@ function fakeSub(over: Partial<{ status: string; priceId: string; interval: stri
       ],
     },
   } as unknown as Stripe.Subscription
+}
+
+// A subscription event is applied as Stripe holds the subscription now
+// (crm#1736): this client holds `sub`.
+function stripeHolding(sub: Stripe.Subscription) {
+  const retrieve = vi.fn(async () => sub)
+  return { stripe: { subscriptions: { retrieve } } as unknown as Stripe, retrieve }
 }
 
 describe('statusGrantsAccess', () => {
@@ -233,7 +248,7 @@ describe('applySubscriptionState: bank payment packs into the cap', () => {
     } as unknown as Stripe.Subscription
     syncIdentityMock.mockResolvedValue(null)
 
-    await handleStripeEvent(supabase, {} as Stripe, { id: 'evt_1', type: 'customer.subscription.updated', data: { object: sub } } as unknown as Stripe.Event)
+    await handleStripeEvent(supabase, stripeHolding(sub).stripe, { id: 'evt_1', type: 'customer.subscription.updated', data: { object: sub } } as unknown as Stripe.Event)
 
     expect(calls.find((c) => c.table === 'company_bank_payment_allowances')).toMatchObject({
       op: 'upsert',
@@ -303,13 +318,114 @@ describe('applySubscriptionState', () => {
   })
 })
 
+// crm#1736: a write that failed was read as success, so the webhook answered
+// 200 and a subscription row saying paying stood beside no grants for good.
+describe('applySubscriptionState: a failed write fails the event', () => {
+  const state = (status: string) => ({
+    companyId: 'co_1',
+    stripeCustomerId: 'cus_1',
+    stripeSubscriptionId: 'sub_1',
+    status,
+    plan: 'monthly' as const,
+    currentPeriodEnd: '2026-12-01T00:00:00.000Z',
+  })
+
+  it('throws when the subscription row cannot be written, before touching the grants', async () => {
+    const { supabase, calls } = recordingSupabase(undefined, (table) => table === 'company_subscriptions')
+    await expect(applySubscriptionState(supabase, state('trialing'))).rejects.toThrow(
+      'company_subscriptions write failed: boom',
+    )
+    expect(calls.some((c) => c.table === 'capability_grants')).toBe(false)
+  })
+
+  it('throws when the grants of a paying subscription cannot be written', async () => {
+    const { supabase } = recordingSupabase(undefined, (table, op) => table === 'capability_grants' && op === 'upsert')
+    await expect(applySubscriptionState(supabase, state('trialing'))).rejects.toThrow('capability_grants write failed: boom')
+  })
+
+  it.each(['delete', 'update'] as const)("throws when the %s of a lapsed plan's grants fails", async (failing) => {
+    const { supabase } = recordingSupabase(undefined, (table, op) => table === 'capability_grants' && op === failing)
+    await expect(applySubscriptionState(supabase, state('canceled'))).rejects.toThrow('capability_grants write failed: boom')
+  })
+
+  it('writes the same grants when applied again', async () => {
+    const first = recordingSupabase()
+    const again = recordingSupabase()
+    await applySubscriptionState(first.supabase, state('active'))
+    await applySubscriptionState(again.supabase, state('active'))
+    const grants = (calls: RecordedOp[]) => calls.find((c) => c.table === 'capability_grants')
+    expect(grants(again.calls)).toEqual(grants(first.calls))
+  })
+})
+
+// crm#1736: a failed write has Stripe deliver the event again, possibly after
+// a later event of the subscription. The event's own copy would roll back.
+describe('handleStripeEvent: the subscription as Stripe holds it now', () => {
+  const companySub = (status: string) =>
+    ({ ...fakeSub({ status }), metadata: { company_id: 'co_1' } }) as unknown as Stripe.Subscription
+  const event = (type: string, status: string) =>
+    ({ id: 'evt_1', type, data: { object: companySub(status) } }) as unknown as Stripe.Event
+
+  afterEach(() => syncIdentityMock.mockReset())
+
+  it('keeps the grants of a payer whose stale "incomplete" event arrives again', async () => {
+    const { supabase, calls } = recordingSupabase()
+    const { stripe, retrieve } = stripeHolding(companySub('active'))
+    syncIdentityMock.mockResolvedValue(null)
+
+    await handleStripeEvent(supabase, stripe, event('customer.subscription.created', 'incomplete'))
+
+    expect(retrieve).toHaveBeenCalledWith('sub_123')
+    expect(calls.find((c) => c.table === 'company_subscriptions' && c.op === 'upsert')?.payload).toMatchObject({
+      status: 'active',
+    })
+    expect(calls.some((c) => c.table === 'capability_grants' && c.op === 'upsert')).toBe(true)
+    expect(calls.some((c) => c.table === 'capability_grants' && c.op === 'delete')).toBe(false)
+  })
+
+  it('applies the event copy of a subscription Stripe no longer has', async () => {
+    const { supabase, calls } = recordingSupabase()
+    const retrieve = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('No such subscription'), { code: 'resource_missing' }))
+
+    await handleStripeEvent(
+      supabase,
+      { subscriptions: { retrieve } } as unknown as Stripe,
+      event('customer.subscription.deleted', 'canceled'),
+    )
+
+    expect(calls.find((c) => c.table === 'company_subscriptions' && c.op === 'upsert')?.payload).toMatchObject({
+      status: 'canceled',
+    })
+    expect(calls.some((c) => c.table === 'capability_grants' && c.op === 'delete')).toBe(true)
+  })
+
+  it('fails the event when Stripe cannot be read, writing nothing', async () => {
+    const { supabase, calls } = recordingSupabase()
+    const retrieve = vi.fn().mockRejectedValue(Object.assign(new Error('api down'), { code: 'api_error' }))
+
+    await expect(
+      handleStripeEvent(
+        supabase,
+        { subscriptions: { retrieve } } as unknown as Stripe,
+        event('customer.subscription.updated', 'active'),
+      ),
+    ).rejects.toThrow('api down')
+    expect(calls).toHaveLength(0)
+  })
+})
+
 // crm#1378: a subscription event of a paying company writes the company's
 // identity onto its Stripe customer, so a renewal invoice (still a draft
 // when the event arrives) is made out to the company as it now stands.
 describe('handleStripeEvent: company identity on the customer', () => {
-  const stripe = {} as Stripe
+  const retrieve = vi.fn()
+  const stripe = { subscriptions: { retrieve } } as unknown as Stripe
 
+  // Stripe holds the subscription as the event carries it.
   function event(type: string, sub: Stripe.Subscription): Stripe.Event {
+    retrieve.mockResolvedValue(sub)
     return { id: 'evt_1', type, data: { object: sub } } as unknown as Stripe.Event
   }
   function companySub(status: string): Stripe.Subscription {
@@ -363,9 +479,12 @@ describe('handleStripeEvent: company identity on the customer', () => {
 // archived source. Resolved by metadata first, the next event wrote the
 // source and let the paying replacement's grants lapse.
 describe('handleStripeEvent: which company an event is for', () => {
-  const stripe = {} as Stripe
-  const updated = (sub: Stripe.Subscription) =>
-    ({ id: 'evt_1', type: 'customer.subscription.updated', data: { object: sub } }) as unknown as Stripe.Event
+  const retrieve = vi.fn()
+  const stripe = { subscriptions: { retrieve } } as unknown as Stripe
+  const updated = (sub: Stripe.Subscription) => {
+    retrieve.mockResolvedValue(sub)
+    return { id: 'evt_1', type: 'customer.subscription.updated', data: { object: sub } } as unknown as Stripe.Event
+  }
   const sourceSub = () =>
     ({ ...fakeSub({ status: 'active' }), metadata: { company_id: 'co_source' } }) as unknown as Stripe.Subscription
 
