@@ -1,0 +1,1 @@
+[2026-11-10] A Bokio upload the run before a re-run migration recorded against its file on the now reversed copy keeps that document: the live copy gets the file and counts as linked, and the identity conflict is no failure. Re-pointing the mapping would need a migration for no gain.

@@ -50,9 +50,14 @@ vi.mock('../lib/key-use', async (importOriginal) => ({
   readProviderKeyUseFacts: vi.fn(),
 }))
 
+vi.mock('../lib/replaced-copy-underlag', () => ({
+  countUnderlagOnReplacedCopies: vi.fn(),
+}))
+
 import { arcimMigrationExtension } from '../index'
 import { listConsents } from '../lib/provider-client'
 import { readProviderKeyUseFacts } from '../lib/key-use'
+import { countUnderlagOnReplacedCopies } from '../lib/replaced-copy-underlag'
 import { createServiceClient } from '@/lib/supabase/server'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
@@ -493,5 +498,53 @@ describe('GET /status: what each stored key is still for', () => {
     await handler(statusRequest(), buildCtx(supabase))
 
     expect(readProviderKeyUseFacts).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * GET /status `underlagOnReplacedCopies` (#51): live verifikat whose underlag
+ * an earlier run left on the copy a re-run migration reversed, so the page
+ * can offer "Hämta underlag" again. Asked only where that run can go.
+ */
+describe('GET /status: underlag left on reversed copies (#51)', () => {
+  const consent = (provider: string) => ({ id: `consent-${provider}`, provider, status: 1, companyName: 'Bolaget AB', createdAt: '2026-10-01' })
+  const completed = sieRow('sie-1', 'completed', '2026-10-02T10:00:00Z')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(createServiceClient as Mock).mockReturnValue(buildService({}))
+    ;(readProviderKeyUseFacts as Mock).mockRejectedValue(new Error('not under test'))
+    ;(countUnderlagOnReplacedCopies as Mock).mockResolvedValue(12)
+  })
+
+  async function underlagOnReplacedCopies(latestCompleted: Row | null) {
+    const { supabase } = buildSupabase({ history: [], latestCompleted })
+    const res = await handler(statusRequest(), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ underlagOnReplacedCopies: number }>(res)
+    expect(res.status).toBe(200)
+    return { count: body.underlagOnReplacedCopies, supabase }
+  }
+
+  it('counts them for a company with a ledger import and a connection that serves underlag', async () => {
+    ;(listConsents as Mock).mockResolvedValue([consent('fortnox')])
+
+    const { count, supabase } = await underlagOnReplacedCopies(completed)
+
+    expect(count).toBe(12)
+    expect(countUnderlagOnReplacedCopies).toHaveBeenCalledWith(supabase, 'company-1')
+  })
+
+  it('does not ask before a ledger import', async () => {
+    ;(listConsents as Mock).mockResolvedValue([consent('bokio')])
+
+    expect((await underlagOnReplacedCopies(null)).count).toBe(0)
+    expect(countUnderlagOnReplacedCopies).not.toHaveBeenCalled()
+  })
+
+  it('does not ask when no connection can fetch underlag', async () => {
+    ;(listConsents as Mock).mockResolvedValue([consent('visma')])
+
+    expect((await underlagOnReplacedCopies(completed)).count).toBe(0)
+    expect(countUnderlagOnReplacedCopies).not.toHaveBeenCalled()
   })
 })

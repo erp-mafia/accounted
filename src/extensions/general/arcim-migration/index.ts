@@ -57,6 +57,8 @@ import {
   type DocumentImportRunSummary,
 } from './lib/document-import-run'
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
+import { countUnderlagOnReplacedCopies } from './lib/replaced-copy-underlag'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import { refreshMigratedSupplierPaymentState } from './lib/refresh-migrated-payment-state'
@@ -421,6 +423,14 @@ export const arcimMigrationExtension: Extension = {
               ),
             )
             : null
+          // Verifikat whose underlag an earlier run left on the copy a re-run
+          // migration then reversed (#51): the page offers "Hämta underlag"
+          // again, which links them to the live copy. Asked only where that
+          // run can go: a ledger import and a connection that serves underlag.
+          const underlagOnReplacedCopies =
+            latestCompletedSieImport && consents.some(c => supportsUnderlagImport(c.provider as string))
+              ? await countUnderlagOnReplacedCopies(supabase, companyId)
+              : 0
 
           return NextResponse.json({
             consents: consents.map(c => ({
@@ -436,6 +446,7 @@ export const arcimMigrationExtension: Extension = {
             latestCompletedSieImport: latestCompletedSieImport ?? null,
             unfinishedConnect,
             latestDocumentImport,
+            underlagOnReplacedCopies,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,

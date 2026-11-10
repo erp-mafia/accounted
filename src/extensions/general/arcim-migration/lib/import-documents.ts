@@ -950,12 +950,30 @@ export async function importProviderDocuments(
       .filter((r) => r.journal_entry_id != null)
       .map((r) => [attachmentKey(r.sha256_hash, r.journal_entry_id as string), r.id]),
   )
-  const recordUpload = async (uploadId: string, documentId: string) => {
+  // Content an earlier run archived on a copy a re-run migration has since
+  // reversed (#51). The run before the re-run recorded each Bokio upload
+  // against that document, and record_bokio_upload keeps an upload's first
+  // document, so it refuses the live copy's document for the same upload.
+  const reversedEntryIds = new Set(vouchers.filter((voucher) => !isLiveCopy(voucher)).map((voucher) => voucher.id))
+  const contentOnReversedCopy = new Set(
+    existingAttachments
+      .filter((row) => row.journal_entry_id != null && reversedEntryIds.has(row.journal_entry_id))
+      .map((row) => row.sha256_hash),
+  )
+  const recordUpload = async (uploadId: string, documentId: string, sha256: string) => {
     if (provider !== 'bokio') return
     const { error } = await supabase.rpc('record_bokio_upload', {
       p_company_id: companyId, p_consent_id: consentId, p_upload_id: uploadId, p_document_id: documentId,
     })
-    if (error) throw new Error('BOKIO_UPLOAD_MAPPING_FAILED')
+    if (!error) return
+    // The file is on its live verifikat already; the upload keeps naming the
+    // same content on the reversed copy. Counting it failed would make every
+    // run after a re-run report these files as missing.
+    if (error.message?.includes('BOKIO_UPLOAD_IDENTITY_CONFLICT') && contentOnReversedCopy.has(sha256)) {
+      log.info('bokio upload keeps its document on the reversed copy', { uploadId, documentId })
+      return
+    }
+    throw new Error('BOKIO_UPLOAD_MAPPING_FAILED')
   }
 
   const unmatchedByReason: Partial<Record<UnmatchedReason, number>> = {}
@@ -996,9 +1014,10 @@ export async function importProviderDocuments(
       const { bytes } = await withUnauthorizedRefresh(() =>
         source().download(attachment),
       )
-      const archivedId = seenAttachments.get(attachmentKey(await computeSHA256(bytes), journalEntryId))
+      const sha256 = await computeSHA256(bytes)
+      const archivedId = seenAttachments.get(attachmentKey(sha256, journalEntryId))
       if (!archivedId) return false
-      await recordUpload(attachment.id, archivedId)
+      await recordUpload(attachment.id, archivedId, sha256)
       return true
     } catch (error) {
       if (stopsTheSweep(error)) throw error
@@ -1405,7 +1424,7 @@ export async function importProviderDocuments(
 
       const sha256 = await computeSHA256(bytes)
       if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
-        await recordUpload(attachment.id, seenAttachments.get(attachmentKey(sha256, journalEntryId))!)
+        await recordUpload(attachment.id, seenAttachments.get(attachmentKey(sha256, journalEntryId))!, sha256)
         result.skipped++
         return
       }
@@ -1447,7 +1466,7 @@ export async function importProviderDocuments(
       )
 
       seenAttachments.set(attachmentKey(sha256, journalEntryId), document.id)
-      await recordUpload(attachment.id, document.id)
+      await recordUpload(attachment.id, document.id, sha256)
       // How it came in: the provider's file, fetched by the migration. The
       // document is its own original; best effort, never fails the sweep.
       await recordDocumentArrival(supabase, {

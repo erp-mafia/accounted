@@ -9227,6 +9227,7 @@
     "ext_arcim_documents_fetch_action": "Hämta underlag",
     "ext_arcim_documents_fetch_after_ledger": "Importera bokföringen först, sedan kan du hämta underlagen.",
     "ext_arcim_documents_fetch_after_sie": "Ladda upp bokföringen som SIE-fil först, sedan kan du hämta underlagen.",
+    "ext_arcim_documents_on_replaced_copies": "{count} verifikat saknar underlag som ligger kvar på makulerade kopior från en tidigare import.",
     "ext_arcim_key_idle": "Migreringen är klar och nyckeln till {provider} används inte längre. Accounted läser bara från {provider} och ändrar aldrig något där. Du kan ta bort nyckeln och ansluta igen om du behöver hämta mer.",
     "ext_arcim_key_in_use_rows": "Nyckeln används fortfarande för att hämta fakturarader som saknas. Accounted läser bara från {provider} och ändrar aldrig något där.",
     "ext_arcim_key_remove": "Ta bort nyckeln",
