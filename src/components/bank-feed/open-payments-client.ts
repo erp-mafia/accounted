@@ -119,6 +119,8 @@ export interface PolledAccount {
   suggested_ledger_account: string | null
   /** The ledger of the cash account this company already books the same IBAN and currency on; null when none. */
   matches_existing: string | null
+  /** The suggestion is the number this account already had, not a fresh one: it never moves to another account. Absent counts as kept. */
+  ledger_kept?: boolean
 }
 
 export interface ConnectionPoll {
