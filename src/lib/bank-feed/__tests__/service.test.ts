@@ -1241,6 +1241,21 @@ describe('disconnectBankFeedConnection', () => {
     const none = stub({ bank_connections: [{ data: null, error: null }] })
     expect(await disconnectBankFeedConnection({ ...ctx, supabase: none.supabase }, CONNECTION)).toEqual({ ok: false, code: 'NOT_FOUND' })
   })
+
+  it.each([
+    ['over at the bank', new ConsentOverError('expired', { status: 410 })],
+    ['unknown to the bank', new BankFeedRefusedError('not found', { code: 'BANK_FEED_NOT_FOUND', status: 404 })],
+  ])('names nothing on the removed row when the provider says the consent is already gone (%s) (#97)', async (_label, refusal) => {
+    mocks.connect.mockReturnValue(fakeConnect({ revokeConsent: vi.fn().mockRejectedValue(refusal) }))
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, aggregator: 'open_payments' } })
+    mocks.disconnect.mockResolvedValue({ connection_id: CONNECTION, session_id: 'consent-1', bank_name: 'Swedbank', released_cash_accounts: 0 })
+    mocks.serviceRpc.mockImplementation(async (name: string) => name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null })
+    const { supabase, payload } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
+    expect(await disconnectBankFeedConnection({ ...ctx, supabase }, CONNECTION)).toMatchObject({ ok: true })
+    // Nothing is live to end or to bill: the claim records it as ended, and no retry is left behind.
+    expect(mocks.serviceRpc).toHaveBeenCalledWith('finish_bank_session_revocation', expect.objectContaining({ p_session_id: 'consent-1', p_succeeded: true }))
+    expect(payload('bank_connections', 'update')).toEqual([])
+  })
 })
 
 describe('startBankFeedConsent at Nordea Corporate Netbank', () => {

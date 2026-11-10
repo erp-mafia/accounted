@@ -34,7 +34,9 @@
  *   sync       "Synka nu": one read with the person present;
  *   disconnect the shared disconnect RPC, then the consent ended at the bank
  *              under the revocation claim of the 'openpayments' namespace; a
- *              consent the bank did not end stays named on the removed row.
+ *              consent the bank did not end stays named on the removed row,
+ *              asked again by the next attempt and by the daily retry
+ *              (./unended-consents.ts).
  *
  * Connect counts one bank connection per company: a consent holds the place
  * until it is ended. A new consent that replaces one (a renewal's, Svea's
@@ -220,7 +222,8 @@ export interface ConsentAttempt {
    * A removed connection only: its consent, which the bank did not end when
    * the connection was removed. Connect counts it against the company's one
    * bank connection until it is ended, so the next attempt ends it first
-   * (releaseHeldConsents); cleared once it is.
+   * (releaseHeldConsents), and the daily retry asks for a company that does
+   * not come back (./unended-consents.ts); cleared once it is.
    */
   unended_consent_id?: string | null
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
@@ -1453,18 +1456,32 @@ export async function syncBankFeedConnection(
   return { ok: false, code, details }
 }
 
+/** What ending a removed connection's consent came to (endRemovedConsent). */
+export type RemovedConsentOutcome = 'ended' | 'already_ended' | 'busy' | 'failed'
+
+/**
+ * The provider's answer that the consent is no longer there to end: over
+ * (expired, revoked or rejected at the bank) or unknown to it. Nothing is
+ * left live to hold the company's place or to be billed, and asking again
+ * never answers otherwise.
+ */
+function consentAlreadyGone(error: unknown): boolean {
+  return error instanceof ConsentOverError || (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND)
+}
+
 /**
  * Ends the consent of a removed connection at the bank, under the claim that
  * fences a new holder while the call is out: 'ended' now, 'already_ended'
- * earlier, 'busy' while another call holds the claim, 'failed' when the
- * bank, Connect or the claim did not answer (the consent may still be live).
+ * earlier or, by the provider's answer, no longer there (consentAlreadyGone),
+ * 'busy' while another call holds the claim, 'failed' when the bank, Connect
+ * or the claim did not answer (the consent may still be live).
  */
 async function endRemovedConsent(
   ctx: OperationContext,
   connect: BankFeedConnect,
   row: Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type'>,
   consentId: string,
-): Promise<'ended' | 'already_ended' | 'busy' | 'failed'> {
+): Promise<RemovedConsentOutcome> {
   const service = createServiceClient()
   const identity = { p_provider: AGGREGATOR_SESSION_NAMESPACE.open_payments, p_session_id: consentId }
   try {
@@ -1472,14 +1489,17 @@ async function endRemovedConsent(
     if (claimError) throw claimError
     const token = claim as { claimed?: boolean; token?: string; reason?: string } | null
     if (token?.claimed !== true || typeof token.token !== 'string') return token?.reason === 'already-revoked' ? 'already_ended' : 'busy'
-    let succeeded = false
+    let outcome: 'ended' | 'already_ended' | 'failed' = 'failed'
     const party = await partyFor(ctx, row, UNATTENDED_SIGNER, false)
     if (party.ok) {
-      succeeded = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId }).then(() => true, () => false)
+      outcome = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId }).then(
+        () => 'ended' as const,
+        (error: unknown) => (consentAlreadyGone(error) ? 'already_ended' as const : 'failed' as const),
+      )
     }
-    await service.rpc('finish_bank_session_revocation', { ...identity, p_claim_token: token.token, p_succeeded: succeeded })
-    if (!succeeded) ctx.log.warn('bank consent not ended at the bank', { connectionId: row.id })
-    return succeeded ? 'ended' : 'failed'
+    await service.rpc('finish_bank_session_revocation', { ...identity, p_claim_token: token.token, p_succeeded: outcome !== 'failed' })
+    if (outcome === 'failed') ctx.log.warn('bank consent not ended at the bank', { connectionId: row.id })
+    return outcome
   } catch (error) {
     ctx.log.warn('bank consent not ended at the bank', { connectionId: row.id, message: error instanceof Error ? error.message : String(error) })
     return 'failed'
@@ -1497,6 +1517,25 @@ async function markUnendedConsent(ctx: OperationContext, row: Pick<Row, 'id' | '
     .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
     .eq('status', 'revoked')
   if (error) ctx.log.warn('unended bank consent not recorded', { connectionId: row.id, message: error.message })
+}
+
+/** A removed connection as ending its unended consent reads it. */
+export type UnendedConsentRow = Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type' | 'consent_attempt'>
+
+/**
+ * Asks once more to end the consent a removed connection still names
+ * (consent_attempt.unended_consent_id), and clears it from the row once it
+ * is ended or already gone. One the bank still does not end stays named,
+ * its refusal on the revocation claim. The connect path (releaseHeldConsents)
+ * and the daily retry (./unended-consents.ts) both end them here. Null when
+ * the row names no consent.
+ */
+export async function endUnendedConsent(ctx: OperationContext, connect: BankFeedConnect, removed: UnendedConsentRow): Promise<RemovedConsentOutcome | null> {
+  const consentId = removed.consent_attempt?.unended_consent_id
+  if (!consentId) return null
+  const outcome = await endRemovedConsent(ctx, connect, removed, consentId)
+  if (outcome === 'ended' || outcome === 'already_ended') await markUnendedConsent(ctx, removed, null)
+  return outcome
 }
 
 /**
@@ -1529,12 +1568,8 @@ async function releaseHeldConsents(ctx: OperationContext, connect: BankFeedConne
     ctx.log.warn('removed connections with a live consent not read', { message: error.message })
     return freed
   }
-  for (const removed of (data ?? []) as Array<Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type' | 'consent_attempt'>>) {
-    const consentId = removed.consent_attempt?.unended_consent_id
-    if (!consentId) continue
-    const outcome = await endRemovedConsent(ctx, connect, removed, consentId)
-    if (outcome === 'ended' || outcome === 'already_ended') await markUnendedConsent(ctx, removed, null)
-    if (outcome === 'ended') freed = true
+  for (const removed of (data ?? []) as UnendedConsentRow[]) {
+    if ((await endUnendedConsent(ctx, connect, removed)) === 'ended') freed = true
   }
   return freed
 }
