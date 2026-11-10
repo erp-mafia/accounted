@@ -24458,7 +24458,13 @@ export const tools: McpTool[] = [
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: { supplier_invoice_id: { type: 'string' }, inbox_item_id: { type: 'string' } },
+      properties: {
+        supplier_invoice_id: { type: 'string' },
+        inbox_item_id: { type: 'string' },
+        // The service's own field (CreditSupplierInvoiceInputSchema), as the
+        // dashboard and v1 doors take it (crm#1733).
+        credit_date: { type: 'string', description: 'Credit note date yyyy-MM-dd; default the inbox reading, else today.' },
+      },
       required: ['supplier_invoice_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
@@ -24466,10 +24472,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.supplier_invoice_id as string
       if (!id) throw badArgument('supplier_invoice_id', 'supplier_invoice_id is required')
-      const parsed = CreditSupplierInvoiceInputSchema.safeParse(
-        typeof args.inbox_item_id === 'string' ? { inbox_item_id: args.inbox_item_id } : {},
-      )
-      if (!parsed.success) throw Object.assign(new Error('inbox_item_id must be a UUID'), { code: 'VALIDATION_ERROR' })
+      const parsed = CreditSupplierInvoiceInputSchema.safeParse({
+        ...(typeof args.inbox_item_id === 'string' ? { inbox_item_id: args.inbox_item_id } : {}),
+        ...(typeof args.credit_date === 'string' ? { credit_date: args.credit_date } : {}),
+      })
+      if (!parsed.success) {
+        if (parsed.error.issues[0]?.path[0] === 'credit_date') {
+          throw badArgument('credit_date', 'credit_date must be ISO yyyy-MM-dd')
+        }
+        throw Object.assign(new Error('inbox_item_id must be a UUID'), { code: 'VALIDATION_ERROR' })
+      }
 
       // The approval runs this same service for real: the dry run refuses
       // now what the commit would refuse (already credited, a partial or

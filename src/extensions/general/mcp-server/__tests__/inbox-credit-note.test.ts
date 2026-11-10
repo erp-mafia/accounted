@@ -181,6 +181,55 @@ describe('gnubok_credit_supplier_invoice', () => {
     expect(schema.required).toEqual(['supplier_invoice_id'])
   })
 
+  it('declares credit_date, the service\'s own date field (crm#1733)', () => {
+    const schema = tool.inputSchema as { properties: Record<string, unknown> }
+    expect(schema.properties).toHaveProperty('credit_date')
+  })
+
+  it('passes credit_date to the dry run and stages it for the approval (crm#1733)', async () => {
+    creditMock.mockResolvedValue({
+      ok: true,
+      dryRun: true,
+      preview: {
+        credit_note: { supplier_invoice_number: 'KREDIT-10234', total: 10000, currency: 'SEK' },
+        original_supplier_invoice_number: '10234',
+        supplier_name: 'Programvara AB',
+        credit_date: '2026-09-12',
+        date_source: 'input',
+        would_create_reversal_journal_entry: true,
+      },
+    })
+    const inserts: Array<{ table: string; payload: unknown }> = []
+
+    const result = (await tool.execute(
+      { supplier_invoice_id: INVOICE_ID, credit_date: '2026-09-12' },
+      'company-1',
+      'user-1',
+      client({ id: 'fp-1', is_closed: false, locked_at: null }, inserts),
+    )) as { staged: boolean }
+
+    expect(creditMock).toHaveBeenCalledWith(expect.anything(), INVOICE_ID, { credit_date: '2026-09-12' }, { dryRun: true })
+    const staged = inserts.find((i) => i.table === 'pending_operations')?.payload as {
+      params: Record<string, unknown>
+      preview_data: Record<string, unknown>
+    }
+    expect(staged.params).toEqual({ supplier_invoice_id: INVOICE_ID, credit_date: '2026-09-12' })
+    expect(staged.preview_data).toMatchObject({ credit_date: '2026-09-12', credit_date_source: 'input' })
+    expect(result.staged).toBe(true)
+  })
+
+  it('refuses a credit_date that is not yyyy-MM-dd before the service is asked', async () => {
+    let thrown: unknown
+    try {
+      await tool.execute({ supplier_invoice_id: INVOICE_ID, credit_date: '12/09/2026' }, 'company-1', 'user-1', client(null))
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeDefined()
+    expect(JSON.stringify(toToolError(thrown))).toContain('credit_date')
+    expect(creditMock).not.toHaveBeenCalled()
+  })
+
   it('stages the credit with the inbox item and the credit note\'s own date', async () => {
     creditMock.mockResolvedValue({
       ok: true,
