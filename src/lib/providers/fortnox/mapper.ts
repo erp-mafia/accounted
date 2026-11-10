@@ -536,6 +536,7 @@ export function mapFortnoxToSupplier(raw: Record<string, unknown>): SupplierDto 
     iban: nonEmptyString(raw['IBAN']),
     bic: nonEmptyString(raw['BIC']),
     currencyCode: nonEmptyString(raw['Currency']),
+    defaultExpenseAccount: nonEmptyString(raw['PreDefinedAccount']),
     defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Comments'] as string | undefined,
     updatedAt: raw['@LastModified'] as string | undefined,

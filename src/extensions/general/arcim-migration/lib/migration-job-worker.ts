@@ -16,7 +16,8 @@ import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput, type R
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
-import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
+import { findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex, proposedExpenseAccount } from './entity-mapper'
 import { bokioSupplierSource } from './bokio-supplier-source'
 import { invoiceWithinScope } from './invoice-scope'
 import { adoptExistingCustomers, customerRegisterFacts, salesInvoicePartyFacts, type PartyCandidate } from './customer-match'
@@ -147,12 +148,35 @@ async function partyWithoutDetail(hydrated: { hydration: HydrationReport; authEr
   throw new Error('MIGRATION_DETAIL_RETRY')
 }
 
+/** The accounts among `numbers` the company's chart holds active. */
+type ActiveAccounts = (numbers: string[]) => Promise<ReadonlySet<string>>
+
+/**
+ * Reads, for one batch, which accounts the company's chart holds active, by
+ * the engine's own rule (findMissingActiveAccounts), each account once: a
+ * supplier's proposed default account is kept only when it is (crm#1744). A
+ * failed read fails the record like any other read here, for a retry, rather
+ * than importing the supplier without the default it has.
+ */
+function activeAccountsOf(supabase: SupabaseClient, job: ProviderMigrationJob, deadline: number): ActiveAccounts {
+  const known = new Map<string, boolean>()
+  return async (numbers) => {
+    const unread = [...new Set(numbers)].filter((n) => !known.has(n))
+    if (unread.length > 0) {
+      const missing = new Set(await withinMigrationDeadline(findMissingActiveAccounts(supabase, job.company_id, unread), deadline))
+      for (const n of unread) known.set(n, !missing.has(n))
+    }
+    return new Set(numbers.filter((n) => known.get(n)))
+  }
+}
+
 /**
  * `parties` collects the source customer behind each prepared record, keyed by
  * chunk id, for adoptExistingCustomers to match before the commit.
  */
 async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
-  connection: ResolvedConsent, deadline: number, parties: Map<string, PartyCandidate>): Promise<Record<string, unknown>> {
+  connection: ResolvedConsent, deadline: number, parties: Map<string, PartyCandidate>,
+  activeAccounts: ActiveAccounts): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
@@ -164,13 +188,15 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     const customer = await customerWithDetail(job, dto as CustomerDto, connection, deadline)
     if (!customer.active) return { id: c.id, skip: 'inactive' }
     parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, customer) })
-    return { id: c.id, row: mapCustomer(customer, job.user_id, job.company_id) }
+    return { id: c.id, row: mapCustomer(customer, job.user_id, job.company_id, job.provider) }
   }
   if (c.resource === 'suppliers') {
     if (!(dto as SupplierDto).active) return { id: c.id, skip: 'inactive' }
     const supplier = await supplierWithDetail(job, dto as SupplierDto, connection, deadline)
     if (!supplier.active) return { id: c.id, skip: 'inactive' }
-    return { id: c.id, row: mapSupplier(supplier, job.user_id, job.company_id) }
+    const proposed = proposedExpenseAccount(supplier)
+    const active = proposed ? await activeAccounts([proposed]) : undefined
+    return { id: c.id, row: mapSupplier(supplier, job.user_id, job.company_id, active) }
   }
   const listed = dto as InvoiceDto
   // A supplier invoice cancelled (makulerad) in Fortnox was never a payable,
@@ -476,14 +502,14 @@ export async function enrichCommittedParties(supabase: SupabaseClient, job: Prov
     const suppliers = new Map<string, SupplierCardDetails>()
     if (customerIds.length > 0) {
       const read = await withinMigrationDeadline(supabase.from('customers')
-        .select('id, org_number, customer_type, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, notes')
+        .select('id, org_number, customer_type, customer_number, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, notes')
         .eq('company_id', job.company_id).in('id', customerIds), deadline)
       if (read.error) throw dbError(read.error)
       for (const card of (read.data ?? []) as CustomerCardDetails[]) customers.set(card.id, card)
     }
     if (supplierIds.length > 0) {
       const read = await withinMigrationDeadline(supabase.from('suppliers')
-        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, notes')
+        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, notes')
         .eq('company_id', job.company_id).in('id', supplierIds), deadline)
       if (read.error) throw dbError(read.error)
       for (const card of (read.data ?? []) as SupplierCardDetails[]) suppliers.set(card.id, card)
@@ -521,6 +547,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
   let batch: Record<string, unknown>[] = []
   let bytes = 0
   const parties = new Map<string, PartyCandidate>()
+  const activeAccounts = activeAccountsOf(supabase, job, deadline)
   const partyChunkIds = new Map<string, PartyResource>()
   for (const c of chunks) if (c.resource === 'customers' || c.resource === 'suppliers') partyChunkIds.set(c.id, c.resource)
   const commit = async () => {
@@ -542,7 +569,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
     for (const c of chunks) {
       if (Date.now() >= deadline - 5000) break
       let record: Record<string, unknown>
-      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties) }
+      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties, activeAccounts) }
       catch (error) {
         const code = failureCode(error)
         if (['MIGRATION_DEADLINE', 'PROVIDER_AUTH_EXPIRED'].includes(code)

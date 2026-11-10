@@ -27,13 +27,14 @@ vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({ reconcileSup
 type MappedParty = { party: { name: string; contact?: { telephone?: string } } }
 const mappedParty = (dto: MappedParty) => ({ name: dto.party.name, ...(dto.party.contact?.telephone ? { phone: dto.party.contact.telephone } : {}) })
 vi.mock('../entity-mapper', () => ({
-  mapCustomer: (dto: MappedParty) => mappedParty(dto),
-  mapSupplier: (dto: MappedParty) => mappedParty(dto),
+  mapCustomer: vi.fn((dto: MappedParty) => mappedParty(dto)),
+  mapSupplier: vi.fn((dto: MappedParty) => mappedParty(dto)),
+  proposedExpenseAccount: (dto: { defaultExpenseAccount?: string }) => dto.defaultExpenseAccount ?? null,
   buildFxRateIndex: vi.fn().mockResolvedValue(new Map()),
   mapSalesInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
   mapSupplierInvoice: vi.fn(() => ({ invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
 }))
-import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
+import { mapCustomer, mapSalesInvoice, mapSupplier, mapSupplierInvoice } from '../entity-mapper'
 import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
 
 function database(overrides: Partial<ProviderMigrationJob> = {}) {
@@ -47,8 +48,10 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
   const rows: Row[] = []
   // The company's customer register and the job's source map, read by the
   // customer match before each commit (crm#1294).
-  const register: { customers: Record<string, unknown>[]; suppliers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[] } = {
-    customers: [], suppliers: [], migration_source_records: [],
+  // And the chart a supplier's proposed default account is read against (crm#1744).
+  const register: { customers: Record<string, unknown>[]; suppliers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[];
+    chart_of_accounts: Record<string, unknown>[] } = {
+    customers: [], suppliers: [], migration_source_records: [], chart_of_accounts: [],
   }
   // As the RPCs: a register's last page, or its refusal, moves the cursor to
   // the next register, and past the last one discovery ends.
@@ -598,6 +601,59 @@ describe('Fortnox suppliers take their country and VAT number from the detail fo
   })
 })
 
+describe('the customer number and a supplier\'s default account reach the row (crm#1744)', () => {
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+  const supplier = (id: string, account?: string) => ({ id, supplierNumber: id, active: true, party: { name: `Leverantör ${id}` },
+    _raw: { SupplierNumber: id }, ...(account ? { defaultExpenseAccount: account } : {}) })
+  const withSuppliers = (...suppliers: ReturnType<typeof supplier>[]) => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    for (const s of suppliers) db.rows.push({ id: `s${s.id}`, source_id: s.id, resource: 'suppliers', state: 'pending', ...sealMigrationPayload(s) })
+    const from = vi.spyOn(db.supabase, 'from')
+    return { db, chartReads: () => from.mock.calls.filter(([table]) => table === 'chart_of_accounts').length }
+  }
+
+  it('maps a customer with the provider it came from, which says where its number is', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    const listed = { id: '1001', customerNumber: '1001', active: true, party: { name: 'Kund AB' }, _raw: { CustomerNumber: '1001' } }
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed) })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapCustomer).toHaveBeenCalledWith(listed, 'user', 'company', 'fortnox')
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('hands the mapper the proposed account when the chart holds it active', async () => {
+    const { db } = withSuppliers(supplier('7', '5410'))
+    db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: true })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '7' }), 'user', 'company', new Set(['5410']))
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('hands it no account the chart lacks or holds inactive, and the supplier still imports', async () => {
+    const { db } = withSuppliers(supplier('7', '5410'), supplier('8', '6110'))
+    db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: false })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '7' }), 'user', 'company', new Set())
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '8' }), 'user', 'company', new Set())
+    expect(db.rows.map(row => row.state)).toEqual(['done', 'done'])
+  })
+
+  it('reads the chart once per account in a batch, and not at all for a supplier that proposes none', async () => {
+    const twice = withSuppliers(supplier('7', '5410'), supplier('8', '5410'))
+    twice.db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: true })
+    await runProviderMigrationWorker({ supabase: twice.db.supabase, jobId: twice.db.job.id })
+    expect(twice.chartReads()).toBe(1)
+    expect(mapSupplier).toHaveBeenLastCalledWith(expect.objectContaining({ id: '8' }), 'user', 'company', new Set(['5410']))
+
+    const none = withSuppliers(supplier('9'))
+    await runProviderMigrationWorker({ supabase: none.db.supabase, jobId: none.db.job.id })
+    expect(none.chartReads()).toBe(0)
+    expect(mapSupplier).toHaveBeenLastCalledWith(expect.objectContaining({ id: '9' }), 'user', 'company', undefined)
+  })
+})
+
 describe('a register record committed onto an existing card fills what the card lacks (crm#1436)', () => {
   const listed = (id: string, phone?: string) => ({ id, customerNumber: id, active: true,
     party: { name: 'Kund AB', ...(phone ? { contact: { telephone: phone } } : {}) }, _raw: { CustomerNumber: id } })
@@ -638,6 +694,37 @@ describe('a register record committed onto an existing card fills what the card 
     committedOnto(db, 'suppliers', '031-12 34 56')
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
     expect(db.register.suppliers[0]).toMatchObject({ phone: '031-12 34 56' })
+  })
+
+  it('fills the customer number of a card that has none, and never replaces one (crm#1744)', async () => {
+    vi.mocked(mapCustomer).mockImplementation((dto) => ({ ...mappedParty(dto), customer_number: '1001' }))
+    try {
+      const db = database({ phase: 'import', resources: ['customers'] })
+      db.register.customers.push(card({ customer_number: null }))
+      committedOnto(db, 'customers', '08-123 45 67')
+      await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+      expect(db.register.customers[0]).toMatchObject({ customer_number: '1001', phone: '08-123 45 67' })
+
+      const typed = database({ phase: 'import', resources: ['customers'] })
+      typed.register.customers.push(card({ customer_number: 'K-7', phone: '070-999 99 99' }))
+      committedOnto(typed, 'customers', '08-123 45 67')
+      await runProviderMigrationWorker({ supabase: typed.supabase, jobId: typed.job.id })
+      expect(typed.register.customers[0]).toMatchObject({ customer_number: 'K-7' })
+      expect(typed.updates).toEqual([])
+    } finally {
+      vi.mocked(mapCustomer).mockImplementation((dto) => mappedParty(dto))
+    }
+  })
+
+  it('fills the default account of a supplier card that has none with the one the row vetted (crm#1744)', async () => {
+    vi.mocked(mapSupplier).mockImplementationOnce((dto) => ({ ...mappedParty(dto), default_expense_account: '5410' }))
+    const db = database({ phase: 'import', resources: ['suppliers'] })
+    db.register.suppliers.push({ id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, email: null, phone: null,
+      address_line1: null, address_line2: null, postal_code: null, city: null, country: 'SE', vat_number: null,
+      bankgiro: null, plusgiro: null, bank_account: null, default_expense_account: null, notes: null })
+    committedOnto(db, 'suppliers', '031-12 34 56')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.suppliers[0]).toMatchObject({ default_expense_account: '5410', phone: '031-12 34 56' })
   })
 
   it('keeps the committed import when the fill fails, and logs no customer data', async () => {

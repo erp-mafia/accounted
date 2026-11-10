@@ -62,6 +62,17 @@ describe('buildCustomerMetadataEnrichment', () => {
     }, { org_number: '5566778899' })).toBeNull()
   })
 
+  it('fills the customer number on a card that has none, and leaves a set or cleared one alone (crm#1744)', () => {
+    const card = { contact_person: 'Anna Andersson', invoice_email_cc_addresses: [], invoice_email_bcc_addresses: [] }
+    expect(buildCustomerMetadataEnrichment({ ...card, customer_number: null }, { customer_number: '1001' }))
+      .toEqual({ customer_number: '1001' })
+    expect(buildCustomerMetadataEnrichment({ ...card, customer_number: 'K-7' }, { customer_number: '1001' })).toBeNull()
+    expect(buildCustomerMetadataEnrichment({ ...card, customer_number: '' }, { customer_number: '1001' })).toBeNull()
+    expect(buildCustomerMetadataEnrichment({ ...card, customer_number: null }, { customer_number: null })).toBeNull()
+    // A caller that did not read the column never fills it.
+    expect(buildCustomerMetadataEnrichment(card, { customer_number: '1001' })).toBeNull()
+  })
+
   it('does not turn unknown provider metadata into explicit empty values', () => {
     expect(buildCustomerMetadataEnrichment({
       contact_person: null,
@@ -175,6 +186,13 @@ describe('a matched card gets the details a new card would have had (crm#1436)',
       { phone: '031-12 34 56', bankgiro: '123-4567', org_number: '5566778899' })).toBeNull()
   })
 
+  it('fills a supplier\'s default account on a card that has none, never over one (crm#1744)', () => {
+    expect(buildSupplierEnrichment({ default_expense_account: null }, { default_expense_account: '5410' }))
+      .toEqual({ default_expense_account: '5410' })
+    expect(buildSupplierEnrichment({ default_expense_account: '6110' }, { default_expense_account: '5410' })).toBeNull()
+    expect(buildSupplierEnrichment({ default_expense_account: null }, { default_expense_account: null })).toBeNull()
+  })
+
   describe('a supplier\'s bank account', () => {
     const card = {
       bankgiro: null, plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null, bic: null,
@@ -211,6 +229,20 @@ describe('writing an enrichment', () => {
     const guarded = calls.filter((c) => c.method === 'is').map((c) => c.args[0])
     expect(guarded).toEqual(['phone', 'address_line1', 'address_line2', 'postal_code', 'city'])
     expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['id', 'cust-1'], ['company_id', 'company-1']])
+  })
+
+  it('writes a customer number or a default account only while the card has none (crm#1744)', async () => {
+    const customer = createQueuedMockSupabase()
+    customer.enqueue({ data: { id: 'cust-1' } })
+    await writeCustomerEnrichment(customer.supabase as unknown as SupabaseClient, 'company-1', 'cust-1', { customer_number: '1001' })
+    expect(customer.calls.find((c) => c.method === 'update')?.args[0]).toMatchObject({ customer_number: '1001' })
+    expect(customer.calls.filter((c) => c.method === 'is').map((c) => c.args[0])).toEqual(['customer_number'])
+
+    const supplier = createQueuedMockSupabase()
+    supplier.enqueue({ data: { id: 'sup-1' } })
+    await writeSupplierEnrichment(supplier.supabase as unknown as SupabaseClient, 'company-1', 'sup-1', { default_expense_account: '5410' })
+    expect(supplier.calls.find((c) => c.method === 'update')?.args[0]).toMatchObject({ default_expense_account: '5410' })
+    expect(supplier.calls.filter((c) => c.method === 'is').map((c) => c.args[0])).toEqual(['default_expense_account'])
   })
 
   it('answers no row when the card got a value in between', async () => {

@@ -1,0 +1,1 @@
+[2026-11-10] A migrated Fortnox supplier keeps its PreDefinedAccount as default_expense_account only when it is a class 4-7 account the company's chart holds active; otherwise none, never a created account, since a missing one fails every booking (crm#1744).
