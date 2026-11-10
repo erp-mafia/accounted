@@ -9,6 +9,7 @@ import {
   vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
 import { inferDomesticSalesRate } from '@/lib/reports/vat-revenue-accounts'
+import { CLASS_4_ACCOUNTS } from '@/lib/bookkeeping/bas-data/class-4-purchases'
 
 // One veto: the import suggestion and the declaration's inference used to hold
 // a list each, and each missed words the other had.
@@ -70,6 +71,44 @@ describe('resolveVatTreatmentRuta', () => {
     expect(vatTreatmentsForAccountClass(3)).not.toContain('reverse_charge_non_eu_services')
     expect(vatTreatmentsForAccountClass(4)).not.toContain('oss')
     expect(defaultRateForVatTreatment('oss', 3)).toBeNull()
+  })
+})
+
+describe('omvänd betalningsskyldighet inom Sverige on the BAS group 44 accounts (crm#1754)', () => {
+  // BAS 2026 names what each account buys, and that decides the ruta:
+  // råvaror och material file ruta 23, tjänster file ruta 24. Read from the
+  // repo's BAS data rather than a hand-kept list, so a renamed or added group
+  // 44 account is checked too. 4400 is the group account for both and is
+  // left out.
+  const group44 = CLASS_4_ACCOUNTS.filter(
+    (a) => a.account_group === '44' && a.account_number !== '4400',
+  )
+
+  it('covers the varor and tjänster accounts, with and without a stated sats', () => {
+    expect(group44.map((a) => a.account_number)).toEqual(
+      ['4410', '4415', '4416', '4417', '4420', '4425', '4426', '4427'],
+    )
+  })
+
+  it.each(group44.map((a) => [a.account_number, a.account_name] as const))(
+    '%s %s files the ruta its BAS name gives',
+    (account, name) => {
+      const box = /tjänster/.test(name) ? 'ruta24' : 'ruta23'
+      expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, account)).toEqual({ box, side: 'debit' })
+    },
+  )
+
+  it('files 4420 in ruta 24, where its SIE label suggestion now lands too', () => {
+    expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, '4420')).toEqual({ box: 'ruta24', side: 'debit' })
+    const suggested = suggestVatTreatment('4420', 'Inköp av tjänster i Sverige, omvänd betalningsskyldighet')
+    expect(suggested).toEqual({ treatment: 'reverse_charge_domestic', rate: 0.25 })
+    expect(resolveVatTreatmentRuta(suggested!.treatment, 4, '4420')?.box).toBe('ruta24')
+  })
+
+  it('leaves the group account and numbers outside BAS on the varor default', () => {
+    for (const account of ['4400', '4421', '4428', '4429']) {
+      expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, account)?.box).toBe('ruta23')
+    }
   })
 })
 
