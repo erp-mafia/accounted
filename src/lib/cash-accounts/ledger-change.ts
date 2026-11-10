@@ -37,6 +37,7 @@
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
 import { eventBus } from '@/lib/events/bus'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { userFacingCode } from '@/lib/errors/user-facing'
@@ -262,12 +263,19 @@ export async function changeBankAccountLedgers(
     return { uid: account.uid, enabled: false, currency, ...(kept ? { ledger_account: kept } : {}), reuse_cash_account_id: null }
   })
 
-  let saved
-  try {
-    saved = await saveBankAccountSelection(ctx.supabase, ctx.companyId, ctx.userId, connection.id, snapshot.token, selections)
-  } catch (error) {
-    return saveFailure(error)
-  }
+  // The save is one statement, rolled back whole when refused.
+  // CASH_ACCOUNT_OPERATION_BUSY means another write to the company's bank
+  // rows (a booking being numbered, a sync step) held a lock the bank guards
+  // take without waiting: the same save a moment later goes through, so it is
+  // tried again as the other bank-row writers do before the dialog says so
+  // (crm#1702). A refusal that is not busy is answered at once.
+  const attempt = await retryWhileCashAccountBusy(
+    () => saveBankAccountSelection(ctx.supabase, ctx.companyId, ctx.userId, connection.id, snapshot.token, selections)
+      .then((receipt) => ({ receipt }), (error: unknown) => ({ error })),
+    (outcome) => 'error' in outcome && isCashAccountBusy(outcome.error),
+  )
+  if ('error' in attempt) return saveFailure(attempt.error)
+  const saved = attempt.receipt
   try {
     await eventBus.emit({
       type: 'bank_connection.account_selection_changed',

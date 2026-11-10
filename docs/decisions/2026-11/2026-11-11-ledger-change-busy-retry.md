@@ -1,0 +1,1 @@
+[2026-11-11] A bank ledger change retries only CASH_ACCOUNT_OPERATION_BUSY (the shared cash-account-busy helper) and keeps that code's own sentence; a 57014 timeout is not retried and no "banken synkar" text was added: the lock holder is usually a booking, and a slow save takes as long again.
