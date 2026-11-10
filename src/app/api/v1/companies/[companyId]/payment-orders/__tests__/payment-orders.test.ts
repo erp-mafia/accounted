@@ -266,8 +266,30 @@ describe('GET /payment-orders', () => {
       supplier_invoice: { supplier_name: 'Derome Bygg AB' },
     })
     expect(body.data.payment_orders[0]).not.toHaveProperty('id')
+    expect(body.data.payment_orders[0].bank_confirming).toBe(false)
     expect(body.data.next_cursor).toBeNull()
     expect(c.calls.some((call) => call.table === 'payment_orders' && call.method === 'eq' && call.args[0] === 'company_id' && call.args[1] === COMPANY_ID)).toBe(true)
+  })
+
+  it('tells a signed payment the bank is still confirming from one nobody signed (crm#1777)', async () => {
+    const waiting = { status: 'awaiting_signature', batch_id: 'c1111111-1111-4111-8111-111111111111', provider_status: 'RCVD' }
+    client({
+      payment_orders: {
+        data: [
+          orderRow({ ...waiting, signing: { status: 'signed' } }),
+          orderRow({ ...waiting, id: 'b2222222-2222-4222-8222-222222222222', signing: { status: 'awaiting_signature' } }),
+        ],
+        error: null,
+      },
+    })
+    const res = await listOrders(request(`${BASE}?status=awaiting_signature`), companyParams)
+    expect(res.status).toBe(200)
+    const orders = (await res.json()).data.payment_orders
+    expect(orders.map((o: { status: string; bank_confirming: boolean }) => [o.status, o.bank_confirming])).toEqual([
+      ['awaiting_signature', true],
+      ['awaiting_signature', false],
+    ])
+    expect(orders[0]).not.toHaveProperty('signing')
   })
 })
 
@@ -284,6 +306,18 @@ describe('GET /payment-orders/:id', () => {
     const res = await getOrder(request(`${BASE}/${ORDER_ID}`), orderParams())
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ payment_order_id: ORDER_ID, status: 'approved', approved_at: '2026-10-10T10:00:00Z' })
+  })
+
+  it('answers bank_confirming from the order\'s signing (crm#1777)', async () => {
+    client({
+      payment_orders: {
+        data: orderRow({ status: 'awaiting_signature', batch_id: 'c1111111-1111-4111-8111-111111111111', provider_status: 'RCVD', signing: { status: 'signed' } }),
+        error: null,
+      },
+    })
+    const res = await getOrder(request(`${BASE}/${ORDER_ID}`), orderParams())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ status: 'awaiting_signature', bank_confirming: true })
   })
 })
 
