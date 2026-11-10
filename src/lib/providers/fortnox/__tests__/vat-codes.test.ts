@@ -30,7 +30,10 @@ describe('fortnoxVatCodeToTreatment', () => {
     ['ITEU', '4535', 'ruta21', 'reverse_charge_eu_services'],
     ['ITGLOB', '4531', 'ruta22', 'reverse_charge_non_eu_services'],
     ['IV', '4415', 'ruta23', 'reverse_charge_domestic'],
+    ['IV', '4410', 'ruta23', 'reverse_charge_domestic'],
     ['IT', '4425', 'ruta24', 'reverse_charge_domestic'],
+    // BAS 4420, tjänster without a stated sats: ruta 24, as Fortnox files it (crm#1754).
+    ['IT', '4420', 'ruta24', 'reverse_charge_domestic'],
     ['IT', '6540', 'ruta24', 'reverse_charge_domestic'],
   ] as const)('%s on %s lands on %s', (code, account, ruta, treatment) => {
     expect(fortnoxVatCodeToTreatment(code, account)).toBe(treatment)
@@ -39,13 +42,14 @@ describe('fortnoxVatCodeToTreatment', () => {
 
   it('refuses IV and IT where Accounted would file the account on the other of rutor 23 and 24', () => {
     // Accounted derives the 23/24 split from the account number (class 4 is
-    // varor except 4425-4427; classes 5-6 are tjänster). A Fortnox IT on a
+    // varor except 4420/4425-4427; classes 5-6 are tjänster). A Fortnox IT on a
     // custom 46xx underentreprenör account would be filed on 23 here, so
     // the code must not translate: the row falls back to the label and the
     // user decides, instead of a reviewed value that silently moves the box.
     expect(fortnoxVatCodeToTreatment('IT', '4610')).toBeNull()
     expect(fortnoxVatCodeToTreatment('IT', '4010')).toBeNull()
     expect(fortnoxVatCodeToTreatment('IV', '4425')).toBeNull()
+    expect(fortnoxVatCodeToTreatment('IV', '4420')).toBeNull()
     expect(fortnoxVatCodeToTreatment('IV', '5410')).toBeNull()
   })
 

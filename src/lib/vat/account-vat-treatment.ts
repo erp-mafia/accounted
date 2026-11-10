@@ -63,7 +63,11 @@ export function resolveVatTreatmentRuta(
   if (treatment === 'reverse_charge_eu_services') return { box: 'ruta21', side: 'debit' }
   if (treatment === 'reverse_charge_non_eu_services') return { box: 'ruta22', side: 'debit' }
   if (treatment === 'reverse_charge_domestic') {
-    const isKnownServiceAccount = accountNumber != null && /^442[567]$/.test(accountNumber)
+    // BAS 2026 splits group 44 by what is bought: 4410 and 4415-4417 are
+    // råvaror och material (ruta 23), 4420 and 4425-4427 are tjänster (ruta
+    // 24). 4420 is the tjänster account without a stated sats; leaving it out
+    // of this check filed its basis as varor in ruta 23 (crm#1754).
+    const isKnownServiceAccount = accountNumber != null && /^442[0567]$/.test(accountNumber)
     return { box: accountClass === 4 && !isKnownServiceAccount ? 'ruta23' : 'ruta24', side: 'debit' }
   }
   return null

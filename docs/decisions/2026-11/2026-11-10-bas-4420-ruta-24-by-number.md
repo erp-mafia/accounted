@@ -1,0 +1,1 @@
+[2026-11-10] BAS 4420 files ruta 24 through the account-number check in resolveVatTreatmentRuta, not by adding 4410/4420 to VAT_ACCOUNT_TABLE or opening vat_box to 20-24: the table lists only basis accounts with a stated sats, and the 23/24 rule for cost accounts stays in one place (crm#1754).

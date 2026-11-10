@@ -12,6 +12,7 @@ import {
   reverseChargeKindForSupplierType,
   reverseChargeKindRuta,
   reverseChargeKindForBasisAccount,
+  reverseChargeKindOnOwnAccount,
   REVERSE_CHARGE_KINDS,
   generateInputVatLine,
   bankRowVatLines,
@@ -256,6 +257,19 @@ describe('costAccountRcBasisRate', () => {
         : rcBasisAccountRate(account)
       expect(costAccountRcBasisRate(account, chart.get(account)), account).toBe(bucketed)
     }
+  })
+})
+
+describe('reverseChargeKindOnOwnAccount', () => {
+  const domestic = { default_vat_treatment: 'reverse_charge_domestic', default_vat_rate: null }
+
+  it('names the box BAS gives a domestic reverse-charge account with that momskod (crm#1754)', () => {
+    // 4420 is tjänster without a stated sats: ruta 24, like 4425-4427, and the
+    // categorize preview shows this box. 4410 is its varor twin, ruta 23.
+    expect(reverseChargeKindOnOwnAccount('4420', domestic)).toEqual({ kind: 'domestic_services', ruta: 'ruta24' })
+    expect(reverseChargeKindOnOwnAccount('4425', domestic)).toEqual({ kind: 'domestic_services', ruta: 'ruta24' })
+    expect(reverseChargeKindOnOwnAccount('4410', domestic)).toEqual({ kind: 'domestic_services', ruta: 'ruta23' })
+    expect(reverseChargeKindOnOwnAccount('4415', domestic)).toEqual({ kind: 'domestic_services', ruta: 'ruta23' })
   })
 })
 

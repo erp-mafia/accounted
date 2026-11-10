@@ -599,6 +599,41 @@ describe('calculateVatDeclaration: reverse charge', () => {
     expect(result.rutor.ruta30).toBe(2000)
   })
 
+  it('files the basis on 4420 (tjänster, no stated sats) in ruta24 and on 4410 (varor) in ruta23 (crm#1754)', async () => {
+    // Neither account is a static BAS basis account: each reaches a ruta
+    // through its momskod, which an import sets from the label. 4420 used to
+    // resolve to ruta 23 like the varor account beside it.
+    chartAccounts = [
+      {
+        account_number: '4420',
+        account_name: 'Inköp av tjänster i Sverige, omvänd betalningsskyldighet',
+        account_class: 4,
+        default_vat_rate: null,
+        default_vat_treatment: 'reverse_charge_domestic',
+      },
+      {
+        account_number: '4410',
+        account_name: 'Inköp av råvaror och material i Sverige, omvänd betalningsskyldighet',
+        account_class: 4,
+        default_vat_rate: null,
+        default_vat_treatment: 'reverse_charge_domestic',
+      },
+    ]
+    seedLedger([
+      { account_number: '4420', debit_amount: 8000, credit_amount: 0 },
+      { account_number: '4410', debit_amount: 4000, credit_amount: 0 },
+      { account_number: '2614', debit_amount: 0, credit_amount: 3000 },
+      { account_number: '2647', debit_amount: 3000, credit_amount: 0 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta24).toBe(8000)
+    expect(result.rutor.ruta23).toBe(4000)
+    expect(result.rutor.ruta30).toBe(3000)
+    expect(result.rutor.ruta48).toBe(3000)
+  })
+
   it('returns zero ruta20-24 when no reverse-charge cost-account activity', async () => {
     seedLedger([
       { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
