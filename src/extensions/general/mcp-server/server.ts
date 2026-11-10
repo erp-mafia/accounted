@@ -22729,6 +22729,11 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to export' },
+        exclude_year_end_closing: {
+          type: 'boolean',
+          description:
+            'true leaves out every bokslut verifikat (resultatavslut, depreciation, tax) from #VER, #UB and #RES, for a receiver that books its own closing (eDeklarera). Default false, the complete file: its #RES is already the result before the resultatavslut.',
+        },
       },
       required: ['fiscal_period_id'],
     },
@@ -22740,6 +22745,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: { type: 'string' },
         company_name: { type: ['string', 'null'] },
         org_number: { type: ['string', 'null'] },
+        exclude_year_end_closing: { type: 'boolean' },
         generated_at: { type: 'string' },
       },
     },
@@ -22751,6 +22757,13 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
+      // The REST and dashboard exports' exclude_closing (crm#1727). Strict
+      // typeof: hosts do not always enforce inputSchema, and a string "false"
+      // must not silently drop the bokslut verifikat.
+      if (args.exclude_year_end_closing !== undefined && typeof args.exclude_year_end_closing !== 'boolean') {
+        throw badArgument('exclude_year_end_closing', 'exclude_year_end_closing must be true or false.')
+      }
+      const excludeYearEndClosing = args.exclude_year_end_closing === true
 
       const { data: company } = await supabase
         .from('company_settings')
@@ -22764,6 +22777,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: fiscalPeriodId,
         company_name: company.company_name || 'Unknown',
         org_number: company.org_number,
+        exclude_year_end_closing: excludeYearEndClosing,
       })
 
       return {
@@ -22772,6 +22786,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: fiscalPeriodId,
         company_name: company.company_name,
         org_number: company.org_number,
+        exclude_year_end_closing: excludeYearEndClosing,
         generated_at: new Date().toISOString(),
       }
     },
